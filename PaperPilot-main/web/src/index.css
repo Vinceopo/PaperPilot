@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-slate-950 text-slate-100 antialiased;
+}
+
+@layer components {
+  .fl-field {
+    @apply relative;
+  }
+
+  .fl-icon {
+    @apply pointer-events-none absolute left-3.5 top-1/2 z-[1] -translate-y-1/2 text-slate-400;
+  }
+
+  .fl-input {
+    @apply h-[52px] w-full rounded-[10px] border border-slate-200 bg-white pl-11 pr-4 text-[15px] text-navy outline-none transition-[border-color] duration-180 ease-in-out;
+  }
+
+  .fl-field:has(.fl-toggle) .fl-input {
+    @apply pr-11;
+  }
+
+  .fl-input:focus {
+    @apply border-accent;
+    box-shadow: 0 0 0 3px rgba(27, 201, 160, 0.18);
+  }
+
+  .fl-field--error .fl-input {
+    @apply border-rose-400;
+  }
+
+  .fl-label {
+    @apply pointer-events-none absolute left-11 top-1/2 origin-left -translate-y-1/2 bg-transparent px-1 text-[15px] text-slate-400 transition-[top,transform,font-size,color,background-color] duration-180 ease-in-out;
+  }
+
+  .fl-input:focus ~ .fl-label,
+  .fl-input:not(:placeholder-shown) ~ .fl-label {
+    @apply top-0 bg-white text-xs;
+  }
+
+  .fl-input:focus ~ .fl-label {
+    @apply text-accent;
+  }
+
+  .fl-field--error .fl-input:focus ~ .fl-label,
+  .fl-field--error .fl-input:not(:placeholder-shown) ~ .fl-label {
+    @apply text-rose-500;
+  }
+
+  .fl-toggle {
+    @apply absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50;
+  }
+}
+
+@keyframes auth-slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes auth-slide-right {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.auth-slide-left {
+  animation: auth-slide-left 200ms ease both;
+}
+
+.auth-slide-right {
+  animation: auth-slide-right 200ms ease both;
+}
+
+.auth-copy-left,
+.auth-copy-right {
+  animation: auth-slide-left 200ms ease both;
+}
+
+.auth-copy-right {
+  animation: auth-slide-right 200ms ease both;
+}
+
+input[type="checkbox"] {
+  accent-color: #1bc9a0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-slide-left,
+  .auth-slide-right,
+  .auth-copy-left,
+  .auth-copy-right,
+  .fl-label {
+    animation: none;
+    transition: none;
+  }
+}

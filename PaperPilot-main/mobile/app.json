@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "PaperPilot",
+    "slug": "paperpilot",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#020617"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.paperpilot.app"
+    },
+    "android": {
+      "package": "com.paperpilot.app"
+    },
+    "extra": {
+      "apiUrl": "http://127.0.0.1:8000",
+      "googleWebClientId": "",
+      "firebase": {
+        "apiKey": "",
+        "authDomain": "paperpilotv6.firebaseapp.com",
+        "projectId": "paperpilotv6",
+        "storageBucket": "paperpilotv6.firebasestorage.app",
+        "messagingSenderId": "",
+        "appId": ""
+      }
+    }
+  }
+}

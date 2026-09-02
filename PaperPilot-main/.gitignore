@@ -1,0 +1,24 @@
+# Python
+api/.venv/
+api/data/
+api/venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+
+# Node
+node_modules/
+web/dist/
+mobile/.expo/
+mobile/dist/
+*.log
+.DS_Store
+
+# Firebase
+.firebase/
+firebase-debug.log
+
+# IDE
+.idea/
+.vscode/
