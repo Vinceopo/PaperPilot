@@ -74,6 +74,11 @@ export async function registerCheck({ email, username }) {
   return postJson("/auth/register/check", { email, username });
 }
 
+/** Resolve a username or email to an email address for login. */
+export async function resolveEmail(identifier) {
+  return postJson("/auth/resolve-email", { identifier });
+}
+
 export async function completeRegister({
   signupToken,
   firstName,

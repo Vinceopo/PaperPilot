@@ -9,7 +9,6 @@ from pypdf import PdfReader
 from app.config import settings
 from app.compliance import run_compliance_scan
 from app.compliance_db import (
-    MechanicsInUse,
     MechanicsNameConflict,
     UpgradeRequired,
     check_scan_eligibility,
@@ -34,7 +33,7 @@ from app.emailer import send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
 from app.otp import PURPOSES, can_send, consume_challenge, generate_code, init_db, store_otp, verify_otp
-from app.profiles import release_username, reserve_username, save_profile, username_taken
+from app.profiles import get_email_by_username, release_username, reserve_username, save_profile, username_taken
 from app.rules import evaluate_manuscript
 from app.schemas import (
     AnalyzeRequest,
@@ -201,10 +200,7 @@ def mechanics_rename(
 
 @app.delete("/mechanics/{mechanics_id}")
 def mechanics_delete(mechanics_id: str, uid: str = Depends(authenticated_uid)):
-    try:
-        deleted = delete_mechanics(uid, mechanics_id)
-    except MechanicsInUse as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
+    deleted = delete_mechanics(uid, mechanics_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Mechanics not found.")
     return {"ok": True}
@@ -368,6 +364,26 @@ def auth_register_check(body: RegisterCheckRequest):
     return {"ok": True}
 
 
+@app.post("/auth/resolve-email")
+def auth_resolve_email(body: dict):
+    """Resolve a username to its registered email for login purposes."""
+    identifier = (body.get("identifier") or "").strip()
+    if not identifier:
+        raise HTTPException(status_code=400, detail="Identifier is required.")
+    # If it looks like an email already, return it as-is after basic validation.
+    if "@" in identifier:
+        email = normalize_email(identifier)
+        err = email_error(email)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        return {"email": email}
+    # Otherwise treat as a username and resolve to email via RTDB.
+    email = get_email_by_username(identifier)
+    if not email:
+        raise HTTPException(status_code=404, detail="No account found for that username.")
+    return {"email": email}
+
+
 @app.post("/auth/otp/send")
 def auth_otp_send(body: OtpSendRequest):
     email = normalize_email(body.email)
@@ -386,7 +402,11 @@ def auth_otp_send(body: OtpSendRequest):
         raise HTTPException(status_code=429, detail=reason)
 
     code = generate_code()
-    ttl = store_otp(email, body.purpose, code)
+    try:
+        ttl = store_otp(email, body.purpose, code)
+    except ValueError as exc:
+        # Re-checking inside the RTDB transaction closes concurrent-send races.
+        raise HTTPException(status_code=429, detail=str(exc)) from None
     try:
         send_otp_email(email, code, body.purpose)
     except Exception as exc:

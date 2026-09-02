@@ -14,6 +14,7 @@ export default function ManuscriptPanel({
   currentVersion,
   onUpload,
   onLoadHistory,
+  onFileSelect,   // optional: called with (File|null) whenever the user picks a file
   busy,
 }) {
   const inputRef = useRef(null);
@@ -111,6 +112,7 @@ export default function ManuscriptPanel({
               const next = e.target.files?.[0] || null;
               setFile(next);
               setError(validateFile(next));
+              onFileSelect?.(next);   // notify parent (feeds useScanFlow)
             }}
           />
         </label>

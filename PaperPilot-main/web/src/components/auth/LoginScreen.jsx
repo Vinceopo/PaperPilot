@@ -1,11 +1,22 @@
 import { useState } from "react";
+import { resolveEmail } from "../../api.js";
 import { auth, firebaseReady } from "../../firebase.js";
 import { signInWithEmail, signInWithGoogle } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
 import AuthShell from "./AuthShell.jsx";
 import GoogleButton from "./GoogleButton.jsx";
 import { FIREBASE_MISSING, authMessage } from "./messages.js";
-import { emailError } from "./validation.js";
+
+/** True when the value looks like a username (no @, 3–20 valid chars). */
+function looksLikeUsername(val) {
+  return val.length >= 1 && !val.includes("@");
+}
+
+function identifierError(val) {
+  const v = val.trim();
+  if (!v) return "Email or username is required.";
+  return "";
+}
 
 export default function LoginScreen({
   slideDir,
@@ -14,7 +25,7 @@ export default function LoginScreen({
   onGoToForgotPassword,
   onContinueAsGuest,
 }) {
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(true);
   const [errors, setErrors] = useState({});
@@ -22,15 +33,15 @@ export default function LoginScreen({
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  function fieldError(field, nextEmail = email, nextPassword = password) {
-    if (field === "email") return emailError(nextEmail);
-    if (field === "password") return nextPassword ? "" : "Password is required.";
+  function fieldError(field, nextId = identifier, nextPw = password) {
+    if (field === "identifier") return identifierError(nextId);
+    if (field === "password") return nextPw ? "" : "Password is required.";
     return "";
   }
 
-  function revalidate(field, nextEmail, nextPassword) {
+  function revalidate(field, nextId, nextPw) {
     if (!touched[field]) return;
-    setErrors((prev) => ({ ...prev, [field]: fieldError(field, nextEmail, nextPassword) }));
+    setErrors((prev) => ({ ...prev, [field]: fieldError(field, nextId, nextPw) }));
   }
 
   function onBlurField(field) {
@@ -41,17 +52,23 @@ export default function LoginScreen({
   async function onSubmit(e) {
     e.preventDefault();
     setFormError("");
-    const next = { email: fieldError("email"), password: fieldError("password") };
+    const next = { identifier: fieldError("identifier"), password: fieldError("password") };
     setErrors(next);
-    setTouched({ email: true, password: true });
-    if (next.email || next.password) return;
+    setTouched({ identifier: true, password: true });
+    if (next.identifier || next.password) return;
     if (!firebaseReady || !auth) {
       setFormError(FIREBASE_MISSING);
       return;
     }
     setBusy(true);
     try {
-      await signInWithEmail(auth, email.trim(), password, remember);
+      let loginEmail = identifier.trim();
+      if (looksLikeUsername(loginEmail)) {
+        // Resolve username → email via the API before handing off to Firebase.
+        const res = await resolveEmail(loginEmail);
+        loginEmail = res.email;
+      }
+      await signInWithEmail(auth, loginEmail, password, remember);
     } catch (err) {
       setFormError(authMessage(err));
     } finally {
@@ -98,18 +115,20 @@ export default function LoginScreen({
     >
       <form className="mt-7 space-y-4" onSubmit={onSubmit} noValidate>
         <FloatingLabelInput
-          id="login-email"
-          label="Email"
-          type="email"
+          id="login-identifier"
+          label="Email or Username"
+          type="text"
           icon="mail"
-          value={email}
+          value={identifier}
           onChange={(e) => {
-            setEmail(e.target.value);
-            revalidate("email", e.target.value, password);
+            setIdentifier(e.target.value);
+            revalidate("identifier", e.target.value, password);
           }}
-          onBlur={() => onBlurField("email")}
-          error={errors.email}
-          autoComplete="email"
+          onBlur={() => onBlurField("identifier")}
+          error={errors.identifier}
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
         />
         <FloatingLabelInput
           id="login-password"
@@ -140,7 +159,7 @@ export default function LoginScreen({
           <button
             type="button"
             className="text-sm font-medium text-accent hover:text-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-sm"
-            onClick={() => onGoToForgotPassword(email.trim())}
+            onClick={() => onGoToForgotPassword(identifier.includes("@") ? identifier.trim() : "")}
           >
             Forgot password?
           </button>

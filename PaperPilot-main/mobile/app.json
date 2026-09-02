@@ -21,6 +21,7 @@
       "firebase": {
         "apiKey": "",
         "authDomain": "paperpilotv6.firebaseapp.com",
+        "databaseURL": "https://paperpilotv6-default-rtdb.asia-southeast1.firebasedatabase.app",
         "projectId": "paperpilotv6",
         "storageBucket": "paperpilotv6.firebasestorage.app",
         "messagingSenderId": "",

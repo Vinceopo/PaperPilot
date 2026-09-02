@@ -8,7 +8,7 @@ import {
   signInWithPopup,
   updateProfile,
 } from "firebase/auth";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { ref, runTransaction, set } from "firebase/database";
 
 export async function signInWithEmail(auth, email, password, remember) {
   await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
@@ -39,25 +39,25 @@ export async function signInWithGoogle(auth, remember) {
 export async function saveUserProfile(db, uid, { firstName, middleName, lastName, username, email }) {
   if (!db || !uid) return;
   try {
-    await setDoc(
-      doc(db, "users", uid),
-      {
-        email,
-        username,
-        usernameLower: (username || "").toLowerCase(),
-        firstName,
-        middleName,
-        lastName,
-        emailVerified: true,
-        createdAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+    await set(ref(db, `users/${uid}`), {
+      email,
+      username,
+      usernameLower: (username || "").toLowerCase(),
+      firstName,
+      middleName,
+      lastName,
+      emailVerified: true,
+      createdAt: Date.now(),
+    });
   } catch (err) {
     console.warn("Could not save profile:", err);
   }
   try {
-    await setDoc(doc(db, "usernames", (username || "").toLowerCase()), { uid, username });
+    const usernameKey = encodeURIComponent((username || "").toLowerCase()).replace(/\./g, "%2E");
+    await runTransaction(ref(db, `usernames/${usernameKey}`), (current) => {
+      if (current && current.uid !== uid) return;
+      return { uid, username };
+    });
   } catch (err) {
     console.warn("Could not reserve username:", err);
   }

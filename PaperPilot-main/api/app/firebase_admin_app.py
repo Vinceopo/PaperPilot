@@ -32,7 +32,11 @@ def firebase_admin_app():
             if not path.is_file():
                 return None
             credential = credentials.Certificate(str(path))
-        _app = firebase_admin.initialize_app(credential)
+        options = {}
+        database_url = (settings.firebase_database_url or "").strip()
+        if database_url:
+            options["databaseURL"] = database_url
+        _app = firebase_admin.initialize_app(credential, options)
         return _app
     except Exception:
         _app = None

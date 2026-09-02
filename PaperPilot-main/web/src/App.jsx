@@ -17,8 +17,10 @@ import RegistrationSuccessScreen from "./components/auth/RegistrationSuccessScre
 import MechanicsPanel from "./components/cockpit/MechanicsPanel.jsx";
 import ManuscriptPanel from "./components/cockpit/ManuscriptPanel.jsx";
 import ScanResults from "./components/cockpit/ScanResults.jsx";
+import ScanResultsScreen from "./components/cockpit/ScanResultsScreen.jsx";
 import UpgradePrompt from "./components/cockpit/UpgradePrompt.jsx";
 import VersionHistory from "./components/cockpit/VersionHistory.jsx";
+import { useScanFlow } from "./hooks/useScanFlow.js";
 
 function itemsFrom(data, key) {
   if (Array.isArray(data)) return data;
@@ -61,6 +63,9 @@ export default function App() {
   const [upgradeMessage, setUpgradeMessage] = useState("");
   const [registrationSuccess, setRegistrationSuccess] = useState(() => pendingRegistration());
   const signedIn = Boolean(user) && !guest;
+
+  // ── Scan flow state machine (mock-ready; swap analyzeDocument for real API) ──
+  const scanFlow = useScanFlow({ mechanicsId: selectedMechanicsId });
 
   useEffect(() => {
     if (!auth) {
@@ -364,6 +369,7 @@ export default function App() {
 
       <main className="mx-auto max-w-[1180px] p-5 md:p-8">
 
+        {/* ── Global API error banner ─────────────────────────────────────── */}
         {error && (
           <div className="mb-5 flex items-start justify-between gap-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700" role="alert">
             <span>{error}</span>
@@ -371,97 +377,189 @@ export default function App() {
           </div>
         )}
 
-        {loading ? (
-          <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
-            Loading your compliance workspace…
-          </div>
-        ) : (
-          <div className="grid gap-7 lg:grid-cols-2">
-            <MechanicsPanel
-              items={mechanics}
-              selectedId={selectedMechanicsId}
-              onSelect={(id) => {
-                setSelectedMechanicsId(id);
-                setCurrentVersion(null);
-                setResult(null);
-              }}
-              onUpload={onMechanicsUpload}
-              onRename={onMechanicsRename}
-              onDelete={onMechanicsDelete}
-              busy={mechanicsBusy}
-            />
-            <ManuscriptPanel
-              mechanicsSelected={Boolean(selectedMechanicsId)}
-              manuscripts={manuscripts}
-              currentVersion={currentVersion}
-              onUpload={onManuscriptUpload}
-              onLoadHistory={onLoadHistory}
-              busy={manuscriptBusy}
-            />
+        {/* ══════════════════════════════════════════════════════════════════
+            SCAN FLOW — takes over the main area; sidebar + header stay visible
+        ═══════════════════════════════════════════════════════════════════ */}
+
+        {/* ── Results screen ─────────────────────────────────────────────── */}
+        {scanFlow.step === "results" && (
+          <ScanResultsScreen
+            result={scanFlow.result}
+            versionNumber={scanFlow.versionNumber}
+            downloadBusy={scanFlow.downloadBusy}
+            downloadError={scanFlow.downloadError}
+            onDownload={scanFlow.downloadReport}
+            onUploadNewVersion={scanFlow.uploadNewVersion}
+            onBackToDashboard={scanFlow.backToDashboard}
+          />
+        )}
+
+        {/* ── Analysing state ────────────────────────────────────────────── */}
+        {scanFlow.step === "analyzing" && (
+          <div className="grid min-h-[60vh] place-items-center rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
+            <div className="flex flex-col items-center gap-5 text-center">
+              {/* Spinner */}
+              <span className="inline-block h-14 w-14 animate-spin rounded-full border-4 border-[#16bfa8] border-t-transparent" />
+              <div>
+                <p className="text-base font-bold text-slate-800">Analysing your document…</p>
+                <p className="mt-1 text-sm text-slate-400">
+                  Checking fonts, spacing, margins, citations, and more.
+                </p>
+                <p className="mt-3 text-xs text-slate-400">
+                  Format checks only — grammar and content are not evaluated.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
-        {currentVersion && (
-          <section className="mt-7 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="border-b border-slate-100 pb-4">
-              <h2 className="text-lg font-bold text-[#172033]">File details</h2>
-              <p className="text-xs text-slate-400">Provide metadata for compliance checking</p>
-            </div>
-            <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Files attached</p>
-            <div className="mt-3 grid gap-4 lg:grid-cols-2">
-              <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-[#fafbfc] p-4">
-                <span className="h-7 w-5 rounded-sm border-2 border-slate-300 bg-white" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-700">{selectedMechanics?.source_filename || selectedMechanics?.filename || selectedMechanics?.name}</p>
-                  <p className="text-[11px] text-slate-400">Format guide</p>
-                </div>
-                <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-semibold text-emerald-700">✓ Ready</span>
-              </div>
-              <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-[#fafbfc] p-4">
-                <span className="h-7 w-5 rounded-sm border-2 border-slate-300 bg-white" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-700">{currentVersion.source_filename || currentVersion.filename}</p>
-                  <p className="text-[11px] text-slate-400">{currentManuscript?.title} · Manuscript</p>
-                </div>
-                <span className="rounded-full bg-amber-100 px-3 py-1 text-[10px] font-semibold text-amber-700">
-                  {result ? "✓ Scanned" : "• Pending scan"}
-                </span>
-              </div>
-            </div>
-            <div className="mt-5 max-w-xs">
-              <label className="text-xs font-semibold text-slate-600">Version label</label>
-              <div className="mt-2 rounded-lg border border-slate-200 bg-[#f8f9fb] px-4 py-3 text-sm font-semibold text-slate-700">
-                v{currentVersion.version_number || "1.0"}
-              </div>
-            </div>
-            <div className="mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-5">
-              <button
-                type="button"
-                onClick={onLoadHistory}
-                className="rounded-lg border border-slate-200 bg-white px-7 py-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-              >
-                View versions
-              </button>
-              <button
-                onClick={() => {
-                  if (remaining <= 0) {
-                    setUpgradeMessage(`You have used all ${limit} scans included in your ${tier} plan this month.`);
-                    return;
-                  }
-                  onScan();
-                }}
-                disabled={scanBusy}
-                className="min-w-44 rounded-lg bg-[#16bfa8] px-7 py-3 text-xs font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {scanBusy ? "Analysing…" : remaining <= 0 ? "Upgrade to scan" : "Upload & Analyse"}
-              </button>
-            </div>
-          </section>
+        {/* ── Scan error state ───────────────────────────────────────────── */}
+        {scanFlow.step === "error" && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-8 text-center shadow-sm">
+            <p className="text-lg font-bold text-rose-700">Analysis failed</p>
+            <p className="mt-2 text-sm text-rose-500">{scanFlow.error}</p>
+            <button
+              type="button"
+              onClick={scanFlow.retry}
+              className="mt-6 rounded-lg bg-rose-600 px-7 py-2.5 text-xs font-bold text-white hover:bg-rose-700"
+            >
+              Try again
+            </button>
+          </div>
         )}
 
-        <div className="mt-5">
-          <ScanResults result={result} tier={tier} />
-        </div>
+        {/* ── Upload flow (idle / fileSelected) ──────────────────────────── */}
+        {(scanFlow.step === "idle" || scanFlow.step === "fileSelected") && (
+          <>
+            {loading ? (
+              <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
+                Loading your compliance workspace…
+              </div>
+            ) : (
+              <div className="grid gap-7 lg:grid-cols-2">
+                <MechanicsPanel
+                  items={mechanics}
+                  selectedId={selectedMechanicsId}
+                  onSelect={(id) => {
+                    setSelectedMechanicsId(id);
+                    setCurrentVersion(null);
+                    setResult(null);
+                  }}
+                  onUpload={onMechanicsUpload}
+                  onRename={onMechanicsRename}
+                  onDelete={onMechanicsDelete}
+                  busy={mechanicsBusy}
+                />
+                <ManuscriptPanel
+                  mechanicsSelected={Boolean(selectedMechanicsId)}
+                  manuscripts={manuscripts}
+                  currentVersion={currentVersion}
+                  onUpload={onManuscriptUpload}
+                  onLoadHistory={onLoadHistory}
+                  onFileSelect={scanFlow.selectFile}
+                  busy={manuscriptBusy}
+                />
+              </div>
+            )}
+
+            {/* File details + Upload & Analyse ──────────────────────────── */}
+            {/* Show when a real version exists OR a file has been selected for mock scan */}
+            {(currentVersion || scanFlow.file) && (
+              <section className="mt-7 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="border-b border-slate-100 pb-4">
+                  <h2 className="text-lg font-bold text-[#172033]">File details</h2>
+                  <p className="text-xs text-slate-400">Review attached files then run compliance analysis</p>
+                </div>
+
+                <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  Files attached
+                </p>
+                <div className="mt-3 grid gap-4 lg:grid-cols-2">
+                  {/* Format guide */}
+                  <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-[#fafbfc] p-4">
+                    <span className="h-7 w-5 rounded-sm border-2 border-slate-300 bg-white" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-slate-700">
+                        {selectedMechanics?.source_filename || selectedMechanics?.filename || selectedMechanics?.name || "No format guide selected"}
+                      </p>
+                      <p className="text-[11px] text-slate-400">Format guide</p>
+                    </div>
+                    {selectedMechanics ? (
+                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-semibold text-emerald-700">✓ Ready</span>
+                    ) : (
+                      <span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-semibold text-slate-400">Needed</span>
+                    )}
+                  </div>
+
+                  {/* Manuscript */}
+                  <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-[#fafbfc] p-4">
+                    <span className="h-7 w-5 rounded-sm border-2 border-slate-300 bg-white" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-slate-700">
+                        {scanFlow.file?.name || currentVersion?.source_filename || currentVersion?.filename}
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        {currentManuscript?.title ? `${currentManuscript.title} · ` : ""}Manuscript
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-amber-100 px-3 py-1 text-[10px] font-semibold text-amber-700">
+                      • Ready to scan
+                    </span>
+                  </div>
+                </div>
+
+                {/* Version label (only when a real API version exists) */}
+                {currentVersion && (
+                  <div className="mt-5 max-w-xs">
+                    <label className="text-xs font-semibold text-slate-600">Version label</label>
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-[#f8f9fb] px-4 py-3 text-sm font-semibold text-slate-700">
+                      v{currentVersion.version_number || scanFlow.versionNumber || "1.0"}
+                    </div>
+                  </div>
+                )}
+
+                {/* Action row */}
+                <div className="mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-5">
+                  {currentVersion && (
+                    <button
+                      type="button"
+                      onClick={onLoadHistory}
+                      className="rounded-lg border border-slate-200 bg-white px-7 py-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    >
+                      View versions
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (remaining <= 0) {
+                        setUpgradeMessage(`You have used all ${limit} scans included in your ${tier} plan this month.`);
+                        return;
+                      }
+                      scanFlow.analyze();
+                    }}
+                    disabled={!scanFlow.file || !selectedMechanicsId}
+                    className="min-w-44 rounded-lg bg-[#16bfa8] px-7 py-3 text-xs font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Upload &amp; Analyse
+                  </button>
+                </div>
+
+                {/* File error from scanFlow */}
+                {scanFlow.fileError && (
+                  <p className="mt-3 text-xs text-rose-500" role="alert">{scanFlow.fileError}</p>
+                )}
+              </section>
+            )}
+
+            {/* Legacy real-API scan results (shown below upload panels when available) */}
+            {result && (
+              <div className="mt-5">
+                <ScanResults result={result} tier={tier} />
+              </div>
+            )}
+          </>
+        )}
       </main>
 
       <VersionHistory

@@ -20,10 +20,11 @@ class Settings(BaseSettings):
     otp_max_sends_per_hour: int = 5
     otp_max_attempts: int = 5
     otp_echo_in_response: bool = False
-    # Keys the HMAC used to hash codes at rest. Generated into api/data/otp_secret when blank.
+    # Keys the HMAC used to hash codes at rest. Generated in server-only RTDB state when blank.
     otp_secret: str = ""
 
     firebase_credentials: str = ""
+    firebase_database_url: str = ""
     free_scan_limit: int = 3
     premium_scan_limit: int = 50
     max_upload_bytes: int = 25_000_000

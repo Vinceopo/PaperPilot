@@ -1,0 +1,28 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
+        ".validate": "newData.hasChildren(['email', 'username'])"
+      }
+    },
+    "usernames": {
+      "$username": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.child('uid').val() === auth.uid && (!newData.exists() || newData.child('uid').val() === auth.uid)))",
+        ".validate": "!newData.exists() || newData.hasChildren(['uid', 'username'])"
+      }
+    },
+    "paperpilot": {
+      ".read": false,
+      ".write": false
+    },
+    "paperpilot_auth": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}
