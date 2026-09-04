@@ -24,22 +24,22 @@ export default function MechanicsPanel({
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
+  const [success, setSuccess] = useState("");
   const selected = items.find((item) => item.id === selectedId);
 
   async function submit(e) {
     e.preventDefault();
     const issue = validateFile(file);
     setError(issue);
+    setSuccess("");
     if (issue) return;
     const fileName = file.name.replace(/\.(pdf|docx)$/i, "");
-    if (items.some((item) => item.name.toLowerCase() === fileName.toLowerCase())) {
-      setError("A mechanics document with this name already exists.");
-      return;
-    }
-    const ok = await onUpload(file, "");
+    // Server is the source of truth for uniqueness (also clears orphaned name locks).
+    const ok = await onUpload(file, fileName);
     if (ok) {
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
+      setSuccess("Format mechanics uploaded completely and ready to use.");
     }
   }
 
@@ -87,9 +87,11 @@ export default function MechanicsPanel({
         <label className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#18bda9] bg-[#f7fcfc] px-5 text-center hover:bg-[#f0fbf9]">
           <span className="grid h-11 w-11 place-items-center rounded-full bg-[#dcf7f2] text-3xl font-light text-[#16bfa8]">↑</span>
           <span className="mt-3 text-sm font-bold text-slate-700">
-            {file?.name || "Drop your format guide here"}
+            {file ? file.name : "Drop your format guide here"}
           </span>
-          <span className="mt-1 text-[11px] text-slate-400">Supports .pdf and .docx · Max 25 MB</span>
+          <span className="mt-1 text-[11px] text-slate-400">
+            {file ? "Click Upload format mechanics below when ready" : "Supports .pdf and .docx · Max 25 MB"}
+          </span>
           <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
             Browse files
           </span>
@@ -111,9 +113,14 @@ export default function MechanicsPanel({
           disabled={busy || !file || Boolean(error)}
           className="mt-3 h-11 w-full rounded-lg bg-[#16bfa8] px-6 text-xs font-bold text-white hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
         >
-          {busy ? "Adding format mechanics…" : "Add format mechanics"}
+          {busy ? "Uploading format mechanics…" : "Upload format mechanics"}
         </button>
         {error && <p className="mt-2 text-xs text-rose-500">{error}</p>}
+        {success && !error && (
+          <p className="mt-2 text-xs font-semibold text-emerald-600" role="status">
+            {success}
+          </p>
+        )}
       </form>
 
       <div className="mt-4 border-t border-slate-100 pt-4">
@@ -140,29 +147,26 @@ export default function MechanicsPanel({
             </label>
 
             {selected && !editing && (
-              <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-[#fafbfc] px-3 py-2">
-                <p className="min-w-0 truncate text-xs text-slate-500">{selected.source_filename}</p>
-                <div className="flex shrink-0 gap-2">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      setEditName(selected.name);
-                      setEditing(true);
-                    }}
-                    className="rounded-md px-2.5 py-1.5 text-[11px] font-semibold text-[#129c8a] hover:bg-emerald-50 disabled:opacity-40"
-                  >
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={removeSelected}
-                    className="rounded-md px-2.5 py-1.5 text-[11px] font-semibold text-rose-500 hover:bg-rose-50 disabled:opacity-40"
-                  >
-                    Delete
-                  </button>
-                </div>
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setEditName(selected.name);
+                    setEditing(true);
+                  }}
+                  className="rounded-md px-2.5 py-1.5 text-[11px] font-semibold text-[#129c8a] hover:bg-emerald-50 disabled:opacity-40"
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={removeSelected}
+                  className="rounded-md px-2.5 py-1.5 text-[11px] font-semibold text-rose-500 hover:bg-rose-50 disabled:opacity-40"
+                >
+                  Delete
+                </button>
               </div>
             )}
 

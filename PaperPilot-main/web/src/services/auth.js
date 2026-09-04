@@ -6,9 +6,64 @@ import {
   setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signOut,
   updateProfile,
 } from "firebase/auth";
 import { ref, runTransaction, set } from "firebase/database";
+
+const LOGIN_NOTICE_KEY = "paperpilot.loginNotice";
+const PASSWORD_CHANGED_KEY = "paperpilot.passwordChanged";
+
+export function markPasswordChanged() {
+  try {
+    sessionStorage.setItem(PASSWORD_CHANGED_KEY, "1");
+  } catch {
+    // Ignore storage failures (private mode, etc.).
+  }
+}
+
+export function hasPasswordChangedNotice() {
+  try {
+    return sessionStorage.getItem(PASSWORD_CHANGED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function clearPasswordChangedNotice() {
+  try {
+    sessionStorage.removeItem(PASSWORD_CHANGED_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+export function setLoginNotice(message) {
+  try {
+    sessionStorage.setItem(LOGIN_NOTICE_KEY, message || "");
+  } catch {
+    // Ignore storage failures (private mode, etc.).
+  }
+}
+
+export function takeLoginNotice() {
+  try {
+    const message = sessionStorage.getItem(LOGIN_NOTICE_KEY) || "";
+    sessionStorage.removeItem(LOGIN_NOTICE_KEY);
+    return message;
+  } catch {
+    return "";
+  }
+}
+
+export async function signOutEverywhere(authInstance) {
+  if (!authInstance) return;
+  try {
+    await signOut(authInstance);
+  } catch {
+    // Already signed out.
+  }
+}
 
 export async function signInWithEmail(auth, email, password, remember) {
   await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);

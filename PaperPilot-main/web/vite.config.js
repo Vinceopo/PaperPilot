@@ -14,6 +14,8 @@ export default defineConfig({
       "/manuscripts": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/scans": { target: "http://127.0.0.1:8000", changeOrigin: true },
       "/subscription": { target: "http://127.0.0.1:8000", changeOrigin: true },
+      "/profile": { target: "http://127.0.0.1:8000", changeOrigin: true },
+      "/account": { target: "http://127.0.0.1:8000", changeOrigin: true },
     },
   },
 });

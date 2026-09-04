@@ -1,14 +1,20 @@
 import { useState } from "react";
 import ForgotPasswordScreen from "./auth/ForgotPasswordScreen.jsx";
 import LoginScreen from "./auth/LoginScreen.jsx";
+import PasswordChangedScreen from "./auth/PasswordChangedScreen.jsx";
 import RegisterScreen from "./auth/RegisterScreen.jsx";
+import {
+  clearPasswordChangedNotice,
+  hasPasswordChangedNotice,
+  markPasswordChanged,
+} from "../services/auth.js";
 
 /**
  * Chooses between the login, register, and password-reset screens. Each screen
  * owns its own form state, so switching modes starts from a clean slate.
  */
 export default function AuthScreen({ onContinueAsGuest }) {
-  const [mode, setMode] = useState("login");
+  const [mode, setMode] = useState(() => (hasPasswordChangedNotice() ? "passwordDone" : "login"));
   const [slideDir, setSlideDir] = useState("left");
   const [notice, setNotice] = useState("");
   const [resetEmail, setResetEmail] = useState("");
@@ -17,6 +23,17 @@ export default function AuthScreen({ onContinueAsGuest }) {
     setSlideDir(direction);
     setNotice("");
     setMode(next);
+  }
+
+  if (mode === "passwordDone") {
+    return (
+      <PasswordChangedScreen
+        onContinue={() => {
+          clearPasswordChangedNotice();
+          go("login", "left");
+        }}
+      />
+    );
   }
 
   if (mode === "register") {
@@ -35,10 +52,10 @@ export default function AuthScreen({ onContinueAsGuest }) {
         slideDir={slideDir}
         initialEmail={resetEmail}
         onGoToLogin={() => go("login", "right")}
-        onDone={(message) => {
+        onDone={() => {
+          markPasswordChanged();
           setSlideDir("right");
-          setMode("login");
-          setNotice(message);
+          setMode("passwordDone");
         }}
       />
     );

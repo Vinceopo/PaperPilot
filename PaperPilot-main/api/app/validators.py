@@ -57,3 +57,22 @@ def name_error(value: str, label: str, required: bool = True) -> str | None:
     if not NAME_RE.match(value):
         return f"{label} may only contain letters, spaces, hyphens, periods, and apostrophes."
     return None
+
+
+PHONE_RE = re.compile(r"^09\d{9}$")
+
+
+def phone_error(value: str, required: bool = False) -> str | None:
+    """PH mobile: exactly 11 digits starting with 09. Empty allowed when optional."""
+    value = (value or "").strip()
+    if not value:
+        return "Mobile number is required." if required else None
+    if not value.isdigit():
+        return "Mobile number must contain numbers only."
+    if len(value) != 11:
+        return "Mobile number must be exactly 11 digits. Example: 0912xxxxxxx"
+    if not value.startswith("09"):
+        return "Mobile number must start with 09. Example: 0912xxxxxxx"
+    if not PHONE_RE.match(value):
+        return "Enter a valid mobile number. Example: 0912xxxxxxx"
+    return None

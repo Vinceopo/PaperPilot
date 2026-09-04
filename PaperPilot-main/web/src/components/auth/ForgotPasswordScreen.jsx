@@ -1,5 +1,8 @@
 import { useState } from "react";
+import { signOut } from "firebase/auth";
 import { resetPasswordWithOtp, sendOtp } from "../../api.js";
+import { auth } from "../../firebase.js";
+import { markPasswordChanged } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
 import AuthShell from "./AuthShell.jsx";
 import OtpStep from "./OtpStep.jsx";
@@ -87,7 +90,11 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
     setBusy(true);
     try {
       await resetPasswordWithOtp({ email: email.trim(), resetToken, newPassword: password });
-      onDone("Password updated. Sign in with your new password.");
+      markPasswordChanged();
+      if (auth?.currentUser) {
+        await signOut(auth).catch(() => {});
+      }
+      onDone();
     } catch (err) {
       setFormError(err.message);
     } finally {

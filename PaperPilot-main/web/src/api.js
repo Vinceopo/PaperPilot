@@ -12,6 +12,17 @@ function detailMessage(err, fallback) {
   return fallback;
 }
 
+function networkError(err) {
+  const msg = String(err?.message || "");
+  if (err?.name === "TypeError" || /failed to fetch|networkerror|load failed/i.test(msg)) {
+    return new ApiError(
+      "Cannot reach the PaperPilot server. Start the API on port 8000 and try again.",
+      0
+    );
+  }
+  return err;
+}
+
 export class ApiError extends Error {
   constructor(message, status, detail) {
     super(message);
@@ -24,17 +35,27 @@ export class ApiError extends Error {
 
 async function responseData(res) {
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(detailMessage(data, res.statusText || "Request failed."), res.status, data.detail);
+  if (!res.ok) {
+    const fallback =
+      res.status === 502 || res.status === 503 || res.statusText === "Internal Server Error"
+        ? "Cannot reach the PaperPilot server. Make sure the API is running on port 8000."
+        : res.statusText || "Request failed.";
+    throw new ApiError(detailMessage(data, fallback), res.status, data.detail);
+  }
   return data;
 }
 
 async function postJson(path, body) {
-  const res = await fetch(`${API}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return responseData(res);
+  try {
+    const res = await fetch(`${API}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return await responseData(res);
+  } catch (err) {
+    throw networkError(err);
+  }
 }
 
 async function authorizedFetch(path, options = {}) {
@@ -46,8 +67,19 @@ async function authorizedFetch(path, options = {}) {
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(`${API}${path}`, { ...options, headers });
-  return responseData(res);
+  try {
+    const res = await fetch(`${API}${path}`, { ...options, headers });
+    if (res.status === 401 && auth?.currentUser) {
+      try {
+        await auth.signOut();
+      } catch {
+        // Session already gone.
+      }
+    }
+    return await responseData(res);
+  } catch (err) {
+    throw networkError(err);
+  }
 }
 
 export async function analyzeManuscript({ title, abstract, text }) {
@@ -168,4 +200,32 @@ export function getComplianceScan(scanId) {
 
 export function getSubscription() {
   return authorizedFetch("/subscription");
+}
+
+// ── Profile ──────────────────────────────────────────────────────────────────
+
+export function getProfile() {
+  return authorizedFetch("/profile");
+}
+
+/**
+ * @param {{ firstName?, middleName?, lastName?, contactNumber?, photoUrl?, removePhoto? }} data
+ */
+export function updateUserProfile(data) {
+  return authorizedFetch("/profile", {
+    method: "PATCH",
+    body: JSON.stringify({
+      first_name: data.firstName ?? undefined,
+      middle_name: data.middleName ?? undefined,
+      last_name: data.lastName ?? undefined,
+      username: data.username ?? undefined,
+      contact_number: data.contactNumber ?? undefined,
+      photo_url: data.photoUrl ?? undefined,
+      remove_photo: data.removePhoto ?? false,
+    }),
+  });
+}
+
+export function deactivateAccount() {
+  return authorizedFetch("/account/deactivate", { method: "POST", body: JSON.stringify({}) });
 }

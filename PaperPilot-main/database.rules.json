@@ -16,6 +16,13 @@
         ".validate": "!newData.exists() || newData.hasChildren(['uid', 'username'])"
       }
     },
+    "phones": {
+      "$phone": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.child('uid').val() === auth.uid && (!newData.exists() || newData.child('uid').val() === auth.uid)))",
+        ".validate": "!newData.exists() || newData.hasChildren(['uid', 'phone'])"
+      }
+    },
     "paperpilot": {
       ".read": false,
       ".write": false

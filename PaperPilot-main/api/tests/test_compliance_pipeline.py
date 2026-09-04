@@ -171,6 +171,39 @@ class PersistenceTests(FirebaseTestCase):
         )
         self.assertTrue(compliance_db.delete_mechanics("owner", first["id"]))
 
+    def test_deleted_mechanics_name_can_be_reused(self):
+        first = self.mechanics("Format Guide")
+        self.assertTrue(compliance_db.delete_mechanics("owner", first["id"]))
+        self.assertEqual(compliance_db.list_mechanics("owner"), [])
+        # Same display name must be allowed again after delete.
+        second = self.mechanics("Format Guide")
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(second["name"], "Format Guide")
+
+    def test_same_title_upload_becomes_new_version(self):
+        parsed, mechanics = self.parsed(), self.mechanics()
+        first, created_first = compliance_db.create_version(
+            "owner", "Thesis Draft", mechanics["id"], "a.docx", "docx", "Text", parsed, None
+        )
+        self.assertTrue(created_first)
+        second, created_second = compliance_db.create_version(
+            "owner", "thesis draft", mechanics["id"], "b.docx", "docx", "Text", parsed, None
+        )
+        self.assertFalse(created_second)
+        self.assertEqual(first["manuscript_id"], second["manuscript_id"])
+        self.assertEqual(first["version_number"], 1)
+        self.assertEqual(second["version_number"], 2)
+
+    def test_orphaned_mechanics_name_reservation_is_reclaimed(self):
+        # Simulate a stale name index entry whose mechanics row is already gone.
+        name_ref = compliance_db._reference(
+            f"{compliance_db.ROOT}/mechanics_names/owner/{compliance_db._name_key('Orphan Guide')}"
+        )
+        name_ref.set("missing-mechanics-id")
+        reclaimed = self.mechanics("Orphan Guide")
+        self.assertEqual(reclaimed["name"], "Orphan Guide")
+        self.assertEqual(name_ref.get(), reclaimed["id"])
+
     def test_mechanics_used_by_version_can_still_be_deleted(self):
         parsed, mechanics = self.parsed(), self.mechanics()
         version, _ = compliance_db.create_version(
@@ -182,6 +215,9 @@ class PersistenceTests(FirebaseTestCase):
         )
         # Deletion is now always allowed regardless of whether the mechanics is in use.
         self.assertTrue(compliance_db.delete_mechanics("owner", mechanics["id"]))
+        # And the name must be free for a fresh upload.
+        again = self.mechanics()
+        self.assertTrue(again["id"])
 
     def test_username_reservation_is_case_insensitive(self):
         self.assertTrue(profiles.reserve_username("Pilot.User", "one"))

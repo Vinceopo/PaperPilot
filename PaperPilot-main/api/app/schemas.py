@@ -60,3 +60,13 @@ class ComplianceScanRequest(BaseModel):
 
 class MechanicsRenameRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
+
+
+class UpdateProfileRequest(BaseModel):
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str | None = None
+    contact_number: str | None = None
+    username: str | None = None
+    photo_url: str | None = None
+    remove_photo: bool = False

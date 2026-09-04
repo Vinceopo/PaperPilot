@@ -27,6 +27,9 @@ class MechanicsNameConflict(ValueError):
     pass
 
 
+class ManuscriptTitleConflict(ValueError):
+    pass
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -67,6 +70,40 @@ def _name_key(name: str) -> str:
     return quote(name.strip().casefold(), safe="").replace(".", "%2E")
 
 
+def _live_mechanics_ids(owner_uid: str) -> set[str]:
+    items = _reference(f"{ROOT}/mechanics/{owner_uid}").get()
+    if not isinstance(items, dict):
+        return set()
+    return {key for key, value in items.items() if isinstance(value, dict)}
+
+
+def reconcile_mechanics_names(owner_uid: str) -> int:
+    """
+    Remove name-index entries that no longer point at a live mechanics document.
+    Returns how many orphaned name locks were cleared.
+    """
+    names = _reference(f"{ROOT}/mechanics_names/{owner_uid}").get()
+    if not isinstance(names, dict) or not names:
+        return 0
+    live = _live_mechanics_ids(owner_uid)
+    cleared = 0
+    for key, mechanics_id in list(names.items()):
+        if mechanics_id not in live:
+            _reference(f"{ROOT}/mechanics_names/{owner_uid}/{key}").delete()
+            cleared += 1
+    return cleared
+
+
+def _release_name_lock_if_orphaned(owner_uid: str, clean_name: str) -> None:
+    """Clear a single name reservation when its mechanics row is already gone."""
+    name_ref = _reference(f"{ROOT}/mechanics_names/{owner_uid}/{_name_key(clean_name)}")
+    current = name_ref.get()
+    if current is None:
+        return
+    if not isinstance(current, str) or current not in _live_mechanics_ids(owner_uid):
+        name_ref.delete()
+
+
 def init_db() -> None:
     """Initialize Firebase Admin without mutating persistent data."""
     firebase_admin_app()
@@ -87,13 +124,25 @@ def create_mechanics(
     owner_uid: str, name: str, filename: str, file_type: str, text: str, parsed: dict, rules: dict
 ) -> dict:
     item_id, created, clean_name = str(uuid.uuid4()), _iso(_now()), name.strip()
+    # Always sweep stale locks first so deleted mechanics names can be reused.
+    reconcile_mechanics_names(owner_uid)
+    _release_name_lock_if_orphaned(owner_uid, clean_name)
+
     name_ref = _reference(f"{ROOT}/mechanics_names/{owner_uid}/{_name_key(clean_name)}")
 
     def reserve(current):
         return item_id if current is None else current
 
-    if name_ref.transaction(reserve) != item_id:
-        raise MechanicsNameConflict("A mechanics document with this name already exists.")
+    reserved = name_ref.transaction(reserve)
+    if reserved != item_id:
+        # Last chance: holder may have been deleted between reconcile and reserve.
+        holder_id = reserved if isinstance(reserved, str) else None
+        if holder_id and holder_id not in _live_mechanics_ids(owner_uid):
+            name_ref.delete()
+            if name_ref.transaction(reserve) == item_id:
+                reserved = item_id
+        if reserved != item_id:
+            raise MechanicsNameConflict("A mechanics document with this name already exists.")
 
     item = {
         "id": item_id,
@@ -115,6 +164,7 @@ def create_mechanics(
 
 
 def list_mechanics(owner_uid: str) -> list[dict]:
+    reconcile_mechanics_names(owner_uid)
     items = _values(_reference(f"{ROOT}/mechanics/{owner_uid}").get())
     items.sort(key=lambda item: item.get("created_at", ""), reverse=True)
     return [_public_mechanics(item) for item in items]
@@ -146,6 +196,8 @@ def rename_mechanics(owner_uid: str, mechanics_id: str, name: str) -> dict | Non
 
     old_key, new_key = _name_key(item["name"]), _name_key(clean_name)
     if old_key != new_key:
+        reconcile_mechanics_names(owner_uid)
+        _release_name_lock_if_orphaned(owner_uid, clean_name)
         new_ref = _reference(f"{ROOT}/mechanics_names/{owner_uid}/{new_key}")
         if new_ref.transaction(lambda current: mechanics_id if current is None else current) != mechanics_id:
             raise MechanicsNameConflict("A mechanics document with this name already exists.")
@@ -172,12 +224,23 @@ def delete_mechanics(owner_uid: str, mechanics_id: str) -> bool:
     item = ref.get()
     if not isinstance(item, dict):
         return False
-    _reference(ROOT).update(
-        {
-            f"mechanics/{owner_uid}/{mechanics_id}": None,
-            f"mechanics_names/{owner_uid}/{_name_key(item['name'])}": None,
-        }
-    )
+
+    # Remove the mechanics document first.
+    ref.delete()
+
+    # Clear the primary name key derived from the stored display name.
+    stored_name = str(item.get("name") or "").strip()
+    if stored_name:
+        _reference(f"{ROOT}/mechanics_names/{owner_uid}/{_name_key(stored_name)}").delete()
+
+    # Also clear any leftover index entries that still point at this id
+    # (orphans from older deletes / mismatched keys).
+    names = _reference(f"{ROOT}/mechanics_names/{owner_uid}").get()
+    if isinstance(names, dict):
+        for key, value in names.items():
+            if value == mechanics_id:
+                _reference(f"{ROOT}/mechanics_names/{owner_uid}/{key}").delete()
+
     return True
 
 
@@ -197,6 +260,19 @@ def _public_version(item: dict, include_content: bool = True) -> dict:
     return value
 
 
+def find_manuscript_by_title(owner_uid: str, title: str, exclude_id: str | None = None) -> dict | None:
+    """Return an existing manuscript whose title matches case-insensitively."""
+    key = _name_key(title)
+    if not key:
+        return None
+    for item in _values(_reference(f"{ROOT}/manuscripts/{owner_uid}").get()):
+        if exclude_id and item.get("id") == exclude_id:
+            continue
+        if _name_key(str(item.get("title") or "")) == key:
+            return item
+    return None
+
+
 def create_version(
     owner_uid: str,
     title: str,
@@ -213,6 +289,23 @@ def create_version(
     created_parent = manuscript_id is None
     manuscript_id = manuscript_id or str(uuid.uuid4())
     clean_title = title.strip()
+    if not clean_title:
+        raise ValueError("A manuscript title is required.")
+
+    # Same title = new version of the existing manuscript (not a second manuscript).
+    if created_parent:
+        existing_by_title = find_manuscript_by_title(owner_uid, clean_title)
+        if existing_by_title is not None:
+            manuscript_id = existing_by_title["id"]
+            created_parent = False
+            clean_title = str(existing_by_title.get("title") or clean_title).strip()
+
+    if not created_parent:
+        existing_parent = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
+        if isinstance(existing_parent, dict) and existing_parent.get("title"):
+            # Keep the original title for version uploads — do not rename via filename.
+            clean_title = str(existing_parent["title"]).strip() or clean_title
+
     failure: list[str] = []
 
     def add_version(root):
@@ -252,7 +345,7 @@ def create_version(
         }
         parent.update(
             {
-                "title": clean_title,
+                "title": clean_title if created_parent else parent.get("title") or clean_title,
                 "current_version_id": version_id,
                 "version_counter": number,
                 "updated_at": created,

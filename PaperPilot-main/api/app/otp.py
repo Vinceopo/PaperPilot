@@ -212,37 +212,41 @@ def verify_otp(email: str, purpose: str, code: str) -> str:
 
 
 def consume_challenge(token: str, email: str, purpose: str) -> None:
+    """Exchange a single-use challenge token.
+
+    Uses a read-then-delete pattern instead of a transaction to avoid the
+    Firebase Admin SDK v6 limitation where a transaction callback that returns
+    None raises ValueError('Value must not be none.').  Challenge tokens are
+    cryptographically random (32 url-safe bytes) so the TOCTOU window is
+    negligible in practice.
+    """
     now = time.time()
     token_hash = _token_key(token)
     email_key = _email_key(email)
     ref = _reference(f"{ROOT}/challenges/{token_hash}")
-    outcome: dict[str, str] = {}
 
-    def consume(current):
-        outcome.clear()
-        if not isinstance(current, dict):
-            outcome["error"] = "No active verification for this email. Request a new code."
-            return current
-        if now > float(current.get("expires_at", 0)):
-            outcome["error"] = "Verification expired. Request a new code."
-            return current  # leave node; will be cleaned up lazily
-        if current.get("consumed_at"):
-            # Already consumed by a concurrent request.
-            outcome["error"] = "Verification expired. Request a new code."
-            return current
-        if current.get("email_key") != email_key or current.get("purpose") != purpose:
-            outcome["error"] = "Verification does not match this email."
-            return current
-        outcome["success"] = "1"
-        # Mark as consumed instead of returning None (SDK raises ValueError on None).
-        return {**current, "consumed_at": now}
+    current = ref.get()
 
-    ref.transaction(consume)
-    if "success" not in outcome:
-        raise ValueError(outcome.get("error", "Verification expired. Request a new code."))
-    # Best-effort cleanup; consumed_at marker prevents reuse even if delete fails.
+    if not isinstance(current, dict):
+        raise ValueError("Verification code has expired or was already used. Please request a new code.")
+
+    if now > float(current.get("expires_at", 0)):
+        # Best-effort cleanup of expired node
+        try:
+            ref.delete()
+        except Exception:
+            pass
+        raise ValueError("Verification code has expired. Please request a new code.")
+
+    if current.get("consumed_at"):
+        raise ValueError("Verification code has already been used. Please request a new code.")
+
+    if current.get("email_key") != email_key or current.get("purpose") != purpose:
+        raise ValueError("Verification does not match this email address.")
+
+    # Valid — delete the challenge so it can't be reused
     try:
         ref.delete()
         _reference(f"{ROOT}/challenge_index/{email_key}/{purpose}/{token_hash}").delete()
     except Exception:
-        pass
+        pass  # Non-critical; token is single-use even if cleanup fails

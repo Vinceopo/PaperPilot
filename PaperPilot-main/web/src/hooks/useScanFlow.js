@@ -28,12 +28,20 @@ function validateFile(file) {
   return "";
 }
 
+function titleFromFile(file) {
+  return file?.name?.replace(/\.(pdf|docx)$/i, "") || "";
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 /**
- * @param {{ mechanicsId?: string }} [opts]
+ * @param {{
+ *   mechanicsId?: string,
+ *   resolveManuscript?: (title: string, documentId: string|null) => ({ id: string, versions?: any[] }|null),
+ *   getActiveManuscript?: () => ({ id?: string, title?: string }|null),
+ * }} [opts]
  */
-export function useScanFlow({ mechanicsId } = {}) {
+export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript } = {}) {
   // ── Core state machine ────────────────────────────────────────────────────
   const [step, setStep] = useState("idle"); // idle | fileSelected | analyzing | results | error
 
@@ -66,30 +74,43 @@ export function useScanFlow({ mechanicsId } = {}) {
 
   /**
    * Runs the (mock) analysis.
-   * Guards against concurrent calls via the `analyzing` step gate.
+   * Uses the uploaded manuscript title/id so My Manuscripts stays consistent.
    */
   const analyze = useCallback(async () => {
     if (!file || fileError || step === "analyzing") return;
     setStep("analyzing");
-    setResult(null); // clear stale data before new analysis
+    setResult(null);
     setError("");
     try {
-      const scanResult = await analyzeDocument(file, mechanicsId, documentId);
-      if (!documentId) {
-        // First scan for this session
-        setDocumentId(scanResult.documentId);
-        setVersionNumber(1);
-      } else {
-        // Subsequent version
-        setVersionNumber((v) => v + 1);
-      }
+      const active = getActiveManuscript?.() || {};
+      const title = String(active.title || titleFromFile(file) || "").trim();
+      const preferredId =
+        (active.id && !String(active.id).startsWith("local-") ? active.id : null) ||
+        documentId ||
+        active.id ||
+        null;
+      const existing = resolveManuscript?.(title, preferredId) || null;
+      const reuseId = existing?.id || preferredId || null;
+      const maxVer = Math.max(
+        0,
+        ...((existing?.versions || []).map((v) => Number(v.versionNumber) || 0))
+      );
+      const nextVersion = existing || preferredId ? maxVer + 1 : 1;
+
+      const scanResult = await analyzeDocument(file, mechanicsId, reuseId, { title });
+      // Keep title from the manuscript form, not only the file name.
+      if (title) scanResult.documentTitle = title;
+      if (reuseId) scanResult.documentId = reuseId;
+
+      setDocumentId(scanResult.documentId);
+      setVersionNumber(nextVersion);
       setResult(scanResult);
       setStep("results");
     } catch (err) {
       setError(err?.message ?? "Analysis failed. Please try again.");
       setStep("error");
     }
-  }, [file, fileError, step, mechanicsId, documentId]);
+  }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript]);
 
   /** Returns the user to the upload screen from the error state. */
   const retry = useCallback(() => {
@@ -106,14 +127,13 @@ export function useScanFlow({ mechanicsId } = {}) {
     setDownloadBusy(true);
     setDownloadError("");
     try {
-      // Pass the full result so downloadReport can build a complete PDF
-      await downloadReportFn(result);
+      await downloadReportFn(result, { versionNumber });
     } catch (err) {
       setDownloadError(err?.message ?? "Download failed. Please try again.");
     } finally {
       setDownloadBusy(false);
     }
-  }, [downloadBusy, result]);
+  }, [downloadBusy, result, versionNumber]);
 
   /**
    * "Upload New Version" — returns to upload, keeps `documentId` so the
@@ -129,21 +149,19 @@ export function useScanFlow({ mechanicsId } = {}) {
   }, []);
 
   /**
-   * "Back to Dashboard" — fully resets all scan state.
+   * "Back to Dashboard" — clears file/result. Manuscript identity is resolved
+   * again on the next scan by title / kept documentId.
    */
   const backToDashboard = useCallback(() => {
     setFileInner(null);
     setFileError("");
     setResult(null);
     setError("");
-    setDocumentId(null);
-    setVersionNumber(1);
     setDownloadError("");
     setStep("idle");
   }, []);
 
   return {
-    // ── State ─────────────────────────────────────────────────────────────
     step,
     file,
     fileError,
@@ -153,7 +171,6 @@ export function useScanFlow({ mechanicsId } = {}) {
     versionNumber,
     downloadBusy,
     downloadError,
-    // ── Actions ───────────────────────────────────────────────────────────
     selectFile,
     analyze,
     retry,

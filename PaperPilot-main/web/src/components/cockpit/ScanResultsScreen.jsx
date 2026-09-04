@@ -318,7 +318,7 @@ export default function ScanResultsScreen({
             disabled={downloadBusy}
             className="mt-auto pt-5 w-full rounded-lg border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {downloadBusy ? "Generating PDF…" : "⬇  Download Analysis (PDF)"}
+            {downloadBusy ? "Generating PDF…" : `⬇  Download Analysis (PDF) · ${versionLabel}`}
           </button>
         </div>
       </div>

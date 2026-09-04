@@ -16,9 +16,10 @@ export const MAX_FILE_BYTES = 25_000_000; // 25 MB
  * @param {File}   file
  * @param {string} [mechanicsId]
  * @param {string} [documentId]   Pass an existing ID to get a "new version" result.
- * @returns {Promise<import('./scanTypes').ScanResult>}
+ * @param {{ title?: string }} [opts]
+ * @returns {Promise<object>}
  */
-export async function analyzeDocument(file, mechanicsId, documentId) {
+export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) {
   // Simulate network + AI processing delay (~2 s)
   await new Promise((resolve) => setTimeout(resolve, 2200));
 
@@ -28,10 +29,13 @@ export async function analyzeDocument(file, mechanicsId, documentId) {
   // ──────────────────────────────────────────────────────────────────────────
 
   const id = documentId ?? `doc-${crypto.randomUUID().slice(0, 8)}`;
+  const documentTitle =
+    (opts.title && String(opts.title).trim()) ||
+    file.name.replace(/\.(pdf|docx)$/i, "");
 
   return {
     documentId: id,
-    documentTitle: file.name.replace(/\.(pdf|docx)$/i, ""),
+    documentTitle,
     campus: "Main Campus",
     college: "College of Engineering",
     scannedAt: new Date().toISOString(),
@@ -122,11 +126,13 @@ export async function analyzeDocument(file, mechanicsId, documentId) {
 
 /**
  * Generates a PDF report from the full ScanResult and triggers a download.
- * Swap this body for a real API blob endpoint when the backend is ready.
+ * Same generator is used from Scan Results and My Manuscripts so versioned
+ * downloads stay consistent.
  *
  * @param {object} result  Full ScanResult object from analyzeDocument / real API
+ * @param {{ versionNumber?: number|string }} [opts]
  */
-export async function downloadReport(result) {
+export async function downloadReport(result, opts = {}) {
   const { jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
 
@@ -142,6 +148,9 @@ export async function downloadReport(result) {
     formatChecks = [],
   } = result;
 
+  const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
+  const versionLabel = `v${versionNumber}.0`;
+
   // ── Derived stats ─────────────────────────────────────────────────────────
   const totalErrors = formatChecks.filter((c) => c.result === "FAIL").length;
   const warnings    = formatChecks.filter((c) => c.result === "REVIEW").length;
@@ -155,7 +164,10 @@ export async function downloadReport(result) {
   }
 
   const scannedDate = scannedAt
-    ? new Date(scannedAt).toLocaleString("en-US", { dateStyle: "long", timeStyle: "short" })
+    ? new Date(scannedAt.length <= 10 ? `${scannedAt}T12:00:00` : scannedAt).toLocaleString("en-US", {
+        dateStyle: "long",
+        timeStyle: scannedAt.length > 10 ? "short" : undefined,
+      })
     : new Date().toLocaleString();
 
   const generatedDate = new Date().toLocaleString("en-US", { dateStyle: "long", timeStyle: "short" });
@@ -215,21 +227,22 @@ export async function downloadReport(result) {
   const titleLines = doc.splitTextToSize(documentTitle, CW - 60);
   doc.text(titleLines, ML, 28);
 
-  // Meta grid (top-right)
+  // Meta grid (top-right) — Version matches the on-screen results header
   const metaX = PW - MR - 58;
   doc.setFontSize(7).setFont(undefined, "normal").setTextColor(180, 190, 205);
   const meta = [
     ["Scanned",        scannedDate],
+    ["Version",        versionLabel],
     ["Citation style", citationStyle],
     ["Generated",      generatedDate],
   ];
   if (campus || college) meta.splice(1, 0, ["Campus / College", [college, campus].filter(Boolean).join(", ")]);
   meta.forEach(([label, val], i) => {
-    const ry = 16 + i * 8;
+    const ry = 14 + i * 7;
     doc.text(label, metaX, ry);
     doc.setTextColor(230, 235, 245).setFont(undefined, "bold");
     const valLines = doc.splitTextToSize(String(val), 58);
-    doc.text(valLines, metaX, ry + 3.5);
+    doc.text(valLines, metaX, ry + 3.2);
     doc.setTextColor(180, 190, 205).setFont(undefined, "normal");
   });
 
@@ -398,5 +411,5 @@ export async function downloadReport(result) {
 
   // ── Save ──────────────────────────────────────────────────────────────────
   const safeTitle = documentTitle.replace(/[^a-z0-9]/gi, "_").slice(0, 40);
-  doc.save(`paperpilot-report-${safeTitle}.pdf`);
+  doc.save(`paperpilot-report-${safeTitle}-${versionLabel}.pdf`);
 }
