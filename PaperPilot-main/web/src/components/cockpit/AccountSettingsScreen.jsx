@@ -18,6 +18,11 @@ import { sendOtp, resetPasswordWithOtp, getProfile, updateUserProfile } from "..
 import { markPasswordChanged } from "../../services/auth.js";
 import OtpStep from "../auth/OtpStep.jsx";
 import { nameError, phoneError, usernameError } from "../auth/validation.js";
+import {
+  loadNotifications,
+  saveNotifications,
+  pushNotification,
+} from "../../lib/notifications.js";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -196,7 +201,7 @@ function BackLink({ onClick, label = "← Back to account" }) {
 
 // ─── main component ───────────────────────────────────────────────────────────
 
-export default function AccountSettingsScreen({ user, tier = "free", onSignOut }) {
+export default function AccountSettingsScreen({ user, tier = "free", onSignOut, onManageSubscription }) {
   const [view, setView] = useState("summary"); // summary | edit | pwOtp | pwNew
 
   // Profile state (loaded from RTDB)
@@ -257,7 +262,12 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut }
 
   // ── derived ─────────────────────────────────────────────────────────────
   const fullName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(" ") || "—";
-  const canEditUsername = Boolean(user?.providerData?.some((p) => p.providerId === "password"));
+  const providers = user?.providerData || [];
+  const hasPasswordProvider = providers.some((p) => p.providerId === "password");
+  const isGoogleAccount = providers.some((p) => p.providerId === "google.com");
+  // Username belongs to email/password sign-up — never require it for Google accounts
+  // (even after they add a password for email login).
+  const canEditUsername = hasPasswordProvider && !isGoogleAccount;
   const isDirty = originalForm && (
     form.firstName !== originalForm.firstName ||
     form.middleName !== originalForm.middleName ||
@@ -370,6 +380,18 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut }
     setPwBusy(true);
     try {
       await resetPasswordWithOtp({ email, resetToken, newPassword: pw.newPw });
+      // Queue notification before sign-out so it appears when they sign back in.
+      if (user?.uid) {
+        const next = pushNotification(loadNotifications(user.uid), {
+          id: `password-${user.uid}-${Date.now()}`,
+          type: "password",
+          title: "Password changed",
+          body: "Your account password was updated successfully.",
+          createdAt: new Date().toISOString(),
+          read: false,
+        });
+        saveNotifications(next, user.uid);
+      }
       markPasswordChanged();
       onSignOut();
     } catch (err) {
@@ -488,7 +510,7 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut }
             purpose="reset_password"
             title="Check your email"
             subtitle={`Enter the 6-digit code sent to ${email}`}
-            expiresIn={otpMeta?.expires_in || 600}
+            expiresIn={otpMeta?.expires_in || 300}
             resendIn={otpMeta?.resend_in || 60}
             devCode={otpMeta?.dev_code || ""}
             onVerified={handleOtpVerified}
@@ -664,11 +686,27 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut }
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
                 </svg>
-                Change password
+                {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
               </>
             )}
           </button>
         </div>
+
+        {isGoogleAccount && (
+          <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+            You sign in with Google. Setting a password is optional and only needed if you also want email login — no username is required.
+          </p>
+        )}
+
+        {onManageSubscription && (
+          <button
+            type="button"
+            onClick={onManageSubscription}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-[#f8f9fb] px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+          >
+            Manage subscription
+          </button>
+        )}
 
         {sendOtpError && (
           <p className="mt-3 text-xs text-rose-500" role="alert">{sendOtpError}</p>

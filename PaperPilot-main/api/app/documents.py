@@ -227,13 +227,66 @@ def derive_mechanics_rules(text: str) -> dict:
             if 6 <= float(value) <= 72
         }
     )
-    if fonts or sizes:
-        rules["font"] = {}
-        if fonts:
-            rules["font"]["families"] = fonts
-        if sizes:
-            rules["font"]["sizes_points"] = sizes
+    font_out: dict = {}
+    if fonts:
+        font_out["families"] = fonts
+        font_out["type"] = fonts[0]
+    if sizes:
+        font_out["sizes_points"] = sizes
+        if len(sizes) >= 1:
+            font_out["heading3_content_size"] = sizes[0]
+        if len(sizes) >= 2:
+            font_out["heading2_size"] = sizes[1]
+        if len(sizes) >= 3:
+            font_out["heading1_size"] = sizes[-1]
+        elif len(sizes) == 1:
+            font_out["heading1_size"] = sizes[0]
+            font_out["heading2_size"] = sizes[0]
 
+    heading1 = re.search(
+        r"\b(?:heading\s*1|h1|chapter titles?)\b[^\d]{0,40}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)\b",
+        normalized,
+        re.I,
+    )
+    heading2 = re.search(
+        r"\b(?:heading\s*2|h2|section titles?)\b[^\d]{0,40}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)\b",
+        normalized,
+        re.I,
+    )
+    heading3 = re.search(
+        r"\b(?:heading\s*3|h3|body(?:\s+text)?|content(?:\s+text)?)\b[^\d]{0,40}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)\b",
+        normalized,
+        re.I,
+    )
+    if not heading3:
+        heading3 = re.search(
+            r"\b(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)\b[^\n.]{0,40}\b(?:body(?:\s+text)?|content(?:\s+text)?)\b",
+            normalized,
+            re.I,
+        )
+    if heading1:
+        font_out["heading1_size"] = float(heading1.group(1))
+    if heading2:
+        font_out["heading2_size"] = float(heading2.group(1))
+    if heading3:
+        font_out["heading3_content_size"] = float(heading3.group(1))
+
+    color = re.search(
+        r"\b(?:font|text)\s+colou?r\s*(?:of|:|=|should be|must be)?\s*"
+        r"(black(?:\s*/\s*automatic)?|automatic|black)\b",
+        normalized,
+        re.I,
+    )
+    if color:
+        token = color.group(1).strip()
+        font_out["color"] = "Black/Automatic" if "/" in token.lower() or "automatic" in token.lower() else token.title()
+    elif re.search(r"\bblack(?:\s*/\s*automatic)?\b", normalized, re.I) and fonts:
+        font_out["color"] = "Black/Automatic"
+
+    if font_out:
+        rules["font"] = font_out
+
+    paper: dict = {}
     named_paper = re.search(r"\b(A4|letter|legal)\b(?:\s+(?:paper|page|size))?", normalized, re.I)
     dimensions = re.search(
         r"\b(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")\s*[x×by]+\s*"
@@ -245,9 +298,34 @@ def derive_mechanics_rules(text: str) -> dict:
         rules["paper_size"] = {}
         if named_paper:
             rules["paper_size"]["name"] = named_paper.group(1).upper()
+            if named_paper.group(1).upper() == "LETTER":
+                paper["size"] = "8.5 x 11"
+            elif named_paper.group(1).upper() == "A4":
+                paper["size"] = "8.27 x 11.69"
+            elif named_paper.group(1).upper() == "LEGAL":
+                paper["size"] = "8.5 x 14"
         if dimensions:
-            rules["paper_size"]["width_inches"] = float(dimensions.group(1))
-            rules["paper_size"]["height_inches"] = float(dimensions.group(2))
+            width = float(dimensions.group(1))
+            height = float(dimensions.group(2))
+            rules["paper_size"]["width_inches"] = width
+            rules["paper_size"]["height_inches"] = height
+            paper["size"] = f"{width:g} x {height:g}"
+
+    orientation = re.search(r"\b(portrait|landscape)\b(?:\s+orientation)?", normalized, re.I)
+    if orientation:
+        paper["orientation"] = orientation.group(1).title()
+
+    substance = re.search(
+        r"\b(?:paper\s+)?(?:weight|substance|lb|pound)\b[^\d]{0,20}?(\d{1,3})\b",
+        normalized,
+        re.I,
+    )
+    if not substance:
+        substance = re.search(r"\b(\d{2,3})\s*(?:lb|pound|#)\s+(?:paper|bond)\b", normalized, re.I)
+    if substance:
+        paper["substance"] = substance.group(1)
+    if paper:
+        rules["paper"] = paper
 
     spacing = re.search(
         r"\b(single|double|one(?:[\s-]and[\s-]a[\s-]half)|1(?:\.0)?|1\.5|2(?:\.0)?)"
@@ -257,10 +335,12 @@ def derive_mechanics_rules(text: str) -> dict:
     )
     if spacing:
         token = spacing.group(1).lower()
-        rules["line_spacing"] = (
+        value = (
             1.0 if token in {"single", "1", "1.0"} else
             1.5 if token in {"1.5", "one-and-a-half", "one and a half"} else 2.0
         )
+        rules["line_spacing"] = value
+        rules["spacing"] = str(value)
 
     margins: dict[str, float] = {}
     uniform = re.search(
@@ -268,9 +348,9 @@ def derive_mechanics_rules(text: str) -> dict:
     )
     if uniform:
         margins = {side: float(uniform.group(1)) for side in ("top", "bottom", "left", "right")}
-    for side in ("top", "bottom", "left", "right"):
+    for side in ("top", "bottom", "left", "right", "gutter", "header", "footer"):
         match = re.search(
-            rf"\b{side}\s+margin\s*(?:of|:|=|should be|must be)?\s*"
+            rf"\b{side}\s+(?:margin|from\s+edge)?\s*(?:of|:|=|should be|must be)?\s*"
             r"(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")",
             normalized,
             re.I,
@@ -281,13 +361,18 @@ def derive_mechanics_rules(text: str) -> dict:
         rules["margins_inches"] = margins
 
     indent = re.search(
-        r"\b(?:first(?:[\s-]line)?|paragraph)\s+indent(?:ation)?\s*"
-        r"(?:of|:|=|should be|must be)?\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")",
+        r"\b(?:first(?:[\s-]line)?|paragraph)\s+indent(?:ation|ion)?\s*"
+        r"(?:of|:|=|should be|must be)?\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\"|tab)?",
         normalized,
         re.I,
     )
+    tab_indent = re.search(r"\b(?:indent(?:ation|ion)?|indention)\b[^\n]{0,40}\b(1\s*tab|one\s+tab)\b", normalized, re.I)
     if indent:
         rules["first_line_indent_inches"] = float(indent.group(1))
+        rules["indention"] = f"{indent.group(1)} inch"
+    elif tab_indent:
+        rules["indention"] = tab_indent.group(1)
+        rules["first_line_indent_inches"] = 0.5
 
     citation = re.search(
         r"\b(APA|MLA|Chicago|Harvard|IEEE|Vancouver|Turabian)\b"
@@ -313,4 +398,239 @@ def derive_mechanics_rules(text: str) -> dict:
         rules["heading_requirements"] = heading_terms
     if pagination_terms:
         rules["pagination_requirements"] = pagination_terms
+
+    pagination: dict = {}
+    position = re.search(
+        r"\bpage numbers?\b[^\n.]{0,80}\b(top|bottom)\s+(left|right|center|centre)\b",
+        normalized,
+        re.I,
+    )
+    if not position:
+        position = re.search(
+            r"\b(top|bottom)\s+(left|right|center|centre)\b[^\n.]{0,40}\bpage numbers?\b",
+            normalized,
+            re.I,
+        )
+    if position:
+        pagination["position"] = f"{position.group(1).title()} {position.group(2).lower()}"
+    first_page = re.search(
+        r"\b(?:first page|chapter(?:\s+opening)?(?:\s+page)?)\b[^\n.]{0,80}"
+        r"\b(no page number|omit(?:ted)?|not (?:shown|displayed)|hidden)\b",
+        normalized,
+        re.I,
+    )
+    if first_page:
+        pagination["first_page_of_chapter"] = first_page.group(0)[:200]
+    if pagination:
+        rules["pagination"] = pagination
+
+    page_break_terms = [
+        sentence[:500] for sentence in sentences
+        if re.search(r"\b(page breaks?|new page|section break|start (?:each|every) .+ on a new page)\b", sentence, re.I)
+        and re.search(r"\b(must|shall|required|should|use|begin|start)\b", sentence, re.I)
+    ]
+    table_terms = [
+        sentence[:500] for sentence in sentences
+        if re.search(r"\btables?\b", sentence, re.I)
+        and re.search(r"\b(must|shall|required|should|format|caption|center|title|above|below)\b", sentence, re.I)
+    ]
+    figure_terms = [
+        sentence[:500] for sentence in sentences
+        if re.search(r"\bfigures?\b", sentence, re.I)
+        and re.search(r"\b(must|shall|required|should|format|caption|center|title|above|below|bold|underline)\b", sentence, re.I)
+    ]
+    if page_break_terms:
+        rules["page_break_requirements"] = page_break_terms
+    if table_terms:
+        rules["table_layout_requirements"] = table_terms
+    if figure_terms:
+        rules["figure_layout_requirements"] = figure_terms
     return rules
+
+
+def normalize_mechanics_rules(raw: dict | None) -> dict:
+    """Sanitize client-edited rules into the shape used by compliance checks."""
+    if not isinstance(raw, dict):
+        return {}
+    rules: dict = {}
+
+    font = raw.get("font") if isinstance(raw.get("font"), dict) else {}
+    families = font.get("families") or raw.get("font_families") or []
+    if isinstance(families, str):
+        families = [part.strip() for part in families.split(",") if part.strip()]
+    font_type = str(font.get("type") or raw.get("font_type") or "").strip()
+    if font_type and font_type not in families:
+        families = [font_type, *list(families)]
+    sizes = font.get("sizes_points") or raw.get("font_sizes") or []
+    if isinstance(sizes, (int, float, str)) and str(sizes).strip():
+        try:
+            sizes = [float(sizes)]
+        except ValueError:
+            sizes = []
+    font_out: dict = {}
+    if families:
+        font_out["families"] = [str(f).strip() for f in families if str(f).strip()][:8]
+    if font_type:
+        font_out["type"] = font_type
+    color = str(font.get("color") or raw.get("font_color") or "").strip()
+    if color:
+        font_out["color"] = color[:80]
+    for key in ("heading1_size", "heading2_size", "heading3_content_size"):
+        value = font.get(key, raw.get(key))
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if 6 <= number <= 72:
+            font_out[key] = number
+            if isinstance(sizes, list):
+                sizes = [*list(sizes), number]
+            else:
+                sizes = [number]
+    if sizes:
+        cleaned = []
+        for value in sizes:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 6 <= number <= 72:
+                cleaned.append(number)
+        if cleaned:
+            # Preserve order while unique-ing
+            seen: set[float] = set()
+            unique = []
+            for number in cleaned:
+                if number not in seen:
+                    seen.add(number)
+                    unique.append(number)
+            font_out["sizes_points"] = unique[:8]
+    if font_out:
+        rules["font"] = font_out
+
+    paper_in = raw.get("paper") if isinstance(raw.get("paper"), dict) else {}
+    paper_out: dict = {}
+    for key in ("size", "orientation", "substance"):
+        value = str(paper_in.get(key) or raw.get(f"paper_{key}") or "").strip()
+        if value:
+            paper_out[key] = value[:120]
+    if paper_out:
+        rules["paper"] = paper_out
+
+    paper = raw.get("paper_size") if isinstance(raw.get("paper_size"), dict) else {}
+    paper_name = str(paper.get("name") or raw.get("paper_size_name") or "").strip().upper()
+    size_label = str(paper_out.get("size") or "").upper()
+    if not paper_name and size_label:
+        if "14" in size_label and "8.5" in size_label:
+            paper_name = "LEGAL"
+        elif "8.5" in size_label and "11" in size_label:
+            paper_name = "LETTER"
+        elif "A4" in size_label or "8.27" in size_label:
+            paper_name = "A4"
+    paper_size_out: dict = {}
+    if paper_name in {"A4", "LETTER", "LEGAL"}:
+        paper_size_out["name"] = paper_name
+    try:
+        width = float(paper.get("width_inches"))
+        height = float(paper.get("height_inches"))
+        if width > 0 and height > 0:
+            paper_size_out["width_inches"] = width
+            paper_size_out["height_inches"] = height
+    except (TypeError, ValueError):
+        dims = re.search(r"(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)", size_label, re.I)
+        if dims:
+            paper_size_out["width_inches"] = float(dims.group(1))
+            paper_size_out["height_inches"] = float(dims.group(2))
+    if paper_size_out:
+        rules["paper_size"] = paper_size_out
+
+    spacing_raw = raw.get("line_spacing", raw.get("spacing"))
+    try:
+        spacing = float(spacing_raw)
+        if spacing in {1.0, 1.5, 2.0}:
+            rules["line_spacing"] = spacing
+            rules["spacing"] = str(spacing)
+    except (TypeError, ValueError):
+        spacing_text = str(raw.get("spacing") or "").strip()
+        if spacing_text:
+            rules["spacing"] = spacing_text[:80]
+            match = re.search(r"(\d+(?:\.\d+)?)", spacing_text)
+            if match:
+                try:
+                    spacing = float(match.group(1))
+                    if spacing in {1.0, 1.5, 2.0}:
+                        rules["line_spacing"] = spacing
+                except ValueError:
+                    pass
+
+    indention = str(raw.get("indention") or "").strip()
+    if indention:
+        rules["indention"] = indention[:120]
+    try:
+        indent = float(raw.get("first_line_indent_inches"))
+        if 0 <= indent <= 2:
+            rules["first_line_indent_inches"] = indent
+    except (TypeError, ValueError):
+        if indention:
+            match = re.search(r"(\d+(?:\.\d+)?)", indention)
+            if match:
+                try:
+                    indent = float(match.group(1))
+                    if 0 <= indent <= 2:
+                        rules["first_line_indent_inches"] = indent
+                except ValueError:
+                    pass
+
+    margins_in = raw.get("margins_inches") if isinstance(raw.get("margins_inches"), dict) else {}
+    margins: dict[str, float] = {}
+    for side in ("top", "bottom", "left", "right", "gutter", "header", "footer"):
+        value = margins_in.get(side, raw.get(f"margin_{side}"))
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= number <= 5:
+            margins[side] = number
+    if margins:
+        rules["margins_inches"] = margins
+
+    citation = str(raw.get("citation_style") or "").strip().upper()
+    if citation in {"APA", "MLA", "IEEE", "CHICAGO", "HARVARD", "VANCOUVER", "TURABIAN"}:
+        rules["citation_style"] = citation
+
+    pagination_in = raw.get("pagination") if isinstance(raw.get("pagination"), dict) else {}
+    pagination_out: dict = {}
+    position = str(pagination_in.get("position") or raw.get("pagination_position") or "").strip()
+    first_page = str(
+        pagination_in.get("first_page_of_chapter") or raw.get("pagination_first_page_rule") or ""
+    ).strip()
+    if position:
+        pagination_out["position"] = position[:200]
+    if first_page:
+        pagination_out["first_page_of_chapter"] = first_page[:200]
+    if pagination_out:
+        rules["pagination"] = pagination_out
+
+    def _lines(value) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip()[:500] for item in value if str(item).strip()][:12]
+        if isinstance(value, str) and value.strip():
+            return [part.strip()[:500] for part in re.split(r"[\n;]+", value) if part.strip()][:12]
+        return []
+
+    for key in (
+        "heading_requirements",
+        "pagination_requirements",
+        "page_break_requirements",
+        "table_layout_requirements",
+        "figure_layout_requirements",
+    ):
+        lines = _lines(raw.get(key))
+        if lines:
+            rules[key] = lines
+
+    if pagination_out and "pagination_requirements" not in rules:
+        rules["pagination_requirements"] = list(pagination_out.values())
+
+    return rules
+

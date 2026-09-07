@@ -15,9 +15,18 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_starttls: bool = True
 
-    otp_ttl_seconds: int = 600
+    # Prefer Resend when set (dev: onboarding@resend.dev). SMTP remains a fallback.
+    resend_api_key: str = ""
+    resend_from: str = "onboarding@resend.dev"
+
+    otp_ttl_seconds: int = 300
     otp_resend_seconds: int = 60
+    otp_rate_window_seconds: int = 3600  # window for otp_max_sends_per_hour
     otp_max_sends_per_hour: int = 5
+    # Stricter limits for forgot / change password (purpose=reset_password).
+    otp_reset_resend_seconds: int = 60
+    otp_reset_window_seconds: int = 1800  # 30 minutes
+    otp_reset_max_sends: int = 10
     otp_max_attempts: int = 5
     otp_echo_in_response: bool = False
     # Keys the HMAC used to hash codes at rest. Generated in server-only RTDB state when blank.

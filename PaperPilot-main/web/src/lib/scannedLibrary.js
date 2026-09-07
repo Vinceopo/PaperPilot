@@ -115,8 +115,17 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
       .filter((c) => c.result === "FAIL" || c.result === "REVIEW")
       .map((c) => ({
         category: c.name || "Format",
-        severity: c.result === "FAIL" ? "critical" : "warning",
-        description: c.details || c.description || c.name,
+        severity:
+          c.severity === "minor"
+            ? "minor"
+            : c.severity === "moderate" || c.result === "REVIEW"
+              ? "moderate"
+              : "critical",
+        description: c.finding || c.details || c.description || c.name,
+        finding: c.finding || c.details || "",
+        explanation: c.explanation || c.details || c.description || "",
+        recommendation: c.recommendation || "",
+        locations: Array.isArray(c.locations) ? c.locations : [],
       })),
     breakdown: (scanResult.scoreBreakdown || []).map((b) => ({
       section: b.metric || b.section || "Section",
@@ -187,8 +196,19 @@ export function versionToScanResult(manuscript, version) {
       id: `issue-${idx}`,
       name: issue.category || "Format",
       description: issue.description || issue.category || "",
-      details: issue.description || "",
-      result: issue.severity === "critical" ? "FAIL" : "REVIEW",
+      details: issue.finding || issue.description || "",
+      finding: issue.finding || issue.description || "",
+      explanation: issue.explanation || issue.description || "",
+      recommendation: issue.recommendation || "",
+      severity: issue.severity || "moderate",
+      locations: Array.isArray(issue.locations) ? issue.locations : [],
+      result: issue.severity === "critical" || issue.severity === "major" ? "FAIL" : "REVIEW",
     })),
+    pageCount: Math.max(
+      0,
+      ...issues.flatMap((issue) =>
+        (issue.locations || []).map((loc) => Number(loc.page) || 0)
+      )
+    ),
   };
 }

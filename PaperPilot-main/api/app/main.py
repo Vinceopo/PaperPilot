@@ -13,6 +13,7 @@ from app.compliance_db import (
     MechanicsNameConflict,
     ManuscriptTitleConflict,
     UpgradeRequired,
+    cancel_subscription,
     check_scan_eligibility,
     create_mechanics,
     create_version,
@@ -28,10 +29,11 @@ from app.compliance_db import (
     persist_scan,
     rename_mechanics,
     require_premium,
+    set_subscription_plan,
     subscription_snapshot,
 )
-from app.documents import DocumentError, derive_mechanics_rules, parse_document, validate_document
-from app.emailer import send_otp_email
+from app.documents import DocumentError, derive_mechanics_rules, normalize_mechanics_rules, parse_document, validate_document
+from app.emailer import email_delivery_configured, send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
 from app.otp import PURPOSES, can_send, consume_challenge, generate_code, init_db, store_otp, verify_otp
@@ -51,14 +53,17 @@ from app.rules import evaluate_manuscript
 from app.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
+    CancelSubscriptionRequest,
     ComplianceScanRequest,
     MechanicsRenameRequest,
+    MechanicsSaveRequest,
     OtpSendRequest,
     OtpVerifyRequest,
     RegisterCheckRequest,
     RegisterRequest,
     ResetPasswordRequest,
     RuleResult,
+    SubscribeRequest,
     UpdateProfileRequest,
 )
 from app.validators import email_error, name_error, normalize_email, password_error, phone_error, username_error
@@ -170,6 +175,55 @@ def mechanics_list(uid: str = Depends(authenticated_uid)):
     return {"items": list_mechanics(uid)}
 
 
+@app.post("/mechanics/extract")
+async def mechanics_extract(
+    file: UploadFile = File(...),
+    uid: str = Depends(authenticated_uid),
+):
+    """Parse a format guide and return editable rules without saving."""
+    del uid  # auth only
+    try:
+        filename, file_type, parsed = await _read_document(file)
+        text = parsed["text"]
+        if not text:
+            raise DocumentError("No extractable text was found in the document.")
+        rules = derive_mechanics_rules(text)
+        return {
+            "name": Path(filename).stem[:200],
+            "source_filename": filename,
+            "file_type": file_type,
+            "text_preview": text[:6000],
+            "extracted_text": text[:100_000],
+            "rules": rules,
+        }
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.post("/mechanics/save", status_code=201)
+def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_uid)):
+    """Save a mechanics profile from AI extraction (edited) or manual customize."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A mechanics name is required.")
+    rules = normalize_mechanics_rules(body.rules)
+    if not rules:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one format rule before saving.",
+        )
+    filename = (body.source_filename or f"{name}.manual").strip()[:300]
+    file_type = (body.file_type or "manual").strip()[:40] or "manual"
+    text = (body.extracted_text or "").strip()
+    parsed = {"text": text, "pages": [], "source": "manual" if file_type == "manual" else "upload"}
+    try:
+        return create_mechanics(uid, name[:200], filename, file_type, text, parsed, rules)
+    except MechanicsNameConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
 @app.post("/mechanics", status_code=201)
 async def mechanics_create(
     file: UploadFile = File(...),
@@ -220,6 +274,29 @@ def mechanics_delete(mechanics_id: str, uid: str = Depends(authenticated_uid)):
     if not deleted:
         raise HTTPException(status_code=404, detail="Mechanics not found.")
     return {"ok": True}
+
+
+@app.post("/manuscripts/preview")
+async def manuscript_preview(
+    file: UploadFile = File(...),
+    uid: str = Depends(authenticated_uid),
+):
+    """Extract manuscript text for a side-by-side preview (no version created)."""
+    del uid
+    try:
+        filename, file_type, parsed = await _read_document(file)
+        text = parsed.get("text") or ""
+        if not text:
+            raise DocumentError("No extractable text was found in the document.")
+        return {
+            "filename": filename,
+            "file_type": file_type,
+            "text_preview": text[:10000],
+            "char_count": len(text),
+            "page_count": parsed.get("page_count") or len(parsed.get("pages") or []) or None,
+        }
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.get("/manuscripts")
@@ -350,6 +427,51 @@ def compliance_scan_detail(scan_id: str, uid: str = Depends(authenticated_uid)):
 @app.get("/subscription")
 def subscription_detail(uid: str = Depends(authenticated_uid)):
     return subscription_snapshot(uid)
+
+
+PREMIUM_PRICE_MONTHLY = 949.0
+PREMIUM_PRICE_ANNUAL = 9490.0
+
+
+@app.post("/subscription/subscribe")
+def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authenticated_uid)):
+    """Activate or change plan. Payment is simulated for demo (no live charge)."""
+    plan = body.plan.strip().lower()
+    try:
+        if plan == "free":
+            return set_subscription_plan(uid, tier="free")
+        amount = (
+            PREMIUM_PRICE_ANNUAL
+            if (body.billing_period or "monthly") == "annual"
+            else PREMIUM_PRICE_MONTHLY
+        )
+        return set_subscription_plan(
+            uid,
+            tier="premium",
+            billing_period=body.billing_period or "monthly",
+            payment_method=body.payment_method or "card",
+            amount=amount,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.post("/subscription/cancel")
+def subscription_cancel(
+    body: CancelSubscriptionRequest | None = None,
+    uid: str = Depends(authenticated_uid),
+):
+    current = subscription_snapshot(uid)
+    if current.get("tier") != "premium" and current.get("status") not in {"active", "canceled"}:
+        raise HTTPException(status_code=400, detail="No active Premium subscription to cancel.")
+    immediate = True if body is None else bool(body.immediate)
+    return cancel_subscription(uid, immediate=immediate)
+
+
+@app.get("/subscription/history")
+def subscription_history(uid: str = Depends(authenticated_uid)):
+    snap = subscription_snapshot(uid)
+    return {"history": snap.get("history") or []}
 
 
 def _require(error: str | None) -> None:
@@ -559,28 +681,45 @@ def auth_otp_send(body: OtpSendRequest):
     if body.purpose == "reset_password" and registered is False:
         raise HTTPException(status_code=404, detail="No account found for this email.")
 
-    allowed, _wait, reason = can_send(email, body.purpose)
+    allowed, wait, reason = can_send(email, body.purpose)
     if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
+        raise HTTPException(
+            status_code=429,
+            detail={"message": reason, "retry_after": wait},
+            headers={"Retry-After": str(wait)},
+        )
 
     code = generate_code()
     try:
         ttl = store_otp(email, body.purpose, code)
     except ValueError as exc:
         # Re-checking inside the RTDB transaction closes concurrent-send races.
-        raise HTTPException(status_code=429, detail=str(exc)) from None
+        message = str(exc)
+        _, retry_wait, _ = can_send(email, body.purpose)
+        raise HTTPException(
+            status_code=429,
+            detail={"message": message, "retry_after": retry_wait or settings.otp_resend_seconds},
+            headers={"Retry-After": str(retry_wait or settings.otp_resend_seconds)},
+        ) from None
+
     try:
         send_otp_email(email, code, body.purpose)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not send email: {exc}") from exc
+    minutes = max(1, ttl // 60)
+    resend_in = (
+        settings.otp_reset_resend_seconds
+        if body.purpose == "reset_password"
+        else settings.otp_resend_seconds
+    )
     payload = {
         "ok": True,
         "expires_in": ttl,
-        "resend_in": settings.otp_resend_seconds,
+        "resend_in": resend_in,
         "max_attempts": settings.otp_max_attempts,
-        "message": "A 6-digit code was sent to your email. It expires in 10 minutes.",
+        "message": f"A 6-digit code was sent to your email. It expires in {minutes} minute(s).",
     }
-    if settings.otp_echo_in_response or not settings.smtp_host:
+    if settings.otp_echo_in_response or not email_delivery_configured():
         payload["dev_code"] = code
     return payload
 

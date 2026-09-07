@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { manuscriptSummary } from "../../lib/scoreBand.js";
 import ManuscriptDetailModal from "./ManuscriptDetailModal.jsx";
+import ConfirmDialog from "../ConfirmDialog.jsx";
 
 const PAGE_SIZE = 8;
 const STATUS_FILTERS = [
@@ -61,6 +62,7 @@ export default function MyManuscriptsScreen({
   const [page, setPage] = useState(1);
   const [viewId, setViewId] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   function setItems(updater) {
     const next = typeof updater === "function" ? updater(items) : updater;
@@ -95,9 +97,14 @@ export default function MyManuscriptsScreen({
 
   function confirmDelete() {
     if (!deleteId) return;
-    setItems((prev) => prev.filter((m) => m.id !== deleteId));
-    if (viewId === deleteId) setViewId(null);
-    setDeleteId(null);
+    setDeleteBusy(true);
+    try {
+      setItems((prev) => prev.filter((m) => m.id !== deleteId));
+      if (viewId === deleteId) setViewId(null);
+      setDeleteId(null);
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   return (
@@ -339,32 +346,19 @@ export default function MyManuscriptsScreen({
       )}
 
       {pendingDelete && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-4">
-          <div role="alertdialog" aria-labelledby="del-title" className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-            <h3 id="del-title" className="text-base font-bold text-[#0F1729]">
-              Delete manuscript?
-            </h3>
-            <p className="mt-2 text-sm text-slate-500">
-              “{pendingDelete.title}” and all of its versions will be removed from this list. This cannot be undone.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setDeleteId(null)}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={confirmDelete}
-                className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-700"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmDialog
+          open
+          title="Delete manuscript?"
+          message={`“${pendingDelete.title}” and all of its versions will be removed from this list. This cannot be undone.`}
+          confirmLabel="Delete"
+          tone="danger"
+          busy={deleteBusy}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeleteId(null);
+          }}
+          onConfirm={confirmDelete}
+        />
       )}
     </div>
   );

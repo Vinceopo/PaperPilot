@@ -255,6 +255,17 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
                             <span className="uppercase tracking-wide opacity-80">{issue.severity}</span>
                           </div>
                           <p className="mt-1 leading-relaxed opacity-90">{issue.description}</p>
+                          {Array.isArray(issue.locations) && issue.locations.length > 0 && (
+                            <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-wide opacity-70">
+                              {issue.locations
+                                .map((loc) =>
+                                  loc.page != null
+                                    ? `p.${loc.page}${loc.line != null ? ` · line ${loc.line}` : ""}`
+                                    : loc.section || "Document"
+                                )
+                                .join(" · ")}
+                            </p>
+                          )}
                         </li>
                       ))}
                     </ul>

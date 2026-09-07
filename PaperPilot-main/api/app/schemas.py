@@ -62,6 +62,14 @@ class MechanicsRenameRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
 
 
+class MechanicsSaveRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    rules: dict = Field(default_factory=dict)
+    source_filename: str | None = Field(default=None, max_length=300)
+    file_type: str | None = Field(default=None, max_length=40)
+    extracted_text: str | None = Field(default=None, max_length=200_000)
+
+
 class UpdateProfileRequest(BaseModel):
     first_name: str | None = None
     middle_name: str | None = None
@@ -70,3 +78,13 @@ class UpdateProfileRequest(BaseModel):
     username: str | None = None
     photo_url: str | None = None
     remove_photo: bool = False
+
+
+class SubscribeRequest(BaseModel):
+    plan: str = Field(..., pattern="^(free|premium)$")
+    billing_period: str | None = Field(default="monthly", pattern="^(monthly|annual)$")
+    payment_method: str | None = Field(default="card", pattern="^(card|gcash|maya)$")
+
+
+class CancelSubscriptionRequest(BaseModel):
+    immediate: bool = True

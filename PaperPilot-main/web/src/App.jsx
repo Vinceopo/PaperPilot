@@ -3,25 +3,27 @@ import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, firebaseReady } from "./firebase.js";
 import {
   deleteMechanics as deleteMechanicsRequest,
+  extractMechanics,
   getSubscription,
   listManuscripts,
-  listManuscriptVersions,
   listMechanics,
+  previewManuscript,
   renameMechanics as renameMechanicsRequest,
-  runComplianceScan,
+  saveMechanicsProfile,
   uploadManuscriptVersion,
-  uploadMechanics,
 } from "./api.js";
 import AuthScreen from "./components/AuthScreen.jsx";
 import RegistrationSuccessScreen from "./components/auth/RegistrationSuccessScreen.jsx";
 import MechanicsPanel from "./components/cockpit/MechanicsPanel.jsx";
 import ManuscriptPanel from "./components/cockpit/ManuscriptPanel.jsx";
-import ScanResults from "./components/cockpit/ScanResults.jsx";
 import ScanResultsScreen from "./components/cockpit/ScanResultsScreen.jsx";
 import AccountSettingsScreen from "./components/cockpit/AccountSettingsScreen.jsx";
 import MyManuscriptsScreen from "./components/cockpit/MyManuscriptsScreen.jsx";
+import SubscriptionScreen from "./components/cockpit/SubscriptionScreen.jsx";
+import NotificationsScreen from "./components/cockpit/NotificationsScreen.jsx";
 import UpgradePrompt from "./components/cockpit/UpgradePrompt.jsx";
-import VersionHistory from "./components/cockpit/VersionHistory.jsx";
+import ConfirmDialog from "./components/ConfirmDialog.jsx";
+import Spinner from "./components/Spinner.jsx";
 import { useScanFlow } from "./hooks/useScanFlow.js";
 import {
   loadScannedManuscripts,
@@ -29,6 +31,17 @@ import {
   saveScannedManuscripts,
   upsertFromScanResult,
 } from "./lib/scannedLibrary.js";
+import {
+  loadNotifications,
+  saveNotifications,
+  unreadCount,
+  markAllRead,
+  markOneRead,
+  pushNotification,
+  notificationFromScan,
+  notificationFromSubscription,
+  notificationFromUpload,
+} from "./lib/notifications.js";
 
 function itemsFrom(data, key) {
   if (Array.isArray(data)) return data;
@@ -60,30 +73,80 @@ export default function App() {
   const [currentManuscript, setCurrentManuscript] = useState(null);
   const [currentVersion, setCurrentVersion] = useState(null);
   const [subscription, setSubscription] = useState(null);
-  const [versions, setVersions] = useState([]);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [mechanicsBusy, setMechanicsBusy] = useState(false);
   const [manuscriptBusy, setManuscriptBusy] = useState(false);
-  const [scanBusy, setScanBusy] = useState(false);
   const [upgradeMessage, setUpgradeMessage] = useState("");
   const [registrationSuccess, setRegistrationSuccess] = useState(() => pendingRegistration());
-  const [activePage, setActivePage] = useState("upload"); // "upload" | "manuscripts" | "account"
+  const [activePage, setActivePage] = useState("upload"); // "upload" | "manuscripts" | "account" | "subscription" | "notifications"
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [scannedLibrary, setScannedLibrary] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const lastSavedScanKey = useRef("");
   const scannedLibraryRef = useRef([]);
+  const notificationsRef = useRef([]);
   const fileDetailsRef = useRef(null);
   const [fileDetailsNotice, setFileDetailsNotice] = useState("");
   const [manuscriptReady, setManuscriptReady] = useState(false);
   const [fileDetailsFocusKey, setFileDetailsFocusKey] = useState(0);
   const [uploadCancelKey, setUploadCancelKey] = useState(0);
+  const [uploadWizardStep, setUploadWizardStep] = useState(1); // 1 | 2 | 3
+  const [wizardMaxStep, setWizardMaxStep] = useState(1);
+  const [fileDetailsConfirm, setFileDetailsConfirm] = useState(null); // "cancel" | "analyse" | null
+  const [fileDetailsConfirmBusy, setFileDetailsConfirmBusy] = useState(false);
   const uploadSessionRef = useRef(0);
   const signedIn = Boolean(user) && !guest;
 
+  function handleBackToDashboard() {
+    setManuscriptReady(false);
+    setFileDetailsNotice("");
+    setCurrentVersion(null);
+    resetUploadWizard(1);
+    scanFlow.backToDashboard();
+  }
+
+  const WIZARD_STEPS = [
+    { step: 1, label: "Upload Format Mechanics" },
+    { step: 2, label: "Upload Manuscript" },
+    { step: 3, label: "File Details" },
+  ];
+
+  function goToUploadWizardStep(step) {
+    if (step < 1 || step > wizardMaxStep) return;
+    setUploadWizardStep(step);
+  }
+
+  function advanceUploadWizard(step) {
+    setUploadWizardStep(step);
+    setWizardMaxStep((max) => Math.max(max, step));
+  }
+
+  function resetUploadWizard(step = 1) {
+    setUploadWizardStep(step);
+    setWizardMaxStep(step);
+  }
+
   scannedLibraryRef.current = scannedLibrary;
+  notificationsRef.current = notifications;
+
+  const notificationUnread = useMemo(() => unreadCount(notifications), [notifications]);
+
+  function persistNotifications(next) {
+    setNotifications(next);
+    saveNotifications(next, user?.uid);
+  }
+
+  function appendNotifications(entries) {
+    const list = Array.isArray(entries) ? entries : entries ? [entries] : [];
+    if (!list.length) return;
+    let next = notificationsRef.current;
+    for (const entry of list) {
+      if (!entry) continue;
+      next = pushNotification(next, entry);
+    }
+    if (next !== notificationsRef.current) persistNotifications(next);
+  }
 
   function focusFileDetails(message) {
     setFileDetailsNotice(message || "");
@@ -104,6 +167,8 @@ export default function App() {
       const inLibrary = scannedLibraryRef.current.some((item) => item.id === m.id);
       return inLibrary ? m : null;
     });
+    setUploadWizardStep(2);
+    setWizardMaxStep((max) => Math.min(max, 2));
   }
 
   // ── Scan flow state machine (mock-ready; swap analyzeDocument for real API) ──
@@ -145,6 +210,7 @@ export default function App() {
     // Persist merged rows if older duplicates were cleaned up.
     if (loaded.length) saveScannedManuscripts(loaded, user?.uid);
     lastSavedScanKey.current = "";
+    setNotifications(loadNotifications(user?.uid));
   }, [user?.uid]);
 
   useEffect(() => {
@@ -157,6 +223,7 @@ export default function App() {
       saveScannedManuscripts(next, user?.uid);
       return next;
     });
+    appendNotifications(notificationFromScan(scanFlow.result, scanFlow.versionNumber));
   }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, user?.uid]);
 
   // Upload "Upload to" choices = same library as My Manuscripts (shared source of truth).
@@ -280,19 +347,30 @@ export default function App() {
     return false;
   }
 
-  async function onMechanicsUpload(file, name) {
+  async function onMechanicsExtract(file) {
+    setError("");
+    return extractMechanics(file);
+  }
+
+  async function onMechanicsSaveProfile(payload) {
     setMechanicsBusy(true);
     setError("");
     try {
-      const created = await uploadMechanics(file, name);
+      const created = await saveMechanicsProfile({
+        name: payload.name,
+        rules: payload.rules,
+        sourceFilename: payload.source_filename,
+        fileType: payload.file_type,
+        extractedText: payload.extracted_text,
+      });
       const data = await listMechanics();
       const next = itemsFrom(data, "mechanics");
       setMechanics(next);
-      setSelectedMechanicsId(created.id || created.mechanics?.id || next[0]?.id || "");
+      setSelectedMechanicsId(created.id || next[0]?.id || "");
       return true;
     } catch (err) {
-      setError(err.message);
-      return false;
+      // Don't swallow — re-throw so the confirm dialog can display the error.
+      throw err;
     } finally {
       setMechanicsBusy(false);
     }
@@ -326,7 +404,6 @@ export default function App() {
         setSelectedMechanicsId(remainingItems[0]?.id || "");
         setCurrentVersion(null);
         setCurrentManuscript(null);
-        setResult(null);
       }
       return true;
     } catch (err) {
@@ -339,7 +416,6 @@ export default function App() {
 
   async function onManuscriptUpload({ file, title, manuscriptId }) {
     setError("");
-    setResult(null);
 
     const resolvedTitle = (title || file.name.replace(/\.(pdf|docx)$/i, "")).trim();
     if (!resolvedTitle) {
@@ -384,8 +460,10 @@ export default function App() {
       version_number: nextVersionNumber,
     });
     setManuscriptReady(true);
+    advanceUploadWizard(3);
     focusFileDetails("Manuscript uploaded completely and ready to scan.");
     setManuscriptBusy(false);
+    appendNotifications(notificationFromUpload(resolvedTitle, nextVersionNumber));
 
     // Resolve the Firebase manuscript id for version uploads.
     // Library rows often use local-/doc- ids after mock scans — match the API row by title.
@@ -510,48 +588,6 @@ export default function App() {
     return true;
   }
 
-  async function onScan() {
-    if (!currentManuscript?.id || !currentVersion?.id) return;
-    setScanBusy(true);
-    setError("");
-    setResult(null);
-    try {
-      const data = await runComplianceScan({
-        manuscriptId: currentManuscript.id,
-        versionId: currentVersion.id,
-        mechanicsId: selectedMechanicsId,
-      });
-      setResult(data.scan || data);
-      setSubscription(await getSubscription());
-    } catch (err) {
-      if (!handleGateError(err)) setError(err.message);
-    } finally {
-      setScanBusy(false);
-    }
-  }
-
-  async function onLoadHistory() {
-    if (!currentManuscript?.id) return;
-    setError("");
-    try {
-      const data = await listManuscriptVersions(currentManuscript.id, true);
-      setVersions(itemsFrom(data, "versions"));
-      setHistoryOpen(true);
-    } catch (err) {
-      if (handleGateError(err)) {
-        try {
-          const current = await listManuscriptVersions(currentManuscript.id, false);
-          setVersions(itemsFrom(current, "versions"));
-          setHistoryOpen(true);
-        } catch {
-          // The upgrade prompt already explains the unavailable history.
-        }
-      } else {
-        setError(err.message);
-      }
-    }
-  }
-
   if (!authReady) {
     return <div className="grid min-h-screen place-items-center bg-navy text-sm text-slate-400">Loading…</div>;
   }
@@ -605,18 +641,39 @@ export default function App() {
   }
 
   // Page metadata driven by activePage
+  const uploadWizardActive =
+    activePage === "upload" &&
+    (scanFlow.step === "idle" || scanFlow.step === "fileSelected");
   const pageTitle =
     activePage === "account"
       ? "Account Settings"
-      : activePage === "manuscripts"
-        ? "My Manuscripts"
-        : "Upload Manuscript";
+      : activePage === "subscription"
+        ? "Upgrade to Premium"
+        : activePage === "notifications"
+          ? "Notifications"
+          : activePage === "manuscripts"
+            ? "My Manuscripts"
+            : activePage === "upload" && scanFlow.step === "results"
+              ? "Scan Results"
+              : activePage === "upload" && scanFlow.step === "analyzing"
+                ? "Analysing Document"
+                : activePage === "upload" && scanFlow.step === "error"
+                  ? "Analysis Failed"
+                  : "Upload Manuscript";
   const breadcrumb =
     activePage === "account"
       ? "Dashboard / Settings"
-      : activePage === "manuscripts"
-        ? "Dashboard / My Manuscripts"
-        : "Dashboard";
+      : activePage === "subscription"
+        ? "Settings / Subscription"
+        : activePage === "notifications"
+          ? "Notification"
+          : activePage === "manuscripts"
+            ? "Dashboard / My Manuscripts"
+            : "Dashboard";
+
+  function openUploadPage() {
+    setActivePage("upload");
+  }
 
   return (
     <div className={`min-h-screen bg-[#f3f5f7] text-[#172033] transition-[padding] duration-300 ${sidebarOpen ? "md:pl-52" : "md:pl-0"}`}>
@@ -626,17 +683,24 @@ export default function App() {
           sidebarOpen ? "flex translate-x-0" : "hidden -translate-x-full md:hidden"
         }`}
       >
-        <div className="flex items-center gap-2.5 px-2">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-white text-[#101a30]">
-            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
-              <path d="M5 5.5h9.5A4.5 4.5 0 0 1 19 10v8.5H9.5A4.5 4.5 0 0 1 5 14V5.5Z" stroke="currentColor" strokeWidth="1.8" />
-              <path d="M8 9h7M8 12h7M8 15h4" stroke="#16bfa8" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold tracking-tight">PAPER PILOT</p>
-            <p className="text-[9px] uppercase tracking-[0.2em] text-slate-500">Compliance</p>
-          </div>
+        <div className="relative flex items-center gap-2.5 px-2">
+          <button
+            type="button"
+            onClick={openUploadPage}
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+            aria-label="Paper Pilot home"
+          >
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-white text-[#101a30]">
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
+                <path d="M5 5.5h9.5A4.5 4.5 0 0 1 19 10v8.5H9.5A4.5 4.5 0 0 1 5 14V5.5Z" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M8 9h7M8 12h7M8 15h4" stroke="#16bfa8" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold tracking-tight">PAPER PILOT</p>
+              <p className="text-[9px] uppercase tracking-[0.2em] text-slate-500">Compliance</p>
+            </div>
+          </button>
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
@@ -653,7 +717,7 @@ export default function App() {
         <nav className="mt-10">
           <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Main menu</p>
           <button
-            onClick={() => setActivePage("upload")}
+            onClick={openUploadPage}
             className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm font-semibold transition ${
               activePage === "upload"
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
@@ -679,7 +743,7 @@ export default function App() {
           <button
             onClick={() => setActivePage("account")}
             className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm transition ${
-              activePage === "account"
+              activePage === "account" || activePage === "subscription"
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
                 : "text-slate-300 hover:text-white"
             }`}
@@ -696,7 +760,7 @@ export default function App() {
       </aside>
 
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 flex h-[76px] items-center justify-between border-b border-slate-200 bg-white px-5 md:px-8">
+      <header className="sticky top-0 z-30 flex min-h-[76px] items-center justify-between border-b border-slate-200 bg-white px-5 md:px-8">
         <div className="flex items-center gap-3">
           {!sidebarOpen && (
             <button
@@ -713,22 +777,108 @@ export default function App() {
           )}
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{breadcrumb}</p>
-            <h1 className="text-xl font-bold tracking-tight text-[#172033]">{pageTitle}</h1>
+            <div className="flex flex-wrap items-center gap-2.5">
+              {uploadWizardActive ? (
+                <nav
+                  aria-label="Upload wizard"
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 text-lg font-bold tracking-tight md:text-xl"
+                >
+                  {WIZARD_STEPS.filter((item) => item.step <= wizardMaxStep).map((item, index) => {
+                    const isCurrent = item.step === uploadWizardStep;
+                    const canJump = !isCurrent && item.step <= wizardMaxStep;
+                    return (
+                      <span key={item.step} className="inline-flex items-center gap-2">
+                        {index > 0 && (
+                          <span className="font-semibold text-slate-300" aria-hidden="true">
+                            /
+                          </span>
+                        )}
+                        {canJump ? (
+                          <button
+                            type="button"
+                            onClick={() => goToUploadWizardStep(item.step)}
+                            className="text-[#16bfa8] transition hover:text-[#109b89] hover:underline"
+                          >
+                            {item.label}
+                          </button>
+                        ) : (
+                          <span
+                            className={isCurrent ? "text-[#172033]" : "text-slate-400"}
+                            aria-current={isCurrent ? "step" : undefined}
+                          >
+                            {item.label}
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </nav>
+              ) : (
+                <div>
+                  <h1 className="text-xl font-bold tracking-tight text-[#172033]">{pageTitle}</h1>
+                  {activePage === "upload" && scanFlow.step === "results" && (
+                    <button
+                      type="button"
+                      onClick={handleBackToDashboard}
+                      className="mt-1 inline-flex items-center text-xs font-semibold text-slate-500 transition hover:text-[#172033]"
+                    >
+                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                      </svg>
+                      Back to Dashboard
+                    </button>
+                  )}
+                </div>
+              )}
+              {activePage === "notifications" && notificationUnread > 0 && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e8f3ff] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-[#2f6fed]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#16bfa8]" />
+                  {notificationUnread} new
+                </span>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <div className="hidden text-right lg:block">
-            <p className="text-xs font-semibold capitalize text-slate-700">{tier} plan</p>
-            <p className="text-[10px] text-slate-400">{remaining} of {limit} scans remaining</p>
-          </div>
+          {activePage !== "notifications" && (
+            <>
+              <div className="hidden text-right lg:block">
+                <p className="text-xs font-semibold capitalize text-slate-700">{tier} plan</p>
+                <p className="text-[10px] text-slate-400">{remaining} of {limit} scans remaining</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActivePage("subscription")}
+                className="rounded-md bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-[#092823] shadow-sm hover:bg-[#12ae99]"
+              >
+                {tier === "premium" ? "Manage subscription" : "Subscribe to Premium"}
+              </button>
+            </>
+          )}
           <button
             type="button"
-            onClick={() => setUpgradeMessage("Upgrade to Premium for 50 monthly scans, full version history, and deeper AI explanations.")}
-            className="rounded-md bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-[#092823] shadow-sm hover:bg-[#12ae99]"
+            onClick={() => setActivePage("notifications")}
+            className={`relative grid h-9 w-9 place-items-center rounded-full transition ${
+              activePage === "notifications"
+                ? "bg-amber-100 text-amber-600"
+                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+            aria-label={
+              notificationUnread
+                ? `Notifications, ${notificationUnread} unread`
+                : "Notifications"
+            }
+            title="Notifications"
           >
-            Subscribe to Premium
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
+              <path d="M12 2a7 7 0 0 0-7 7v.7c0 1.5-.4 3-.9 4.3l-.5 1.2a1 1 0 0 0 .9 1.4h15a1 1 0 0 0 .9-1.4l-.5-1.2A11 11 0 0 1 19 9.7V9a7 7 0 0 0-7-7Zm0 20a3 3 0 0 0 2.8-2H9.2A3 3 0 0 0 12 22Z" />
+            </svg>
+            {notificationUnread > 0 && (
+              <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[9px] font-bold leading-none text-white ring-2 ring-white">
+                {notificationUnread > 9 ? "9+" : notificationUnread}
+              </span>
+            )}
           </button>
-          <span className="grid h-9 w-9 place-items-center rounded-full bg-slate-100 text-sm" aria-label="Notifications">🔔</span>
           <button className="text-sm text-slate-500 md:hidden" onClick={doSignOut}>
             Sign out
           </button>
@@ -749,7 +899,34 @@ export default function App() {
             ACCOUNT SETTINGS PAGE
         ═══════════════════════════════════════════════════════════════════ */}
         {activePage === "account" && (
-          <AccountSettingsScreen user={user} tier={tier} onSignOut={doSignOut} />
+          <AccountSettingsScreen
+            user={user}
+            tier={tier}
+            onSignOut={doSignOut}
+            onManageSubscription={() => setActivePage("subscription")}
+          />
+        )}
+
+        {activePage === "subscription" && (
+          <SubscriptionScreen
+            subscription={subscription}
+            onSubscriptionChange={(next) => {
+              setSubscription(next);
+              const note = notificationFromSubscription(next);
+              if (note) appendNotifications(note);
+            }}
+            onBack={() => setActivePage("account")}
+            onBackToDashboard={() => setActivePage("upload")}
+          />
+        )}
+
+        {activePage === "notifications" && (
+          <NotificationsScreen
+            items={notifications}
+            unread={notificationUnread}
+            onMarkAllRead={() => persistNotifications(markAllRead(notifications))}
+            onMarkRead={(id) => persistNotifications(markOneRead(notifications, id))}
+          />
         )}
 
         {activePage === "manuscripts" && (
@@ -763,7 +940,10 @@ export default function App() {
                   "Older manuscript versions are available on Premium. Upgrade to view full version history."
               )
             }
-            onUploadNew={() => setActivePage("upload")}
+            onUploadNew={() => {
+              resetUploadWizard(1);
+              setActivePage("upload");
+            }}
           />
         )}
 
@@ -786,13 +966,9 @@ export default function App() {
               setCurrentVersion(null);
               // Keep currentManuscript so Upload can target the same paper as a new version.
               scanFlow.uploadNewVersion();
+              resetUploadWizard(selectedMechanicsId ? 2 : 1);
             }}
-            onBackToDashboard={() => {
-              setManuscriptReady(false);
-              setFileDetailsNotice("");
-              setCurrentVersion(null);
-              scanFlow.backToDashboard();
-            }}
+            onBackToDashboard={handleBackToDashboard}
           />
         )}
 
@@ -800,8 +976,7 @@ export default function App() {
         {scanFlow.step === "analyzing" && (
           <div className="grid min-h-[60vh] place-items-center rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
             <div className="flex flex-col items-center gap-5 text-center">
-              {/* Spinner */}
-              <span className="inline-block h-14 w-14 animate-spin rounded-full border-4 border-[#16bfa8] border-t-transparent" />
+              <Spinner className="h-14 w-14 border-4 text-[#16bfa8]" />
               <div>
                 <p className="text-base font-bold text-slate-800">Analysing your document…</p>
                 <p className="mt-1 text-sm text-slate-400">
@@ -835,54 +1010,63 @@ export default function App() {
           <>
             {loading ? (
               <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
-                Loading your compliance workspace…
+                <div className="flex flex-col items-center gap-3">
+                  <Spinner className="h-8 w-8 border-[3px] text-[#16bfa8]" />
+                  Loading your compliance workspace…
+                </div>
               </div>
             ) : (
-              <div className="grid gap-7 lg:grid-cols-2">
-                <MechanicsPanel
-                  items={mechanics}
-                  selectedId={selectedMechanicsId}
-                  onSelect={(id) => {
-                    setSelectedMechanicsId(id);
-                    setCurrentVersion(null);
-                    setResult(null);
-                  }}
-                  onUpload={onMechanicsUpload}
-                  onRename={onMechanicsRename}
-                  onDelete={onMechanicsDelete}
-                  busy={mechanicsBusy}
-                />
-                <ManuscriptPanel
-                  mechanicsSelected={Boolean(selectedMechanicsId)}
-                  manuscripts={uploadTargets}
-                  selectedManuscriptId={currentManuscript?.id || ""}
-                  onSelectManuscript={selectUploadTarget}
-                  onUpload={onManuscriptUpload}
-                  uploadCancelKey={uploadCancelKey}
-                  onFilePick={() => {
-                    // Picking a file alone must not open File details.
-                    setManuscriptReady(false);
-                    setFileDetailsNotice("");
-                    setCurrentVersion(null);
-                    scanFlow.selectFile(null);
-                  }}
-                  busy={manuscriptBusy}
-                />
-              </div>
-            )}
+              <>
+                {uploadWizardStep === 1 && (
+                  <MechanicsPanel
+                    items={mechanics}
+                    selectedId={selectedMechanicsId}
+                    onSelect={(id) => {
+                      setSelectedMechanicsId(id);
+                      setCurrentVersion(null);
+                    }}
+                    onExtract={onMechanicsExtract}
+                    onSaveProfile={onMechanicsSaveProfile}
+                    onRename={onMechanicsRename}
+                    onDelete={onMechanicsDelete}
+                    onContinue={() => advanceUploadWizard(2)}
+                    busy={mechanicsBusy}
+                  />
+                )}
 
-            {/* File details — only after Upload manuscript */}
-            {manuscriptReady && (currentVersion || scanFlow.file) && (
+                {uploadWizardStep === 2 && (
+                  <ManuscriptPanel
+                    mechanicsSelected={Boolean(selectedMechanicsId)}
+                    manuscripts={uploadTargets}
+                    selectedManuscriptId={currentManuscript?.id || ""}
+                    onSelectManuscript={selectUploadTarget}
+                    onUpload={onManuscriptUpload}
+                    onPreview={previewManuscript}
+                    uploadCancelKey={uploadCancelKey}
+                    onFilePick={() => {
+                      // Picking a file alone must not open File details.
+                      setManuscriptReady(false);
+                      setFileDetailsNotice("");
+                      setCurrentVersion(null);
+                      scanFlow.selectFile(null);
+                      setWizardMaxStep((max) => Math.min(max, 2));
+                    }}
+                    busy={manuscriptBusy}
+                  />
+                )}
+
+                {uploadWizardStep === 3 && manuscriptReady && (currentVersion || scanFlow.file) && (
               <section
                 ref={fileDetailsRef}
                 id="file-details"
-                className={`mt-7 scroll-mt-6 rounded-xl border bg-white p-6 shadow-sm transition ${
+                className={`mx-auto max-w-4xl scroll-mt-6 rounded-xl border bg-white p-6 shadow-sm transition md:p-8 ${
                   fileDetailsNotice
                     ? "border-[#16bfa8] ring-2 ring-[#16bfa8]/25"
                     : "border-slate-200"
                 }`}
               >
-                <div className="border-b border-slate-100 pb-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#16bfa8]">Step 3 of 3</p>
+                <div className="mt-1 border-b border-slate-100 pb-4">
                   <h2 className="text-lg font-bold text-[#172033]">File details</h2>
                   <p className="text-xs text-slate-400">Review attached files then run compliance analysis</p>
                 </div>
@@ -967,7 +1151,7 @@ export default function App() {
                 <div className="mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-5">
                   <button
                     type="button"
-                    onClick={cancelManuscriptUpload}
+                    onClick={() => setFileDetailsConfirm("cancel")}
                     className="rounded-lg border border-slate-200 bg-white px-7 py-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                   >
                     Cancel upload
@@ -979,13 +1163,12 @@ export default function App() {
                         setUpgradeMessage(`You have used all ${limit} scans included in your ${tier} plan this month.`);
                         return;
                       }
-                      setFileDetailsNotice("");
-                      scanFlow.analyze();
+                      setFileDetailsConfirm("analyse");
                     }}
                     disabled={(!scanFlow.file && !currentVersion) || !selectedMechanicsId}
-                    className="min-w-44 rounded-lg bg-[#16bfa8] px-7 py-3 text-xs font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
+                    className="inline-flex min-w-44 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-7 py-3 text-xs font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                     Analyse document
+                    Analyse document
                   </button>
                 </div>
 
@@ -994,13 +1177,22 @@ export default function App() {
                   <p className="mt-3 text-xs text-rose-500" role="alert">{scanFlow.fileError}</p>
                 )}
               </section>
-            )}
+                )}
 
-            {/* Legacy real-API scan results (shown below upload panels when available) */}
-            {result && (
-              <div className="mt-5">
-                <ScanResults result={result} tier={tier} />
-              </div>
+                {uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file)) && (
+                  <div className="mx-auto max-w-4xl rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+                    <p className="text-sm font-semibold text-slate-700">No manuscript ready yet</p>
+                    <p className="mt-1 text-xs text-slate-400">Upload a manuscript in Step 2 to continue.</p>
+                    <button
+                      type="button"
+                      onClick={() => goToUploadWizardStep(2)}
+                      className="mt-4 rounded-lg bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-white hover:bg-[#12ae99]"
+                    >
+                      Back to Upload Manuscript
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
@@ -1008,14 +1200,51 @@ export default function App() {
         </>)}
       </main>
 
-      <VersionHistory
-        open={historyOpen}
-        manuscript={currentManuscript}
-        versions={versions}
-        tier={tier}
-        onClose={() => setHistoryOpen(false)}
+      <ConfirmDialog
+        open={Boolean(fileDetailsConfirm)}
+        title={
+          fileDetailsConfirm === "cancel"
+            ? "Cancel this upload?"
+            : "Analyse this document?"
+        }
+        message={
+          fileDetailsConfirm === "cancel"
+            ? "The staged manuscript will be discarded and you will return to Upload Manuscript. This cannot be undone."
+            : `Check “${currentManuscript?.title || "this manuscript"}” against the selected format mechanics? This uses 1 scan from your plan.`
+        }
+        confirmLabel={fileDetailsConfirm === "cancel" ? "Cancel upload" : "Start analysis"}
+        tone={fileDetailsConfirm === "cancel" ? "danger" : "primary"}
+        busy={fileDetailsConfirmBusy}
+        onCancel={() => {
+          if (fileDetailsConfirmBusy) return;
+          setFileDetailsConfirm(null);
+        }}
+        onConfirm={async () => {
+          if (!fileDetailsConfirm) return;
+          setFileDetailsConfirmBusy(true);
+          try {
+            if (fileDetailsConfirm === "cancel") {
+              cancelManuscriptUpload();
+              setFileDetailsConfirm(null);
+              return;
+            }
+            setFileDetailsNotice("");
+            setFileDetailsConfirm(null);
+            scanFlow.analyze();
+          } finally {
+            setFileDetailsConfirmBusy(false);
+          }
+        }}
       />
-      <UpgradePrompt message={upgradeMessage} onClose={() => setUpgradeMessage("")} />
+
+      <UpgradePrompt
+        message={upgradeMessage}
+        onClose={() => setUpgradeMessage("")}
+        onUpgrade={() => {
+          setUpgradeMessage("");
+          setActivePage("subscription");
+        }}
+      />
     </div>
   );
 }

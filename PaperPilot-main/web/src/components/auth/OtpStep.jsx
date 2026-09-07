@@ -28,7 +28,7 @@ export default function OtpStep({
   const [phase, setPhase] = useState("entering"); // entering | verifying | success | error
   const [round, setRound] = useState(0);
   const [devCode, setDevCode] = useState(initialDevCode || "");
-  const [expiresAt, setExpiresAt] = useState(() => Date.now() + (expiresIn || 600) * 1000);
+  const [expiresAt, setExpiresAt] = useState(() => Date.now() + (expiresIn || 300) * 1000);
   const [resendAt, setResendAt] = useState(() => Date.now() + (resendIn || 60) * 1000);
   const [now, setNow] = useState(() => Date.now());
   const attemptedRef = useRef("");
@@ -85,7 +85,7 @@ export default function OtpStep({
     setPhase("entering");
     try {
       const res = await sendOtp({ email, purpose });
-      setExpiresAt(Date.now() + (res.expires_in || 600) * 1000);
+      setExpiresAt(Date.now() + (res.expires_in || 300) * 1000);
       setResendAt(Date.now() + (res.resend_in || 60) * 1000);
       setDevCode(res.dev_code || "");
       setCode("");
@@ -129,11 +129,7 @@ export default function OtpStep({
 
       {phase !== "success" && phase !== "verifying" ? (
         <>
-          {devCode ? (
-            <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[13px] text-amber-700">
-              Dev mode (no SMTP configured): your code is <span className="font-semibold">{devCode}</span>
-            </p>
-          ) : null}
+          {/* Dev code banner removed — Resend delivers codes via email */}
 
           <div className="mt-4 flex items-center justify-between text-sm">
             <span className={expired ? "text-rose-500" : "text-slate-500"} role="timer" aria-live="off">

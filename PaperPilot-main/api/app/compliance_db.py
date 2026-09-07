@@ -1,12 +1,45 @@
 from __future__ import annotations
 
 import copy
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import settings
 from app.firebase_admin_app import firebase_admin_app
+
+
+def _firebase_retry(fn, retries: int = 3, delay: float = 1.5):
+    """Call *fn()* up to *retries* times, backing off on transient Firebase
+    / network errors (ConnectionResetError, ChunkedEncodingError, UnknownError).
+    Raises the last exception if all attempts fail.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            transient = any(
+                kw in msg
+                for kw in (
+                    "connection reset",
+                    "connectionreseterror",
+                    "chunkedencodingerror",
+                    "connection broken",
+                    "unknown error while making a remote service call",
+                    "econnreset",
+                )
+            )
+            if not transient or attempt == retries - 1:
+                raise
+            last_exc = exc
+            wait = delay * (2 ** attempt)
+            print(f"[firebase_retry] transient error (attempt {attempt + 1}/{retries}), "
+                  f"retrying in {wait:.1f}s — {exc}")
+            time.sleep(wait)
+    raise last_exc  # unreachable, satisfies type checkers
 
 ROOT = "/paperpilot"
 
@@ -355,7 +388,7 @@ def create_version(
         versions.setdefault(manuscript_id, {})[version_id] = version
         return root
 
-    result = _reference(ROOT).transaction(add_version)
+    result = _firebase_retry(lambda: _reference(ROOT).transaction(add_version))
     if failure:
         raise LookupError(
             "Mechanics not found." if failure[-1] == "mechanics" else "Manuscript not found."
@@ -425,14 +458,47 @@ def _normalized_subscription(current: object, now: datetime) -> dict:
         return {
             "owner_uid": "",
             "tier": "free",
+            "status": "none",
+            "billing_period": None,
+            "payment_method": None,
             "scans_used": 0,
             "period_start": start,
             "period_end": end,
+            "renews_at": None,
+            "canceled_at": None,
+            "history": [],
             "created_at": now_text,
             "updated_at": now_text,
         }
     value = copy.deepcopy(current)
-    if now_text >= value.get("period_end", ""):
+    value.setdefault("status", "active" if value.get("tier") == "premium" else "none")
+    value.setdefault("billing_period", None)
+    value.setdefault("payment_method", None)
+    value.setdefault("renews_at", None)
+    value.setdefault("canceled_at", None)
+    value.setdefault("history", [])
+    # Canceled premium lapses at renews_at / period_end.
+    renews = value.get("renews_at") or value.get("period_end") or ""
+    if (
+        value.get("tier") == "premium"
+        and value.get("status") == "canceled"
+        and renews
+        and now_text >= renews
+    ):
+        value.update(
+            {
+                "tier": "free",
+                "status": "none",
+                "billing_period": None,
+                "payment_method": None,
+                "renews_at": None,
+                "scans_used": 0,
+                "period_start": start,
+                "period_end": end,
+                "updated_at": now_text,
+            }
+        )
+    elif now_text >= value.get("period_end", ""):
         value.update(
             {
                 "scans_used": 0,
@@ -441,7 +507,31 @@ def _normalized_subscription(current: object, now: datetime) -> dict:
                 "updated_at": now_text,
             }
         )
+        if value.get("tier") == "premium" and value.get("status") == "active":
+            # Advance renewal window with the new billing period.
+            value["renews_at"] = _renewal_date(now, value.get("billing_period") or "monthly")
     return value
+
+
+def _renewal_date(now: datetime, billing_period: str) -> str:
+    if billing_period == "annual":
+        return _iso(now.replace(year=now.year + 1))
+    # Monthly: end of next calendar month-ish — use period_end helper + 1 month.
+    year, month = now.year, now.month + 1
+    if month > 12:
+        year, month = year + 1, 1
+    # Same day-of-month when possible.
+    day = min(now.day, 28)
+    try:
+        return _iso(now.replace(year=year, month=month, day=day, hour=0, minute=0, second=0, microsecond=0))
+    except ValueError:
+        return _iso(now.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0))
+
+
+def _append_history(row: dict, entry: dict, limit: int = 50) -> None:
+    history = list(row.get("history") or [])
+    history.insert(0, entry)
+    row["history"] = history[:limit]
 
 
 def subscription_snapshot(owner_uid: str) -> dict:
@@ -456,13 +546,155 @@ def subscription_snapshot(owner_uid: str) -> dict:
     row = ref.transaction(normalize)
     limit = settings.premium_scan_limit if row["tier"] == "premium" else settings.free_scan_limit
     used = int(row.get("scans_used", 0))
+    status = row.get("status") or ("active" if row["tier"] == "premium" else "none")
     return {
         "tier": row["tier"],
+        "status": status,
+        "billing_period": row.get("billing_period"),
+        "payment_method": row.get("payment_method"),
         "limit": limit,
         "used": used,
         "remaining": max(limit - used, 0),
-        "reset_at": row["period_end"],
+        "reset_at": row.get("period_end"),
+        "renews_at": row.get("renews_at"),
+        "canceled_at": row.get("canceled_at"),
+        "history": list(row.get("history") or [])[:20],
     }
+
+
+def set_subscription_plan(
+    owner_uid: str,
+    *,
+    tier: str,
+    billing_period: str | None = None,
+    payment_method: str | None = None,
+    amount: float | None = None,
+) -> dict:
+    """Subscribe, change plan, or switch back to free (immediate)."""
+    tier = (tier or "free").strip().lower()
+    if tier not in {"free", "premium"}:
+        raise ValueError("Plan must be free or premium.")
+    if tier == "premium":
+        billing_period = (billing_period or "monthly").strip().lower()
+        if billing_period not in {"monthly", "annual"}:
+            raise ValueError("Billing period must be monthly or annual.")
+        payment_method = (payment_method or "card").strip().lower()
+        if payment_method not in {"card", "gcash", "maya"}:
+            raise ValueError("Payment method must be card, gcash, or maya.")
+    else:
+        billing_period = None
+        payment_method = None
+
+    now = _now()
+    now_text = _iso(now)
+    start, end = _month_bounds(now)
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+
+    def apply(current):
+        row = _normalized_subscription(current, now)
+        row["owner_uid"] = owner_uid
+        previous_tier = row.get("tier") or "free"
+        if tier == "premium":
+            action = "changed" if previous_tier == "premium" else "subscribed"
+            row.update(
+                {
+                    "tier": "premium",
+                    "status": "active",
+                    "billing_period": billing_period,
+                    "payment_method": payment_method,
+                    "renews_at": _renewal_date(now, billing_period),
+                    "canceled_at": None,
+                    "period_start": row.get("period_start") or start,
+                    "period_end": row.get("period_end") or end,
+                    "updated_at": now_text,
+                }
+            )
+            if not row.get("created_at"):
+                row["created_at"] = now_text
+            _append_history(
+                row,
+                {
+                    "id": str(uuid.uuid4()),
+                    "action": action,
+                    "plan": "premium",
+                    "billing_period": billing_period,
+                    "payment_method": payment_method,
+                    "amount": amount,
+                    "at": now_text,
+                },
+            )
+        else:
+            row.update(
+                {
+                    "tier": "free",
+                    "status": "none",
+                    "billing_period": None,
+                    "payment_method": None,
+                    "renews_at": None,
+                    "canceled_at": now_text if previous_tier == "premium" else row.get("canceled_at"),
+                    "updated_at": now_text,
+                }
+            )
+            if previous_tier == "premium":
+                _append_history(
+                    row,
+                    {
+                        "id": str(uuid.uuid4()),
+                        "action": "canceled",
+                        "plan": "free",
+                        "billing_period": None,
+                        "payment_method": None,
+                        "amount": 0,
+                        "at": now_text,
+                    },
+                )
+        return row
+
+    ref.transaction(apply)
+    return subscription_snapshot(owner_uid)
+
+
+def cancel_subscription(owner_uid: str, *, immediate: bool = True) -> dict:
+    """Cancel Premium. immediate=True downgrades now; otherwise keep access until renews_at."""
+    now = _now()
+    now_text = _iso(now)
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+
+    def apply(current):
+        row = _normalized_subscription(current, now)
+        row["owner_uid"] = owner_uid
+        if row.get("tier") != "premium":
+            return row
+        row["canceled_at"] = now_text
+        row["updated_at"] = now_text
+        _append_history(
+            row,
+            {
+                "id": str(uuid.uuid4()),
+                "action": "canceled",
+                "plan": "premium" if not immediate else "free",
+                "billing_period": row.get("billing_period"),
+                "payment_method": row.get("payment_method"),
+                "amount": 0,
+                "at": now_text,
+            },
+        )
+        if immediate:
+            row.update(
+                {
+                    "tier": "free",
+                    "status": "none",
+                    "billing_period": None,
+                    "payment_method": None,
+                    "renews_at": None,
+                }
+            )
+        else:
+            row["status"] = "canceled"
+        return row
+
+    ref.transaction(apply)
+    return subscription_snapshot(owner_uid)
 
 
 def require_premium(owner_uid: str) -> None:
@@ -541,7 +773,7 @@ def persist_scan(
         subscriptions[owner_uid] = sub
         return root
 
-    _reference(ROOT).transaction(add_scan)
+    _firebase_retry(lambda: _reference(ROOT).transaction(add_scan))
     if failure:
         kind, detail = failure[-1]
         if kind == "upgrade":

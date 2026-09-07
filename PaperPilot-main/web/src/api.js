@@ -24,12 +24,13 @@ function networkError(err) {
 }
 
 export class ApiError extends Error {
-  constructor(message, status, detail) {
+  constructor(message, status, detail, retryAfter = 0) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
     this.code = detail && typeof detail === "object" ? detail.code : undefined;
+    this.retryAfter = Number(retryAfter) || 0;
   }
 }
 
@@ -40,7 +41,12 @@ async function responseData(res) {
       res.status === 502 || res.status === 503 || res.statusText === "Internal Server Error"
         ? "Cannot reach the PaperPilot server. Make sure the API is running on port 8000."
         : res.statusText || "Request failed.";
-    throw new ApiError(detailMessage(data, fallback), res.status, data.detail);
+    const retryHeader = res.headers.get("Retry-After");
+    const retryAfter =
+      (data?.detail && typeof data.detail === "object" && data.detail.retry_after) ||
+      retryHeader ||
+      0;
+    throw new ApiError(detailMessage(data, fallback), res.status, data.detail, retryAfter);
   }
   return data;
 }
@@ -143,6 +149,31 @@ export function listMechanics() {
   return authorizedFetch("/mechanics");
 }
 
+export function extractMechanics(file) {
+  const body = new FormData();
+  body.append("file", file);
+  return authorizedFetch("/mechanics/extract", { method: "POST", body });
+}
+
+export function saveMechanicsProfile({
+  name,
+  rules,
+  sourceFilename,
+  fileType,
+  extractedText,
+}) {
+  return authorizedFetch("/mechanics/save", {
+    method: "POST",
+    body: JSON.stringify({
+      name: name.trim(),
+      rules: rules || {},
+      source_filename: sourceFilename || undefined,
+      file_type: fileType || undefined,
+      extracted_text: extractedText || undefined,
+    }),
+  });
+}
+
 export function uploadMechanics(file, name = "") {
   const body = new FormData();
   body.append("file", file);
@@ -165,6 +196,12 @@ export function deleteMechanics(mechanicsId) {
 
 export function listManuscripts() {
   return authorizedFetch("/manuscripts");
+}
+
+export function previewManuscript(file) {
+  const body = new FormData();
+  body.append("file", file);
+  return authorizedFetch("/manuscripts/preview", { method: "POST", body });
 }
 
 export function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
@@ -200,6 +237,28 @@ export function getComplianceScan(scanId) {
 
 export function getSubscription() {
   return authorizedFetch("/subscription");
+}
+
+export function subscribeToPlan({ plan, billingPeriod, paymentMethod }) {
+  return authorizedFetch("/subscription/subscribe", {
+    method: "POST",
+    body: JSON.stringify({
+      plan,
+      billing_period: billingPeriod || undefined,
+      payment_method: paymentMethod || undefined,
+    }),
+  });
+}
+
+export function cancelSubscription({ immediate = true } = {}) {
+  return authorizedFetch("/subscription/cancel", {
+    method: "POST",
+    body: JSON.stringify({ immediate }),
+  });
+}
+
+export function getSubscriptionHistory() {
+  return authorizedFetch("/subscription/history");
 }
 
 // ── Profile ──────────────────────────────────────────────────────────────────

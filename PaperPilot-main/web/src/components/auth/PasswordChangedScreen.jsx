@@ -20,7 +20,7 @@ export default function PasswordChangedScreen({ onContinue }) {
           Changing password is completed! Please login again
         </p>
         <p className="mt-2 text-sm text-slate-500">
-          For your security, all active sessions have been ended. Sign in with your new password to continue.
+          For your security, all active sessions have been ended. Sign in again with Google or your email and new password to continue.
         </p>
         <button
           type="button"

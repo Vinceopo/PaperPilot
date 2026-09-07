@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { signOut } from "firebase/auth";
 import { resetPasswordWithOtp, sendOtp } from "../../api.js";
 import { auth } from "../../firebase.js";
@@ -24,6 +24,16 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordErrors, setPasswordErrors] = useState({});
   const [touched, setTouched] = useState({});
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!cooldownUntil || cooldownUntil <= Date.now()) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [cooldownUntil]);
+
+  const cooldownLeft = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
 
   const backToLogin = (
     <p className="mt-6 text-center text-sm text-slate-500">
@@ -44,12 +54,19 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
     const err = emailError(email);
     setEmailErr(err);
     if (err) return;
+    if (cooldownLeft > 0) {
+      setFormError(`Please wait ${cooldownLeft} second(s) before requesting another code.`);
+      return;
+    }
     setBusy(true);
     try {
       const res = await sendOtp({ email: email.trim(), purpose: "reset_password" });
       setOtpMeta({ expiresIn: res.expires_in, resendIn: res.resend_in, devCode: res.dev_code });
+      setCooldownUntil(Date.now() + (res.resend_in || 60) * 1000);
       setStep("otp");
     } catch (err2) {
+      const wait = Number(err2.retryAfter) || 0;
+      if (wait > 0) setCooldownUntil(Date.now() + wait * 1000);
       setFormError(err2.message);
     } finally {
       setBusy(false);
@@ -243,10 +260,14 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
 
         <button
           type="submit"
-          disabled={busy}
+          disabled={busy || cooldownLeft > 0}
           className="w-full rounded-xl bg-accent py-3 text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
         >
-          {busy ? "Sending code…" : "Send verification code"}
+          {busy
+            ? "Sending code…"
+            : cooldownLeft > 0
+              ? `Try again in ${cooldownLeft}s`
+              : "Send verification code"}
         </button>
       </form>
     </AuthShell>

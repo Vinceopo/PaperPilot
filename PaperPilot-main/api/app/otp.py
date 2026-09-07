@@ -16,7 +16,6 @@ log = logging.getLogger("paperpilot.otp")
 
 ROOT = "/paperpilot_auth"
 PURPOSES = frozenset({"verify_email", "reset_password"})
-RATE_WINDOW_SECONDS = 3600
 _secret_cache: bytes | None = None
 
 
@@ -71,41 +70,75 @@ def generate_code() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-def _active_sends(value: object, now: float) -> list[float]:
+def _rate_limits(purpose: str) -> tuple[int, int, int]:
+    """Return (cooldown_seconds, window_seconds, max_sends) for a purpose."""
+    if purpose == "reset_password":
+        return (
+            settings.otp_reset_resend_seconds,
+            settings.otp_reset_window_seconds,
+            settings.otp_reset_max_sends,
+        )
+    return (
+        settings.otp_resend_seconds,
+        settings.otp_rate_window_seconds,
+        settings.otp_max_sends_per_hour,
+    )
+
+
+def _active_sends(value: object, now: float, window_seconds: int) -> list[float]:
     if not isinstance(value, dict):
         return []
     sends = value.get("sends", [])
     if not isinstance(sends, list):
         return []
     return sorted(
-        [float(item) for item in sends if now - float(item) < RATE_WINDOW_SECONDS],
+        [float(item) for item in sends if now - float(item) < window_seconds],
         reverse=True,
     )
 
 
-def _rate_result(sends: list[float], now: float) -> tuple[bool, int, str]:
+def _rate_result(
+    sends: list[float],
+    now: float,
+    *,
+    cooldown_seconds: int,
+    window_seconds: int,
+    max_sends: int,
+    purpose: str = "verify_email",
+) -> tuple[bool, int, str]:
     if not sends:
         return True, 0, ""
-    cooldown = math.ceil(settings.otp_resend_seconds - (now - sends[0]))
+    cooldown = math.ceil(cooldown_seconds - (now - sends[0]))
     if cooldown > 0:
         return False, cooldown, f"Please wait {cooldown} second(s) before requesting a new code."
-    cap = max(settings.otp_max_sends_per_hour, 1)
+    cap = max(max_sends, 1)
     if len(sends) >= cap:
         blocking = sends[min(cap - 1, len(sends) - 1)]
-        wait = max(math.ceil(RATE_WINDOW_SECONDS - (now - blocking)), 1)
-        minutes = max(math.ceil(wait / 60), 1)
-        return False, wait, f"Too many codes requested. Try again in about {minutes} minute(s)."
+        wait = max(math.ceil(window_seconds - (now - blocking)), 1)
+        label = "password reset codes" if purpose == "reset_password" else "codes"
+        if wait >= 60:
+            minutes = max(math.ceil(wait / 60), 1)
+            return False, wait, f"Too many {label} requested. Try again in about {minutes} minute(s)."
+        return False, wait, f"Too many {label} requested. Try again in {wait} second(s)."
     return True, 0, ""
 
 
 def can_send(email: str, purpose: str) -> tuple[bool, int, str]:
     """Rate limit code delivery. Returns (allowed, wait_seconds, reason)."""
     now = time.time()
+    cooldown_seconds, window_seconds, max_sends = _rate_limits(purpose)
     ref = _reference(f"{ROOT}/send_rates/{_email_key(email)}/{purpose}")
     result = ref.transaction(
-        lambda current: {"sends": _active_sends(current, now)}
+        lambda current: {"sends": _active_sends(current, now, window_seconds)}
     )
-    return _rate_result(_active_sends(result, now), now)
+    return _rate_result(
+        _active_sends(result, now, window_seconds),
+        now,
+        cooldown_seconds=cooldown_seconds,
+        window_seconds=window_seconds,
+        max_sends=max_sends,
+        purpose=purpose,
+    )
 
 
 def store_otp(email: str, purpose: str, code: str) -> int:
@@ -115,13 +148,21 @@ def store_otp(email: str, purpose: str, code: str) -> int:
     digest = _hash_code(email, purpose, code)
     email_key = _email_key(email)
     denied: list[tuple[int, str]] = []
+    cooldown_seconds, window_seconds, max_sends = _rate_limits(purpose)
 
     def store(root):
         denied.clear()
         root = copy.deepcopy(root) if isinstance(root, dict) else {}
         rates = root.setdefault("send_rates", {}).setdefault(email_key, {})
-        sends = _active_sends(rates.get(purpose), now)
-        allowed, wait, reason = _rate_result(sends, now)
+        sends = _active_sends(rates.get(purpose), now, window_seconds)
+        allowed, wait, reason = _rate_result(
+            sends,
+            now,
+            cooldown_seconds=cooldown_seconds,
+            window_seconds=window_seconds,
+            max_sends=max_sends,
+            purpose=purpose,
+        )
         if not allowed:
             denied[:] = [(wait, reason)]
             return root
