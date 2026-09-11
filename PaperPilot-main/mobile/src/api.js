@@ -180,6 +180,34 @@ export function listMechanics() {
   return authorizedFetch("/mechanics");
 }
 
+export function extractMechanics({ uri, name, mimeType }) {
+  const filename = cleanFilename(name || "mechanics.pdf", mimeType);
+  return authorizedMultipartUpload("/mechanics/extract", uri, {
+    fieldName: "file",
+    mimeType: guessMime(filename, mimeType),
+    filename,
+  });
+}
+
+export function saveMechanicsProfile({
+  name,
+  rules,
+  sourceFilename,
+  fileType,
+  extractedText,
+}) {
+  return authorizedFetch("/mechanics/save", {
+    method: "POST",
+    body: JSON.stringify({
+      name: String(name || "").trim(),
+      rules: rules || {},
+      source_filename: sourceFilename || undefined,
+      file_type: fileType || undefined,
+      extracted_text: extractedText || undefined,
+    }),
+  });
+}
+
 export function uploadMechanics({ uri, name, mimeType, displayName = "" }) {
   const filename = cleanFilename(name || "mechanics.pdf", mimeType);
   const parameters = {};
@@ -207,6 +235,15 @@ export function deleteMechanics(mechanicsId) {
 
 export function listManuscripts() {
   return authorizedFetch("/manuscripts");
+}
+
+export function previewManuscript({ uri, name, mimeType }) {
+  const filename = cleanFilename(name || "manuscript.pdf", mimeType);
+  return authorizedMultipartUpload("/manuscripts/preview", uri, {
+    fieldName: "file",
+    mimeType: guessMime(filename, mimeType),
+    filename,
+  });
 }
 
 export function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {

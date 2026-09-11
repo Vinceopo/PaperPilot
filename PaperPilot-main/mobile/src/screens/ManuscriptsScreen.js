@@ -1,24 +1,74 @@
-import { useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
+import { manuscriptSummary } from "../lib/scoreBand";
+
+function formatDate(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso + (iso.length <= 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function bandColors(band) {
+  if (band?.key === "compliant") {
+    return { bg: colors.emeraldBg, border: "#a7f3d0", text: colors.emerald };
+  }
+  if (band?.key === "needs_revision") {
+    return { bg: colors.amberBg, border: "#fde68a", text: colors.amber };
+  }
+  return { bg: colors.roseBg, border: colors.roseBorder, text: colors.rose };
+}
 
 export default function ManuscriptsScreen() {
-  const { manuscripts, currentManuscript, currentVersion } = useAppData();
-  const [selectedId, setSelectedId] = useState(null);
+  const { scannedLibrary, updateScannedLibrary } = useAppData();
+  const items = Array.isArray(scannedLibrary) ? scannedLibrary : [];
 
-  const selected =
-    manuscripts.find((item) => item.id === selectedId) ||
-    (selectedId === currentManuscript?.id ? currentManuscript : null);
-
-  if (!manuscripts.length) {
+  if (!items.length) {
     return (
       <View style={styles.emptyWrap}>
         <Text style={styles.emptyTitle}>My Manuscripts</Text>
         <Text style={styles.emptyBody}>
-          No manuscripts yet. Upload one from the Upload tab to start tracking versions.
+          No scanned manuscripts yet. Run a scan from Upload to build your library.
         </Text>
       </View>
+    );
+  }
+
+  function openDetail(summary) {
+    Alert.alert(
+      summary.title || "Manuscript",
+      [
+        `Score: ${Math.round(summary.latestScore)}/100`,
+        `Status: ${summary.band?.label || "—"}`,
+        `Latest: ${summary.latestVersionLabel}`,
+        `Versions: ${summary.versionCount}`,
+        `Scanned: ${formatDate(summary.scannedDate)}`,
+      ].join("\n"),
+      [
+        { text: "Close", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert("Delete manuscript", `Remove “${summary.title}” from your library?`, [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete",
+                style: "destructive",
+                onPress: () =>
+                  updateScannedLibrary(items.filter((m) => m.id !== summary.id)),
+              },
+            ]);
+          },
+        },
+      ]
     );
   }
 
@@ -26,49 +76,36 @@ export default function ManuscriptsScreen() {
     <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
       <Text style={styles.kicker}>Library</Text>
       <Text style={styles.title}>My Manuscripts</Text>
-      <Text style={styles.subtitle}>Saved drafts and versioned uploads</Text>
+      <Text style={styles.subtitle}>Only manuscripts you have scanned appear here</Text>
 
-      {manuscripts.map((item) => {
-        const active = selectedId === item.id;
-        const versions =
-          item.version_count ?? item.current_version_number ?? item.versions?.length ?? 0;
+      {items.map((item) => {
+        const summary = manuscriptSummary(item);
+        const tone = bandColors(summary.band);
         return (
-          <Pressable
-            key={item.id}
-            style={[styles.card, active && styles.cardActive]}
-            onPress={() => setSelectedId(active ? null : item.id)}
-          >
-            <Text style={styles.cardTitle} numberOfLines={2}>
-              {item.title || "Untitled manuscript"}
-            </Text>
+          <Pressable key={item.id} style={styles.card} onPress={() => openDetail(summary)}>
+            <View style={styles.cardTop}>
+              <Text style={styles.cardTitle} numberOfLines={2}>
+                {summary.title || "Untitled manuscript"}
+              </Text>
+              <View
+                style={[
+                  styles.badge,
+                  { backgroundColor: tone.bg, borderColor: tone.border },
+                ]}
+              >
+                <Text style={[styles.badgeText, { color: tone.text }]}>
+                  {summary.band?.label || "—"}
+                </Text>
+              </View>
+            </View>
             <Text style={styles.meta}>
-              {versions} version{Number(versions) === 1 ? "" : "s"}
-              {item.updated_at
-                ? ` · updated ${new Date(item.updated_at).toLocaleDateString()}`
-                : ""}
+              Score {Math.round(summary.latestScore)} · {summary.latestVersionLabel} ·{" "}
+              {summary.versionCount} version{summary.versionCount === 1 ? "" : "s"}
             </Text>
+            <Text style={styles.meta}>Scanned {formatDate(summary.scannedDate)}</Text>
           </Pressable>
         );
       })}
-
-      {selected ? (
-        <View style={styles.details}>
-          <Text style={styles.detailsLabel}>Details</Text>
-          <Text style={styles.detailsTitle}>{selected.title}</Text>
-          <Text style={styles.meta}>
-            Versions: {selected.version_count ?? selected.current_version_number ?? "—"}
-          </Text>
-          {currentManuscript?.id === selected.id && currentVersion ? (
-            <Text style={styles.ready}>
-              Current session · v{currentVersion.version_number} ready to scan
-            </Text>
-          ) : (
-            <Text style={styles.hint}>
-              Open Upload to add a new version of this manuscript.
-            </Text>
-          )}
-        </View>
-      ) : null}
     </ScrollView>
   );
 }
@@ -108,25 +145,14 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 10,
   },
-  cardActive: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
-  cardTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
-  meta: { marginTop: 6, fontSize: 12, color: colors.slate },
-  details: {
-    marginTop: 12,
+  cardTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  cardTitle: { flex: 1, fontSize: 15, fontWeight: "700", color: colors.text },
+  badge: {
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
-  detailsLabel: {
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    color: colors.muted,
-  },
-  detailsTitle: { marginTop: 6, fontSize: 17, fontWeight: "700", color: colors.text },
-  ready: { marginTop: 10, fontSize: 13, fontWeight: "600", color: colors.emerald },
-  hint: { marginTop: 10, fontSize: 13, color: colors.muted, lineHeight: 19 },
+  badgeText: { fontSize: 10, fontWeight: "800", letterSpacing: 0.6 },
+  meta: { marginTop: 6, fontSize: 12, color: colors.slate },
 });

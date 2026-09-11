@@ -2,7 +2,7 @@ import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
 import PrimaryButton from "./PrimaryButton";
 
-export default function UpgradePrompt({ message, onClose }) {
+export default function UpgradePrompt({ message, onClose, onUpgrade }) {
   if (!message) return null;
   return (
     <Modal transparent animationType="fade" visible onRequestClose={onClose}>
@@ -19,7 +19,13 @@ export default function UpgradePrompt({ message, onClose }) {
               <Text style={styles.secondaryText}>Not now</Text>
             </Pressable>
             <View style={styles.flex}>
-              <PrimaryButton title="Upgrade soon" disabled onPress={() => {}} />
+              <PrimaryButton
+                title="View plans"
+                onPress={() => {
+                  onClose?.();
+                  onUpgrade?.();
+                }}
+              />
             </View>
           </View>
         </View>
@@ -44,8 +50,8 @@ const styles = StyleSheet.create({
   },
   badge: {
     alignSelf: "flex-start",
-    backgroundColor: "#f5f3ff",
-    color: colors.violet,
+    backgroundColor: colors.accentMuted,
+    color: colors.accentText,
     overflow: "hidden",
     borderRadius: 999,
     paddingHorizontal: 12,

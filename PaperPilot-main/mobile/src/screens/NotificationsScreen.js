@@ -1,19 +1,14 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
+import { relativeTime } from "../lib/notifications";
 
 export default function NotificationsScreen() {
-  const { notifications, setNotifications } = useAppData();
-
-  function markRead(id) {
-    setNotifications((current) =>
-      current.map((item) => (item.id === id ? { ...item, read: true } : item))
-    );
-  }
-
-  function markAllRead() {
-    setNotifications((current) => current.map((item) => ({ ...item, read: true })));
-  }
+  const {
+    notifications,
+    markNotificationsAllRead,
+    markNotificationRead,
+  } = useAppData();
 
   if (!notifications.length) {
     return (
@@ -30,10 +25,10 @@ export default function NotificationsScreen() {
     <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
       <View style={styles.headerRow}>
         <View>
-          <Text style={styles.kicker}>Inbox</Text>
+          <Text style={styles.kicker}>Notification</Text>
           <Text style={styles.title}>Notifications</Text>
         </View>
-        <Pressable onPress={markAllRead}>
+        <Pressable onPress={markNotificationsAllRead}>
           <Text style={styles.markAll}>Mark all read</Text>
         </Pressable>
       </View>
@@ -42,7 +37,7 @@ export default function NotificationsScreen() {
         <Pressable
           key={item.id}
           style={[styles.card, !item.read && styles.cardUnread]}
-          onPress={() => markRead(item.id)}
+          onPress={() => markNotificationRead(item.id)}
         >
           <View style={styles.row}>
             <Text style={styles.cardTitle}>{item.title}</Text>
@@ -50,7 +45,7 @@ export default function NotificationsScreen() {
           </View>
           {item.body ? <Text style={styles.body}>{item.body}</Text> : null}
           <Text style={styles.time}>
-            {item.createdAt ? new Date(item.createdAt).toLocaleString() : ""}
+            {item.createdAt ? relativeTime(item.createdAt) || new Date(item.createdAt).toLocaleString() : ""}
           </Text>
         </Pressable>
       ))}

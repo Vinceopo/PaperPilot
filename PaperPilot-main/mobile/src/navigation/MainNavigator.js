@@ -46,7 +46,11 @@ function MainTabs() {
         component={ManuscriptsScreen}
         options={{ title: "Library" }}
       />
-      <Tab.Screen name="Results" component={ScanResultScreen} />
+      <Tab.Screen
+        name="Results"
+        component={ScanResultScreen}
+        options={{ title: "Results" }}
+      />
       <Tab.Screen name="Account" component={AccountScreen} />
     </Tab.Navigator>
   );
@@ -71,7 +75,7 @@ export default function MainNavigator() {
         <Stack.Screen
           name="Subscription"
           component={SubscriptionScreen}
-          options={{ title: "Subscription" }}
+          options={{ title: "Upgrade to Premium" }}
         />
         <Stack.Screen
           name="Notifications"
