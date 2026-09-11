@@ -29,7 +29,13 @@ from app.compliance_db import (
     require_premium,
     subscription_snapshot,
 )
-from app.documents import DocumentError, derive_mechanics_rules, parse_document, validate_document
+from app.documents import (
+    DocumentError,
+    derive_mechanics_rules,
+    normalize_mechanics_rules,
+    parse_document,
+    validate_document,
+)
 from app.emailer import send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
@@ -47,6 +53,7 @@ from app.schemas import (
     RuleResult,
     ComplianceScanRequest,
     MechanicsRenameRequest,
+    MechanicsSaveRequest,
 )
 from app.validators import email_error, name_error, normalize_email, password_error, username_error
 
@@ -155,6 +162,55 @@ def mechanics_list(uid: str = Depends(authenticated_uid)):
     return {"items": list_mechanics(uid)}
 
 
+@app.post("/mechanics/extract")
+async def mechanics_extract(
+    file: UploadFile = File(...),
+    uid: str = Depends(authenticated_uid),
+):
+    """Parse a format guide and return editable rules without saving."""
+    del uid  # auth only
+    try:
+        filename, file_type, parsed = await _read_document(file)
+        text = parsed["text"]
+        if not text:
+            raise DocumentError("No extractable text was found in the document.")
+        rules = derive_mechanics_rules(text)
+        return {
+            "name": Path(filename).stem[:200],
+            "source_filename": filename,
+            "file_type": file_type,
+            "text_preview": text[:6000],
+            "extracted_text": text[:100_000],
+            "rules": rules,
+        }
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.post("/mechanics/save", status_code=201)
+def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_uid)):
+    """Save a mechanics profile from AI extraction (edited) or manual customize."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A mechanics name is required.")
+    rules = normalize_mechanics_rules(body.rules)
+    if not rules:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one format rule before saving.",
+        )
+    filename = (body.source_filename or f"{name}.manual").strip()[:300]
+    file_type = (body.file_type or "manual").strip()[:40] or "manual"
+    text = (body.extracted_text or "").strip()
+    parsed = {"text": text, "pages": [], "source": "manual" if file_type == "manual" else "upload"}
+    try:
+        return create_mechanics(uid, name[:200], filename, file_type, text, parsed, rules)
+    except MechanicsNameConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
 @app.post("/mechanics", status_code=201)
 async def mechanics_create(
     file: UploadFile = File(...),
@@ -213,6 +269,29 @@ def mechanics_delete(mechanics_id: str, uid: str = Depends(authenticated_uid)):
 @app.get("/manuscripts")
 def manuscripts_list(uid: str = Depends(authenticated_uid)):
     return {"items": list_manuscripts(uid)}
+
+
+@app.post("/manuscripts/preview")
+async def manuscript_preview(
+    file: UploadFile = File(...),
+    uid: str = Depends(authenticated_uid),
+):
+    """Extract manuscript text for a side-by-side preview (no version created)."""
+    del uid
+    try:
+        filename, file_type, parsed = await _read_document(file)
+        text = parsed.get("text") or ""
+        if not text:
+            raise DocumentError("No extractable text was found in the document.")
+        return {
+            "filename": filename,
+            "file_type": file_type,
+            "text_preview": text[:10000],
+            "char_count": len(text),
+            "page_count": parsed.get("page_count") or len(parsed.get("pages") or []) or None,
+        }
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.post("/manuscripts/versions", status_code=201)

@@ -60,3 +60,11 @@ class ComplianceScanRequest(BaseModel):
 
 class MechanicsRenameRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
+
+
+class MechanicsSaveRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    rules: dict = Field(default_factory=dict)
+    source_filename: str | None = Field(default=None, max_length=300)
+    file_type: str | None = Field(default=None, max_length=40)
+    extracted_text: str | None = Field(default=None, max_length=200_000)
