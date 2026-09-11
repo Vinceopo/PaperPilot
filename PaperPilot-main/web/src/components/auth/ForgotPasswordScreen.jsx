@@ -4,7 +4,7 @@ import { resetPasswordWithOtp, sendOtp } from "../../api.js";
 import { auth } from "../../firebase.js";
 import { markPasswordChanged } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
-import AuthShell from "./AuthShell.jsx";
+import AuthShell from "./AuthShell.jsx";sdfsdf
 import OtpStep from "./OtpStep.jsx";
 import { passwordChecks, confirmPasswordError, emailError, passwordError } from "./validation.js";
 
