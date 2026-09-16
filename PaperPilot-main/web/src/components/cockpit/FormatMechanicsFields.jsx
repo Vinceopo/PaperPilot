@@ -1,5 +1,6 @@
 /**
- * Format Fields — shared editable form for Customize and AI Upload modes.
+ * Format Fields — editable form for Customize, Upload extract, and Saved mechanics.
+ * Values shown are the actual rules (from extraction, saved profile, or sample starter).
  */
 
 const inputClass =
@@ -32,30 +33,29 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
   }
 
   return (
-    <div className="space-y-4 rounded-xl border border-slate-200 bg-[#f8f9fb] p-4">
-      <div className="flex items-center justify-between gap-2">
+    <div className="flex max-h-[min(32rem,70vh)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#f8f9fb]">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 px-4 py-3">
         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{title}</p>
-        <p className="text-[10px] text-slate-400">All fields are editable</p>
+        <p className="text-[10px] text-slate-400">Edit any rule to customize</p>
       </div>
 
+      <div className="pp-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
       <Field label="Profile name">
         <input
           disabled={disabled}
           value={form.name}
           onChange={set("name")}
-          placeholder="e.g. Capstone Format Guide"
           className={inputClass}
         />
       </Field>
 
       <Section title="Paper">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Size" hint="e.g. 8.5 x 11">
+          <Field label="Size">
             <input
               disabled={disabled}
               value={form.paperSize}
               onChange={set("paperSize")}
-              placeholder="8.5 x 11"
               className={inputClass}
             />
           </Field>
@@ -70,21 +70,19 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               <option value="Landscape">Landscape</option>
             </select>
           </Field>
-          <Field label="Substance" hint="Paper weight, e.g. 20">
+          <Field label="Substance" hint="Paper weight">
             <input
               disabled={disabled}
               value={form.paperSubstance}
               onChange={set("paperSubstance")}
-              placeholder="20"
               className={inputClass}
             />
           </Field>
-          <Field label="Spacing" hint="Line spacing, e.g. 1.5">
+          <Field label="Spacing" hint="Line spacing">
             <input
               disabled={disabled}
               value={form.spacing}
               onChange={set("spacing")}
-              placeholder="1.5"
               list="pp-line-spacing"
               className={inputClass}
             />
@@ -94,12 +92,11 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               <option value="2" />
             </datalist>
           </Field>
-          <Field label="Indention" hint="e.g. 1 tab or 0.5 inch">
+          <Field label="Indention">
             <input
               disabled={disabled}
               value={form.indention}
               onChange={set("indention")}
-              placeholder="0.5 inch"
               className={inputClass}
             />
           </Field>
@@ -126,7 +123,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
                 step="0.05"
                 value={form[key]}
                 onChange={set(key)}
-                placeholder="1"
                 className={inputClass}
               />
             </Field>
@@ -145,7 +141,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               step="0.5"
               value={form.fontHeading1Size}
               onChange={set("fontHeading1Size")}
-              placeholder="16"
               className={inputClass}
             />
           </Field>
@@ -158,7 +153,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               step="0.5"
               value={form.fontHeading2Size}
               onChange={set("fontHeading2Size")}
-              placeholder="14"
               className={inputClass}
             />
           </Field>
@@ -171,7 +165,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               step="0.5"
               value={form.fontHeading3Size}
               onChange={set("fontHeading3Size")}
-              placeholder="12"
               className={inputClass}
             />
           </Field>
@@ -180,7 +173,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               disabled={disabled}
               value={form.fontType}
               onChange={set("fontType")}
-              placeholder="Times New Roman"
               list="pp-font-families"
               className={inputClass}
             />
@@ -195,7 +187,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               disabled={disabled}
               value={form.fontColor}
               onChange={set("fontColor")}
-              placeholder="Black/Automatic"
               list="pp-font-colors"
               className={inputClass}
             />
@@ -210,21 +201,19 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
 
       <Section title="Pagination">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Position" hint="e.g. top right, no extra characters">
+          <Field label="Position">
             <input
               disabled={disabled}
               value={form.paginationPosition}
               onChange={set("paginationPosition")}
-              placeholder="Top right"
               className={inputClass}
             />
           </Field>
-          <Field label="First page of each chapter" hint="e.g. no page number shown">
+          <Field label="First page of each chapter">
             <input
               disabled={disabled}
               value={form.paginationFirstPageRule}
               onChange={set("paginationFirstPageRule")}
-              placeholder="No page number shown"
               className={inputClass}
             />
           </Field>
@@ -232,39 +221,33 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
       </Section>
 
       <Section title="Page breaks">
-        <Field label="Page break rules" hint="e.g. only when starting a new chapter">
+        <Field label="Page break rules">
           <textarea
             disabled={disabled}
             value={form.pageBreaks}
             onChange={set("pageBreaks")}
-            placeholder="Only when starting a new chapter"
             className={areaClass}
           />
         </Field>
       </Section>
 
       <Section title="Layout for tables">
-        <Field label="Table naming / title convention" hint='e.g. Table <name> above a TABLE TITLE caption'>
+        <Field label="Table naming / title convention">
           <textarea
             disabled={disabled}
             value={form.tableLayout}
             onChange={set("tableLayout")}
-            placeholder='Table <name> above a "TABLE TITLE" caption'
             className={areaClass}
           />
         </Field>
       </Section>
 
       <Section title="Layout for figures">
-        <Field
-          label="Figure naming / title convention"
-          hint="e.g. Figure <number>: Figure Title in bold/underlined below the figure"
-        >
+        <Field label="Figure naming / title convention">
           <textarea
             disabled={disabled}
             value={form.figureLayout}
             onChange={set("figureLayout")}
-            placeholder="Figure <number>: Figure Title in bold/underlined below the figure"
             className={areaClass}
           />
         </Field>
@@ -285,6 +268,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
           </select>
         </Field>
       </Section>
+      </div>
     </div>
   );
 }

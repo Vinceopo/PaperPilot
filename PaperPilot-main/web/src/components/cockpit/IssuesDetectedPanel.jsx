@@ -219,6 +219,39 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
     return list;
   }, [entries, severityFilter, selectedPage]);
 
+  // Same page + same severity → one block (multiple findings listed inside).
+  const issueBlocks = useMemo(() => {
+    const map = new Map();
+    visibleEntries.forEach((entry) => {
+      const key = `${entry.page ?? "doc"}::${entry.severity}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          page: entry.page,
+          severity: entry.severity,
+          items: [],
+        });
+      }
+      map.get(key).items.push(entry);
+    });
+    return [...map.values()]
+      .map((block) => ({
+        ...block,
+        items: [...block.items].sort((a, b) => {
+          const lineA = a.line == null ? Number.MAX_SAFE_INTEGER : Number(a.line);
+          const lineB = b.line == null ? Number.MAX_SAFE_INTEGER : Number(b.line);
+          if (lineA !== lineB) return lineA - lineB;
+          return String(a.finding || "").localeCompare(String(b.finding || ""));
+        }),
+      }))
+      .sort((a, b) => {
+        const pageA = a.page == null ? Number.MAX_SAFE_INTEGER : Number(a.page);
+        const pageB = b.page == null ? Number.MAX_SAFE_INTEGER : Number(b.page);
+        if (pageA !== pageB) return pageA - pageB;
+        return severityRank(b.severity) - severityRank(a.severity);
+      });
+  }, [visibleEntries]);
+
   const entriesByPage = useMemo(() => {
     const map = new Map();
     const filtered = severityFilter ? entries.filter((e) => e.severity === severityFilter) : entries;
@@ -310,11 +343,11 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
       <div className="grid lg:grid-cols-[200px_minmax(0,1fr)]">
 
         {/* ── Pages sidebar — only pages with issues are listed ────────── */}
-        <aside className="border-b border-slate-100 bg-[#fafbfc] lg:border-b-0 lg:border-r">
-          <p className="px-4 py-3 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
+        <aside className="flex max-h-[min(32rem,70vh)] flex-col border-b border-slate-100 bg-[#fafbfc] lg:border-b-0 lg:border-r">
+          <p className="shrink-0 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
             Pages with issues
           </p>
-          <nav className="space-y-0.5 px-2 pb-3" aria-label="Issue pages">
+          <nav className="pp-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3" aria-label="Issue pages">
 
             {/* All-issues summary row */}
             <button
@@ -374,10 +407,10 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
         </aside>
 
         {/* ── Main findings pane ─────────────────────────────────────────── */}
-        <section className="min-w-0 p-5 md:p-6">
+        <section className="flex max-h-[min(32rem,70vh)] min-w-0 flex-col">
 
           {/* Header */}
-          <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 px-5 pb-0 pt-5 md:px-6 md:pt-6">
             <div>
               <h3 className="text-base font-bold text-slate-800">
                 {selectedPage === "all"
@@ -403,76 +436,124 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
           </div>
 
           {visibleEntries.length === 0 ? (
-            <p className="mt-8 text-sm text-slate-400">No issues found here.</p>
+            <p className="mt-8 px-5 text-sm text-slate-400 md:px-6">No issues found here.</p>
           ) : (
-            <div className="mt-4 space-y-3">
-              {visibleEntries.map((entry) => {
-                const s = SEVERITY[entry.severity] || SEVERITY.minor;
-                const xaiOpen = expandedXai.has(entry.id);
+            <div className="pp-scroll mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-5 md:px-6 md:pb-6">
+              {issueBlocks.map((block) => {
+                const s = SEVERITY[block.severity] || SEVERITY.minor;
+                const lines = [
+                  ...new Set(block.items.map((item) => item.line).filter((line) => line != null)),
+                ].sort((a, b) => a - b);
+                const blockOpen = block.items.some((item) => expandedXai.has(item.id));
                 return (
                   <div
-                    key={entry.id}
+                    key={block.key}
                     className={`overflow-hidden rounded-xl border border-slate-200 border-l-4 ${s.border} ${s.rowBg} transition`}
                   >
-                    {/* Location + issue row */}
-                    <button
-                      type="button"
-                      onClick={() => toggleXai(entry.id)}
-                      className="flex w-full items-start gap-3 px-4 py-3 text-left"
-                      aria-expanded={xaiOpen}
-                    >
-                      {/* Location badge */}
-                      <LocationBadge page={entry.page} line={entry.line} />
-
-                      {/* Issue text */}
-                      <p className="min-w-0 flex-1 pt-0.5 text-sm font-semibold text-slate-700">
-                        {entry.finding}
-                      </p>
-
-                      {/* Severity tag + expand chevron */}
-                      <div className="flex shrink-0 items-center gap-2">
-                        <span
-                          className={`hidden rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide sm:inline-block ${s.tag}`}
-                        >
-                          {s.label}
-                        </span>
-                        <svg
-                          viewBox="0 0 24 24"
-                          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${xaiOpen ? "rotate-180" : ""}`}
-                          fill="none" stroke="currentColor" strokeWidth="2"
-                          aria-hidden="true"
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                        </svg>
-                      </div>
-                    </button>
-
-                    {/* XAI explanation — collapsible */}
-                    {xaiOpen && (
-                      <div className="border-t border-slate-200/80 bg-white px-4 py-4">
-                        <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
-                          XAI explanation
-                        </p>
-                        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                          {entry.explanation}
-                        </p>
-                        {entry.recommendation && (
-                          <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#16bfa8]/30 bg-[#f0fdfb] px-3 py-2">
-                            <svg viewBox="0 0 24 24" className="mt-0.5 h-4 w-4 shrink-0 text-[#16bfa8]" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            <p className="text-xs font-medium text-[#0d7a6a]">
-                              {entry.recommendation}
-                            </p>
-                          </div>
-                        )}
-                        <p className="mt-2 text-[11px] text-slate-400">
-                          {entry.page != null ? `Page ${entry.page}` : "Document-level"}
-                          {entry.line != null ? `, Line ${entry.line}` : ""}
-                          {entry.section ? ` · ${entry.section}` : ""}
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200/70 px-4 py-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <LocationBadge
+                            page={block.page}
+                            line={lines.length === 1 ? lines[0] : null}
+                          />
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${s.tag}`}
+                          >
+                            {s.label}
+                          </span>
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            {block.items.length} issue{block.items.length !== 1 ? "s" : ""}
+                            {lines.length > 1 ? ` · lines ${lines.join(", ")}` : ""}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          Grouped by same page and same severity
                         </p>
                       </div>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const shouldOpen = !blockOpen;
+                          setExpandedXai((prev) => {
+                            const next = new Set(prev);
+                            block.items.forEach((item) => {
+                              if (shouldOpen) next.add(item.id);
+                              else next.delete(item.id);
+                            });
+                            return next;
+                          });
+                        }}
+                        className="shrink-0 text-xs font-semibold text-[#16bfa8] underline-offset-2 hover:underline"
+                      >
+                        {blockOpen ? "Hide details" : "Show details"}
+                      </button>
+                    </div>
+
+                    <ul className="divide-y divide-slate-200/70">
+                      {block.items.map((entry) => {
+                        const xaiOpen = expandedXai.has(entry.id);
+                        return (
+                          <li key={entry.id}>
+                            <button
+                              type="button"
+                              onClick={() => toggleXai(entry.id)}
+                              className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-white/50"
+                              aria-expanded={xaiOpen}
+                            >
+                              {entry.line != null ? (
+                                <span className="mt-0.5 shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-[#0d9488]">
+                                  Line {entry.line}
+                                </span>
+                              ) : (
+                                <span className="mt-0.5 shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-400">
+                                  Page
+                                </span>
+                              )}
+                              <p className="min-w-0 flex-1 pt-0.5 text-sm font-semibold text-slate-700">
+                                {entry.finding}
+                              </p>
+                              <svg
+                                viewBox="0 0 24 24"
+                                className={`mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform ${xaiOpen ? "rotate-180" : ""}`}
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                aria-hidden="true"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+                              </svg>
+                            </button>
+
+                            {xaiOpen && (
+                              <div className="border-t border-slate-200/80 bg-white px-4 py-4">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
+                                  XAI explanation
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                                  {entry.explanation}
+                                </p>
+                                {entry.recommendation && (
+                                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#16bfa8]/30 bg-[#f0fdfb] px-3 py-2">
+                                    <svg viewBox="0 0 24 24" className="mt-0.5 h-4 w-4 shrink-0 text-[#16bfa8]" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    <p className="text-xs font-medium text-[#0d7a6a]">
+                                      {entry.recommendation}
+                                    </p>
+                                  </div>
+                                )}
+                                <p className="mt-2 text-[11px] text-slate-400">
+                                  {entry.page != null ? `Page ${entry.page}` : "Document-level"}
+                                  {entry.line != null ? `, Line ${entry.line}` : ""}
+                                  {entry.section ? ` · ${entry.section}` : ""}
+                                </p>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   </div>
                 );
               })}

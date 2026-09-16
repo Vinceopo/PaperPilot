@@ -188,6 +188,43 @@ export function renameMechanics(mechanicsId, name) {
   });
 }
 
+export function updateMechanicsProfile(mechanicsId, { name, rules }) {
+  const body = {};
+  if (name != null) body.name = String(name).trim();
+  if (rules != null) body.rules = rules;
+  return authorizedFetch(`/mechanics/${encodeURIComponent(mechanicsId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function downloadSampleMechanics() {
+  const user = auth?.currentUser;
+  const headers = new Headers();
+  if (user) {
+    headers.set("Authorization", `Bearer ${await user.getIdToken()}`);
+  }
+  try {
+    const res = await fetch(`${API}/mechanics/sample`, { headers });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(detailMessage(data, "Could not download sample mechanics."), res.status, data.detail);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "Sample_Format_Mechanics.docx";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    return true;
+  } catch (err) {
+    throw networkError(err);
+  }
+}
+
 export function deleteMechanics(mechanicsId) {
   return authorizedFetch(`/mechanics/${encodeURIComponent(mechanicsId)}`, {
     method: "DELETE",

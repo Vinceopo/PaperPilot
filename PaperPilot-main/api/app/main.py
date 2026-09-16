@@ -1,6 +1,5 @@
 import io
 import json
-import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
@@ -10,10 +9,9 @@ from pypdf import PdfReader
 from app.config import settings
 from app.compliance import run_compliance_scan
 from app.compliance_db import (
+    MechanicsInUse,
     MechanicsNameConflict,
-    ManuscriptTitleConflict,
     UpgradeRequired,
-    cancel_subscription,
     check_scan_eligibility,
     create_mechanics,
     create_version,
@@ -27,48 +25,37 @@ from app.compliance_db import (
     list_mechanics,
     list_versions,
     persist_scan,
-    rename_mechanics,
     require_premium,
-    set_subscription_plan,
     subscription_snapshot,
+    update_mechanics,
 )
-from app.documents import DocumentError, derive_mechanics_rules, normalize_mechanics_rules, parse_document, validate_document
-from app.emailer import email_delivery_configured, send_otp_email
+from app.documents import (
+    DocumentError,
+    derive_mechanics_rules,
+    normalize_mechanics_rules,
+    parse_document,
+    validate_document,
+)
+from app.emailer import send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
 from app.otp import PURPOSES, can_send, consume_challenge, generate_code, init_db, store_otp, verify_otp
-from app.profiles import (
-    claim_phone,
-    get_email_by_username,
-    get_profile,
-    phone_in_use,
-    release_phone,
-    release_username,
-    reserve_username,
-    save_profile,
-    update_profile,
-    username_taken,
-)
+from app.profiles import release_username, reserve_username, save_profile, username_taken
 from app.rules import evaluate_manuscript
 from app.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
-    CancelSubscriptionRequest,
-    ComplianceScanRequest,
-    MechanicsRenameRequest,
-    MechanicsSaveRequest,
     OtpSendRequest,
     OtpVerifyRequest,
     RegisterCheckRequest,
     RegisterRequest,
     ResetPasswordRequest,
     RuleResult,
-    SubscribeRequest,
-    UpdateProfileRequest,
+    ComplianceScanRequest,
+    MechanicsSaveRequest,
+    MechanicsUpdateRequest,
 )
-from app.validators import email_error, name_error, normalize_email, password_error, phone_error, username_error
-
-log = logging.getLogger("paperpilot.api")
+from app.validators import email_error, name_error, normalize_email, password_error, username_error
 
 app = FastAPI(title="PaperPilot API", version="0.1.0")  # reload settings after .env
 init_db()
@@ -146,7 +133,7 @@ def authenticated_uid(authorization: str | None = Header(default=None)) -> str:
             ),
         )
     try:
-        decoded = fb.verify_id_token(token, check_revoked=True)
+        decoded = fb.verify_id_token(token)
         uid = decoded.get("uid") or decoded.get("sub")
         if not uid:
             raise ValueError("Token has no UID.")
@@ -164,6 +151,50 @@ async def _read_document(file: UploadFile) -> tuple[str, str, dict]:
     file_type = validate_document(filename, data, settings.max_upload_bytes)
     parsed = parse_document(data, file_type)
     return filename, file_type, parsed
+
+
+def _document_preview_pages(parsed: dict, text: str, limit: int = 40) -> list[dict]:
+    """Build page-shaped preview payloads for PDF/DOCX uploads."""
+    pages_out: list[dict] = []
+    source_pages = parsed.get("pages") or []
+    if source_pages:
+        for page in source_pages[:limit]:
+            page_text = "\n".join(
+                line.get("text", "") for line in (page.get("lines") or []) if line.get("text")
+            ).strip()
+            pages_out.append(
+                {
+                    "page_index": page.get("page_index", len(pages_out)),
+                    "text": page_text[:8000],
+                }
+            )
+    else:
+        paragraphs = parsed.get("paragraphs") or []
+        chunks: list[str] = []
+        current: list[str] = []
+        for paragraph in paragraphs:
+            current.append(str(paragraph.get("text") or ""))
+            runs = paragraph.get("runs") or []
+            if any(int(run.get("page_breaks") or 0) > 0 for run in runs):
+                chunks.append("\n".join(current).strip())
+                current = []
+        if current:
+            chunks.append("\n".join(current).strip())
+        if not chunks:
+            body = (text or "").strip()
+            size = 2200
+            chunks = [
+                body[i : i + size].strip()
+                for i in range(0, min(len(body), size * limit), size)
+                if body[i : i + size].strip()
+            ]
+        for index, chunk in enumerate(chunks[:limit]):
+            if chunk:
+                pages_out.append({"page_index": index, "text": chunk[:8000]})
+
+    if not pages_out and text:
+        pages_out = [{"page_index": 0, "text": text[:8000]}]
+    return pages_out
 
 
 def _raise_upgrade(exc: UpgradeRequired) -> None:
@@ -188,12 +219,17 @@ async def mechanics_extract(
         if not text:
             raise DocumentError("No extractable text was found in the document.")
         rules = derive_mechanics_rules(text)
+        pages = _document_preview_pages(parsed, text)
         return {
             "name": Path(filename).stem[:200],
             "source_filename": filename,
             "file_type": file_type,
             "text_preview": text[:6000],
             "extracted_text": text[:100_000],
+            "page_count": (parsed.get("metadata") or {}).get("page_count")
+            or len(parsed.get("pages") or [])
+            or len(pages),
+            "pages": pages,
             "rules": rules,
         }
     except DocumentError as exc:
@@ -212,16 +248,78 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
             status_code=400,
             detail="Add at least one format rule before saving.",
         )
-    filename = (body.source_filename or f"{name}.manual").strip()[:300]
-    file_type = (body.file_type or "manual").strip()[:40] or "manual"
+    filename = (body.source_filename or f"{name}.docx").strip()[:300]
+    raw_type = (body.file_type or "docx").strip().lower()[:40] or "docx"
+    # SQLite CHECK only allows pdf/docx — map customize/"manual" saves to docx.
+    file_type = raw_type if raw_type in ("pdf", "docx") else "docx"
+    if not filename.lower().endswith((".pdf", ".docx")):
+        filename = f"{Path(filename).stem}.docx"
     text = (body.extracted_text or "").strip()
-    parsed = {"text": text, "pages": [], "source": "manual" if file_type == "manual" else "upload"}
+    parsed = {
+        "text": text,
+        "pages": [],
+        "source": "manual" if raw_type in ("manual", "customize") else "upload",
+    }
     try:
         return create_mechanics(uid, name[:200], filename, file_type, text, parsed, rules)
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.get("/mechanics/sample")
+def mechanics_sample():
+    """Downloadable sample format-mechanics guide (DOCX) for users who need a starting point."""
+    from docx import Document
+    from fastapi.responses import StreamingResponse
+
+    doc = Document()
+    doc.add_heading("Sample Format Mechanics Guide", level=0)
+    doc.add_paragraph(
+        "Use this guide as a starting point. Upload it in PaperPilot, review the "
+        "extracted Format Fields, then edit any value to match your school or style."
+    )
+    doc.add_heading("Paper", level=1)
+    doc.add_paragraph("Paper size: 8.5 x 11 (Letter)")
+    doc.add_paragraph("Orientation: Portrait")
+    doc.add_paragraph("Paper substance / weight: 20")
+    doc.add_paragraph("Line spacing: 1.5")
+    doc.add_paragraph("First-line indentation: 0.5 inch")
+    doc.add_heading("Margins (inches)", level=1)
+    doc.add_paragraph("Top: 1 · Bottom: 1 · Left: 1 · Right: 1")
+    doc.add_paragraph("Gutter: 0 · Header: 0.5 · Footer: 0.5")
+    doc.add_heading("Font", level=1)
+    doc.add_paragraph("Font type: Times New Roman")
+    doc.add_paragraph("Font color: Black/Automatic")
+    doc.add_paragraph("Heading 1 size: 16 pt")
+    doc.add_paragraph("Heading 2 size: 14 pt")
+    doc.add_paragraph("Heading 3 and body content size: 12 pt")
+    doc.add_heading("Pagination", level=1)
+    doc.add_paragraph("Page number position: Top right")
+    doc.add_paragraph("First page of each chapter: No page number shown")
+    doc.add_heading("Page breaks", level=1)
+    doc.add_paragraph("Insert a page break only when starting a new chapter.")
+    doc.add_heading("Tables", level=1)
+    doc.add_paragraph('Table naming: Table <name> above a "TABLE TITLE" caption.')
+    doc.add_heading("Figures", level=1)
+    doc.add_paragraph(
+        "Figure naming: Figure <number>: Figure Title in bold/underlined below the figure."
+    )
+    doc.add_heading("Citation format", level=1)
+    doc.add_paragraph("Citation style: APA 7th Edition")
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    headers = {
+        "Content-Disposition": 'attachment; filename="Sample_Format_Mechanics.docx"'
+    }
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers,
+    )
 
 
 @app.post("/mechanics", status_code=201)
@@ -249,16 +347,22 @@ async def mechanics_create(
 
 
 @app.patch("/mechanics/{mechanics_id}")
-def mechanics_rename(
+def mechanics_update(
     mechanics_id: str,
-    body: MechanicsRenameRequest,
+    body: MechanicsUpdateRequest,
     uid: str = Depends(authenticated_uid),
 ):
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="A mechanics name is required.")
+    if body.name is None and body.rules is None:
+        raise HTTPException(status_code=400, detail="Provide a name and/or rules to update.")
+    name = body.name.strip() if body.name is not None else None
+    rules = normalize_mechanics_rules(body.rules) if body.rules is not None else None
+    if body.rules is not None and not rules:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one format rule before saving.",
+        )
     try:
-        item = rename_mechanics(uid, mechanics_id, name)
+        item = update_mechanics(uid, mechanics_id, name=name, rules=rules)
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
@@ -270,10 +374,18 @@ def mechanics_rename(
 
 @app.delete("/mechanics/{mechanics_id}")
 def mechanics_delete(mechanics_id: str, uid: str = Depends(authenticated_uid)):
-    deleted = delete_mechanics(uid, mechanics_id)
+    try:
+        deleted = delete_mechanics(uid, mechanics_id)
+    except MechanicsInUse as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     if not deleted:
         raise HTTPException(status_code=404, detail="Mechanics not found.")
     return {"ok": True}
+
+
+@app.get("/manuscripts")
+def manuscripts_list(uid: str = Depends(authenticated_uid)):
+    return {"items": list_manuscripts(uid)}
 
 
 @app.post("/manuscripts/preview")
@@ -281,27 +393,29 @@ async def manuscript_preview(
     file: UploadFile = File(...),
     uid: str = Depends(authenticated_uid),
 ):
-    """Extract manuscript text for a side-by-side preview (no version created)."""
+    """Extract manuscript pages for a document-style side preview (no version created)."""
     del uid
     try:
         filename, file_type, parsed = await _read_document(file)
         text = parsed.get("text") or ""
         if not text:
             raise DocumentError("No extractable text was found in the document.")
+
+        pages_out = _document_preview_pages(parsed, text)
+        source_pages = parsed.get("pages") or []
+
         return {
             "filename": filename,
             "file_type": file_type,
             "text_preview": text[:10000],
             "char_count": len(text),
-            "page_count": parsed.get("page_count") or len(parsed.get("pages") or []) or None,
+            "page_count": (parsed.get("metadata") or {}).get("page_count")
+            or len(source_pages)
+            or len(pages_out),
+            "pages": pages_out,
         }
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
-
-
-@app.get("/manuscripts")
-def manuscripts_list(uid: str = Depends(authenticated_uid)):
-    return {"items": list_manuscripts(uid)}
 
 
 @app.post("/manuscripts/versions", status_code=201)
@@ -331,14 +445,10 @@ async def manuscript_version_create(
             manuscript_id,
         )
         return {"created_manuscript": created_parent, "version": version}
-    except ManuscriptTitleConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except LookupError:
         raise HTTPException(status_code=404, detail="Manuscript or mechanics not found.") from None
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.get("/manuscripts/{manuscript_id}/versions")
@@ -429,51 +539,6 @@ def subscription_detail(uid: str = Depends(authenticated_uid)):
     return subscription_snapshot(uid)
 
 
-PREMIUM_PRICE_MONTHLY = 949.0
-PREMIUM_PRICE_ANNUAL = 9490.0
-
-
-@app.post("/subscription/subscribe")
-def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authenticated_uid)):
-    """Activate or change plan. Payment is simulated for demo (no live charge)."""
-    plan = body.plan.strip().lower()
-    try:
-        if plan == "free":
-            return set_subscription_plan(uid, tier="free")
-        amount = (
-            PREMIUM_PRICE_ANNUAL
-            if (body.billing_period or "monthly") == "annual"
-            else PREMIUM_PRICE_MONTHLY
-        )
-        return set_subscription_plan(
-            uid,
-            tier="premium",
-            billing_period=body.billing_period or "monthly",
-            payment_method=body.payment_method or "card",
-            amount=amount,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
-
-
-@app.post("/subscription/cancel")
-def subscription_cancel(
-    body: CancelSubscriptionRequest | None = None,
-    uid: str = Depends(authenticated_uid),
-):
-    current = subscription_snapshot(uid)
-    if current.get("tier") != "premium" and current.get("status") not in {"active", "canceled"}:
-        raise HTTPException(status_code=400, detail="No active Premium subscription to cancel.")
-    immediate = True if body is None else bool(body.immediate)
-    return cancel_subscription(uid, immediate=immediate)
-
-
-@app.get("/subscription/history")
-def subscription_history(uid: str = Depends(authenticated_uid)):
-    snap = subscription_snapshot(uid)
-    return {"history": snap.get("history") or []}
-
-
 def _require(error: str | None) -> None:
     if error:
         raise HTTPException(status_code=400, detail=error)
@@ -500,172 +565,10 @@ def auth_register_check(body: RegisterCheckRequest):
     _require(email_error(email))
     _require(username_error(username))
     if _email_registered(email):
-        raise HTTPException(status_code=409, detail="This email is already in use. Please sign in or use a different email.")
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
     if username_taken(username) is True:
         raise HTTPException(status_code=409, detail="That username is already taken.")
     return {"ok": True}
-
-
-@app.post("/auth/resolve-email")
-def auth_resolve_email(body: dict):
-    """Resolve a username to its registered email for login purposes."""
-    identifier = (body.get("identifier") or "").strip()
-    if not identifier:
-        raise HTTPException(status_code=400, detail="Identifier is required.")
-    # If it looks like an email already, return it as-is after basic validation.
-    if "@" in identifier:
-        email = normalize_email(identifier)
-        err = email_error(email)
-        if err:
-            raise HTTPException(status_code=400, detail=err)
-        return {"email": email}
-    # Otherwise treat as a username and resolve to email via RTDB.
-    email = get_email_by_username(identifier)
-    if not email:
-        raise HTTPException(status_code=404, detail="No account found for that username.")
-    return {"email": email}
-
-
-# ── Profile ──────────────────────────────────────────────────────────────────
-
-@app.get("/profile")
-def get_user_profile(uid: str = Depends(authenticated_uid)):
-    """Return the authenticated user's profile from RTDB."""
-    data = get_profile(uid)
-    if data is None:
-        # Fall back to Firebase Auth data so the page is never empty.
-        fb = admin_auth()
-        if fb:
-            try:
-                u = fb.get_user(uid)
-                parts = (u.display_name or "").split()
-                return {
-                    "uid": uid,
-                    "email": u.email or "",
-                    "firstName": parts[0] if parts else "",
-                    "middleName": "",
-                    "lastName": parts[-1] if len(parts) > 1 else "",
-                    "contactNumber": "",
-                    "username": "",
-                    "photoURL": u.photo_url or "",
-                    "emailVerified": u.email_verified,
-                }
-            except Exception:
-                pass
-        raise HTTPException(status_code=404, detail="Profile not found.")
-    return {**data, "uid": uid}
-
-
-@app.patch("/profile")
-def patch_user_profile(body: UpdateProfileRequest, uid: str = Depends(authenticated_uid)):
-    """Update mutable profile fields (name, contact, photo)."""
-    if body.first_name is not None:
-        _require(name_error(body.first_name.strip(), "First name"))
-    if body.last_name is not None:
-        _require(name_error(body.last_name.strip(), "Last name"))
-    if body.middle_name is not None:
-        _require(name_error(body.middle_name.strip(), "Middle name", required=False))
-    if body.contact_number is not None:
-        _require(phone_error(body.contact_number.strip(), required=False))
-    if body.username is not None:
-        if not body.username.strip():
-            raise HTTPException(status_code=400, detail="Username cannot be blank.")
-        _require(username_error(body.username.strip()))
-
-    current = get_profile(uid) or {}
-    if not current.get("email"):
-        fb = admin_auth()
-        if fb:
-            try:
-                current["email"] = fb.get_user(uid).email or ""
-            except Exception:
-                pass
-    old_phone = str(current.get("contactNumber") or "").strip()
-    new_phone = None if body.contact_number is None else body.contact_number.strip()
-    old_username = str(current.get("username") or "").strip()
-    new_username = None if body.username is None else body.username.strip()
-
-    if new_username is not None:
-        claimed = reserve_username(new_username, uid)
-        if claimed is False:
-            raise HTTPException(status_code=409, detail="That username is already taken.")
-        if claimed is None:
-            raise HTTPException(status_code=503, detail="Could not verify username. Please try again.")
-
-    if new_phone:
-        taken = phone_in_use(new_phone, uid)
-        if taken is True:
-            raise HTTPException(status_code=409, detail="Number is already in use")
-        claimed = claim_phone(new_phone, uid)
-        if claimed is False:
-            raise HTTPException(status_code=409, detail="Number is already in use")
-        if claimed is None:
-            raise HTTPException(status_code=503, detail="Could not verify mobile number. Please try again.")
-
-    ok = update_profile(
-        uid,
-        first_name=body.first_name,
-        middle_name=body.middle_name,
-        last_name=body.last_name,
-        contact_number=body.contact_number,
-        username=body.username,
-        email=(current.get("email") or None),
-        photo_url=body.photo_url,
-        remove_photo=body.remove_photo,
-    )
-
-    if new_username is not None:
-        old_key = old_username.strip().lower()
-        new_key = new_username.strip().lower()
-        if old_key and old_key != new_key:
-            release_username(old_username)
-
-    if new_phone is not None:
-        old_digits = "".join(ch for ch in old_phone if ch.isdigit())
-        new_digits = "".join(ch for ch in new_phone if ch.isdigit())
-        if old_digits and old_digits != new_digits:
-            release_phone(old_phone, uid)
-
-    # Sync display name / photoURL to Firebase Auth so it's consistent.
-    fb = admin_auth()
-    if fb:
-        try:
-            profile = get_profile(uid) or current
-            parts = [
-                body.first_name if body.first_name is not None else profile.get("firstName", ""),
-                body.middle_name if body.middle_name is not None else profile.get("middleName", ""),
-                body.last_name if body.last_name is not None else profile.get("lastName", ""),
-            ]
-            display = " ".join(p.strip() for p in parts if p and str(p).strip())
-            kwargs: dict = {}
-            if display:
-                kwargs["display_name"] = display
-            if body.remove_photo:
-                kwargs["photo_url"] = ""
-            elif body.photo_url is not None:
-                kwargs["photo_url"] = body.photo_url
-            if kwargs:
-                fb.update_user(uid, **kwargs)
-        except Exception as exc:
-            log.warning("Firebase Auth profile sync failed: %s", exc)
-
-    if not ok:
-        raise HTTPException(status_code=503, detail="Profile update failed. Please try again.")
-    updated = get_profile(uid) or {}
-    return {"ok": True, **updated, "uid": uid}
-
-
-@app.post("/account/deactivate")
-def deactivate_account(uid: str = Depends(authenticated_uid)):
-    """Disable this account. The user will be forced out on next auth check."""
-    fb = admin_auth()
-    if not fb:
-        raise HTTPException(status_code=503, detail="Account management is temporarily unavailable.")
-    try:
-        fb.update_user(uid, disabled=True)
-        return {"ok": True}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/auth/otp/send")
@@ -677,49 +580,28 @@ def auth_otp_send(body: OtpSendRequest):
 
     registered = _email_registered(email)
     if body.purpose == "verify_email" and registered:
-        raise HTTPException(status_code=409, detail="This email is already in use. Please sign in or use a different email.")
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
     if body.purpose == "reset_password" and registered is False:
         raise HTTPException(status_code=404, detail="No account found for this email.")
 
-    allowed, wait, reason = can_send(email, body.purpose)
+    allowed, _wait, reason = can_send(email, body.purpose)
     if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail={"message": reason, "retry_after": wait},
-            headers={"Retry-After": str(wait)},
-        )
+        raise HTTPException(status_code=429, detail=reason)
 
     code = generate_code()
-    try:
-        ttl = store_otp(email, body.purpose, code)
-    except ValueError as exc:
-        # Re-checking inside the RTDB transaction closes concurrent-send races.
-        message = str(exc)
-        _, retry_wait, _ = can_send(email, body.purpose)
-        raise HTTPException(
-            status_code=429,
-            detail={"message": message, "retry_after": retry_wait or settings.otp_resend_seconds},
-            headers={"Retry-After": str(retry_wait or settings.otp_resend_seconds)},
-        ) from None
-
+    ttl = store_otp(email, body.purpose, code)
     try:
         send_otp_email(email, code, body.purpose)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Could not send email: {exc}") from exc
-    minutes = max(1, ttl // 60)
-    resend_in = (
-        settings.otp_reset_resend_seconds
-        if body.purpose == "reset_password"
-        else settings.otp_resend_seconds
-    )
     payload = {
         "ok": True,
         "expires_in": ttl,
-        "resend_in": resend_in,
+        "resend_in": settings.otp_resend_seconds,
         "max_attempts": settings.otp_max_attempts,
-        "message": f"A 6-digit code was sent to your email. It expires in {minutes} minute(s).",
+        "message": "A 6-digit code was sent to your email. It expires in 10 minutes.",
     }
-    if settings.otp_echo_in_response or not email_delivery_configured():
+    if settings.otp_echo_in_response or not settings.smtp_host:
         payload["dev_code"] = code
     return payload
 
@@ -753,9 +635,7 @@ def auth_register(body: RegisterRequest):
     # The account is only created once a valid code has been exchanged for this token.
     try:
         consume_challenge(body.signup_token, email, "verify_email")
-    except Exception as exc:
-        # Catch all exceptions (ValueError for validation, RuntimeError for RTDB issues)
-        # so any failure here returns a clean 400 rather than a 500.
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     fb = admin_auth()
@@ -774,7 +654,7 @@ def auth_register(body: RegisterRequest):
             email_verified=True,
         )
     except EmailAlreadyExistsError:
-        raise HTTPException(status_code=409, detail="This email is already in use. Please sign in or use a different email.") from None
+        raise HTTPException(status_code=409, detail="An account with this email already exists.") from None
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -816,10 +696,8 @@ def auth_reset_password(body: ResetPasswordRequest):
     try:
         user = fb.get_user_by_email(email)
         fb.update_user(user.uid, password=body.new_password)
-        # Invalidate every existing session so other devices must sign in again.
-        fb.revoke_refresh_tokens(user.uid)
     except UserNotFoundError:
         raise HTTPException(status_code=400, detail="No account found for this email.") from None
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "signed_out": True}
+    return {"ok": True}
