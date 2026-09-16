@@ -25,9 +25,9 @@ from app.compliance_db import (
     list_mechanics,
     list_versions,
     persist_scan,
-    rename_mechanics,
     require_premium,
     subscription_snapshot,
+    update_mechanics,
 )
 from app.documents import (
     DocumentError,
@@ -52,8 +52,8 @@ from app.schemas import (
     ResetPasswordRequest,
     RuleResult,
     ComplianceScanRequest,
-    MechanicsRenameRequest,
     MechanicsSaveRequest,
+    MechanicsUpdateRequest,
 )
 from app.validators import email_error, name_error, normalize_email, password_error, username_error
 
@@ -153,6 +153,50 @@ async def _read_document(file: UploadFile) -> tuple[str, str, dict]:
     return filename, file_type, parsed
 
 
+def _document_preview_pages(parsed: dict, text: str, limit: int = 40) -> list[dict]:
+    """Build page-shaped preview payloads for PDF/DOCX uploads."""
+    pages_out: list[dict] = []
+    source_pages = parsed.get("pages") or []
+    if source_pages:
+        for page in source_pages[:limit]:
+            page_text = "\n".join(
+                line.get("text", "") for line in (page.get("lines") or []) if line.get("text")
+            ).strip()
+            pages_out.append(
+                {
+                    "page_index": page.get("page_index", len(pages_out)),
+                    "text": page_text[:8000],
+                }
+            )
+    else:
+        paragraphs = parsed.get("paragraphs") or []
+        chunks: list[str] = []
+        current: list[str] = []
+        for paragraph in paragraphs:
+            current.append(str(paragraph.get("text") or ""))
+            runs = paragraph.get("runs") or []
+            if any(int(run.get("page_breaks") or 0) > 0 for run in runs):
+                chunks.append("\n".join(current).strip())
+                current = []
+        if current:
+            chunks.append("\n".join(current).strip())
+        if not chunks:
+            body = (text or "").strip()
+            size = 2200
+            chunks = [
+                body[i : i + size].strip()
+                for i in range(0, min(len(body), size * limit), size)
+                if body[i : i + size].strip()
+            ]
+        for index, chunk in enumerate(chunks[:limit]):
+            if chunk:
+                pages_out.append({"page_index": index, "text": chunk[:8000]})
+
+    if not pages_out and text:
+        pages_out = [{"page_index": 0, "text": text[:8000]}]
+    return pages_out
+
+
 def _raise_upgrade(exc: UpgradeRequired) -> None:
     raise HTTPException(status_code=403, detail=exc.detail) from None
 
@@ -175,12 +219,17 @@ async def mechanics_extract(
         if not text:
             raise DocumentError("No extractable text was found in the document.")
         rules = derive_mechanics_rules(text)
+        pages = _document_preview_pages(parsed, text)
         return {
             "name": Path(filename).stem[:200],
             "source_filename": filename,
             "file_type": file_type,
             "text_preview": text[:6000],
             "extracted_text": text[:100_000],
+            "page_count": (parsed.get("metadata") or {}).get("page_count")
+            or len(parsed.get("pages") or [])
+            or len(pages),
+            "pages": pages,
             "rules": rules,
         }
     except DocumentError as exc:
@@ -199,16 +248,78 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
             status_code=400,
             detail="Add at least one format rule before saving.",
         )
-    filename = (body.source_filename or f"{name}.manual").strip()[:300]
-    file_type = (body.file_type or "manual").strip()[:40] or "manual"
+    filename = (body.source_filename or f"{name}.docx").strip()[:300]
+    raw_type = (body.file_type or "docx").strip().lower()[:40] or "docx"
+    # SQLite CHECK only allows pdf/docx — map customize/"manual" saves to docx.
+    file_type = raw_type if raw_type in ("pdf", "docx") else "docx"
+    if not filename.lower().endswith((".pdf", ".docx")):
+        filename = f"{Path(filename).stem}.docx"
     text = (body.extracted_text or "").strip()
-    parsed = {"text": text, "pages": [], "source": "manual" if file_type == "manual" else "upload"}
+    parsed = {
+        "text": text,
+        "pages": [],
+        "source": "manual" if raw_type in ("manual", "customize") else "upload",
+    }
     try:
         return create_mechanics(uid, name[:200], filename, file_type, text, parsed, rules)
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.get("/mechanics/sample")
+def mechanics_sample():
+    """Downloadable sample format-mechanics guide (DOCX) for users who need a starting point."""
+    from docx import Document
+    from fastapi.responses import StreamingResponse
+
+    doc = Document()
+    doc.add_heading("Sample Format Mechanics Guide", level=0)
+    doc.add_paragraph(
+        "Use this guide as a starting point. Upload it in PaperPilot, review the "
+        "extracted Format Fields, then edit any value to match your school or style."
+    )
+    doc.add_heading("Paper", level=1)
+    doc.add_paragraph("Paper size: 8.5 x 11 (Letter)")
+    doc.add_paragraph("Orientation: Portrait")
+    doc.add_paragraph("Paper substance / weight: 20")
+    doc.add_paragraph("Line spacing: 1.5")
+    doc.add_paragraph("First-line indentation: 0.5 inch")
+    doc.add_heading("Margins (inches)", level=1)
+    doc.add_paragraph("Top: 1 · Bottom: 1 · Left: 1 · Right: 1")
+    doc.add_paragraph("Gutter: 0 · Header: 0.5 · Footer: 0.5")
+    doc.add_heading("Font", level=1)
+    doc.add_paragraph("Font type: Times New Roman")
+    doc.add_paragraph("Font color: Black/Automatic")
+    doc.add_paragraph("Heading 1 size: 16 pt")
+    doc.add_paragraph("Heading 2 size: 14 pt")
+    doc.add_paragraph("Heading 3 and body content size: 12 pt")
+    doc.add_heading("Pagination", level=1)
+    doc.add_paragraph("Page number position: Top right")
+    doc.add_paragraph("First page of each chapter: No page number shown")
+    doc.add_heading("Page breaks", level=1)
+    doc.add_paragraph("Insert a page break only when starting a new chapter.")
+    doc.add_heading("Tables", level=1)
+    doc.add_paragraph('Table naming: Table <name> above a "TABLE TITLE" caption.')
+    doc.add_heading("Figures", level=1)
+    doc.add_paragraph(
+        "Figure naming: Figure <number>: Figure Title in bold/underlined below the figure."
+    )
+    doc.add_heading("Citation format", level=1)
+    doc.add_paragraph("Citation style: APA 7th Edition")
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    headers = {
+        "Content-Disposition": 'attachment; filename="Sample_Format_Mechanics.docx"'
+    }
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers,
+    )
 
 
 @app.post("/mechanics", status_code=201)
@@ -236,16 +347,22 @@ async def mechanics_create(
 
 
 @app.patch("/mechanics/{mechanics_id}")
-def mechanics_rename(
+def mechanics_update(
     mechanics_id: str,
-    body: MechanicsRenameRequest,
+    body: MechanicsUpdateRequest,
     uid: str = Depends(authenticated_uid),
 ):
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="A mechanics name is required.")
+    if body.name is None and body.rules is None:
+        raise HTTPException(status_code=400, detail="Provide a name and/or rules to update.")
+    name = body.name.strip() if body.name is not None else None
+    rules = normalize_mechanics_rules(body.rules) if body.rules is not None else None
+    if body.rules is not None and not rules:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one format rule before saving.",
+        )
     try:
-        item = rename_mechanics(uid, mechanics_id, name)
+        item = update_mechanics(uid, mechanics_id, name=name, rules=rules)
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
@@ -276,19 +393,26 @@ async def manuscript_preview(
     file: UploadFile = File(...),
     uid: str = Depends(authenticated_uid),
 ):
-    """Extract manuscript text for a side-by-side preview (no version created)."""
+    """Extract manuscript pages for a document-style side preview (no version created)."""
     del uid
     try:
         filename, file_type, parsed = await _read_document(file)
         text = parsed.get("text") or ""
         if not text:
             raise DocumentError("No extractable text was found in the document.")
+
+        pages_out = _document_preview_pages(parsed, text)
+        source_pages = parsed.get("pages") or []
+
         return {
             "filename": filename,
             "file_type": file_type,
             "text_preview": text[:10000],
             "char_count": len(text),
-            "page_count": parsed.get("page_count") or len(parsed.get("pages") or []) or None,
+            "page_count": (parsed.get("metadata") or {}).get("page_count")
+            or len(source_pages)
+            or len(pages_out),
+            "pages": pages_out,
         }
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None

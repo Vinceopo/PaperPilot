@@ -1,8 +1,13 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_API_DIR = Path(__file__).resolve().parent.parent
+_ENV_FILE = _API_DIR / ".env"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(_ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
@@ -24,6 +29,7 @@ class Settings(BaseSettings):
     otp_secret: str = ""
 
     firebase_credentials: str = ""
+    firebase_database_url: str = ""
     free_scan_limit: int = 3
     premium_scan_limit: int = 50
     max_upload_bytes: int = 25_000_000

@@ -234,7 +234,16 @@ def list_mechanics(owner_uid: str) -> list[dict]:
 
 
 def rename_mechanics(owner_uid: str, mechanics_id: str, name: str) -> dict | None:
-    clean_name = name.strip()
+    return update_mechanics(owner_uid, mechanics_id, name=name)
+
+
+def update_mechanics(
+    owner_uid: str,
+    mechanics_id: str,
+    name: str | None = None,
+    rules: dict | None = None,
+) -> dict | None:
+    """Rename and/or replace the stored format rules for a mechanics profile."""
     with _write_lock, connection() as conn:
         row = conn.execute(
             "SELECT * FROM mechanics WHERE id = ? AND owner_uid = ?",
@@ -242,24 +251,35 @@ def rename_mechanics(owner_uid: str, mechanics_id: str, name: str) -> dict | Non
         ).fetchone()
         if not row:
             return None
-        extension = Path(row["source_filename"]).suffix.lower()
-        if extension and clean_name.lower().endswith(extension):
-            clean_name = clean_name[: -len(extension)].strip()
-        if not clean_name:
-            raise ValueError("A mechanics name is required.")
-        renamed_filename = f"{clean_name}{extension}"
-        duplicate = conn.execute(
-            """SELECT 1 FROM mechanics
-               WHERE owner_uid = ? AND name = ? COLLATE NOCASE AND id <> ?""",
-            (owner_uid, clean_name, mechanics_id),
-        ).fetchone()
-        if duplicate:
-            raise MechanicsNameConflict("A mechanics document with this name already exists.")
+
+        clean_name = row["name"]
+        renamed_filename = row["source_filename"]
+        if name is not None:
+            clean_name = name.strip()
+            extension = Path(row["source_filename"]).suffix.lower()
+            if extension and clean_name.lower().endswith(extension):
+                clean_name = clean_name[: -len(extension)].strip()
+            if not clean_name:
+                raise ValueError("A mechanics name is required.")
+            renamed_filename = f"{clean_name}{extension}"
+            duplicate = conn.execute(
+                """SELECT 1 FROM mechanics
+                   WHERE owner_uid = ? AND name = ? COLLATE NOCASE AND id <> ?""",
+                (owner_uid, clean_name, mechanics_id),
+            ).fetchone()
+            if duplicate:
+                raise MechanicsNameConflict("A mechanics document with this name already exists.")
+
+        rules_json = row["rules_json"]
+        if rules is not None:
+            rules_json = json.dumps(rules, ensure_ascii=False)
+
         try:
             conn.execute(
-                """UPDATE mechanics SET name = ?, source_filename = ?
+                """UPDATE mechanics
+                   SET name = ?, source_filename = ?, rules_json = ?
                    WHERE id = ? AND owner_uid = ?""",
-                (clean_name, renamed_filename, mechanics_id, owner_uid),
+                (clean_name, renamed_filename, rules_json, mechanics_id, owner_uid),
             )
         except sqlite3.IntegrityError as exc:
             raise MechanicsNameConflict(
@@ -271,30 +291,51 @@ def rename_mechanics(owner_uid: str, mechanics_id: str, name: str) -> dict | Non
 
 
 def delete_mechanics(owner_uid: str, mechanics_id: str) -> bool:
-    with _write_lock, connection() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM mechanics WHERE id = ? AND owner_uid = ?",
-            (mechanics_id, owner_uid),
-        ).fetchone()
-        if not row:
-            return False
-        in_use = conn.execute(
-            """SELECT 1 FROM manuscript_versions v
-               JOIN manuscripts m ON m.id = v.manuscript_id
-               WHERE v.mechanics_id = ? AND m.owner_uid = ?
-               LIMIT 1""",
-            (mechanics_id, owner_uid),
-        ).fetchone()
-        if in_use:
-            raise MechanicsInUse(
-                "This mechanics document is used by a manuscript version and cannot be deleted."
+    """Remove a mechanics profile.
+
+    Linked compliance scans for this format are removed. Manuscript versions that
+    pointed at it keep their files; the format link becomes inactive so deletion
+    is never blocked by prior uploads.
+    """
+    with _write_lock:
+        conn = _connect()
+        try:
+            # SQLite refuses to change this pragma mid-transaction, so disable
+            # FKs before any other statements on this connection.
+            conn.execute("PRAGMA foreign_keys = OFF")
+            row = conn.execute(
+                "SELECT 1 FROM mechanics WHERE id = ? AND owner_uid = ?",
+                (mechanics_id, owner_uid),
+            ).fetchone()
+            if not row:
+                return False
+
+            scan_ids = [
+                r["id"]
+                for r in conn.execute(
+                    """SELECT s.id FROM compliance_scans s
+                       WHERE s.mechanics_id = ? AND s.owner_uid = ?""",
+                    (mechanics_id, owner_uid),
+                ).fetchall()
+            ]
+            for scan_id in scan_ids:
+                conn.execute(
+                    "DELETE FROM section_formatting_checks WHERE scan_id = ?",
+                    (scan_id,),
+                )
+            if scan_ids:
+                conn.execute(
+                    "DELETE FROM compliance_scans WHERE mechanics_id = ? AND owner_uid = ?",
+                    (mechanics_id, owner_uid),
+                )
+            conn.execute(
+                "DELETE FROM mechanics WHERE id = ? AND owner_uid = ?",
+                (mechanics_id, owner_uid),
             )
-        conn.execute(
-            "DELETE FROM mechanics WHERE id = ? AND owner_uid = ?",
-            (mechanics_id, owner_uid),
-        )
-        conn.commit()
-    return True
+            conn.commit()
+            return True
+        finally:
+            conn.close()
 
 
 def get_mechanics(owner_uid: str, mechanics_id: str, conn: sqlite3.Connection | None = None) -> dict | None:

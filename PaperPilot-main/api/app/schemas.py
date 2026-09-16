@@ -62,6 +62,11 @@ class MechanicsRenameRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
 
 
+class MechanicsUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    rules: dict | None = None
+
+
 class MechanicsSaveRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     rules: dict = Field(default_factory=dict)

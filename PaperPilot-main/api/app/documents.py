@@ -211,108 +211,392 @@ def _parse_docx(data: bytes) -> dict:
     }
 
 
+def _flatten_mechanics_text(text: str) -> str:
+    """Collapse PDF/DOCX layout noise so label:value patterns can be matched."""
+    cleaned = (text or "").replace("\r", "\n")
+    cleaned = cleaned.replace("\u00a0", " ").replace("\u200b", "")
+    # Join hyphenated line-breaks: "Times New-\nRoman" -> "Times NewRoman" then fix later
+    cleaned = re.sub(r"-\s*\n\s*", "", cleaned)
+    # Treat newlines / bullets as spaces so "Size\n:\n8.5 x 11" becomes searchable.
+    cleaned = re.sub(r"[\n\t|•●▪◦]+", " ", cleaned)
+    cleaned = re.sub(r"\s*([:：])\s*", r" : ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _clip_value(value: str, stop_words: tuple[str, ...]) -> str:
+    text = (value or "").strip(" \t-:;,.|/\\")
+    if not text:
+        return ""
+    # Stop at the next outline/label boundary when the capture ran long.
+    pattern = r"(?i)\s+(?:%s)\b" % "|".join(re.escape(word) for word in stop_words)
+    parts = re.split(pattern, text, maxsplit=1)
+    return parts[0].strip(" \t-:;,.|/\\")[:200]
+
+
+def _value_after_label(flat: str, labels: tuple[str, ...], stop_words: tuple[str, ...]) -> str:
+    label_alt = "|".join(re.escape(label) for label in labels)
+    stop_alt = "|".join(re.escape(word) for word in stop_words)
+    match = re.search(
+        rf"(?i)\b(?:{label_alt})\b(?:\s*[)\].-]*)?\s*"
+        rf"(?:[:：=\-–]|is|are|of|should be|must be)?\s*"
+        rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})\b|$)",
+        flat,
+    )
+    if not match:
+        # Looser window: label then value within ~60 chars.
+        match = re.search(
+            rf"(?i)\b(?:{label_alt})\b.{{0,12}}?([A-Za-z0-9][A-Za-z0-9 .\"″'/\-]{{0,80}})",
+            flat,
+        )
+    if not match:
+        return ""
+    return _clip_value(match.group(1), stop_words)
+
+
+def _parse_paper_size(value: str) -> dict:
+    text = (value or "").strip()
+    if not text:
+        return {}
+    upper = text.upper()
+    out: dict = {}
+    if re.search(r"\bLEGAL\b", upper) or (re.search(r"8\.5", upper) and re.search(r"\b14\b", upper)):
+        out["name"] = "LEGAL"
+        out["label"] = "8.5 x 14"
+    elif re.search(r"\bA4\b", upper) or re.search(r"8\.27|210\s*[x×]\s*297", upper):
+        out["name"] = "A4"
+        out["label"] = "8.27 x 11.69"
+    elif (
+        re.search(r"\bLETTER\b", upper)
+        or re.search(r"\bSHORT\s*BOND\b", upper)
+        or (re.search(r"8\.5", upper) and re.search(r"\b11\b", upper))
+    ):
+        out["name"] = "LETTER"
+        out["label"] = "8.5 x 11"
+    dims = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?\s*[x×by]\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?",
+        text,
+        re.I,
+    )
+    if dims:
+        out["width_inches"] = float(dims.group(1))
+        out["height_inches"] = float(dims.group(2))
+        out.setdefault("label", f"{dims.group(1)} x {dims.group(2)}")
+    elif out.get("label"):
+        pass
+    elif text:
+        out["label"] = text[:80]
+    return out
+
+
+def _parse_spacing(value: str) -> float | None:
+    text = (value or "").strip().lower()
+    if not text:
+        return None
+    if re.search(r"\bdouble\b", text):
+        return 2.0
+    if re.search(r"\bsingle\b", text):
+        return 1.0
+    if re.search(r"one[\s-]+and[\s-]+a[\s-]+half|1\.5", text):
+        return 1.5
+    number = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not number:
+        return None
+    spacing = float(number.group(1))
+    return spacing if spacing in {1.0, 1.5, 2.0} else spacing if 0.5 <= spacing <= 3 else None
+
+
+def _parse_inches(value: str) -> float | None:
+    text = (value or "").strip().lower()
+    if not text:
+        return None
+    if re.search(r"\bone\s+inch\b", text):
+        return 1.0
+    if re.search(r"\bhalf\s*(?:an?\s*)?inch\b|½", text):
+        return 0.5
+    if re.search(r"\bone\s+tab\b|\btab\b", text):
+        return 0.5
+    number = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not number:
+        return None
+    amount = float(number.group(1))
+    return amount if 0 <= amount <= 5 else None
+
+
 def derive_mechanics_rules(text: str) -> dict:
-    normalized = re.sub(r"[ \t]+", " ", text)
+    """Extract editable format rules from a mechanics guide's plain text.
+
+    Handles Capstone-style outlines where PDF extraction splits labels and values
+    onto separate lines (e.g. \"Size\\n:\\n8.5 x 11\").
+    """
+    flat = _flatten_mechanics_text(text)
     rules: dict = {}
+    if not flat:
+        return rules
+
+    stop = (
+        "Size", "Orientation", "Substance", "Spacing", "Indention", "Indentation",
+        "Margins", "Margin", "Font", "Type", "Color", "Pagination", "Citation",
+        "Heading", "Table", "Figure", "Page", "Top", "Bottom", "Left", "Right",
+        "Gutter", "Header", "Footer", "Paper", "a.", "b.", "c.", "d.", "e.",
+        "i.", "ii.", "iii.", "iv.", "v.", "vi.",
+    )
+
+    paper: dict = {}
+    size_raw = _value_after_label(flat, ("Size", "Paper size", "Page size"), stop)
+    size_info = _parse_paper_size(size_raw) if size_raw else {}
+    if not size_info:
+        # Global fallbacks when the guide never uses an explicit Size label.
+        size_info = _parse_paper_size(flat)
+    if size_info.get("label"):
+        paper["size"] = size_info["label"]
+    paper_size: dict = {}
+    if size_info.get("name"):
+        paper_size["name"] = size_info["name"]
+    if size_info.get("width_inches") and size_info.get("height_inches"):
+        paper_size["width_inches"] = size_info["width_inches"]
+        paper_size["height_inches"] = size_info["height_inches"]
+    if paper_size:
+        rules["paper_size"] = paper_size
+
+    orientation = _value_after_label(flat, ("Orientation", "Page orientation"), stop)
+    if orientation:
+        if re.search(r"landscape", orientation, re.I):
+            paper["orientation"] = "Landscape"
+        elif re.search(r"portrait", orientation, re.I):
+            paper["orientation"] = "Portrait"
+    elif re.search(r"\blandscape\b", flat, re.I):
+        paper["orientation"] = "Landscape"
+    else:
+        paper["orientation"] = "Portrait"
+
+    substance = _value_after_label(
+        flat, ("Substance", "Paper substance", "Paper weight", "Basis weight", "gsm"), stop
+    )
+    if substance:
+        number = re.search(r"(\d+(?:\.\d+)?)", substance)
+        paper["substance"] = number.group(1) if number else substance[:40]
+
+    if paper:
+        rules["paper"] = paper
+
+    spacing_raw = _value_after_label(
+        flat, ("Spacing", "Line spacing", "Line space", "Lines spacing"), stop
+    )
+    spacing_val = _parse_spacing(spacing_raw) if spacing_raw else None
+    if spacing_val is None:
+        spacing_match = re.search(
+            r"\b(single|double|one(?:[\s-]and[\s-]a[\s-]half)|1(?:\.0)?|1\.5|2(?:\.0)?)"
+            r"(?:[\s-]+line)?[\s-]+spac(?:e|ed|ing)\b",
+            flat,
+            re.I,
+        )
+        if spacing_match:
+            spacing_val = _parse_spacing(spacing_match.group(0))
+    if spacing_val is not None:
+        rules["line_spacing"] = spacing_val
+        rules["spacing"] = str(spacing_val).rstrip("0").rstrip(".") if isinstance(spacing_val, float) else str(spacing_val)
+        if rules["spacing"] == "1":
+            rules["spacing"] = "1"
+        elif spacing_val == 1.5:
+            rules["spacing"] = "1.5"
+        elif spacing_val == 2.0:
+            rules["spacing"] = "2"
+
+    indent_raw = _value_after_label(
+        flat,
+        ("Indention", "Indentation", "First-line indent", "First line indent", "Paragraph indent"),
+        stop,
+    )
+    indent_val = _parse_inches(indent_raw) if indent_raw else None
+    if indent_val is None:
+        indent_match = re.search(
+            r"\b(?:first(?:[\s-]line)?|paragraph)\s+indent(?:ation|ion)?\s*"
+            r"(?:of|:|=|should be|must be)?\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?",
+            flat,
+            re.I,
+        )
+        if indent_match:
+            indent_val = float(indent_match.group(1))
+        elif re.search(r"\bone\s+tab\b|\bindent(?:ation|ion)?\s*(?:of|:)?\s*one\s+tab\b", flat, re.I):
+            indent_val = 0.5
+    if indent_val is not None:
+        rules["first_line_indent_inches"] = indent_val
+        rules["indention"] = f"{indent_val} inch" if indent_val != 1 else "1 inch"
+
+    margins: dict[str, float] = {}
+    for side in ("top", "bottom", "left", "right", "gutter", "header", "footer"):
+        side_raw = _value_after_label(
+            flat,
+            (f"{side.capitalize()} margin", f"{side} margin", side.capitalize(), side),
+            stop,
+        )
+        amount = _parse_inches(side_raw) if side_raw else None
+        if amount is None:
+            match = re.search(
+                rf"\b{side}\s+margin\s*(?:of|:|=|should be|must be)?\s*"
+                r"(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?",
+                flat,
+                re.I,
+            )
+            if match:
+                amount = float(match.group(1))
+        if amount is not None:
+            margins[side] = amount
+    if not margins:
+        uniform = re.search(
+            r"\b(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")\s+(?:on\s+all\s+sides\s+)?margins?\b"
+            r"|\bmargins?\s*(?:of|:|=)?\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")\s*(?:on\s+all\s+sides)?",
+            flat,
+            re.I,
+        )
+        if uniform:
+            amount = float(next(group for group in uniform.groups() if group))
+            margins = {side: amount for side in ("top", "bottom", "left", "right")}
+    if margins:
+        rules["margins_inches"] = margins
 
     known_fonts = (
         "Times New Roman", "Arial", "Calibri", "Cambria", "Georgia",
         "Helvetica", "Courier New", "Garamond", "Verdana",
     )
-    fonts = [font for font in known_fonts if re.search(rf"\b{re.escape(font)}\b", normalized, re.I)]
+    fonts = [font for font in known_fonts if re.search(rf"\b{re.escape(font)}\b", flat, re.I)]
+    font_type = _value_after_label(flat, ("Font type", "Font", "Typeface", "Type"), stop)
+    if font_type:
+        for font in known_fonts:
+            if re.search(rf"\b{re.escape(font)}\b", font_type, re.I):
+                if font not in fonts:
+                    fonts.insert(0, font)
+                break
     sizes = sorted(
         {
             float(value)
-            for value in re.findall(r"\b(\d{1,2}(?:\.\d+)?)\s*(?:pt|point)s?\b", normalized, re.I)
+            for value in re.findall(r"\b(\d{1,2}(?:\.\d+)?)\s*(?:pt|point)s?\b", flat, re.I)
             if 6 <= float(value) <= 72
         }
     )
-    if fonts or sizes:
-        rules["font"] = {}
-        if fonts:
-            rules["font"]["families"] = fonts
-        if sizes:
-            rules["font"]["sizes_points"] = sizes
-
-    named_paper = re.search(r"\b(A4|letter|legal)\b(?:\s+(?:paper|page|size))?", normalized, re.I)
-    dimensions = re.search(
-        r"\b(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")\s*[x×by]+\s*"
-        r"(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")\b",
-        normalized,
-        re.I,
+    h1 = _value_after_label(flat, ("Heading 1", "Heading1", "H1"), stop)
+    h2 = _value_after_label(flat, ("Heading 2", "Heading2", "H2"), stop)
+    h3 = _value_after_label(
+        flat, ("Heading 3", "Heading3", "H3", "Content size", "Body size", "Body font size"), stop
     )
-    if named_paper or dimensions:
-        rules["paper_size"] = {}
-        if named_paper:
-            rules["paper_size"]["name"] = named_paper.group(1).upper()
-        if dimensions:
-            rules["paper_size"]["width_inches"] = float(dimensions.group(1))
-            rules["paper_size"]["height_inches"] = float(dimensions.group(2))
 
-    spacing = re.search(
-        r"\b(single|double|one(?:[\s-]and[\s-]a[\s-]half)|1(?:\.0)?|1\.5|2(?:\.0)?)"
-        r"(?:[\s-]+line)?[\s-]+spac(?:e|ed|ing)\b",
-        normalized,
-        re.I,
-    )
-    if spacing:
-        token = spacing.group(1).lower()
-        rules["line_spacing"] = (
-            1.0 if token in {"single", "1", "1.0"} else
-            1.5 if token in {"1.5", "one-and-a-half", "one and a half"} else 2.0
-        )
-
-    margins: dict[str, float] = {}
-    uniform = re.search(
-        r"\b(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")\s+margins?\b", normalized, re.I
-    )
-    if uniform:
-        margins = {side: float(uniform.group(1)) for side in ("top", "bottom", "left", "right")}
-    for side in ("top", "bottom", "left", "right"):
+    def _nearby_pt(labels: tuple[str, ...]) -> float | None:
+        label_alt = "|".join(re.escape(label) for label in labels)
         match = re.search(
-            rf"\b{side}\s+margin\s*(?:of|:|=|should be|must be)?\s*"
-            r"(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")",
-            normalized,
-            re.I,
+            rf"(?i)\b(?:{label_alt})\b.{{0,48}}?(\d{{1,2}}(?:\.\d+)?)\s*(?:pt|point)?s?\b",
+            flat,
         )
-        if match:
-            margins[side] = float(match.group(1))
-    if margins:
-        rules["margins_inches"] = margins
+        if not match:
+            return None
+        number = float(match.group(1))
+        return number if 6 <= number <= 72 else None
 
-    indent = re.search(
-        r"\b(?:first(?:[\s-]line)?|paragraph)\s+indent(?:ation)?\s*"
-        r"(?:of|:|=|should be|must be)?\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")",
-        normalized,
-        re.I,
+    font: dict = {}
+    if fonts:
+        font["families"] = fonts
+        font["type"] = fonts[0]
+    if sizes:
+        font["sizes_points"] = sizes
+    for raw, key, labels in (
+        (h1, "heading1_size", ("Heading 1", "Heading1", "H1")),
+        (h2, "heading2_size", ("Heading 2", "Heading2", "H2")),
+        (h3, "heading3_content_size", ("Heading 3", "Heading3", "H3", "Content size", "Body size")),
+    ):
+        number = re.search(r"(\d+(?:\.\d+)?)", raw or "")
+        value = float(number.group(1)) if number and 6 <= float(number.group(1)) <= 72 else None
+        if value is None:
+            value = _nearby_pt(labels)
+        if value is not None:
+            font[key] = value
+            sizes = sorted(set([*sizes, value]))
+            font["sizes_points"] = sizes
+    font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
+    if font_color:
+        if re.search(r"black|automatic", font_color, re.I):
+            font["color"] = "Black/Automatic"
+        else:
+            font["color"] = font_color[:40]
+    else:
+        font.setdefault("color", "Black/Automatic")
+    if font:
+        rules["font"] = font
+
+    pagination: dict = {}
+    if re.search(r"\btop\s+right\b", flat, re.I):
+        pagination["position"] = "Top right"
+    elif re.search(r"\btop\s+center\b|\btop\s+centre\b", flat, re.I):
+        pagination["position"] = "Top center"
+    elif re.search(r"\bbottom\s+right\b", flat, re.I):
+        pagination["position"] = "Bottom right"
+    elif re.search(r"\bbottom\s+center\b|\bbottom\s+centre\b", flat, re.I):
+        pagination["position"] = "Bottom center"
+    else:
+        position = _value_after_label(
+            flat, ("Page number position", "Page numbers", "Pagination position"), stop
+        )
+        if position:
+            pagination["position"] = position[:120]
+    first_page = _value_after_label(
+        flat,
+        ("First page of each chapter", "First page", "Chapter first page"),
+        stop,
     )
-    if indent:
-        rules["first_line_indent_inches"] = float(indent.group(1))
+    if first_page:
+        pagination["first_page_of_chapter"] = first_page[:160]
+    elif re.search(r"no page number.*(chapter|first page)|first page.*no page number", flat, re.I):
+        pagination["first_page_of_chapter"] = "No page number shown"
+    if pagination:
+        rules["pagination"] = pagination
+        rules["pagination_requirements"] = list(pagination.values())
+
+    page_breaks = _value_after_label(flat, ("Page breaks", "Page break rules", "Page break"), stop)
+    page_breaks = _clip_value(page_breaks, stop)
+    # Reject truncated scraps like "Do" from "Do not …" cut by a stop word.
+    if page_breaks and (len(page_breaks) < 12 or len(page_breaks.split()) < 3):
+        page_breaks = ""
+    if not page_breaks:
+        sentence = re.search(
+            r"(?i)((?:insert\s+a\s+)?page\s+breaks?[^.!?\n]{10,220}[.!?]?"
+            r"|(?:do\s+not|only|never|always)[^.!?\n]{0,40}page\s+break[^.!?\n]{5,180}[.!?]?)",
+            flat,
+        )
+        if sentence:
+            page_breaks = _clip_value(sentence.group(1), stop)
+            if page_breaks and (len(page_breaks) < 12 or len(page_breaks.split()) < 3):
+                page_breaks = ""
+    if page_breaks:
+        rules["page_break_requirements"] = [page_breaks[:300]]
+    elif re.search(r"page break.*(?:new chapter|chapter)|(?:new chapter|chapter).*page break", flat, re.I):
+        rules["page_break_requirements"] = ["Only when starting a new chapter"]
+
+    table_layout = _value_after_label(flat, ("Table layout", "Tables", "Table naming", "Table"), stop)
+    if table_layout and len(table_layout) > 3:
+        rules["table_layout_requirements"] = [table_layout[:300]]
+
+    figure_layout = _value_after_label(
+        flat, ("Figure layout", "Figures", "Figure naming", "Figure"), stop
+    )
+    if figure_layout and len(figure_layout) > 3:
+        rules["figure_layout_requirements"] = [figure_layout[:300]]
 
     citation = re.search(
         r"\b(APA|MLA|Chicago|Harvard|IEEE|Vancouver|Turabian)\b"
-        r"(?:\s+(?:citation|referencing|reference|style|format))?",
-        normalized,
+        r"(?:\s*(?:7th|6th|style|format|citation|referencing))?",
+        flat,
         re.I,
     )
     if citation:
         rules["citation_style"] = citation.group(1).upper()
+    else:
+        citation_raw = _value_after_label(
+            flat, ("Citation format", "Citation style", "Citation", "Reference style"), stop
+        )
+        if citation_raw:
+            style = re.search(r"\b(APA|MLA|Chicago|Harvard|IEEE|Vancouver|Turabian)\b", citation_raw, re.I)
+            if style:
+                rules["citation_style"] = style.group(1).upper()
 
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", text) if part.strip()]
-    heading_terms = [
-        sentence[:500] for sentence in sentences
-        if re.search(r"\b(headings?|section titles?)\b", sentence, re.I)
-        and re.search(r"\b(must|shall|required|should|use|format)\b", sentence, re.I)
-    ]
-    pagination_terms = [
-        sentence[:500] for sentence in sentences
-        if re.search(r"\b(page numbers?|pagination|numbered pages?)\b", sentence, re.I)
-        and re.search(r"\b(must|shall|required|should|use|place|begin|start)\b", sentence, re.I)
-    ]
-    if heading_terms:
-        rules["heading_requirements"] = heading_terms
-    if pagination_terms:
-        rules["pagination_requirements"] = pagination_terms
     return rules
 
 
