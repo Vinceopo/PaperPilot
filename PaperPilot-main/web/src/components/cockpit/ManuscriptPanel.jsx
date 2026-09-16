@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { normalizeTitle } from "../../lib/scannedLibrary.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
+import DocumentPagePreview from "./DocumentPagePreview.jsx";
 
 function validateFile(file) {
   if (!file) return "Choose a manuscript.";
@@ -147,7 +148,7 @@ export default function ManuscriptPanel({
 
   return (
     <section
-      className={`relative mx-auto max-w-4xl rounded-xl border p-6 shadow-sm transition md:p-8 ${
+      className={`relative w-full rounded-xl border p-6 shadow-sm transition md:p-8 ${
         mechanicsSelected
           ? "border-slate-200 bg-white"
           : "border-slate-200 bg-white opacity-50 grayscale"
@@ -257,38 +258,38 @@ export default function ManuscriptPanel({
           </label>
 
           {showPreview && (
-            <div className="flex min-h-44 flex-col rounded-xl border border-slate-200 bg-[#fafbfc] p-4">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <div className="flex min-h-44 flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   Manuscript preview
                 </p>
                 {preview?.page_count ? (
                   <span className="text-[10px] font-semibold text-slate-400">
-                    {preview.page_count} page{preview.page_count === 1 ? "" : "s"}
+                    {preview.page_count} page{preview.page_count === 1 ? "" : "s"} · scroll to read
                   </span>
-                ) : null}
+                ) : (
+                  <span className="text-[10px] font-semibold text-slate-400">Scroll to read</span>
+                )}
               </div>
-              <div className="mt-2 min-h-0 flex-1 overflow-y-auto rounded-lg border border-slate-100 bg-white p-3">
+
+              <div className="pp-scroll max-h-[min(36rem,72vh)] min-h-[22rem] flex-1 overflow-y-auto px-3 py-4 sm:px-5">
                 {previewBusy && (
-                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <div className="flex h-48 items-center justify-center gap-2 text-xs text-slate-500">
                     <Spinner className="h-4 w-4 text-[#16bfa8]" />
-                    Extracting manuscript content…
+                    Preparing document pages…
                   </div>
                 )}
                 {!previewBusy && preview?.error && (
-                  <p className="text-xs text-rose-500">{preview.error}</p>
-                )}
-                {!previewBusy && preview?.text_preview && (
-                  <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-slate-600">
-                    {preview.text_preview}
+                  <p className="rounded-lg bg-white px-4 py-3 text-xs text-rose-500 shadow-sm">
+                    {preview.error}
                   </p>
                 )}
-                {!previewBusy && !preview?.text_preview && !preview?.error && (
-                  <p className="text-xs text-slate-400">No preview available yet.</p>
+                {!previewBusy && !preview?.error && (
+                  <DocumentPagePreview preview={preview} />
                 )}
               </div>
-              <p className="mt-2 text-[10px] text-slate-400">
-                Preview only — compliance analysis starts on File Details.
+              <p className="border-t border-slate-200/80 bg-[#f3f5f7] px-4 py-2 text-[10px] text-slate-400">
+                Live preview of your uploaded manuscript — scroll to see pages below.
               </p>
             </div>
           )}

@@ -237,3 +237,38 @@ input[type="checkbox"] {
     stroke-dashoffset: 0;
   }
 }
+
+/* PaperPilot panel scrollbars — thin, theme-matched, professional */
+@layer utilities {
+  .pp-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #9ad9d0 #eef2f6;
+  }
+
+  .pp-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .pp-scroll::-webkit-scrollbar-track {
+    background: #eef2f6;
+    border-radius: 999px;
+    margin-block: 4px;
+  }
+
+  .pp-scroll::-webkit-scrollbar-thumb {
+    background: #9ad9d0;
+    border-radius: 999px;
+    border: 2px solid #eef2f6;
+  }
+
+  .pp-scroll::-webkit-scrollbar-thumb:hover {
+    background: #16bfa8;
+  }
+
+  .pp-scroll-panel {
+    max-height: min(32rem, 70vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}

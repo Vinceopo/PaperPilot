@@ -10,6 +10,7 @@ import {
   previewManuscript,
   renameMechanics as renameMechanicsRequest,
   saveMechanicsProfile,
+  updateMechanicsProfile,
   uploadManuscriptVersion,
 } from "./api.js";
 import AuthScreen from "./components/AuthScreen.jsx";
@@ -107,7 +108,7 @@ export default function App() {
   }
 
   const WIZARD_STEPS = [
-    { step: 1, label: "Upload Format Mechanics" },
+    { step: 1, label: "Upload Academic Documents" },
     { step: 2, label: "Upload Manuscript" },
     { step: 3, label: "File Details" },
   ];
@@ -278,7 +279,23 @@ export default function App() {
       setAuthReady(true);
       return undefined;
     }
+
+    let booted = false;
+    // Always start at the login screen when the app loads / localhost restarts.
+    // Firebase otherwise restores the previous session and skips Auth.
+    signOut(auth)
+      .catch(() => {})
+      .finally(() => {
+        booted = true;
+        setUser(null);
+        setGuest(false);
+        setRegistrationSuccess(null);
+        setAuthReady(true);
+      });
+
     const unsub = onAuthStateChanged(auth, (next) => {
+      // Ignore the restored-session event that fires before our forced sign-out finishes.
+      if (!booted && next) return;
       setUser(next);
       if (next) {
         setGuest(false);
@@ -317,17 +334,36 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
-      const [mechanicsData, manuscriptsData, subscriptionData] = await Promise.all([
+      // Load each resource independently — a 503 on manuscripts/subscription
+      // must not wipe a successful mechanics list (that caused "already exists"
+      // saves while Use a Saved Format looked empty).
+      const [mechanicsResult, manuscriptsResult, subscriptionResult] = await Promise.allSettled([
         listMechanics(),
         listManuscripts(),
         getSubscription(),
       ]);
-      const nextMechanics = itemsFrom(mechanicsData, "mechanics");
-      const nextManuscripts = itemsFrom(manuscriptsData, "manuscripts");
-      setMechanics(nextMechanics);
-      setManuscripts(nextManuscripts);
-      setSubscription(subscriptionData);
-      setSelectedMechanicsId((current) => current || nextMechanics[0]?.id || "");
+
+      const failures = [];
+      if (mechanicsResult.status === "fulfilled") {
+        const nextMechanics = itemsFrom(mechanicsResult.value, "mechanics");
+        setMechanics(nextMechanics);
+        setSelectedMechanicsId((current) => current || nextMechanics[0]?.id || "");
+      } else {
+        failures.push(mechanicsResult.reason?.message || "Could not load format mechanics.");
+      }
+      if (manuscriptsResult.status === "fulfilled") {
+        setManuscripts(itemsFrom(manuscriptsResult.value, "manuscripts"));
+      } else {
+        failures.push(manuscriptsResult.reason?.message || "Could not load manuscripts.");
+      }
+      if (subscriptionResult.status === "fulfilled") {
+        setSubscription(subscriptionResult.value);
+      } else {
+        failures.push(subscriptionResult.reason?.message || "Could not load subscription.");
+      }
+      if (failures.length) {
+        setError(failures[0]);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -369,7 +405,46 @@ export default function App() {
       setSelectedMechanicsId(created.id || next[0]?.id || "");
       return true;
     } catch (err) {
-      // Don't swallow — re-throw so the confirm dialog can display the error.
+      // Name conflict usually means the profile is already in SQLite — refresh the
+      // list so Use a Saved Format shows it instead of looking empty.
+      if (err?.status === 409 || /already exists/i.test(err?.message || "")) {
+        try {
+          const data = await listMechanics();
+          const next = itemsFrom(data, "mechanics");
+          setMechanics(next);
+          const match = next.find(
+            (item) => item.name.toLowerCase() === String(payload.name || "").trim().toLowerCase()
+          );
+          if (match) setSelectedMechanicsId(match.id);
+        } catch {
+          // Keep original save error.
+        }
+        const conflict = new Error(
+          "This format is already saved. Open “Use a Saved Format” to select it, or change the profile name."
+        );
+        conflict.status = 409;
+        throw conflict;
+      }
+      throw err;
+    } finally {
+      setMechanicsBusy(false);
+    }
+  }
+
+  async function onMechanicsUpdateProfile(mechanicsId, payload) {
+    setMechanicsBusy(true);
+    setError("");
+    try {
+      const updated = await updateMechanicsProfile(mechanicsId, {
+        name: payload.name,
+        rules: payload.rules,
+      });
+      setMechanics((current) =>
+        current.map((item) => (item.id === mechanicsId ? { ...item, ...updated } : item))
+      );
+      setSelectedMechanicsId(mechanicsId);
+      return true;
+    } catch (err) {
       throw err;
     } finally {
       setMechanicsBusy(false);
@@ -407,8 +482,9 @@ export default function App() {
       }
       return true;
     } catch (err) {
+      // Surface on the dashboard and rethrow so the panel can close the dialog cleanly.
       setError(err.message);
-      return false;
+      throw err;
     } finally {
       setMechanicsBusy(false);
     }
@@ -659,7 +735,7 @@ export default function App() {
                 ? "Analysing Document"
                 : activePage === "upload" && scanFlow.step === "error"
                   ? "Analysis Failed"
-                  : "Upload Manuscript";
+                  : "Upload Academic Documents";
   const breadcrumb =
     activePage === "account"
       ? "Dashboard / Settings"
@@ -724,7 +800,7 @@ export default function App() {
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            <span className="text-[#22c9b4]">↑</span> Upload Manuscript
+            <span className="text-[#22c9b4]">↑</span> Upload Academic Documents
           </button>
           <button
             onClick={() => setActivePage("manuscripts")}
@@ -797,13 +873,13 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => goToUploadWizardStep(item.step)}
-                            className="text-[#16bfa8] transition hover:text-[#109b89] hover:underline"
+                            className="text-slate-400 transition hover:text-[#16bfa8] hover:underline"
                           >
                             {item.label}
                           </button>
                         ) : (
                           <span
-                            className={isCurrent ? "text-[#172033]" : "text-slate-400"}
+                            className={isCurrent ? "text-[#16bfa8]" : "text-slate-400"}
                             aria-current={isCurrent ? "step" : undefined}
                           >
                             {item.label}
@@ -885,7 +961,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1180px] p-5 md:p-8">
+      <main className="w-full p-5 md:p-8">
 
         {/* ── Global API error banner ─────────────────────────────────────── */}
         {error && (
@@ -1027,6 +1103,7 @@ export default function App() {
                     }}
                     onExtract={onMechanicsExtract}
                     onSaveProfile={onMechanicsSaveProfile}
+                    onUpdateProfile={onMechanicsUpdateProfile}
                     onRename={onMechanicsRename}
                     onDelete={onMechanicsDelete}
                     onContinue={() => advanceUploadWizard(2)}
@@ -1059,7 +1136,7 @@ export default function App() {
               <section
                 ref={fileDetailsRef}
                 id="file-details"
-                className={`mx-auto max-w-4xl scroll-mt-6 rounded-xl border bg-white p-6 shadow-sm transition md:p-8 ${
+                className={`w-full scroll-mt-6 rounded-xl border bg-white p-6 shadow-sm transition md:p-8 ${
                   fileDetailsNotice
                     ? "border-[#16bfa8] ring-2 ring-[#16bfa8]/25"
                     : "border-slate-200"
@@ -1180,7 +1257,7 @@ export default function App() {
                 )}
 
                 {uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file)) && (
-                  <div className="mx-auto max-w-4xl rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+                  <div className="w-full rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
                     <p className="text-sm font-semibold text-slate-700">No manuscript ready yet</p>
                     <p className="mt-1 text-xs text-slate-400">Upload a manuscript in Step 2 to continue.</p>
                     <button

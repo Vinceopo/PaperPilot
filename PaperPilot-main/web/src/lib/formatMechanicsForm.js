@@ -1,18 +1,47 @@
 /**
  * Shared Format Mechanics form model ↔ API rules dict.
- * Used by Customize (blank) and Upload (AI-filled) Format Fields panel.
+ * Used by Customize, Upload (extracted), and Saved (loaded) Format Fields.
  */
 
+/** Real editable starter values (not empty placeholders). */
+export function sampleMechanicsForm(name = "Sample Capstone Format") {
+  return {
+    name: name || "Sample Capstone Format",
+    paperSize: "8.5 x 11",
+    paperOrientation: "Portrait",
+    paperSubstance: "20",
+    spacing: "1.5",
+    indention: "0.5 inch",
+    marginTop: "1",
+    marginLeft: "1",
+    marginBottom: "1",
+    marginRight: "1",
+    marginGutter: "0",
+    marginHeader: "0.5",
+    marginFooter: "0.5",
+    fontHeading1Size: "16",
+    fontHeading2Size: "14",
+    fontHeading3Size: "12",
+    fontType: "Times New Roman",
+    fontColor: "Black/Automatic",
+    paginationPosition: "Top right",
+    paginationFirstPageRule: "No page number shown",
+    pageBreaks: "Only when starting a new chapter",
+    tableLayout: 'Table <name> above a "TABLE TITLE" caption',
+    figureLayout: "Figure <number>: Figure Title in bold/underlined below the figure",
+    citationFormat: "APA",
+  };
+}
+
+/** Blank form — used before upload extraction. */
 export function emptyMechanicsForm(name = "") {
   return {
     name: name || "",
-    // Paper
     paperSize: "",
     paperOrientation: "Portrait",
     paperSubstance: "",
     spacing: "",
     indention: "",
-    // Margins
     marginTop: "",
     marginLeft: "",
     marginBottom: "",
@@ -20,16 +49,13 @@ export function emptyMechanicsForm(name = "") {
     marginGutter: "",
     marginHeader: "",
     marginFooter: "",
-    // Font
     fontHeading1Size: "",
     fontHeading2Size: "",
     fontHeading3Size: "",
     fontType: "",
     fontColor: "Black/Automatic",
-    // Pagination
     paginationPosition: "",
     paginationFirstPageRule: "",
-    // Layout rules
     pageBreaks: "",
     tableLayout: "",
     figureLayout: "",
@@ -121,7 +147,11 @@ export function rulesToForm(rules = {}, name = "") {
     paginationFirstPageRule: String(
       pagination.first_page_of_chapter || rules.pagination_first_page_rule || ""
     ),
-    pageBreaks: asText(rules.page_break_requirements || rules.page_breaks),
+    pageBreaks: asText(rules.page_break_requirements || rules.page_breaks)
+      .split(/\n/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 12 && part.split(/\s+/).length >= 3)
+      .join("\n"),
     tableLayout: asText(rules.table_layout_requirements || rules.table_layout),
     figureLayout: asText(rules.figure_layout_requirements || rules.figure_layout),
     citationFormat: String(rules.citation_style || "APA").toUpperCase(),

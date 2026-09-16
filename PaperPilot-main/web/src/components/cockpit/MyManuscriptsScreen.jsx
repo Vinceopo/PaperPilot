@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
-  Eye,
   Filter,
   Lock,
   Search,
@@ -253,11 +252,10 @@ export default function MyManuscriptsScreen({
                         <button
                           type="button"
                           onClick={() => setViewId(row.id)}
-                          className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-[#0F1729]"
+                          className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-[#0F1729]"
                           aria-label={`View ${row.title}`}
-                          title="View"
                         >
-                          <Eye className="h-4 w-4" />
+                          View
                         </button>
                         <button
                           type="button"
