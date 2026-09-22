@@ -1,12 +1,38 @@
-import { StyleSheet, Text, View } from "react-native";
+import { Linking, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
 import { useAppData } from "../context/AppDataContext";
+import { createSubscriptionCheckout } from "../api";
 import { colors } from "../theme";
 import PrimaryButton from "../components/ui/PrimaryButton";
 import UpgradePrompt from "../components/ui/UpgradePrompt";
 
 export default function SubscriptionScreen() {
-  const { tier, remaining, limit, used, upgradeMessage, setUpgradeMessage } = useAppData();
+  const { tier, remaining, limit, used, upgradeMessage, setUpgradeMessage, refreshSubscription } =
+    useAppData();
   const isPremium = tier === "premium";
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function startPayMongoCheckout(billingPeriod = "monthly") {
+    setBusy(true);
+    setError("");
+    try {
+      const data = await createSubscriptionCheckout({ billingPeriod });
+      const url = data?.checkout_url;
+      if (!url) throw new Error("PayMongo checkout URL was not returned.");
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) throw new Error("Cannot open PayMongo checkout on this device.");
+      await Linking.openURL(url);
+      // Tier flips only when the webhook confirms payment — refresh when user returns.
+      setTimeout(() => {
+        refreshSubscription?.();
+      }, 4000);
+    } catch (err) {
+      setError(err?.message || "Could not start PayMongo checkout.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <View style={styles.root}>
@@ -35,25 +61,43 @@ export default function SubscriptionScreen() {
         <Text style={styles.perk}>
           {isPremium ? "✓" : "·"} APA, MLA & IEEE citation styles
         </Text>
+        <Text style={styles.note}>
+          Card, GCash, Maya and other methods are entered on PayMongo Hosted Checkout — never inside
+          PaperPilot.
+        </Text>
       </View>
 
       {!isPremium ? (
-        <PrimaryButton
-          title="View plans"
-          onPress={() =>
-            setUpgradeMessage(
-              "Upgrade to Premium for 50 monthly scans, full version history, and deeper AI explanations."
-            )
-          }
-          style={{ marginTop: 16 }}
-        />
+        <>
+          <PrimaryButton
+            title={busy ? "Opening PayMongo…" : "Pay with PayMongo — ₱949/mo"}
+            onPress={() => startPayMongoCheckout("monthly")}
+            disabled={busy}
+            style={{ marginTop: 16 }}
+          />
+          <PrimaryButton
+            title={busy ? "Opening PayMongo…" : "Pay with PayMongo — ₱9,490/yr"}
+            onPress={() => startPayMongoCheckout("annual")}
+            disabled={busy}
+            style={{ marginTop: 10 }}
+          />
+        </>
       ) : (
         <View style={styles.activeBox}>
           <Text style={styles.activeText}>Your Premium plan is active.</Text>
         </View>
       )}
 
-      <UpgradePrompt message={upgradeMessage} onClose={() => setUpgradeMessage("")} />
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <UpgradePrompt
+        message={upgradeMessage}
+        onClose={() => setUpgradeMessage("")}
+        onUpgrade={() => {
+          setUpgradeMessage("");
+          startPayMongoCheckout("monthly");
+        }}
+      />
     </View>
   );
 }
@@ -105,6 +149,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   perk: { fontSize: 14, color: "#475569", marginBottom: 8 },
+  note: { marginTop: 8, fontSize: 12, lineHeight: 18, color: colors.muted },
   activeBox: {
     marginTop: 16,
     borderWidth: 1,
@@ -114,4 +159,5 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   activeText: { fontSize: 13, fontWeight: "600", color: colors.emerald },
+  error: { marginTop: 12, fontSize: 13, color: "#e11d48" },
 });

@@ -49,7 +49,9 @@ Moderate — Noticeable and needs fixing, but would not block review by itself.
 Internal test: "Is this something an adviser would flag and ask the author to fix, but still proceed with content review?"
 Minor — Cosmetic, easy to fix, and does not affect structure or credibility.
 Internal test: "Would a reader barely notice this, or does it fix in seconds?"
-Never show, quote, paraphrase, or ask these internal test questions in output."""
+Never show, quote, paraphrase, or ask these internal test questions in output.
+Keep the provided current_severity unless the measured evidence clearly justifies a one-step change.
+Do not escalate minor margin shortfalls to critical. Prefer the measured explanation facts."""
 
 
 def enrich_compliance_issues(
@@ -63,12 +65,16 @@ def enrich_compliance_issues(
             for issue in issues:
                 issue["premium_detail_available"] = True
         return issues
+    LOCATION_SAMPLE = 25
     safe_input = [
         {
             "issue_type": issue["issue_type"],
             "current_severity": issue["severity"],
+            "title": issue.get("title"),
             "summary": issue["summary"],
-            "locations": issue["locations"],
+            "measured_explanation": issue.get("explanation"),
+            "measured_recommendation": issue.get("recommendation"),
+            "locations": (issue.get("locations") or [])[:LOCATION_SAMPLE],
             "count": issue["count"],
         }
         for issue in issues
@@ -81,6 +87,7 @@ def enrich_compliance_issues(
     prompt = f"""You enrich already-detected academic document formatting issues.
 Do not perform grammar, plagiarism, source-validity, or citation-content analysis.
 Consolidate reasoning by issue_type. Do not create or remove issue types.
+Use measured_explanation numbers as ground truth; do not invent different measurements.
 {COMPLIANCE_SEVERITY_RUBRIC}
 {depth}
 
@@ -96,6 +103,7 @@ MECHANICS RULES:
 DETERMINISTIC GROUPED ISSUES:
 {json.dumps(safe_input, ensure_ascii=False)}
 """
+    severity_rank = {"minor": 0, "moderate": 1, "critical": 2}
     try:
         genai.configure(api_key=settings.gemini_api_key)
         model = genai.GenerativeModel(settings.gemini_model)
@@ -114,12 +122,17 @@ DETERMINISTIC GROUPED ISSUES:
         }
         for issue in issues:
             update = by_type.get(issue["issue_type"])
-            if update:
-                issue["severity"] = update["severity"]
-                issue["explanation"] = update["explanation"][:1000]
-                recommendation = update.get("recommendation")
-                if isinstance(recommendation, str) and recommendation.strip():
-                    issue["recommendation"] = recommendation[:1000]
+            if not update:
+                continue
+            original = issue["severity"]
+            proposed = update["severity"]
+            # Allow at most one severity step away from the measured severity.
+            if abs(severity_rank[proposed] - severity_rank.get(original, 1)) <= 1:
+                issue["severity"] = proposed
+            issue["explanation"] = update["explanation"][:1000]
+            recommendation = update.get("recommendation")
+            if isinstance(recommendation, str) and recommendation.strip():
+                issue["recommendation"] = recommendation[:1000]
         if tier != "premium":
             for issue in issues:
                 issue["premium_detail_available"] = True

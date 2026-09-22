@@ -10,6 +10,7 @@ import {
   ACCEPTED_EXTENSIONS,
   MAX_FILE_BYTES,
 } from "../lib/mockAnalysis";
+import { isServerId } from "../lib/scanMapper";
 
 function validateFile(file) {
   if (!file) return "";
@@ -27,7 +28,7 @@ function titleFromFile(file) {
   return file?.name?.replace(/\.(pdf|docx)$/i, "") || "";
 }
 
-export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript } = {}) {
+export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript, getScanTarget } = {}) {
   const [step, setStep] = useState("idle");
   const [file, setFileInner] = useState(null);
   const [fileError, setFileError] = useState("");
@@ -47,7 +48,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   }, []);
 
   const analyze = useCallback(async () => {
-    if (!file || fileError || step === "analyzing") return;
+    if ((!file && !getScanTarget) || fileError || step === "analyzing") return;
     setStep("analyzing");
     setResult(null);
     setError("");
@@ -66,20 +67,28 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
         ...((existing?.versions || []).map((v) => Number(v.versionNumber) || 0))
       );
       const nextVersion = existing || preferredId ? maxVer + 1 : 1;
+      const target = (await getScanTarget?.()) || {};
 
-      const scanResult = await analyzeDocument(file, mechanicsId, reuseId, { title });
+      const scanResult = await analyzeDocument(file, mechanicsId, reuseId, {
+        title,
+        manuscriptId: target.manuscriptId,
+        versionId: target.versionId,
+        citationStyle: target.citationStyle,
+        pageCount: target.pageCount,
+      });
       if (title) scanResult.documentTitle = title;
       if (reuseId) scanResult.documentId = reuseId;
+      if (isServerId(target.manuscriptId)) scanResult.documentId = target.manuscriptId;
 
       setDocumentId(scanResult.documentId);
-      setVersionNumber(nextVersion);
+      setVersionNumber(Number(target.versionNumber) || nextVersion);
       setResult(scanResult);
       setStep("results");
     } catch (err) {
       setError(err?.message ?? "Analysis failed. Please try again.");
       setStep("error");
     }
-  }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript]);
+  }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
 
   const retry = useCallback(() => {
     setError("");

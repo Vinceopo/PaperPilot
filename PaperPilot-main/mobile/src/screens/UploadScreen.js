@@ -22,6 +22,7 @@ import {
   rulesToForm,
 } from "../lib/formatMechanicsForm";
 import { ACCEPTED_EXTENSIONS, MAX_FILE_BYTES } from "../lib/mockAnalysis";
+import { isScanReady } from "../lib/scanMapper";
 
 const MIME = [
   "application/pdf",
@@ -127,6 +128,7 @@ export default function UploadScreen({ navigation }) {
   const [previewBusy, setPreviewBusy] = useState(false);
 
   const selectedMechanics = mechanics.find((item) => item.id === selectedMechanicsId);
+  const scanReady = isScanReady(currentVersion, currentManuscript);
 
   useEffect(() => {
     setMsFile(null);
@@ -304,6 +306,7 @@ export default function UploadScreen({ navigation }) {
   }
 
   function onAnalyse() {
+    if (!scanReady) return;
     if (remaining <= 0) {
       setUpgradeMessage(
         `You have used all ${limit} scans included in your ${tier} plan this month.`
@@ -760,7 +763,9 @@ export default function UploadScreen({ navigation }) {
                       {currentManuscript?.title || "Manuscript"}
                     </Text>
                   </View>
-                  <Text style={styles.badgeReady}>✓ Ready</Text>
+                  <Text style={scanReady ? styles.badgeReady : styles.badgePending}>
+                    {scanReady ? "✓ Ready to scan" : "Needed"}
+                  </Text>
                 </View>
 
                 {currentVersion ? (
@@ -785,12 +790,10 @@ export default function UploadScreen({ navigation }) {
                   <Pressable
                     style={[
                       styles.primaryBtn,
-                      (!scanFlow.file && !currentVersion) || !selectedMechanicsId
-                        ? { opacity: 0.4 }
-                        : null,
+                      !scanReady || !selectedMechanicsId ? { opacity: 0.4 } : null,
                     ]}
                     onPress={onAnalyse}
-                    disabled={(!scanFlow.file && !currentVersion) || !selectedMechanicsId}
+                    disabled={!scanReady || !selectedMechanicsId}
                   >
                     <Text style={styles.primaryBtnText}>
                       {remaining <= 0 ? "Upgrade to scan" : "Analyse document"}

@@ -139,7 +139,7 @@ export default function ScanResultScreen({ navigation }) {
             <View style={[styles.bandPill, { backgroundColor: pillBg, borderColor: pillBorder }]}>
               <Text style={[styles.bandText, { color: pillText }]}>{band.label}</Text>
             </View>
-            <Text style={styles.scoreHint}>Overall compliance score</Text>
+            <Text style={styles.scoreHint}>Average of the formatting breakdown scores</Text>
           </View>
         </View>
       </View>
@@ -147,6 +147,7 @@ export default function ScanResultScreen({ navigation }) {
       {scoreBreakdown.length ? (
         <View style={styles.card}>
           <Text style={styles.cardKicker}>Score breakdown</Text>
+          <Text style={styles.scoreHint}>Formatting metrics only</Text>
           <View style={{ marginTop: 12, gap: 12 }}>
             {scoreBreakdown.map((item) => (
               <ScoreBar

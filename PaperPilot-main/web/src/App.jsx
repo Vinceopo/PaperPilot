@@ -12,6 +12,7 @@ import {
   saveMechanicsProfile,
   updateMechanicsProfile,
   uploadManuscriptVersion,
+  warmApi,
 } from "./api.js";
 import AuthScreen from "./components/AuthScreen.jsx";
 import RegistrationSuccessScreen from "./components/auth/RegistrationSuccessScreen.jsx";
@@ -76,6 +77,7 @@ export default function App() {
   const [currentManuscript, setCurrentManuscript] = useState(null);
   const [currentVersion, setCurrentVersion] = useState(null);
   const [subscription, setSubscription] = useState(null);
+  const [billingReturn, setBillingReturn] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [mechanicsBusy, setMechanicsBusy] = useState(false);
@@ -233,6 +235,22 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [fileDetailsFocusKey, manuscriptReady, currentVersion, scanFlow.file]);
 
+  // PayMongo success/cancel redirect: /?billing=success|canceled
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const billing = params.get("billing");
+      if (billing !== "success" && billing !== "canceled") return;
+      setBillingReturn(billing);
+      setActivePage("subscription");
+      params.delete("billing");
+      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash || ""}`;
+      window.history.replaceState({}, "", next);
+    } catch {
+      // Ignore malformed URL params.
+    }
+  }, []);
+
   useEffect(() => {
     const loaded = loadScannedManuscripts(user?.uid);
     setScannedLibrary(loaded);
@@ -349,6 +367,10 @@ export default function App() {
     setLoading(true);
     setError("");
     try {
+      // Vercel Python cold-starts install deps on first request — warm first so
+      // the three parallel dashboard calls don't all race a 60s install.
+      await warmApi();
+
       // Load each resource independently — a 503 on manuscripts/subscription
       // must not wipe a successful mechanics list (that caused "already exists"
       // saves while Use a Saved Format looked empty).
@@ -400,6 +422,7 @@ export default function App() {
 
   async function onMechanicsExtract(file) {
     setError("");
+    await warmApi();
     return extractMechanics(file);
   }
 
@@ -971,6 +994,7 @@ export default function App() {
         {activePage === "subscription" && (
           <SubscriptionScreen
             subscription={subscription}
+            billingReturn={billingReturn}
             onSubscriptionChange={(next) => {
               setSubscription(next);
               const note = notificationFromSubscription(next);

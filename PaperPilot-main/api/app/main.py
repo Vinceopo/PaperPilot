@@ -1,17 +1,21 @@
 import io
 import json
+import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pypdf import PdfReader
 
+from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes
 from app.config import settings
 from app.compliance import run_compliance_scan
 from app.compliance_db import (
     MechanicsInUse,
     MechanicsNameConflict,
     UpgradeRequired,
+    cancel_user_subscription,
     check_scan_eligibility,
     create_mechanics,
     create_version,
@@ -19,6 +23,7 @@ from app.compliance_db import (
     get_mechanics,
     get_scan,
     get_version,
+    get_version_full,
     init_db as init_compliance_db,
     is_current_version,
     list_manuscripts,
@@ -26,9 +31,17 @@ from app.compliance_db import (
     list_versions,
     persist_scan,
     require_premium,
+    save_pending_checkout,
     subscription_snapshot,
     update_mechanics,
 )
+from app.paymongo import (
+    PayMongoError,
+    create_checkout_session,
+    plan_amount_pesos,
+    verify_webhook_signature,
+)
+from app.paymongo_events import handle_paymongo_event
 from app.documents import (
     DocumentError,
     derive_mechanics_rules,
@@ -45,6 +58,8 @@ from app.rules import evaluate_manuscript
 from app.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
+    CancelSubscriptionRequest,
+    CloudinaryDocumentRequest,
     OtpSendRequest,
     OtpVerifyRequest,
     RegisterCheckRequest,
@@ -52,8 +67,10 @@ from app.schemas import (
     ResetPasswordRequest,
     RuleResult,
     ComplianceScanRequest,
+    ManuscriptVersionCloudinaryRequest,
     MechanicsSaveRequest,
     MechanicsUpdateRequest,
+    SubscribeRequest,
 )
 from app.validators import email_error, name_error, normalize_email, password_error, username_error
 
@@ -61,12 +78,21 @@ app = FastAPI(title="PaperPilot API", version="0.1.0")  # reload settings after 
 init_db()
 init_compliance_db()
 
-# Local web (Vite) + Expo. Credentials are not required for /analyze.
+# Local web (Vite) + Expo / LAN + Vercel. Credentials are not required for /analyze.
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins or ["*"],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    # localhost + private LAN IPs + Vercel previews
+    allow_origin_regex=(
+        r"https?://("
+        r"localhost|127\.0\.0\.1|"
+        r"192\.168\.\d{1,3}\.\d{1,3}|"
+        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+        r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|"
+        r"([a-z0-9-]+\.)+vercel\.app"
+        r")(:\d+)?"
+    ),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -89,6 +115,20 @@ def health():
     return {"ok": True, "service": "paperpilot-api"}
 
 
+@app.get("/json/version")
+@app.get("/json")
+@app.get("/json/list")
+def chrome_devtools_probe():
+    """IDE/browser probes open ports for Chrome DevTools (/json/version). Answer so logs stay clean."""
+    return {
+        "ok": True,
+        "service": "paperpilot-api",
+        "Browser": "PaperPilot API",
+        "Protocol-Version": "0",
+        "webSocketDebuggerUrl": "",
+    }
+
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(body: AnalyzeRequest):
     try:
@@ -107,14 +147,18 @@ def analyze(body: AnalyzeRequest):
 
 
 @app.post("/extract-pdf")
-async def extract_pdf(file: UploadFile = File(...)):
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
+async def extract_pdf(body: CloudinaryDocumentRequest):
+    try:
+        data, hint = fetch_cloudinary_bytes(body.cloudinary_url)
+    except CloudinaryFetchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    filename = (body.filename or hint or "document.pdf").strip()
+    if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Upload a PDF file.")
-    data = await file.read()
     reader = PdfReader(io.BytesIO(data))
     pages = [(page.extract_text() or "") for page in reader.pages]
     text = "\n\n".join(pages).strip()
-    return {"filename": file.filename, "pages": len(reader.pages), "text": text}
+    return {"filename": filename, "pages": len(reader.pages), "text": text}
 
 
 def authenticated_uid(authorization: str | None = Header(default=None)) -> str:
@@ -142,19 +186,22 @@ def authenticated_uid(authorization: str | None = Header(default=None)) -> str:
         raise HTTPException(status_code=401, detail="The Firebase ID token is invalid or expired.") from None
 
 
-async def _read_document(file: UploadFile) -> tuple[str, str, dict]:
-    filename = Path(file.filename or "").name
-    try:
-        data = await file.read(settings.max_upload_bytes + 1)
-    finally:
-        await file.close()
+def _read_document_bytes(filename: str, data: bytes) -> tuple[str, str, dict]:
     file_type = validate_document(filename, data, settings.max_upload_bytes)
     parsed = parse_document(data, file_type)
     return filename, file_type, parsed
 
 
-def _document_preview_pages(parsed: dict, text: str, limit: int = 40) -> list[dict]:
-    """Build page-shaped preview payloads for PDF/DOCX uploads."""
+def _read_cloudinary_document(url: str, filename_hint: str | None = None) -> tuple[str, str, dict]:
+    data, hint = fetch_cloudinary_bytes(url)
+    filename = Path((filename_hint or hint or "document").strip()).name
+    if not Path(filename).suffix and hint and Path(hint).suffix:
+        filename = Path(hint).name
+    return _read_document_bytes(filename, data)
+
+
+def _document_preview_pages(parsed: dict, text: str, limit: int = 500) -> list[dict]:
+    """Text fallback only. The web UI prefers the original uploaded file."""
     pages_out: list[dict] = []
     source_pages = parsed.get("pages") or []
     if source_pages:
@@ -173,13 +220,19 @@ def _document_preview_pages(parsed: dict, text: str, limit: int = 40) -> list[di
         chunks: list[str] = []
         current: list[str] = []
         for paragraph in paragraphs:
-            current.append(str(paragraph.get("text") or ""))
+            if (paragraph.get("source") or "body") != "body":
+                continue
             runs = paragraph.get("runs") or []
+            current.append(str(paragraph.get("text") or ""))
             if any(int(run.get("page_breaks") or 0) > 0 for run in runs):
-                chunks.append("\n".join(current).strip())
+                chunk = "\n".join(current).strip()
+                if chunk:
+                    chunks.append(chunk)
                 current = []
         if current:
-            chunks.append("\n".join(current).strip())
+            chunk = "\n".join(current).strip()
+            if chunk:
+                chunks.append(chunk)
         if not chunks:
             body = (text or "").strip()
             size = 2200
@@ -208,16 +261,21 @@ def mechanics_list(uid: str = Depends(authenticated_uid)):
 
 @app.post("/mechanics/extract")
 async def mechanics_extract(
-    file: UploadFile = File(...),
+    body: CloudinaryDocumentRequest,
     uid: str = Depends(authenticated_uid),
 ):
     """Parse a format guide and return editable rules without saving."""
     del uid  # auth only
     try:
-        filename, file_type, parsed = await _read_document(file)
+        filename, file_type, parsed = _read_cloudinary_document(
+            body.cloudinary_url, body.filename
+        )
         text = parsed["text"]
         if not text:
-            raise DocumentError("No extractable text was found in the document.")
+            raise DocumentError(
+                "No extractable text was found in the document. "
+                "Use a text-based PDF or DOCX (not a scanned image-only PDF)."
+            )
         rules = derive_mechanics_rules(text)
         pages = _document_preview_pages(parsed, text)
         return {
@@ -232,6 +290,8 @@ async def mechanics_extract(
             "pages": pages,
             "rules": rules,
         }
+    except CloudinaryFetchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
@@ -324,22 +384,25 @@ def mechanics_sample():
 
 @app.post("/mechanics", status_code=201)
 async def mechanics_create(
-    file: UploadFile = File(...),
-    name: str | None = Form(default=None),
+    body: CloudinaryDocumentRequest,
     uid: str = Depends(authenticated_uid),
 ):
     try:
-        filename, file_type, parsed = await _read_document(file)
+        filename, file_type, parsed = _read_cloudinary_document(
+            body.cloudinary_url, body.filename
+        )
         text = parsed["text"]
         if not text:
             raise DocumentError("No extractable text was found in the document.")
-        item_name = (name or Path(filename).stem).strip()
+        item_name = (body.name or Path(filename).stem).strip()
         if not item_name:
             raise DocumentError("A mechanics name is required.")
         item = create_mechanics(
             uid, item_name[:200], filename, file_type, text, parsed, derive_mechanics_rules(text)
         )
         return item
+    except CloudinaryFetchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except DocumentError as exc:
@@ -390,13 +453,15 @@ def manuscripts_list(uid: str = Depends(authenticated_uid)):
 
 @app.post("/manuscripts/preview")
 async def manuscript_preview(
-    file: UploadFile = File(...),
+    body: CloudinaryDocumentRequest,
     uid: str = Depends(authenticated_uid),
 ):
     """Extract manuscript pages for a document-style side preview (no version created)."""
     del uid
     try:
-        filename, file_type, parsed = await _read_document(file)
+        filename, file_type, parsed = _read_cloudinary_document(
+            body.cloudinary_url, body.filename
+        )
         text = parsed.get("text") or ""
         if not text:
             raise DocumentError("No extractable text was found in the document.")
@@ -413,31 +478,37 @@ async def manuscript_preview(
             or len(source_pages)
             or len(pages_out),
             "pages": pages_out,
+            "cloudinary_url": body.cloudinary_url,
         }
+    except CloudinaryFetchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.post("/manuscripts/versions", status_code=201)
 async def manuscript_version_create(
-    file: UploadFile = File(...),
-    mechanics_id: str = Form(...),
-    title: str = Form(...),
-    manuscript_id: str | None = Form(default=None),
+    body: ManuscriptVersionCloudinaryRequest,
     uid: str = Depends(authenticated_uid),
 ):
-    if not title.strip():
+    if not body.title.strip():
         raise HTTPException(status_code=400, detail="A manuscript title is required.")
-    if not get_mechanics(uid, mechanics_id):
-        raise HTTPException(status_code=404, detail="Mechanics not found.")
+    manuscript_id = (body.manuscript_id or "").strip() or None
+    if not body.mechanics_id or not get_mechanics(uid, body.mechanics_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Format mechanics not found. Select a saved format profile, then upload again.",
+        )
     try:
-        filename, file_type, parsed = await _read_document(file)
+        filename, file_type, parsed = _read_cloudinary_document(
+            body.cloudinary_url, body.filename
+        )
         if not parsed["text"]:
             raise DocumentError("No extractable text was found in the document.")
         version, created_parent = create_version(
             uid,
-            title.strip()[:300],
-            mechanics_id,
+            body.title.strip()[:300],
+            body.mechanics_id,
             filename,
             file_type,
             parsed["text"],
@@ -445,10 +516,21 @@ async def manuscript_version_create(
             manuscript_id,
         )
         return {"created_manuscript": created_parent, "version": version}
+    except CloudinaryFetchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Manuscript or mechanics not found.") from None
+    except LookupError as exc:
+        reason = str(exc) or ""
+        if "echanics" in reason:
+            raise HTTPException(
+                status_code=404,
+                detail="Format mechanics not found. Select a saved format profile, then upload again.",
+            ) from None
+        raise HTTPException(
+            status_code=404,
+            detail="That manuscript was not found on the server. Upload it as a new manuscript and try again.",
+        ) from None
 
 
 @app.get("/manuscripts/{manuscript_id}/versions")
@@ -497,7 +579,7 @@ def compliance_scan_create(
     body: ComplianceScanRequest,
     uid: str = Depends(authenticated_uid),
 ):
-    version = get_version(uid, manuscript_id, version_id)
+    version = get_version_full(uid, manuscript_id, version_id)
     mechanics = get_mechanics(uid, body.mechanics_id)
     if not version or not mechanics:
         raise HTTPException(status_code=404, detail="Manuscript version or mechanics not found.")
@@ -511,7 +593,7 @@ def compliance_scan_create(
         version["parsed_data"], mechanics["rules"], subscription["tier"]
     )
     try:
-        return persist_scan(
+        scan = persist_scan(
             uid,
             manuscript_id,
             version_id,
@@ -524,6 +606,9 @@ def compliance_scan_create(
         _raise_upgrade(exc)
     except LookupError:
         raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
+    scan["page_count"] = result.get("page_count") or 0
+    scan["pagination"] = result.get("pagination") or {}
+    return scan
 
 
 @app.get("/scans/{scan_id}")
@@ -537,6 +622,115 @@ def compliance_scan_detail(scan_id: str, uid: str = Depends(authenticated_uid)):
 @app.get("/subscription")
 def subscription_detail(uid: str = Depends(authenticated_uid)):
     return subscription_snapshot(uid)
+
+
+@app.get("/subscription/history")
+def subscription_history(uid: str = Depends(authenticated_uid)):
+    snap = subscription_snapshot(uid)
+    return {"history": snap.get("history") or []}
+
+
+@app.post("/subscription/subscribe")
+def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authenticated_uid)):
+    plan = body.plan.lower()
+    if plan == "free":
+        return cancel_user_subscription(uid, immediate=True)
+
+    billing_period = (body.billing_period or "monthly").lower()
+    if billing_period not in ("monthly", "annual"):
+        billing_period = "monthly"
+
+    base = (settings.app_public_url or "https://paperpilotph.vercel.app").rstrip("/")
+    success_url = f"{base}/?billing=success"
+    cancel_url = f"{base}/?billing=canceled"
+    reference = f"pp-{uid[:8]}-{int(time.time())}"
+
+    customer_email = None
+    customer_name = None
+    fb = admin_auth()
+    if fb:
+        try:
+            user = fb.get_user(uid)
+            customer_email = user.email
+            customer_name = user.display_name
+        except Exception:
+            pass
+
+    try:
+        payload = create_checkout_session(
+            uid=uid,
+            billing_period=billing_period,
+            success_url=success_url,
+            cancel_url=cancel_url,
+            customer_email=customer_email,
+            customer_name=customer_name,
+            reference_number=reference,
+        )
+    except PayMongoError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="PayMongo returned an unexpected response.")
+    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    checkout_url = attrs.get("checkout_url")
+    session_id = data.get("id")
+    if not checkout_url or not session_id:
+        raise HTTPException(status_code=502, detail="PayMongo checkout URL missing.")
+
+    save_pending_checkout(
+        uid,
+        checkout_session_id=str(session_id),
+        billing_period=billing_period,
+        reference_number=reference,
+        amount_pesos=plan_amount_pesos(billing_period),
+    )
+    return {
+        "checkout_url": checkout_url,
+        "checkout_session_id": session_id,
+        "billing_period": billing_period,
+        "amount": plan_amount_pesos(billing_period),
+        "currency": "PHP",
+        "provider": "paymongo",
+    }
+
+
+@app.post("/subscription/cancel")
+def subscription_cancel(body: CancelSubscriptionRequest, uid: str = Depends(authenticated_uid)):
+    return cancel_user_subscription(uid, immediate=bool(body.immediate))
+
+
+@app.post("/subscription/create-checkout")
+def subscription_create_checkout(body: SubscribeRequest, uid: str = Depends(authenticated_uid)):
+    """Alias for PayMongo Hosted Checkout creation (Premium upgrades only)."""
+    if body.plan.lower() == "free":
+        raise HTTPException(status_code=400, detail="Use /subscription/cancel to leave Premium.")
+    return subscription_subscribe(body, uid)
+
+
+@app.post("/webhooks/paymongo")
+@app.post("/api/webhooks/paymongo")
+async def paymongo_webhook(
+    request: Request,
+    paymongo_signature: str | None = Header(default=None, alias="Paymongo-Signature"),
+):
+    """
+    PayMongo webhook — raw body required for HMAC verification.
+    FastAPI does not JSON-parse Request.body(), so signature verification is safe here.
+    Tier changes happen only after a valid signature (never from client redirects).
+    """
+    raw = await request.body()
+    if not verify_webhook_signature(raw, paymongo_signature):
+        raise HTTPException(status_code=403, detail="Invalid PayMongo webhook signature.")
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook JSON.") from exc
+
+    # Respond quickly after verify; handler is sync/RTDB and should stay short.
+    result = handle_paymongo_event(payload if isinstance(payload, dict) else {})
+    return JSONResponse(result, status_code=200)
 
 
 def _require(error: str | None) -> None:

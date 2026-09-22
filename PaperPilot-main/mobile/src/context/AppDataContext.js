@@ -22,6 +22,7 @@ import {
   saveMechanicsProfile,
   uploadManuscriptVersion,
 } from "../api";
+import { isServerId, scanTargetIds } from "../lib/scanMapper";
 import { useScanFlow } from "../hooks/useScanFlow";
 import {
   loadScannedManuscripts,
@@ -100,16 +101,43 @@ export function AppDataProvider({ children }) {
     return list.find((m) => normalizeTitle(m.title) === key) || null;
   }, []);
 
+  const currentVersionRef = useRef(null);
+  currentVersionRef.current = currentVersion;
+  const mechanicsRef = useRef(mechanics);
+  mechanicsRef.current = mechanics;
+  const selectedMechanicsIdRef = useRef(selectedMechanicsId);
+  selectedMechanicsIdRef.current = selectedMechanicsId;
+
   const getActiveManuscript = useCallback(() => {
     const m = currentManuscriptRef.current;
     if (!m) return null;
     return { id: m.id, title: m.title };
   }, []);
 
+  const getScanTarget = useCallback(async () => {
+    const version = currentVersionRef.current;
+    const manuscript = currentManuscriptRef.current;
+    const { versionId, manuscriptId, ready } = scanTargetIds(version, manuscript);
+    if (!ready) {
+      throw new Error("Wait until the manuscript finishes uploading, then analyse.");
+    }
+    const mechanicsId = selectedMechanicsIdRef.current;
+    const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
+    const citationStyle = String(profile?.rules?.citation_style || "APA").toUpperCase();
+    return {
+      manuscriptId,
+      versionId,
+      citationStyle,
+      pageCount: version?.page_count,
+      versionNumber: version?.version_number,
+    };
+  }, []);
+
   const scanFlow = useScanFlow({
     mechanicsId: selectedMechanicsId,
     resolveManuscript,
     getActiveManuscript,
+    getScanTarget,
   });
 
   function persistNotifications(next) {
@@ -234,6 +262,17 @@ export function AppDataProvider({ children }) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const refreshSubscription = useCallback(async () => {
+    if (!auth?.currentUser) return null;
+    try {
+      const data = await getSubscription();
+      setSubscription(data);
+      return data;
+    } catch {
+      return null;
     }
   }, []);
 
@@ -375,6 +414,10 @@ export function AppDataProvider({ children }) {
       setError("Enter a manuscript title.");
       return false;
     }
+    if (!selectedMechanicsId) {
+      setError("Select a format mechanics profile before uploading a manuscript.");
+      return false;
+    }
 
     if (!manuscriptId) {
       const takenInLibrary = scannedLibraryRef.current.some(
@@ -392,34 +435,12 @@ export function AppDataProvider({ children }) {
     const libraryEntry = manuscriptId
       ? scannedLibraryRef.current.find((m) => m.id === manuscriptId)
       : null;
-    const nextId = manuscriptId || `local-${Date.now()}`;
     const nextVersionNumber = libraryEntry
       ? Math.max(0, ...(libraryEntry.versions || []).map((v) => Number(v.versionNumber) || 0)) + 1
       : 1;
 
-    scanFlow.selectFile(file);
-    setCurrentManuscript({ id: nextId, title: resolvedTitle });
-    setCurrentVersion({
-      id: `local-ver-${Date.now()}`,
-      source_filename: file.name,
-      filename: file.name,
-      version_number: nextVersionNumber,
-    });
-    setManuscriptReady(true);
-    advanceUploadWizard(3);
-    setFileDetailsNotice("Manuscript uploaded completely and ready to scan.");
-    setManuscriptBusy(false);
-    appendNotifications(notificationFromUpload(resolvedTitle, nextVersionNumber));
-
-    const isServerId = (id) =>
-      Boolean(id) &&
-      !String(id).startsWith("local-") &&
-      !String(id).startsWith("doc-");
-
     const resolveApiManuscriptId = () => {
-      if (isServerId(libraryEntry?.serverManuscriptId)) {
-        return libraryEntry.serverManuscriptId;
-      }
+      if (isServerId(libraryEntry?.serverManuscriptId)) return libraryEntry.serverManuscriptId;
       if (isServerId(manuscriptId)) return manuscriptId;
       const titleKey = normalizeTitle(resolvedTitle);
       const fromApi = manuscriptsRef.current.find(
@@ -428,22 +449,30 @@ export function AppDataProvider({ children }) {
       return fromApi?.id || "";
     };
 
-    void (async () => {
+    try {
+      let apiManuscriptId = resolveApiManuscriptId();
+      let created;
       try {
-        let apiManuscriptId = resolveApiManuscriptId();
-        let created;
-        try {
+        created = await uploadManuscriptVersion({
+          file,
+          title: resolvedTitle,
+          manuscriptId: apiManuscriptId || undefined,
+          mechanicsId: selectedMechanicsId,
+        });
+      } catch (firstErr) {
+        const missingParent =
+          firstErr?.status === 404 &&
+          apiManuscriptId &&
+          /manuscript was not found/i.test(firstErr?.message || "");
+        const isConflict =
+          firstErr?.status === 409 || /already exists/i.test(firstErr?.message || "");
+        if (missingParent) {
           created = await uploadManuscriptVersion({
             file,
             title: resolvedTitle,
-            manuscriptId: apiManuscriptId || undefined,
             mechanicsId: selectedMechanicsId,
           });
-        } catch (firstErr) {
-          const isConflict =
-            firstErr?.status === 409 || /already exists/i.test(firstErr?.message || "");
-          if (!isConflict || !manuscriptId) throw firstErr;
-
+        } else if (isConflict && manuscriptId) {
           const fromApi = await listManuscripts().catch(() => null);
           const apiList = itemsFrom(fromApi, "manuscripts");
           if (apiList.length) setManuscripts(apiList);
@@ -451,74 +480,73 @@ export function AppDataProvider({ children }) {
             (m) => normalizeTitle(m.title) === normalizeTitle(resolvedTitle) && isServerId(m.id)
           );
           if (!matched?.id) throw firstErr;
-
-          apiManuscriptId = matched.id;
           created = await uploadManuscriptVersion({
             file,
             title: resolvedTitle,
-            manuscriptId: apiManuscriptId,
+            manuscriptId: matched.id,
             mechanicsId: selectedMechanicsId,
           });
-        }
-
-        if (uploadSessionRef.current !== sessionId) return;
-
-        const version = created.version || {
-          id: created.version_id,
-          manuscript_id: created.manuscript_id || apiManuscriptId || nextId,
-          version_number: created.version_number,
-          source_filename: created.source_filename || created.filename || file.name,
-          page_count: created.page_count,
-        };
-        const manuscript = created.manuscript || created.created_manuscript || {
-          id: version.manuscript_id || created.manuscript_id || nextId,
-          title: resolvedTitle,
-        };
-        const resolvedId = manuscript.id || version.manuscript_id || apiManuscriptId || nextId;
-
-        setCurrentManuscript({
-          id: manuscriptId || resolvedId,
-          title: manuscript.title || resolvedTitle,
-        });
-        setCurrentVersion({
-          ...version,
-          version_number: version.version_number || nextVersionNumber,
-        });
-
-        if (manuscriptId && isServerId(resolvedId)) {
-          setScannedLibrary((prev) => {
-            const next = prev.map((m) =>
-              m.id === manuscriptId || normalizeTitle(m.title) === normalizeTitle(resolvedTitle)
-                ? { ...m, serverManuscriptId: resolvedId }
-                : m
-            );
-            void saveScannedManuscripts(next, user?.uid);
-            return next;
-          });
-        }
-
-        const data = await listManuscripts();
-        if (uploadSessionRef.current !== sessionId) return;
-        setManuscripts(itemsFrom(data, "manuscripts"));
-      } catch (err) {
-        if (uploadSessionRef.current !== sessionId) return;
-        if (err?.status === 409 || /already exists/i.test(err?.message || "")) {
-          if (!manuscriptId) {
-            setError(err.message || "A manuscript with this title already exists.");
-            setManuscriptReady(false);
-            setFileDetailsNotice("");
-            setCurrentVersion(null);
-            scanFlow.selectFile(null);
-          }
-          return;
-        }
-        if (!handleGateError(err)) {
-          // Keep File details usable even if API sync fails.
+        } else {
+          throw firstErr;
         }
       }
-    })();
 
-    return true;
+      if (uploadSessionRef.current !== sessionId) return false;
+
+      const version = created.version || {};
+      const resolvedManuscriptId =
+        version.manuscript_id ||
+        created.manuscript_id ||
+        created.created_manuscript?.id ||
+        apiManuscriptId;
+      if (!isServerId(version.id) || !isServerId(resolvedManuscriptId)) {
+        throw new Error("The server did not return a saved manuscript. Please upload again.");
+      }
+
+      scanFlow.selectFile(file);
+      setCurrentManuscript({
+        id: manuscriptId || resolvedManuscriptId,
+        title: resolvedTitle,
+        serverManuscriptId: resolvedManuscriptId,
+      });
+      setCurrentVersion({
+        ...version,
+        manuscript_id: resolvedManuscriptId,
+        version_number: version.version_number || nextVersionNumber,
+        source_filename: version.source_filename || file.name,
+        filename: file.name,
+      });
+      if (manuscriptId) {
+        setScannedLibrary((prev) => {
+          const next = prev.map((m) =>
+            m.id === manuscriptId || normalizeTitle(m.title) === normalizeTitle(resolvedTitle)
+              ? { ...m, serverManuscriptId: resolvedManuscriptId }
+              : m
+          );
+          void saveScannedManuscripts(next, user?.uid);
+          return next;
+        });
+      }
+      const data = await listManuscripts();
+      if (uploadSessionRef.current !== sessionId) return false;
+      setManuscripts(itemsFrom(data, "manuscripts"));
+      setManuscriptReady(true);
+      advanceUploadWizard(3);
+      setFileDetailsNotice("Manuscript uploaded completely and ready to scan.");
+      appendNotifications(notificationFromUpload(resolvedTitle, version.version_number || nextVersionNumber));
+      return true;
+    } catch (err) {
+      if (uploadSessionRef.current !== sessionId) return false;
+      if (handleGateError(err)) return false;
+      setError(err.message || "Could not upload the manuscript. Please try again.");
+      setManuscriptReady(false);
+      setFileDetailsNotice("");
+      setCurrentVersion(null);
+      scanFlow.selectFile(null);
+      return false;
+    } finally {
+      if (uploadSessionRef.current === sessionId) setManuscriptBusy(false);
+    }
   }
 
   const uploadTargets = useMemo(
@@ -579,6 +607,7 @@ export function AppDataProvider({ children }) {
       limit,
       remaining,
       loadDashboard,
+      refreshSubscription,
       scannedLibrary,
       updateScannedLibrary,
       uploadTargets,
@@ -624,6 +653,7 @@ export function AppDataProvider({ children }) {
       limit,
       remaining,
       loadDashboard,
+      refreshSubscription,
       scannedLibrary,
       updateScannedLibrary,
       uploadTargets,

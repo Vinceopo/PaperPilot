@@ -1,18 +1,17 @@
+"""Compliance / manuscripts / scans persistence on Firebase Realtime Database."""
 from __future__ import annotations
 
 import json
-import sqlite3
-import threading
+import re
 import uuid
-from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterator
 
 from app.config import settings
+from app.firebase_admin_app import firebase_admin_app
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "paperpilot.db"
-_write_lock = threading.RLock()
+ROOT = "/paperpilot"
+_RESPONSE_PARSED_LIMIT = 2_500_000
 
 
 class UpgradeRequired(Exception):
@@ -52,185 +51,87 @@ def _month_bounds(now: datetime) -> tuple[str, str]:
     return _iso(start), _iso(end)
 
 
-def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 15000")
-    return conn
+def _name_key(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
+    return cleaned or "unnamed"
 
 
-@contextmanager
-def connection() -> Iterator[sqlite3.Connection]:
-    conn = _connect()
-    try:
-        yield conn
-    finally:
-        conn.close()
+def _reference(path: str):
+    if not firebase_admin_app():
+        raise RuntimeError("Firebase Realtime Database is unavailable.")
+    from firebase_admin import db
+
+    return db.reference(path)
 
 
 def init_db() -> None:
-    with _write_lock, connection() as conn:
-        conn.executescript(
-            """
-            PRAGMA journal_mode = WAL;
-            CREATE TABLE IF NOT EXISTS mechanics (
-                id TEXT PRIMARY KEY,
-                owner_uid TEXT NOT NULL,
-                name TEXT NOT NULL,
-                source_filename TEXT NOT NULL,
-                file_type TEXT NOT NULL CHECK (file_type IN ('pdf', 'docx')),
-                extracted_text TEXT NOT NULL,
-                parsed_data_json TEXT NOT NULL,
-                rules_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_mechanics_owner_created
-                ON mechanics(owner_uid, created_at DESC);
-
-            CREATE TABLE IF NOT EXISTS manuscripts (
-                id TEXT PRIMARY KEY,
-                owner_uid TEXT NOT NULL,
-                title TEXT NOT NULL,
-                current_version_id TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (current_version_id) REFERENCES manuscript_versions(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_manuscripts_owner_updated
-                ON manuscripts(owner_uid, updated_at DESC);
-
-            CREATE TABLE IF NOT EXISTS manuscript_versions (
-                id TEXT PRIMARY KEY,
-                manuscript_id TEXT NOT NULL,
-                mechanics_id TEXT NOT NULL,
-                version_number INTEGER NOT NULL CHECK (version_number > 0),
-                source_filename TEXT NOT NULL,
-                file_type TEXT NOT NULL CHECK (file_type IN ('pdf', 'docx')),
-                extracted_text TEXT NOT NULL,
-                parsed_data_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE (manuscript_id, version_number),
-                FOREIGN KEY (manuscript_id) REFERENCES manuscripts(id) ON DELETE CASCADE,
-                FOREIGN KEY (mechanics_id) REFERENCES mechanics(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_versions_manuscript_number
-                ON manuscript_versions(manuscript_id, version_number DESC);
-
-            CREATE TABLE IF NOT EXISTS compliance_scans (
-                id TEXT PRIMARY KEY,
-                owner_uid TEXT NOT NULL,
-                manuscript_version_id TEXT NOT NULL,
-                mechanics_id TEXT NOT NULL,
-                overall_score DECIMAL(5,2) NOT NULL CHECK (overall_score BETWEEN 0 AND 100),
-                issues_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (manuscript_version_id) REFERENCES manuscript_versions(id),
-                FOREIGN KEY (mechanics_id) REFERENCES mechanics(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_scans_owner_created
-                ON compliance_scans(owner_uid, created_at DESC);
-
-            CREATE TABLE IF NOT EXISTS section_formatting_checks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                scan_id TEXT NOT NULL,
-                section_name TEXT NOT NULL,
-                formatting_score DECIMAL(5,2) NOT NULL CHECK (formatting_score BETWEEN 0 AND 100),
-                issue_count INTEGER NOT NULL DEFAULT 0,
-                issues_json TEXT NOT NULL,
-                FOREIGN KEY (scan_id) REFERENCES compliance_scans(id) ON DELETE CASCADE
-            );
-            CREATE INDEX IF NOT EXISTS idx_section_checks_scan
-                ON section_formatting_checks(scan_id);
-
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                owner_uid TEXT PRIMARY KEY,
-                tier TEXT NOT NULL DEFAULT 'free' CHECK (tier IN ('free', 'premium')),
-                scans_used INTEGER NOT NULL DEFAULT 0 CHECK (scans_used >= 0),
-                period_start TEXT NOT NULL,
-                period_end TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            """
-        )
-        try:
-            conn.execute(
-                """CREATE UNIQUE INDEX IF NOT EXISTS idx_mechanics_owner_name_nocase
-                   ON mechanics(owner_uid, name COLLATE NOCASE)"""
-            )
-        except sqlite3.IntegrityError:
-            # Older local databases may already contain duplicate names. New
-            # writes are still guarded transactionally below until renamed.
-            pass
-        # Keep filenames from earlier app versions in sync with their saved
-        # display names while preserving the original document extension.
-        rows = conn.execute("SELECT id, name, source_filename FROM mechanics").fetchall()
-        for row in rows:
-            extension = Path(row["source_filename"]).suffix.lower()
-            expected = f"{row['name']}{extension}"
-            if row["source_filename"] != expected:
-                conn.execute(
-                    "UPDATE mechanics SET source_filename = ? WHERE id = ?",
-                    (expected, row["id"]),
-                )
-        conn.commit()
+    """Warm Firebase Admin; RTDB needs no schema migration."""
+    firebase_admin_app()
 
 
-def _loads(value: str) -> object:
-    return json.loads(value)
-
-
-def _mechanics_row(row: sqlite3.Row) -> dict:
+def _mechanics_public(item: dict) -> dict:
     return {
-        "id": row["id"],
-        "name": row["name"],
-        "source_filename": row["source_filename"],
-        "file_type": row["file_type"],
-        "rules": _loads(row["rules_json"]),
-        "created_at": row["created_at"],
+        "id": item["id"],
+        "name": item["name"],
+        "source_filename": item["source_filename"],
+        "file_type": item["file_type"],
+        "rules": item.get("rules") or {},
+        "created_at": item["created_at"],
     }
+
+
+def _slim_version_payload(value: dict) -> dict:
+    """Keep API responses under Vercel's ~4.5MB body limit."""
+    parsed = value.get("parsed_data")
+    if not isinstance(parsed, dict):
+        return value
+    encoded = json.dumps(parsed, ensure_ascii=False)
+    if len(encoded) <= _RESPONSE_PARSED_LIMIT:
+        return value
+    out = dict(value)
+    out["parsed_data"] = {
+        "_truncated": True,
+        "metadata": parsed.get("metadata") or {},
+    }
+    text = out.get("text") or ""
+    if len(text) > 50_000:
+        out["text"] = text[:50_000]
+    return out
 
 
 def create_mechanics(
     owner_uid: str, name: str, filename: str, file_type: str, text: str, parsed: dict, rules: dict
 ) -> dict:
     item_id, created, clean_name = str(uuid.uuid4()), _iso(_now()), name.strip()
-    with _write_lock, connection() as conn:
-        duplicate = conn.execute(
-            "SELECT 1 FROM mechanics WHERE owner_uid = ? AND name = ? COLLATE NOCASE",
-            (owner_uid, clean_name),
-        ).fetchone()
-        if duplicate:
+    key = _name_key(clean_name)
+    name_ref = _reference(f"{ROOT}/mechanics_names/{owner_uid}/{key}")
+    existing_id = name_ref.get()
+    if existing_id and existing_id != item_id:
+        existing = _reference(f"{ROOT}/mechanics/{owner_uid}/{existing_id}").get()
+        if existing:
             raise MechanicsNameConflict("A mechanics document with this name already exists.")
-        try:
-            conn.execute(
-                """INSERT INTO mechanics
-                   (id, owner_uid, name, source_filename, file_type, extracted_text,
-                    parsed_data_json, rules_json, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    item_id, owner_uid, clean_name, filename, file_type, text,
-                    json.dumps(parsed, ensure_ascii=False), json.dumps(rules), created,
-                ),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise MechanicsNameConflict(
-                "A mechanics document with this name already exists."
-            ) from exc
-        conn.commit()
-        row = conn.execute("SELECT * FROM mechanics WHERE id = ?", (item_id,)).fetchone()
-    return _mechanics_row(row)
+    name_ref.set(item_id)
+
+    item = {
+        "id": item_id,
+        "owner_uid": owner_uid,
+        "name": clean_name,
+        "source_filename": filename,
+        "file_type": file_type,
+        "extracted_text": text,
+        "parsed_data": parsed,
+        "rules": rules,
+        "created_at": created,
+    }
+    _reference(f"{ROOT}/mechanics/{owner_uid}/{item_id}").set(item)
+    return _mechanics_public(item)
 
 
 def list_mechanics(owner_uid: str) -> list[dict]:
-    with connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM mechanics WHERE owner_uid = ? ORDER BY created_at DESC, rowid DESC",
-            (owner_uid,),
-        ).fetchall()
-    return [_mechanics_row(row) for row in rows]
+    rows = _reference(f"{ROOT}/mechanics/{owner_uid}").get() or {}
+    items = [_mechanics_public(v) for v in rows.values() if isinstance(v, dict)]
+    items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return items
 
 
 def rename_mechanics(owner_uid: str, mechanics_id: str, name: str) -> dict | None:
@@ -243,118 +144,80 @@ def update_mechanics(
     name: str | None = None,
     rules: dict | None = None,
 ) -> dict | None:
-    """Rename and/or replace the stored format rules for a mechanics profile."""
-    with _write_lock, connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM mechanics WHERE id = ? AND owner_uid = ?",
-            (mechanics_id, owner_uid),
-        ).fetchone()
-        if not row:
-            return None
+    ref = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}")
+    row = ref.get()
+    if not isinstance(row, dict):
+        return None
 
-        clean_name = row["name"]
-        renamed_filename = row["source_filename"]
-        if name is not None:
-            clean_name = name.strip()
-            extension = Path(row["source_filename"]).suffix.lower()
-            if extension and clean_name.lower().endswith(extension):
-                clean_name = clean_name[: -len(extension)].strip()
-            if not clean_name:
-                raise ValueError("A mechanics name is required.")
-            renamed_filename = f"{clean_name}{extension}"
-            duplicate = conn.execute(
-                """SELECT 1 FROM mechanics
-                   WHERE owner_uid = ? AND name = ? COLLATE NOCASE AND id <> ?""",
-                (owner_uid, clean_name, mechanics_id),
-            ).fetchone()
-            if duplicate:
-                raise MechanicsNameConflict("A mechanics document with this name already exists.")
+    clean_name = row.get("name") or ""
+    renamed_filename = row.get("source_filename") or ""
+    old_key = _name_key(clean_name)
 
-        rules_json = row["rules_json"]
-        if rules is not None:
-            rules_json = json.dumps(rules, ensure_ascii=False)
+    if name is not None:
+        clean_name = name.strip()
+        extension = Path(renamed_filename).suffix.lower()
+        if extension and clean_name.lower().endswith(extension):
+            clean_name = clean_name[: -len(extension)].strip()
+        if not clean_name:
+            raise ValueError("A mechanics name is required.")
+        renamed_filename = f"{clean_name}{extension}"
+        new_key = _name_key(clean_name)
+        if new_key != old_key:
+            name_ref = _reference(f"{ROOT}/mechanics_names/{owner_uid}/{new_key}")
+            existing_id = name_ref.get()
+            if existing_id and existing_id != mechanics_id:
+                existing = _reference(f"{ROOT}/mechanics/{owner_uid}/{existing_id}").get()
+                if existing:
+                    raise MechanicsNameConflict(
+                        "A mechanics document with this name already exists."
+                    )
+            name_ref.set(mechanics_id)
+            _reference(f"{ROOT}/mechanics_names/{owner_uid}/{old_key}").delete()
 
-        try:
-            conn.execute(
-                """UPDATE mechanics
-                   SET name = ?, source_filename = ?, rules_json = ?
-                   WHERE id = ? AND owner_uid = ?""",
-                (clean_name, renamed_filename, rules_json, mechanics_id, owner_uid),
-            )
-        except sqlite3.IntegrityError as exc:
-            raise MechanicsNameConflict(
-                "A mechanics document with this name already exists."
-            ) from exc
-        conn.commit()
-        updated = conn.execute("SELECT * FROM mechanics WHERE id = ?", (mechanics_id,)).fetchone()
-    return _mechanics_row(updated)
+    updates = {
+        "name": clean_name,
+        "source_filename": renamed_filename,
+    }
+    if rules is not None:
+        updates["rules"] = rules
+    ref.update(updates)
+    updated = ref.get() or {**row, **updates}
+    return _mechanics_public(updated)
 
 
 def delete_mechanics(owner_uid: str, mechanics_id: str) -> bool:
-    """Remove a mechanics profile.
+    ref = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}")
+    row = ref.get()
+    if not isinstance(row, dict):
+        return False
 
-    Linked compliance scans for this format are removed. Manuscript versions that
-    pointed at it keep their files; the format link becomes inactive so deletion
-    is never blocked by prior uploads.
-    """
-    with _write_lock:
-        conn = _connect()
-        try:
-            # SQLite refuses to change this pragma mid-transaction, so disable
-            # FKs before any other statements on this connection.
-            conn.execute("PRAGMA foreign_keys = OFF")
-            row = conn.execute(
-                "SELECT 1 FROM mechanics WHERE id = ? AND owner_uid = ?",
-                (mechanics_id, owner_uid),
-            ).fetchone()
-            if not row:
-                return False
+    scans = _reference(f"{ROOT}/compliance_scans/{owner_uid}").get() or {}
+    for scan_id, scan in list(scans.items()):
+        if not isinstance(scan, dict):
+            continue
+        if scan.get("mechanics_id") != mechanics_id:
+            continue
+        _reference(f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}").delete()
+        _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").delete()
 
-            scan_ids = [
-                r["id"]
-                for r in conn.execute(
-                    """SELECT s.id FROM compliance_scans s
-                       WHERE s.mechanics_id = ? AND s.owner_uid = ?""",
-                    (mechanics_id, owner_uid),
-                ).fetchall()
-            ]
-            for scan_id in scan_ids:
-                conn.execute(
-                    "DELETE FROM section_formatting_checks WHERE scan_id = ?",
-                    (scan_id,),
-                )
-            if scan_ids:
-                conn.execute(
-                    "DELETE FROM compliance_scans WHERE mechanics_id = ? AND owner_uid = ?",
-                    (mechanics_id, owner_uid),
-                )
-            conn.execute(
-                "DELETE FROM mechanics WHERE id = ? AND owner_uid = ?",
-                (mechanics_id, owner_uid),
-            )
-            conn.commit()
-            return True
-        finally:
-            conn.close()
+    key = _name_key(row.get("name") or "")
+    name_ref = _reference(f"{ROOT}/mechanics_names/{owner_uid}/{key}")
+    if name_ref.get() == mechanics_id:
+        name_ref.delete()
+    ref.delete()
+    return True
 
 
-def get_mechanics(owner_uid: str, mechanics_id: str, conn: sqlite3.Connection | None = None) -> dict | None:
-    owns_conn = conn is None
-    conn = conn or _connect()
-    try:
-        row = conn.execute(
-            "SELECT * FROM mechanics WHERE id = ? AND owner_uid = ?", (mechanics_id, owner_uid)
-        ).fetchone()
-        if not row:
-            return None
-        return {
-            **_mechanics_row(row),
-            "text": row["extracted_text"],
-            "parsed_data": _loads(row["parsed_data_json"]),
-        }
-    finally:
-        if owns_conn:
-            conn.close()
+def get_mechanics(owner_uid: str, mechanics_id: str, conn=None) -> dict | None:
+    del conn  # SQLite compat shim
+    row = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}").get()
+    if not isinstance(row, dict):
+        return None
+    return {
+        **_mechanics_public(row),
+        "text": row.get("extracted_text") or "",
+        "parsed_data": row.get("parsed_data") or {},
+    }
 
 
 def create_version(
@@ -368,159 +231,581 @@ def create_version(
     manuscript_id: str | None,
 ) -> tuple[dict, bool]:
     created, version_id = _iso(_now()), str(uuid.uuid4())
-    with _write_lock, connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        mechanics = conn.execute(
-            "SELECT 1 FROM mechanics WHERE id = ? AND owner_uid = ?", (mechanics_id, owner_uid)
-        ).fetchone()
-        if not mechanics:
-            conn.rollback()
-            raise LookupError("Mechanics not found.")
-        created_parent = manuscript_id is None
-        if created_parent:
-            manuscript_id = str(uuid.uuid4())
-            conn.execute(
-                """INSERT INTO manuscripts
-                   (id, owner_uid, title, current_version_id, created_at, updated_at)
-                   VALUES (?, ?, ?, NULL, ?, ?)""",
-                (manuscript_id, owner_uid, title.strip(), created, created),
-            )
-            version_number = 1
-        else:
-            parent = conn.execute(
-                "SELECT id FROM manuscripts WHERE id = ? AND owner_uid = ?",
-                (manuscript_id, owner_uid),
-            ).fetchone()
-            if not parent:
-                conn.rollback()
-                raise LookupError("Manuscript not found.")
-            version_number = conn.execute(
-                "SELECT COALESCE(MAX(version_number), 0) + 1 FROM manuscript_versions WHERE manuscript_id = ?",
-                (manuscript_id,),
-            ).fetchone()[0]
-        conn.execute(
-            """INSERT INTO manuscript_versions
-               (id, manuscript_id, mechanics_id, version_number, source_filename, file_type,
-                extracted_text, parsed_data_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                version_id, manuscript_id, mechanics_id, version_number, filename, file_type,
-                text, json.dumps(parsed, ensure_ascii=False), created,
-            ),
+    if not get_mechanics(owner_uid, mechanics_id):
+        raise LookupError("Mechanics not found.")
+
+    created_parent = manuscript_id is None
+    if created_parent:
+        manuscript_id = str(uuid.uuid4())
+        _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").set(
+            {
+                "id": manuscript_id,
+                "owner_uid": owner_uid,
+                "title": title.strip(),
+                "current_version_id": None,
+                "version_counter": 0,
+                "created_at": created,
+                "updated_at": created,
+            }
         )
-        conn.execute(
-            """UPDATE manuscripts SET title = ?, current_version_id = ?, updated_at = ?
-               WHERE id = ?""",
-            (title.strip(), version_id, created, manuscript_id),
-        )
-        conn.commit()
+
+    ms_ref = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}")
+    manuscript = ms_ref.get()
+    if not isinstance(manuscript, dict):
+        raise LookupError("Manuscript not found.")
+
+    next_number = int(manuscript.get("version_counter") or 0) + 1
+    version = {
+        "id": version_id,
+        "manuscript_id": manuscript_id,
+        "mechanics_id": mechanics_id,
+        "version_number": next_number,
+        "source_filename": filename,
+        "file_type": file_type,
+        "extracted_text": text,
+        "parsed_data": parsed,
+        "created_at": created,
+    }
+    _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").set(version)
+    ms_ref.update(
+        {
+            "title": title.strip(),
+            "current_version_id": version_id,
+            "version_counter": next_number,
+            "updated_at": created,
+        }
+    )
     return get_version(owner_uid, manuscript_id, version_id), created_parent
 
 
 def list_manuscripts(owner_uid: str) -> list[dict]:
-    with connection() as conn:
-        rows = conn.execute(
-            """SELECT m.*, v.version_number,
-                      (SELECT COUNT(*) FROM manuscript_versions mv WHERE mv.manuscript_id = m.id) AS version_count
-               FROM manuscripts m
-               LEFT JOIN manuscript_versions v ON v.id = m.current_version_id
-               WHERE m.owner_uid = ?
-               ORDER BY m.updated_at DESC""",
-            (owner_uid,),
-        ).fetchall()
-    return [
-        {
-            "id": row["id"], "title": row["title"], "current_version_id": row["current_version_id"],
-            "current_version_number": row["version_number"], "version_count": row["version_count"],
-            "created_at": row["created_at"], "updated_at": row["updated_at"],
-        }
-        for row in rows
-    ]
+    rows = _reference(f"{ROOT}/manuscripts/{owner_uid}").get() or {}
+    items = []
+    for row in rows.values():
+        if not isinstance(row, dict):
+            continue
+        mid = row.get("id")
+        versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{mid}").get() or {}
+        current_id = row.get("current_version_id")
+        current = versions.get(current_id) if isinstance(versions, dict) else None
+        version_number = (current or {}).get("version_number") if isinstance(current, dict) else None
+        items.append(
+            {
+                "id": mid,
+                "title": row.get("title"),
+                "current_version_id": current_id,
+                "current_version_number": version_number,
+                "version_count": len(versions) if isinstance(versions, dict) else 0,
+                "created_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"),
+            }
+        )
+    items.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    return items
 
 
-def _version_row(row: sqlite3.Row, include_content: bool = True) -> dict:
+def _version_row(row: dict, include_content: bool = True) -> dict:
     value = {
-        "id": row["id"], "manuscript_id": row["manuscript_id"],
+        "id": row["id"],
+        "manuscript_id": row["manuscript_id"],
         "mechanics_id": row["mechanics_id"],
-        "version_number": row["version_number"], "source_filename": row["source_filename"],
-        "file_type": row["file_type"], "created_at": row["created_at"],
+        "version_number": row["version_number"],
+        "source_filename": row["source_filename"],
+        "file_type": row["file_type"],
+        "created_at": row["created_at"],
     }
     if include_content:
-        value["text"] = row["extracted_text"]
-        value["parsed_data"] = _loads(row["parsed_data_json"])
+        value["text"] = row.get("extracted_text") or ""
+        value["parsed_data"] = row.get("parsed_data") or {}
+        value = _slim_version_payload(value)
     return value
 
 
 def get_version(owner_uid: str, manuscript_id: str, version_id: str) -> dict | None:
-    with connection() as conn:
-        row = conn.execute(
-            """SELECT v.* FROM manuscript_versions v
-               JOIN manuscripts m ON m.id = v.manuscript_id
-               WHERE v.id = ? AND v.manuscript_id = ? AND m.owner_uid = ?""",
-            (version_id, manuscript_id, owner_uid),
-        ).fetchone()
-    return _version_row(row) if row else None
+    manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
+    if not isinstance(manuscript, dict):
+        return None
+    row = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
+    if not isinstance(row, dict):
+        return None
+    return _version_row(row, include_content=True)
+
+
+def get_version_full(owner_uid: str, manuscript_id: str, version_id: str) -> dict | None:
+    """Full parsed_data for server-side scans (not slimmed for HTTP)."""
+    manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
+    if not isinstance(manuscript, dict):
+        return None
+    row = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
+    if not isinstance(row, dict):
+        return None
+    return {
+        "id": row["id"],
+        "manuscript_id": row["manuscript_id"],
+        "mechanics_id": row["mechanics_id"],
+        "version_number": row["version_number"],
+        "source_filename": row["source_filename"],
+        "file_type": row["file_type"],
+        "created_at": row["created_at"],
+        "text": row.get("extracted_text") or "",
+        "parsed_data": row.get("parsed_data") or {},
+    }
 
 
 def list_versions(owner_uid: str, manuscript_id: str, history: bool) -> tuple[list[dict] | None, str | None]:
-    with connection() as conn:
-        manuscript = conn.execute(
-            "SELECT current_version_id FROM manuscripts WHERE id = ? AND owner_uid = ?",
-            (manuscript_id, owner_uid),
-        ).fetchone()
-        if not manuscript:
-            return None, None
-        if history:
-            rows = conn.execute(
-                "SELECT * FROM manuscript_versions WHERE manuscript_id = ? ORDER BY version_number DESC",
-                (manuscript_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM manuscript_versions WHERE id = ?", (manuscript["current_version_id"],)
-            ).fetchall()
-    return [_version_row(row, include_content=False) for row in rows], manuscript["current_version_id"]
+    manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
+    if not isinstance(manuscript, dict):
+        return None, None
+    current_id = manuscript.get("current_version_id")
+    all_versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get() or {}
+    if not isinstance(all_versions, dict):
+        return [], current_id
+    if history:
+        rows = list(all_versions.values())
+        rows.sort(key=lambda r: int(r.get("version_number") or 0), reverse=True)
+    else:
+        current = all_versions.get(current_id)
+        rows = [current] if isinstance(current, dict) else []
+    return [_version_row(r, include_content=False) for r in rows if isinstance(r, dict)], current_id
 
 
 def is_current_version(owner_uid: str, manuscript_id: str, version_id: str) -> bool | None:
-    with connection() as conn:
-        row = conn.execute(
-            "SELECT current_version_id FROM manuscripts WHERE id = ? AND owner_uid = ?",
-            (manuscript_id, owner_uid),
-        ).fetchone()
-    return None if not row else row["current_version_id"] == version_id
+    manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
+    if not isinstance(manuscript, dict):
+        return None
+    return manuscript.get("current_version_id") == version_id
 
 
-def _subscription(conn: sqlite3.Connection, owner_uid: str) -> sqlite3.Row:
+def _subscription_row(owner_uid: str) -> dict:
     now, now_text = _now(), _iso(_now())
     start, end = _month_bounds(now)
-    conn.execute(
-        """INSERT OR IGNORE INTO subscriptions
-           (owner_uid, tier, scans_used, period_start, period_end, created_at, updated_at)
-           VALUES (?, 'free', 0, ?, ?, ?, ?)""",
-        (owner_uid, start, end, now_text, now_text),
-    )
-    row = conn.execute("SELECT * FROM subscriptions WHERE owner_uid = ?", (owner_uid,)).fetchone()
-    if now_text >= row["period_end"]:
-        conn.execute(
-            """UPDATE subscriptions SET scans_used = 0, period_start = ?, period_end = ?, updated_at = ?
-               WHERE owner_uid = ?""",
-            (start, end, now_text, owner_uid),
-        )
-        row = conn.execute("SELECT * FROM subscriptions WHERE owner_uid = ?", (owner_uid,)).fetchone()
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+    row = ref.get()
+    if not isinstance(row, dict):
+        row = {
+            "owner_uid": owner_uid,
+            "tier": "free",
+            "scans_used": 0,
+            "period_start": start,
+            "period_end": end,
+            "created_at": now_text,
+            "updated_at": now_text,
+        }
+        ref.set(row)
+        return row
+    if now_text >= str(row.get("period_end") or ""):
+        row = {
+            **row,
+            "scans_used": 0,
+            "period_start": start,
+            "period_end": end,
+            "updated_at": now_text,
+        }
+        ref.set(row)
     return row
 
 
+def _history_list(row: dict) -> list[dict]:
+    history = row.get("history")
+    if isinstance(history, list):
+        return [h for h in history if isinstance(h, dict)]
+    if isinstance(history, dict):
+        return [h for h in history.values() if isinstance(h, dict)]
+    return []
+
+
 def subscription_snapshot(owner_uid: str) -> dict:
-    with _write_lock, connection() as conn:
-        row = _subscription(conn, owner_uid)
-        conn.commit()
-    limit = settings.premium_scan_limit if row["tier"] == "premium" else settings.free_scan_limit
-    used = row["scans_used"]
+    row = _subscription_row(owner_uid)
+    tier = str(row.get("tier") or "free").lower()
+    # Expire premium when renews_at is in the past (one-time PayMongo checkout model).
+    renews_at = row.get("renews_at")
+    if tier == "premium" and renews_at and str(renews_at) < _iso(_now()):
+        tier = "free"
+        row = {
+            **row,
+            "tier": "free",
+            "status": "expired",
+            "updated_at": _iso(_now()),
+        }
+        _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
+            {"tier": "free", "status": "expired", "updated_at": row["updated_at"]}
+        )
+    limit = settings.premium_scan_limit if tier == "premium" else settings.free_scan_limit
+    used = int(row.get("scans_used") or 0)
+    remaining = limit if settings.disable_scan_limit else max(limit - used, 0)
+    history = sorted(
+        _history_list(row),
+        key=lambda h: str(h.get("at") or ""),
+        reverse=True,
+    )
     return {
-        "tier": row["tier"], "limit": limit, "used": used,
-        "remaining": max(limit - used, 0), "reset_at": row["period_end"],
+        "tier": tier,
+        "status": row.get("status") or ("active" if tier == "premium" else "free"),
+        "billing_period": row.get("billing_period") or None,
+        "payment_method": row.get("payment_method") or None,
+        "renews_at": row.get("renews_at") or None,
+        "limit": limit,
+        "used": used,
+        "remaining": remaining,
+        "payment_issue": bool(row.get("payment_issue")),
+        "payment_issue_reason": row.get("payment_issue_reason") or None,
+        "provider": row.get("provider") or None,
+        "paymongo_subscription_id": row.get("paymongo_subscription_id") or None,
+        "reset_at": row.get("period_end"),
+        "history": history[:50],
     }
+
+
+def _append_history(owner_uid: str, entry: dict) -> None:
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+    row = ref.get() if ref else None
+    if not isinstance(row, dict):
+        row = _subscription_row(owner_uid)
+    history = _history_list(row)
+    history.insert(0, entry)
+    ref.update({"history": history[:100], "updated_at": entry.get("at") or _iso(_now())})
+
+
+def save_pending_checkout(
+    owner_uid: str,
+    *,
+    checkout_session_id: str,
+    billing_period: str,
+    reference_number: str,
+    amount_pesos: int,
+) -> None:
+    now = _iso(_now())
+    _reference(f"{ROOT}/paymongo_checkouts/{checkout_session_id}").set(
+        {
+            "id": checkout_session_id,
+            "owner_uid": owner_uid,
+            "billing_period": billing_period,
+            "reference_number": reference_number,
+            "amount": amount_pesos,
+            "status": "pending",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+
+
+def get_pending_checkout(checkout_session_id: str) -> dict | None:
+    row = _reference(f"{ROOT}/paymongo_checkouts/{checkout_session_id}").get()
+    return row if isinstance(row, dict) else None
+
+
+def activate_premium_from_payment(
+    owner_uid: str,
+    *,
+    billing_period: str,
+    payment_method: str | None,
+    amount_pesos: int | None,
+    checkout_session_id: str | None = None,
+    payment_id: str | None = None,
+    reference_number: str | None = None,
+) -> dict:
+    now = _now()
+    now_text = _iso(now)
+    period = "annual" if billing_period == "annual" else "monthly"
+    renews = now + (timedelta(days=365) if period == "annual" else timedelta(days=30))
+    start, end = _month_bounds(now)
+    patch = {
+        "tier": "premium",
+        "status": "active",
+        "billing_period": period,
+        "payment_method": payment_method or "paymongo",
+        "provider": "paymongo",
+        "renews_at": _iso(renews),
+        "period_start": start,
+        "period_end": end,
+        "scans_used": 0,
+        "last_checkout_session_id": checkout_session_id,
+        "last_payment_id": payment_id,
+        "last_reference_number": reference_number,
+        "updated_at": now_text,
+    }
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(patch)
+    _append_history(
+        owner_uid,
+        {
+            "id": payment_id or checkout_session_id or str(uuid.uuid4()),
+            "action": "subscribed",
+            "at": now_text,
+            "billing_period": period,
+            "payment_method": payment_method or "paymongo",
+            "amount": amount_pesos,
+            "checkout_session_id": checkout_session_id,
+            "payment_id": payment_id,
+            "reference_number": reference_number,
+        },
+    )
+    if checkout_session_id:
+        _reference(f"{ROOT}/paymongo_checkouts/{checkout_session_id}").update(
+            {
+                "status": "paid",
+                "payment_id": payment_id,
+                "updated_at": now_text,
+            }
+        )
+    if payment_id:
+        _reference(f"{ROOT}/paymongo_payments/{payment_id}").set(
+            {
+                "id": payment_id,
+                "owner_uid": owner_uid,
+                "checkout_session_id": checkout_session_id,
+                "billing_period": period,
+                "created_at": now_text,
+            }
+        )
+    return subscription_snapshot(owner_uid)
+
+
+def cancel_user_subscription(owner_uid: str, *, immediate: bool = True) -> dict:
+    now_text = _iso(_now())
+    row = _subscription_row(owner_uid)
+    if immediate:
+        patch = {
+            "tier": "free",
+            "status": "canceled",
+            "updated_at": now_text,
+        }
+    else:
+        patch = {
+            "status": "canceled",
+            "updated_at": now_text,
+        }
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(patch)
+    _append_history(
+        owner_uid,
+        {
+            "id": str(uuid.uuid4()),
+            "action": "canceled",
+            "at": now_text,
+            "billing_period": row.get("billing_period"),
+            "payment_method": row.get("payment_method"),
+            "amount": None,
+        },
+    )
+    return subscription_snapshot(owner_uid)
+
+
+def mark_checkout_failed(checkout_session_id: str, reason: str | None = None) -> None:
+    ref = _reference(f"{ROOT}/paymongo_checkouts/{checkout_session_id}")
+    row = ref.get()
+    if not isinstance(row, dict):
+        return
+    ref.update(
+        {
+            "status": "failed",
+            "failure_reason": (reason or "")[:500],
+            "updated_at": _iso(_now()),
+        }
+    )
+
+
+def claim_webhook_event(event_id: str, event_type: str) -> bool:
+    """Return True if this event should be processed (first claim). False if already done."""
+    if not event_id:
+        return True
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in event_id)[:200]
+    ref = _reference(f"{ROOT}/paymongo_events/{safe}")
+    existing = ref.get()
+    if isinstance(existing, dict) and existing.get("status") == "processed":
+        return False
+    now = _iso(_now())
+    ref.set(
+        {
+            "id": event_id,
+            "type": event_type,
+            "status": "processing",
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    return True
+
+
+def complete_webhook_event(event_id: str) -> None:
+    if not event_id:
+        return
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in event_id)[:200]
+    _reference(f"{ROOT}/paymongo_events/{safe}").update(
+        {"status": "processed", "updated_at": _iso(_now())}
+    )
+
+
+def link_paymongo_subscription(subscription_id: str, owner_uid: str) -> None:
+    if not subscription_id or not owner_uid:
+        return
+    now = _iso(_now())
+    _reference(f"{ROOT}/paymongo_subscriptions/{subscription_id}").set(
+        {"id": subscription_id, "owner_uid": owner_uid, "updated_at": now, "created_at": now}
+    )
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
+        {"paymongo_subscription_id": subscription_id, "updated_at": now}
+    )
+
+
+def get_uid_for_paymongo_subscription(subscription_id: str) -> str | None:
+    if not subscription_id:
+        return None
+    row = _reference(f"{ROOT}/paymongo_subscriptions/{subscription_id}").get()
+    if isinstance(row, dict) and row.get("owner_uid"):
+        return str(row["owner_uid"])
+    return None
+
+
+def get_uid_for_payment(payment_id: str) -> str | None:
+    if not payment_id:
+        return None
+    row = _reference(f"{ROOT}/paymongo_payments/{payment_id}").get()
+    if isinstance(row, dict) and row.get("owner_uid"):
+        return str(row["owner_uid"])
+    return None
+
+
+def flag_payment_issue(owner_uid: str, *, reason: str, event_type: str) -> None:
+    now = _iso(_now())
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
+        {
+            "payment_issue": True,
+            "payment_issue_reason": (reason or event_type)[:500],
+            "payment_issue_at": now,
+            # Keep tier as-is (grace). Surface status for banners.
+            "status": "past_due",
+            "updated_at": now,
+        }
+    )
+    _append_history(
+        owner_uid,
+        {
+            "id": str(uuid.uuid4()),
+            "action": "payment_issue",
+            "at": now,
+            "billing_period": None,
+            "payment_method": None,
+            "amount": None,
+            "reason": (reason or event_type)[:200],
+        },
+    )
+
+
+def renew_premium_period(
+    owner_uid: str,
+    *,
+    billing_period: str,
+    payment_id: str | None,
+    amount_pesos: int | None,
+) -> dict:
+    now = _now()
+    now_text = _iso(now)
+    period = "annual" if billing_period == "annual" else "monthly"
+    renews = now + (timedelta(days=365) if period == "annual" else timedelta(days=30))
+    start, end = _month_bounds(now)
+    patch = {
+        "tier": "premium",
+        "status": "active",
+        "payment_issue": False,
+        "payment_issue_reason": None,
+        "billing_period": period,
+        "renews_at": _iso(renews),
+        "period_start": start,
+        "period_end": end,
+        "scans_used": 0,
+        "last_payment_id": payment_id,
+        "updated_at": now_text,
+    }
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(patch)
+    if payment_id:
+        _reference(f"{ROOT}/paymongo_payments/{payment_id}").set(
+            {
+                "id": payment_id,
+                "owner_uid": owner_uid,
+                "billing_period": period,
+                "created_at": now_text,
+            }
+        )
+    _append_history(
+        owner_uid,
+        {
+            "id": payment_id or str(uuid.uuid4()),
+            "action": "renewed",
+            "at": now_text,
+            "billing_period": period,
+            "payment_method": "paymongo",
+            "amount": amount_pesos,
+            "payment_id": payment_id,
+        },
+    )
+    return subscription_snapshot(owner_uid)
+
+
+def downgrade_to_free_from_payment(
+    payment_id: str | None,
+    *,
+    owner_uid: str | None = None,
+    reason: str = "refund",
+) -> dict | None:
+    uid = owner_uid or (get_uid_for_payment(payment_id) if payment_id else None)
+    if not uid:
+        return None
+    now_text = _iso(_now())
+    _reference(f"{ROOT}/subscriptions/{uid}").update(
+        {
+            "tier": "free",
+            "status": "refunded" if "refund" in reason else "unpaid",
+            "payment_issue": False,
+            "payment_issue_reason": None,
+            "updated_at": now_text,
+        }
+    )
+    _append_history(
+        uid,
+        {
+            "id": payment_id or str(uuid.uuid4()),
+            "action": "downgraded",
+            "at": now_text,
+            "billing_period": None,
+            "payment_method": None,
+            "amount": None,
+            "reason": reason[:200],
+            "payment_id": payment_id,
+        },
+    )
+    return subscription_snapshot(uid)
+
+
+def sync_subscription_fields(owner_uid: str, resource: dict) -> None:
+    attrs = resource.get("attributes") if isinstance(resource.get("attributes"), dict) else {}
+    patch: dict = {"updated_at": _iso(_now())}
+    status = attrs.get("status")
+    if status:
+        patch["provider_status"] = str(status)[:80]
+    meta = attrs.get("metadata") if isinstance(attrs.get("metadata"), dict) else {}
+    period = meta.get("billing_period")
+    if period in ("monthly", "annual"):
+        patch["billing_period"] = period
+    sub_id = resource.get("id")
+    if sub_id:
+        patch["paymongo_subscription_id"] = str(sub_id)
+        link_paymongo_subscription(str(sub_id), owner_uid)
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(patch)
+
+
+def log_merchant_event(event_type: str, resource: dict) -> None:
+    event_id = str(resource.get("id") or uuid.uuid4())
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in f"{event_type}_{event_id}")[:200]
+    _reference(f"{ROOT}/paymongo_merchant_log/{safe}").set(
+        {
+            "type": event_type,
+            "resource_id": resource.get("id"),
+            "at": _iso(_now()),
+            "snapshot": {
+                "id": resource.get("id"),
+                "type": resource.get("type"),
+            },
+        }
+    )
 
 
 def require_premium(owner_uid: str) -> None:
@@ -536,7 +821,7 @@ def check_scan_eligibility(owner_uid: str, manuscript_id: str, version_id: str) 
         raise LookupError("Manuscript not found.")
     if sub["tier"] != "premium" and not current:
         raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"])
-    if sub["used"] >= sub["limit"]:
+    if not settings.disable_scan_limit and sub["used"] >= sub["limit"]:
         raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"])
     return sub
 
@@ -551,75 +836,77 @@ def persist_scan(
     sections: list[dict],
 ) -> dict:
     scan_id, created = str(uuid.uuid4()), _iso(_now())
-    with _write_lock, connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        sub = _subscription(conn, owner_uid)
-        limit = settings.premium_scan_limit if sub["tier"] == "premium" else settings.free_scan_limit
-        current = conn.execute(
-            "SELECT current_version_id FROM manuscripts WHERE id = ? AND owner_uid = ?",
-            (manuscript_id, owner_uid),
-        ).fetchone()
-        version = conn.execute(
-            """SELECT 1 FROM manuscript_versions
-               WHERE id = ? AND manuscript_id = ?""", (version_id, manuscript_id)
-        ).fetchone()
-        mechanics = conn.execute(
-            "SELECT 1 FROM mechanics WHERE id = ? AND owner_uid = ?", (mechanics_id, owner_uid)
-        ).fetchone()
-        if not current or not version or not mechanics:
-            conn.rollback()
-            raise LookupError("Requested scan input was not found.")
-        if (sub["tier"] != "premium" and current["current_version_id"] != version_id) or sub["scans_used"] >= limit:
-            conn.rollback()
-            raise UpgradeRequired(sub["tier"], limit, sub["scans_used"])
-        conn.execute(
-            """INSERT INTO compliance_scans
-               (id, owner_uid, manuscript_version_id, mechanics_id, overall_score, issues_json, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (scan_id, owner_uid, version_id, mechanics_id, overall_score, json.dumps(issues), created),
+    sub = _subscription_row(owner_uid)
+    limit = settings.premium_scan_limit if sub.get("tier") == "premium" else settings.free_scan_limit
+    manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
+    version = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
+    mechanics = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}").get()
+    if not isinstance(manuscript, dict) or not isinstance(version, dict) or not isinstance(mechanics, dict):
+        raise LookupError("Requested scan input was not found.")
+
+    old_version = sub.get("tier") != "premium" and manuscript.get("current_version_id") != version_id
+    limit_hit = (not settings.disable_scan_limit) and int(sub.get("scans_used") or 0) >= limit
+    if old_version or limit_hit:
+        raise UpgradeRequired(sub.get("tier") or "free", limit, int(sub.get("scans_used") or 0))
+
+    scan = {
+        "id": scan_id,
+        "owner_uid": owner_uid,
+        "manuscript_version_id": version_id,
+        "mechanics_id": mechanics_id,
+        "overall_score": float(overall_score),
+        "issues": issues,
+        "created_at": created,
+    }
+    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(scan)
+
+    for index, section in enumerate(sections):
+        check = {
+            "id": str(index + 1),
+            "section_name": section["section"],
+            "formatting_score": float(section["formatting_score"]),
+            "issue_count": int(section["issue_count"]),
+            "issues": section.get("issues") or [],
+        }
+        _reference(
+            f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}/{check['id']}"
+        ).set(check)
+
+    if not settings.disable_scan_limit:
+        _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
+            {
+                "scans_used": int(sub.get("scans_used") or 0) + 1,
+                "updated_at": created,
+            }
         )
-        for section in sections:
-            conn.execute(
-                """INSERT INTO section_formatting_checks
-                   (scan_id, section_name, formatting_score, issue_count, issues_json)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (
-                    scan_id, section["section"], section["formatting_score"],
-                    section["issue_count"], json.dumps(section.get("issues", [])),
-                ),
-            )
-        conn.execute(
-            "UPDATE subscriptions SET scans_used = scans_used + 1, updated_at = ? WHERE owner_uid = ?",
-            (created, owner_uid),
-        )
-        conn.commit()
     return get_scan(owner_uid, scan_id)
 
 
 def get_scan(owner_uid: str, scan_id: str) -> dict | None:
-    with connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM compliance_scans WHERE id = ? AND owner_uid = ?", (scan_id, owner_uid)
-        ).fetchone()
-        if not row:
-            return None
-        section_rows = conn.execute(
-            """SELECT section_name, formatting_score, issue_count, issues_json
-               FROM section_formatting_checks WHERE scan_id = ? ORDER BY id""",
-            (scan_id,),
-        ).fetchall()
+    row = _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").get()
+    if not isinstance(row, dict):
+        return None
+    checks = _reference(f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}").get() or {}
+    section_items = []
+    if isinstance(checks, dict):
+        ordered = sorted(checks.values(), key=lambda c: int((c or {}).get("id") or 0))
+        for item in ordered:
+            if not isinstance(item, dict):
+                continue
+            section_items.append(
+                {
+                    "section": item.get("section_name"),
+                    "formatting_score": round(float(item.get("formatting_score") or 0), 2),
+                    "issue_count": int(item.get("issue_count") or 0),
+                    "issues": item.get("issues") or [],
+                }
+            )
     return {
-        "id": row["id"], "manuscript_version_id": row["manuscript_version_id"],
-        "mechanics_id": row["mechanics_id"], "overall_score": round(float(row["overall_score"]), 2),
-        "issues": _loads(row["issues_json"]),
-        "sections": [
-            {
-                "section": item["section_name"],
-                "formatting_score": round(float(item["formatting_score"]), 2),
-                "issue_count": item["issue_count"],
-                "issues": _loads(item["issues_json"]),
-            }
-            for item in section_rows
-        ],
-        "created_at": row["created_at"],
+        "id": row["id"],
+        "manuscript_version_id": row["manuscript_version_id"],
+        "mechanics_id": row["mechanics_id"],
+        "overall_score": round(float(row.get("overall_score") or 0), 2),
+        "issues": row.get("issues") or [],
+        "sections": section_items,
+        "created_at": row.get("created_at"),
     }

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm install --prefix PaperPilot-main/web && npm run build --prefix PaperPilot-main/web",
+  "outputDirectory": "PaperPilot-main/web/dist",
+  "installCommand": "npm install --prefix PaperPilot-main/web",
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300,
+      "includeFiles": "{PaperPilot-main/api/app/**,PaperPilot-main/api/requirements.txt}"
+    },
+    "api/webhooks/paymongo.py": {
+      "maxDuration": 30,
+      "includeFiles": "{PaperPilot-main/api/app/**,PaperPilot-main/api/requirements.txt}"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/((?!webhooks(?:/|$)).*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/api",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/((?!api(?:/|$)).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

@@ -164,7 +164,7 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
   const [severityFilter, setSeverityFilter] = useState(null);
   const [selectedPage, setSelectedPage] = useState("all");
 
-  const { entries } = useMemo(
+  const { entries, pageCount } = useMemo(
     () => normalizeDetectedIssues(formatChecks, pageCountProp),
     [formatChecks, pageCountProp]
   );
@@ -178,13 +178,11 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
   }, [entries]);
 
   const pages = useMemo(() => {
-    const sourceEntries = severityFilter
-      ? entries.filter((e) => e.severity === severityFilter)
-      : entries;
-    return [...new Set(sourceEntries.map((e) => e.page).filter((p) => p != null))].sort(
-      (a, b) => a - b
-    );
-  }, [entries, severityFilter]);
+    const fromIssues = entries.map((e) => e.page).filter((p) => p != null);
+    const total = Math.max(Number(pageCountProp) || 0, pageCount, ...fromIssues, 0);
+    if (total > 0) return Array.from({ length: total }, (_, i) => i + 1);
+    return [...new Set(fromIssues)].sort((a, b) => a - b);
+  }, [entries, pageCount, pageCountProp]);
 
   useEffect(() => {
     setSeverityFilter(null);

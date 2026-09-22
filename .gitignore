@@ -3,3 +3,4 @@ paperpilotv6-firebase-adminsdk-*.json
 **/node_modules/
 **/.expo/
 **/dist/
+.vercel

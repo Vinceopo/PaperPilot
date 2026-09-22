@@ -298,6 +298,27 @@ export function getSubscription() {
   return authorizedFetch("/subscription");
 }
 
+/** Create PayMongo Hosted Checkout for Premium (never send card data to our API). */
+export function subscribeToPlan({ plan = "premium", billingPeriod = "monthly" } = {}) {
+  return authorizedFetch("/subscription/subscribe", {
+    method: "POST",
+    body: JSON.stringify({
+      plan,
+      billing_period: billingPeriod,
+    }),
+  });
+}
+
+export function createSubscriptionCheckout({ billingPeriod = "monthly" } = {}) {
+  return authorizedFetch("/subscription/create-checkout", {
+    method: "POST",
+    body: JSON.stringify({
+      plan: "premium",
+      billing_period: billingPeriod,
+    }),
+  });
+}
+
 export function itemsFrom(data, key) {
   if (Array.isArray(data)) return data;
   return data?.[key] || data?.items || [];

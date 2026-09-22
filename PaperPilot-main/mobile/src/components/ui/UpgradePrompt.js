@@ -20,7 +20,7 @@ export default function UpgradePrompt({ message, onClose, onUpgrade }) {
             </Pressable>
             <View style={styles.flex}>
               <PrimaryButton
-                title="View plans"
+                title="Upgrade with PayMongo"
                 onPress={() => {
                   onClose?.();
                   onUpgrade?.();

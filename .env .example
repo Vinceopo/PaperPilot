@@ -1,0 +1,17 @@
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
+# Production: keep VITE_API_URL=/api (same-origin). Never set an absolute API host
+# in Vercel → Environment Variables — it gets baked into the client bundle.
+VITE_API_URL=/api
+# PayMongo (server-only). Never expose secret/webhook keys to the web client.
+# Dashboard → Developers → API Keys / Webhooks
+PAYMONGO_SECRET_KEY=
+PAYMONGO_WEBHOOK_SECRET=
+PAYMONGO_PAYMENT_METHODS=card,gcash,paymaya,grab_pay,qrph
+APP_PUBLIC_URL=https://paperpilotph.vercel.app
+# Webhook Endpoint URL must be:
+#   https://paperpilotph.vercel.app/api/webhooks/paymongo

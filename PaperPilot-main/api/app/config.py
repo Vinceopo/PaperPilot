@@ -11,7 +11,11 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
+    cors_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174,"
+        "https://paperpilotph.vercel.app"
+    )
 
     smtp_host: str = ""
     smtp_port: int = 587
@@ -41,7 +45,21 @@ class Settings(BaseSettings):
     firebase_database_url: str = ""
     free_scan_limit: int = 3
     premium_scan_limit: int = 50
-    max_upload_bytes: int = 25_000_000
+    # TEMP testing bypass. Set False when asked to restore the monthly scan cap.
+    disable_scan_limit: bool = True
+    max_upload_bytes: int = 40_000_000
+
+    cloudinary_cloud_name: str = ""
+    cloudinary_api_key: str = ""
+    cloudinary_api_secret: str = ""
+    cloudinary_upload_preset: str = "uploaded_docs"
+
+    # PayMongo (server-only). Secret key creates Checkout Sessions; webhook secret verifies events.
+    paymongo_secret_key: str = ""
+    paymongo_webhook_secret: str = ""
+    paymongo_payment_methods: str = "card,gcash,paymaya,grab_pay,qrph"
+    # Public web app URL used for Checkout success/cancel redirects.
+    app_public_url: str = "https://paperpilotph.vercel.app"
 
 
 settings = Settings()

@@ -7,7 +7,14 @@ from pathlib import Path
 
 import fitz
 from docx import Document
+from docx.document import Document as DocxDocument
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+from docx.table import Table
+from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 
 class DocumentError(ValueError):
@@ -68,7 +75,7 @@ def _parse_pdf(data: bytes) -> dict:
                             "font": span.get("font"),
                             "size": round(float(span.get("size", 0)), 2),
                             "bold": bool(int(span.get("flags", 0)) & 16),
-                            "italic": bool(int(span.get("flags", 0)) & 2),
+                            "color": span.get("color"),
                             "bbox": [round(float(value), 2) for value in span.get("bbox", [])],
                         }
                         for span in source_line.get("spans", [])
@@ -107,6 +114,7 @@ def _parse_pdf(data: bytes) -> dict:
             "pagination_fidelity": "fixed_source_pages",
             "page_count": len(pages),
             "indexing": "page_index and line_index are fixed zero-based source indexes",
+            "includes": "every PDF page, including headers, footers, and table text",
         },
         "pages": pages,
     }
@@ -116,71 +124,300 @@ def _length_inches(value) -> float | None:
     return round(value.inches, 3) if value is not None else None
 
 
+def _docx_alignment(paragraph) -> str | None:
+    align = paragraph.alignment
+    if align is None and paragraph.style is not None:
+        align = paragraph.style.paragraph_format.alignment
+    mapping = {
+        WD_ALIGN_PARAGRAPH.LEFT: "left",
+        WD_ALIGN_PARAGRAPH.CENTER: "center",
+        WD_ALIGN_PARAGRAPH.RIGHT: "right",
+        WD_ALIGN_PARAGRAPH.JUSTIFY: "justify",
+    }
+    return mapping.get(align)
+
+
+def _docx_line_spacing(formatting) -> float | None:
+    rule = formatting.line_spacing_rule
+    if rule == WD_LINE_SPACING.ONE_POINT_FIVE:
+        return 1.5
+    if rule == WD_LINE_SPACING.DOUBLE:
+        return 2.0
+    if rule == WD_LINE_SPACING.SINGLE:
+        return 1.0
+    value = formatting.line_spacing
+    if isinstance(value, (int, float)):
+        return round(float(value), 3)
+    return None
+
+
+def _iter_block_element(element, container):
+    for child in element.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, container)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, container)
+        elif child.tag == qn("w:sdt"):
+            content = child.find(qn("w:sdtContent"))
+            if content is not None:
+                yield from _iter_block_element(content, container)
+        elif child.tag in {qn("w:sdtContent"), qn("w:customXml")}:
+            yield from _iter_block_element(child, container)
+
+
+def _iter_docx_block_items(parent):
+    if isinstance(parent, DocxDocument):
+        element = parent.element.body
+        container = parent
+    elif hasattr(parent, "_tc"):
+        element = parent._tc
+        container = parent
+    else:
+        element = parent._element
+        container = parent
+    yield from _iter_block_element(element, container)
+
+
+def _run_inside_excluded(run_el, stop_el) -> bool:
+    parent = run_el.getparent()
+    skip = {qn("w:drawing"), qn("w:txbxContent"), qn("w:pict"), qn("w:del")}
+    while parent is not None and parent is not stop_el:
+        if parent.tag in skip:
+            return True
+        parent = parent.getparent()
+    return False
+
+
+def _docx_run_elements(paragraph):
+    for run_el in paragraph._element.iter(qn("w:r")):
+        if not _run_inside_excluded(run_el, paragraph._element):
+            yield run_el
+
+
+def _related_parts(document, needle: str):
+    rels = getattr(document.part, "rels", None)
+    if not rels:
+        return
+    for rel in rels.values():
+        reltype = str(getattr(rel, "reltype", "") or "")
+        if needle not in reltype:
+            continue
+        try:
+            yield rel.target_part
+        except Exception:
+            continue
+
+
+def _docx_run_font_name(run, paragraph) -> str | None:
+    name = run.font.name
+    if name:
+        return name
+    try:
+        rpr = run._element.rPr
+        if rpr is not None:
+            rfonts = rpr.rFonts
+            if rfonts is not None:
+                for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
+                    value = rfonts.get(qn(f"w:{attr}"))
+                    if value and not _is_docx_decorative_font(value):
+                        return value
+                for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
+                    value = rfonts.get(qn(f"w:{attr}"))
+                    if value:
+                        return value
+    except Exception:
+        pass
+    try:
+        style = paragraph.style
+        while style is not None:
+            if style.font and style.font.name:
+                return style.font.name
+            style = style.base_style
+    except Exception:
+        pass
+    return None
+
+
+def _is_docx_decorative_font(name: str | None) -> bool:
+    return bool(name and re.search(
+        r"(emoji|symbol|wingdings|webdings|marlett|dingbat|barra?code|icon)",
+        str(name),
+        re.I,
+    ))
+
+
+def _docx_run_font_size(run, paragraph) -> float | None:
+    if run.font.size:
+        return round(run.font.size.pt, 2)
+    try:
+        rpr = run._element.rPr
+        if rpr is not None and rpr.sz is not None and rpr.sz.val is not None:
+            return round(float(rpr.sz.val) / 2.0, 2)
+    except Exception:
+        pass
+    try:
+        style = paragraph.style
+        while style is not None:
+            if style.font and style.font.size:
+                return round(style.font.size.pt, 2)
+            style = style.base_style
+    except Exception:
+        pass
+    return None
+
+
+def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, source: str):
+    runs: list[dict] = []
+    page_break_total = 0
+    for run_index, run_el in enumerate(_docx_run_elements(paragraph)):
+        run = Run(run_el, paragraph)
+        page_break_count = 0
+        line_break_count = 0
+        for br in run._element.iter(qn("w:br")):
+            break_type = br.get(qn("w:type"))
+            if break_type == "page":
+                page_break_count += 1
+            else:
+                line_break_count += 1
+        rendered_page_breaks = len(list(run._element.iter(qn("w:lastRenderedPageBreak"))))
+        page_break_total += page_break_count + rendered_page_breaks
+        rgb = None
+        try:
+            if run.font.color and run.font.color.rgb:
+                rgb = str(run.font.color.rgb)
+        except Exception:
+            rgb = None
+        runs.append(
+            {
+                "text": run.text,
+                "font": _docx_run_font_name(run, paragraph),
+                "size": _docx_run_font_size(run, paragraph),
+                "bold": run.bold,
+                "italic": run.italic,
+                "color": rgb,
+                "style": run.style.name if run.style else None,
+                "page_breaks": page_break_count,
+                "rendered_page_breaks": rendered_page_breaks,
+                "line_breaks": line_break_count,
+                "run_index": run_index,
+            }
+        )
+    source_lines = paragraph.text.splitlines() or [""]
+    lines = []
+    collected = []
+    for text in source_lines:
+        lines.append({"line_index": line_index, "text": text})
+        collected.append(text)
+        line_index += 1
+    formatting = paragraph.paragraph_format
+    record = {
+        "paragraph_index": paragraph_index,
+        "source": source,
+        "style": paragraph.style.name if paragraph.style else None,
+        "text": paragraph.text,
+        "lines": lines,
+        "runs": runs,
+        "formatting": {
+            "line_spacing": _docx_line_spacing(formatting),
+            "alignment": _docx_alignment(paragraph),
+            "space_before_points": (
+                round(formatting.space_before.pt, 2) if formatting.space_before else None
+            ),
+            "space_after_points": (
+                round(formatting.space_after.pt, 2) if formatting.space_after else None
+            ),
+            "first_line_indent_inches": _length_inches(formatting.first_line_indent),
+            "left_indent_inches": _length_inches(formatting.left_indent),
+            "right_indent_inches": _length_inches(formatting.right_indent),
+            "page_break_before": formatting.page_break_before,
+        },
+    }
+    return record, line_index, page_break_total, collected
+
+
+def _append_docx_paragraph(paragraphs, all_lines, breaks, paragraph, paragraph_index, line_index, source):
+    record, line_index, page_breaks, collected = _docx_paragraph_record(
+        paragraph, paragraph_index, line_index, source
+    )
+    paragraphs.append(record)
+    all_lines.extend(collected)
+    if page_breaks:
+        breaks.append({"paragraph_index": paragraph_index, "source": source, "count": page_breaks})
+    return line_index
+
+
 def _parse_docx(data: bytes) -> dict:
     document = Document(io.BytesIO(data))
     paragraphs: list[dict] = []
     all_lines: list[str] = []
     explicit_page_breaks: list[dict] = []
     line_index = 0
-    for paragraph_index, paragraph in enumerate(document.paragraphs):
-        runs: list[dict] = []
-        for run_index, run in enumerate(paragraph.runs):
-            page_break_count = 0
-            line_break_count = 0
-            for br in run._element.iter(qn("w:br")):
-                break_type = br.get(qn("w:type"))
-                if break_type == "page":
-                    page_break_count += 1
-                    explicit_page_breaks.append(
-                        {"paragraph_index": paragraph_index, "run_index": run_index}
-                    )
-                else:
-                    line_break_count += 1
-            runs.append(
-                {
-                    "text": run.text,
-                    "font": run.font.name,
-                    "size": round(run.font.size.pt, 2) if run.font.size else None,
-                    "bold": run.bold,
-                    "italic": run.italic,
-                    "style": run.style.name if run.style else None,
-                    "page_breaks": page_break_count,
-                    "line_breaks": line_break_count,
-                }
-            )
-        source_lines = paragraph.text.splitlines() or [""]
-        lines = []
-        for text in source_lines:
-            lines.append({"line_index": line_index, "text": text})
-            all_lines.append(text)
-            line_index += 1
-        formatting = paragraph.paragraph_format
-        paragraphs.append(
-            {
-                "paragraph_index": paragraph_index,
-                "style": paragraph.style.name if paragraph.style else None,
-                "text": paragraph.text,
-                "lines": lines,
-                "runs": runs,
-                "formatting": {
-                    "line_spacing": (
-                        round(float(formatting.line_spacing), 3)
-                        if isinstance(formatting.line_spacing, (int, float))
-                        else None
-                    ),
-                    "space_before_points": (
-                        round(formatting.space_before.pt, 2) if formatting.space_before else None
-                    ),
-                    "space_after_points": (
-                        round(formatting.space_after.pt, 2) if formatting.space_after else None
-                    ),
-                    "first_line_indent_inches": _length_inches(formatting.first_line_indent),
-                    "left_indent_inches": _length_inches(formatting.left_indent),
-                    "right_indent_inches": _length_inches(formatting.right_indent),
-                    "page_break_before": formatting.page_break_before,
-                },
-            }
+    paragraph_index = 0
+    seen_cells: set = set()
+    seen_paragraphs: set = set()
+
+    def consume_paragraph(paragraph, source: str) -> None:
+        nonlocal line_index, paragraph_index
+        element = paragraph._element
+        if element in seen_paragraphs:
+            return
+        seen_paragraphs.add(element)
+        line_index = _append_docx_paragraph(
+            paragraphs, all_lines, explicit_page_breaks, paragraph, paragraph_index, line_index, source
         )
+        paragraph_index += 1
+
+    def consume_table(table, source: str) -> None:
+        for row in table.rows:
+            for cell in row.cells:
+                cell_el = cell._tc
+                if cell_el in seen_cells:
+                    continue
+                seen_cells.add(cell_el)
+                consume_parent(cell, source)
+
+    def consume_parent(parent, source: str) -> None:
+        for block in _iter_docx_block_items(parent):
+            if isinstance(block, Paragraph):
+                consume_paragraph(block, source)
+            else:
+                consume_table(block, "table" if source == "body" else source)
+
+    def consume_textboxes(root, container, source: str) -> None:
+        for txbx in root.iter(qn("w:txbxContent")):
+            for block in _iter_block_element(txbx, container):
+                if isinstance(block, Paragraph):
+                    consume_paragraph(block, source)
+                else:
+                    consume_table(block, source)
+
+    consume_parent(document, "body")
+    consume_textboxes(document.element, document, "textbox")
+
+    for section in document.sections:
+        for source, part in (("header", section.header), ("footer", section.footer)):
+            try:
+                consume_parent(part, source)
+                consume_textboxes(part._element, part, source)
+            except Exception:
+                continue
+
+    for needle, source in (("footnotes", "footnote"), ("endnotes", "endnote")):
+        for part in _related_parts(document, needle):
+            try:
+                root = part.element
+            except Exception:
+                continue
+            for note in root.iterchildren():
+                note_type = note.get(qn("w:type"))
+                if note_type in {"separator", "continuationSeparator"}:
+                    continue
+                for block in _iter_block_element(note, document):
+                    if isinstance(block, Paragraph):
+                        consume_paragraph(block, source)
+                    else:
+                        consume_table(block, source)
+
     sections = [
         {
             "section_index": index,
@@ -197,13 +434,16 @@ def _parse_docx(data: bytes) -> dict:
         "text": "\n".join(all_lines).strip(),
         "metadata": {
             "format": "docx",
-            "pagination_fidelity": "explicit_breaks_only_no_static_layout",
-            "pagination_note": (
-                "DOCX pagination depends on the rendering engine, fonts, and printer settings; "
-                "page locations cannot be inferred reliably without rendering."
-            ),
+            "pagination_fidelity": "word_rendered_breaks_when_present_else_estimated",
             "explicit_page_break_count": len(explicit_page_breaks),
+            "paragraph_count": len(paragraphs),
             "line_indexing": "line_index is document-flow based and zero-based",
+            "includes": "body, tables, headers, footers, text boxes, footnotes, and endnotes",
+            "rendered_page_break_count": sum(
+                int(run.get("rendered_page_breaks") or 0)
+                for paragraph in paragraphs
+                for run in (paragraph.get("runs") or [])
+            ),
         },
         "paragraphs": paragraphs,
         "sections": sections,
@@ -597,7 +837,9 @@ def derive_mechanics_rules(text: str) -> dict:
             if style:
                 rules["citation_style"] = style.group(1).upper()
 
-    return rules
+    from app.mechanics_ml import enrich_mechanics_rules
+
+    return enrich_mechanics_rules(text, rules)
 
 
 def normalize_mechanics_rules(raw: dict | None) -> dict:

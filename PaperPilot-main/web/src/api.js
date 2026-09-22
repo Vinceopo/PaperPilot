@@ -1,7 +1,28 @@
 import { auth } from "./firebase.js";
 import { uploadToCloudinary } from "./lib/cloudinaryUpload.js";
 
-const API = import.meta.env.VITE_API_URL || "/api";
+/**
+ * Production (Vercel): always same-origin `/api` — frontend and serverless share one host.
+ * Absolute VITE_API_URL values are ignored in production builds (common stale-dashboard bug).
+ *
+ * Local Vite: `/api` is proxied by vite.config.js to VITE_API_PROXY_TARGET
+ * (default http://127.0.0.1:8000). VITE_API_PROXY_TARGET is never used in production.
+ */
+function resolveApiBase() {
+  const raw = String(import.meta.env.VITE_API_URL || "/api")
+    .trim()
+    .replace(/\/$/, "");
+  if (import.meta.env.PROD) {
+    if (!raw || raw.startsWith("/")) return raw || "/api";
+    console.warn(
+      `[PaperPilot] Ignoring absolute VITE_API_URL in production ("${raw}"). Using same-origin /api.`
+    );
+    return "/api";
+  }
+  return raw || "/api";
+}
+
+const API = resolveApiBase();
 
 function detailMessage(err, fallback) {
   const detail = err?.detail;
@@ -11,13 +32,38 @@ function detailMessage(err, fallback) {
   return fallback;
 }
 
+function unreachableMessage(status) {
+  // Note: a failed fetch does NOT mean /api is undeployed — curl often still works.
+  // Common causes: Python cold-start, brief network blip, or tab sleep mid-request.
+  if (import.meta.env.PROD) {
+    if (status === 502 || status === 503 || status === 504) {
+      return (
+        `PaperPilot API returned ${status} (cold start or overload). ` +
+        "Wait a few seconds and try again."
+      );
+    }
+    if (status) {
+      return `PaperPilot API returned ${status}. Try again in a moment.`;
+    }
+    return (
+      "Could not complete the API request (network interruption or cold start). " +
+      "Wait a few seconds and retry — /api is deployed on this site."
+    );
+  }
+  if (API.startsWith("/")) {
+    return (
+      "Cannot reach the PaperPilot API through the Vite /api proxy. " +
+      "Start the local API (`npm run dev` from PaperPilot-main) or set " +
+      "VITE_API_PROXY_TARGET=http://127.0.0.1:8000 in web/.env."
+    );
+  }
+  return `Cannot reach the PaperPilot API at ${API}. Check your network connection and try again.`;
+}
+
 function networkError(err) {
   const msg = String(err?.message || "");
   if (err?.name === "TypeError" || /failed to fetch|networkerror|load failed/i.test(msg)) {
-    return new ApiError(
-      "Cannot reach the PaperPilot server. Start the API on port 8000 and try again.",
-      0
-    );
+    return new ApiError(unreachableMessage(0), 0);
   }
   return err;
 }
@@ -37,8 +83,8 @@ async function responseData(res) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const fallback =
-      res.status === 502 || res.status === 503 || res.statusText === "Internal Server Error"
-        ? "Cannot reach the PaperPilot server. Make sure the API is running on port 8000."
+      res.status === 502 || res.status === 503
+        ? unreachableMessage(res.status)
         : res.statusText || "Request failed.";
     const retryHeader = res.headers.get("Retry-After");
     const retryAfter =
@@ -50,9 +96,15 @@ async function responseData(res) {
   return data;
 }
 
+/** Join API base with a path that always starts with `/`. */
+function apiUrl(path) {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${API}${p}`;
+}
+
 async function postJson(path, body) {
   try {
-    const res = await fetch(`${API}${path}`, {
+    const res = await fetch(apiUrl(path), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -73,8 +125,8 @@ async function authorizedFetch(path, options = {}) {
     headers.set("Content-Type", "application/json");
   }
   try {
-    const res = await fetch(`${API}${path}`, { ...options, headers });
-    // Only clear the session when Firebase says the token itself is invalid —
+    const res = await fetch(apiUrl(path), { ...options, headers });
+    // Only clear the session when Firebase says the token itself is invalid â€”
     // a backend 401 (misconfig, expired server session, etc.) must not force logout.
     if (res.status === 401 && auth?.currentUser) {
       try {
@@ -96,7 +148,6 @@ async function authorizedFetch(path, options = {}) {
 export async function analyzeManuscript({ title, abstract, text }) {
   return postJson("/analyze", { title, abstract, text });
 }
-
 export async function extractPdf(file) {
   const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
   return postJson("/extract-pdf", {
@@ -155,7 +206,28 @@ export function listMechanics() {
   return authorizedFetch("/mechanics");
 }
 
+/**
+ * Wake the Vercel Python /api function before parallel dashboard calls.
+ * Retries briefly through cold-start 502/503 windows; never throws.
+ */
+export async function warmApi({ attempts = 4, delayMs = 1500 } = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const res = await fetch(apiUrl("/health"), { method: "GET" });
+      if (res.ok) return true;
+    } catch {
+      // keep trying
+    }
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  return false;
+}
+
 export async function extractMechanics(file) {
+  // Avoid racing a Python cold-start on the first authenticated call.
+  await warmApi({ attempts: 2, delayMs: 1000 });
   const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
   return authorizedFetch("/mechanics/extract", {
     method: "POST",
@@ -221,7 +293,7 @@ export async function downloadSampleMechanics() {
     headers.set("Authorization", `Bearer ${await user.getIdToken()}`);
   }
   try {
-    const res = await fetch(`${API}/mechanics/sample`, { headers });
+    const res = await fetch(apiUrl("/mechanics/sample"), { headers });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       throw new ApiError(detailMessage(data, "Could not download sample mechanics."), res.status, data.detail);
@@ -317,6 +389,18 @@ export function cancelSubscription({ immediate = true } = {}) {
   return authorizedFetch("/subscription/cancel", {
     method: "POST",
     body: JSON.stringify({ immediate }),
+  });
+}
+
+
+/** Explicit checkout alias (same as subscribeToPlan for premium). */
+export function createSubscriptionCheckout({ billingPeriod } = {}) {
+  return authorizedFetch("/subscription/create-checkout", {
+    method: "POST",
+    body: JSON.stringify({
+      plan: "premium",
+      billing_period: billingPeriod || "monthly",
+    }),
   });
 }
 

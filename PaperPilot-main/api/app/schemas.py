@@ -73,3 +73,29 @@ class MechanicsSaveRequest(BaseModel):
     source_filename: str | None = Field(default=None, max_length=300)
     file_type: str | None = Field(default=None, max_length=40)
     extracted_text: str | None = Field(default=None, max_length=200_000)
+
+
+class CloudinaryDocumentRequest(BaseModel):
+    """Document already uploaded to Cloudinary (avoids Vercel 4.5MB body limit)."""
+
+    cloudinary_url: str = Field(..., min_length=8, max_length=2000)
+    filename: str | None = Field(default=None, max_length=300)
+    name: str | None = Field(default=None, max_length=200)
+
+
+class ManuscriptVersionCloudinaryRequest(BaseModel):
+    cloudinary_url: str = Field(..., min_length=8, max_length=2000)
+    filename: str | None = Field(default=None, max_length=300)
+    mechanics_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=300)
+    manuscript_id: str | None = Field(default=None, max_length=80)
+
+
+class SubscribeRequest(BaseModel):
+    plan: str = Field(..., pattern="^(free|premium)$")
+    billing_period: str | None = Field(default="monthly", pattern="^(monthly|annual)$")
+
+
+class CancelSubscriptionRequest(BaseModel):
+    immediate: bool = True
+
