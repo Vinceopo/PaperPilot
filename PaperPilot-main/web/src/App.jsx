@@ -83,6 +83,7 @@ export default function App() {
   const [upgradeMessage, setUpgradeMessage] = useState("");
   const [registrationSuccess, setRegistrationSuccess] = useState(() => pendingRegistration());
   const [activePage, setActivePage] = useState("upload"); // "upload" | "manuscripts" | "account" | "subscription" | "notifications"
+  const [billingReturn, setBillingReturn] = useState(null); // "success" | "canceled" | null
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [scannedLibrary, setScannedLibrary] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -100,6 +101,23 @@ export default function App() {
   const [fileDetailsConfirmBusy, setFileDetailsConfirmBusy] = useState(false);
   const uploadSessionRef = useRef(0);
   const signedIn = Boolean(user) && !guest;
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const billing = params.get("billing");
+      if (billing === "success" || billing === "canceled") {
+        setBillingReturn(billing);
+        setActivePage("subscription");
+        params.delete("billing");
+        const next = params.toString();
+        const path = `${window.location.pathname}${next ? `?${next}` : ""}${window.location.hash || ""}`;
+        window.history.replaceState({}, "", path);
+      }
+    } catch {
+      // Ignore URL parsing issues.
+    }
+  }, []);
 
   function handleBackToDashboard() {
     setManuscriptReady(false);
@@ -971,6 +989,8 @@ export default function App() {
         {activePage === "subscription" && (
           <SubscriptionScreen
             subscription={subscription}
+            billingReturn={billingReturn}
+            onBillingReturnHandled={() => setBillingReturn(null)}
             onSubscriptionChange={(next) => {
               setSubscription(next);
               const note = notificationFromSubscription(next);

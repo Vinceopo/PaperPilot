@@ -73,3 +73,16 @@ class MechanicsSaveRequest(BaseModel):
     source_filename: str | None = Field(default=None, max_length=300)
     file_type: str | None = Field(default=None, max_length=40)
     extracted_text: str | None = Field(default=None, max_length=200_000)
+
+
+class SubscribeRequest(BaseModel):
+    """Start Premium checkout (PayMongo) or immediately switch to Free."""
+
+    plan: str = Field(..., pattern="^(free|premium)$")
+    billing_period: str | None = Field(default="monthly", pattern="^(monthly|annual)$")
+    # Optional / ignored for Premium — PayMongo Hosted Checkout collects the method.
+    payment_method: str | None = Field(default=None, max_length=40)
+
+
+class CancelSubscriptionRequest(BaseModel):
+    immediate: bool = True

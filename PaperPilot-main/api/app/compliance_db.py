@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
 import threading
@@ -10,9 +11,13 @@ from pathlib import Path
 from typing import Iterator
 
 from app.config import settings
+from app.firebase_admin_app import firebase_admin_app
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "paperpilot.db"
 _write_lock = threading.RLock()
+
+# Firebase Realtime Database root for compliance + billing state.
+ROOT = "/paperpilot"
 
 
 class UpgradeRequired(Exception):
@@ -50,6 +55,20 @@ def _month_bounds(now: datetime) -> tuple[str, str]:
     else:
         end = start.replace(month=start.month + 1)
     return _iso(start), _iso(end)
+
+
+def _reference(path: str):
+    if not firebase_admin_app():
+        raise RuntimeError("Firebase Realtime Database is unavailable.")
+    from firebase_admin import db
+
+    return db.reference(path)
+
+
+def _name_key(name: str) -> str:
+    from urllib.parse import quote
+
+    return quote(name.strip().casefold(), safe="").replace(".", "%2E")
 
 
 def _connect() -> sqlite3.Connection:
@@ -491,36 +510,391 @@ def is_current_version(owner_uid: str, manuscript_id: str, version_id: str) -> b
     return None if not row else row["current_version_id"] == version_id
 
 
-def _subscription(conn: sqlite3.Connection, owner_uid: str) -> sqlite3.Row:
-    now, now_text = _now(), _iso(_now())
+def _normalized_subscription(current: object, now: datetime) -> dict:
+    now_text = _iso(now)
     start, end = _month_bounds(now)
-    conn.execute(
-        """INSERT OR IGNORE INTO subscriptions
-           (owner_uid, tier, scans_used, period_start, period_end, created_at, updated_at)
-           VALUES (?, 'free', 0, ?, ?, ?, ?)""",
-        (owner_uid, start, end, now_text, now_text),
-    )
-    row = conn.execute("SELECT * FROM subscriptions WHERE owner_uid = ?", (owner_uid,)).fetchone()
-    if now_text >= row["period_end"]:
-        conn.execute(
-            """UPDATE subscriptions SET scans_used = 0, period_start = ?, period_end = ?, updated_at = ?
-               WHERE owner_uid = ?""",
-            (start, end, now_text, owner_uid),
+    if not isinstance(current, dict):
+        return {
+            "owner_uid": "",
+            "tier": "free",
+            "status": "none",
+            "billing_period": None,
+            "payment_method": None,
+            "scans_used": 0,
+            "period_start": start,
+            "period_end": end,
+            "renews_at": None,
+            "canceled_at": None,
+            "pending_checkout": None,
+            "history": [],
+            "created_at": now_text,
+            "updated_at": now_text,
+        }
+    value = copy.deepcopy(current)
+    value.setdefault("status", "active" if value.get("tier") == "premium" else "none")
+    value.setdefault("billing_period", None)
+    value.setdefault("payment_method", None)
+    value.setdefault("renews_at", None)
+    value.setdefault("canceled_at", None)
+    value.setdefault("pending_checkout", None)
+    value.setdefault("history", [])
+    value.setdefault("scans_used", 0)
+    # Canceled premium lapses at renews_at / period_end.
+    renews = value.get("renews_at") or value.get("period_end") or ""
+    if (
+        value.get("tier") == "premium"
+        and value.get("status") == "canceled"
+        and renews
+        and now_text >= renews
+    ):
+        value.update(
+            {
+                "tier": "free",
+                "status": "none",
+                "billing_period": None,
+                "payment_method": None,
+                "renews_at": None,
+                "scans_used": 0,
+                "period_start": start,
+                "period_end": end,
+                "updated_at": now_text,
+            }
         )
-        row = conn.execute("SELECT * FROM subscriptions WHERE owner_uid = ?", (owner_uid,)).fetchone()
-    return row
+    elif now_text >= str(value.get("period_end") or ""):
+        value.update(
+            {
+                "scans_used": 0,
+                "period_start": start,
+                "period_end": end,
+                "updated_at": now_text,
+            }
+        )
+        if value.get("tier") == "premium" and value.get("status") == "active":
+            value["renews_at"] = _renewal_date(now, value.get("billing_period") or "monthly")
+    return value
+
+
+def _renewal_date(now: datetime, billing_period: str) -> str:
+    if billing_period == "annual":
+        return _iso(now.replace(year=now.year + 1))
+    year, month = now.year, now.month + 1
+    if month > 12:
+        year, month = year + 1, 1
+    day = min(now.day, 28)
+    try:
+        return _iso(
+            now.replace(year=year, month=month, day=day, hour=0, minute=0, second=0, microsecond=0)
+        )
+    except ValueError:
+        return _iso(
+            now.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
+        )
+
+
+def _append_history(row: dict, entry: dict, limit: int = 50) -> None:
+    history = list(row.get("history") or [])
+    history.insert(0, entry)
+    row["history"] = history[:limit]
 
 
 def subscription_snapshot(owner_uid: str) -> dict:
-    with _write_lock, connection() as conn:
-        row = _subscription(conn, owner_uid)
-        conn.commit()
+    now = _now()
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+
+    def normalize(current):
+        value = _normalized_subscription(current, now)
+        value["owner_uid"] = owner_uid
+        return value
+
+    row = ref.transaction(normalize)
     limit = settings.premium_scan_limit if row["tier"] == "premium" else settings.free_scan_limit
-    used = row["scans_used"]
+    used = int(row.get("scans_used", 0) or 0)
+    status = row.get("status") or ("active" if row["tier"] == "premium" else "none")
     return {
-        "tier": row["tier"], "limit": limit, "used": used,
-        "remaining": max(limit - used, 0), "reset_at": row["period_end"],
+        "tier": row["tier"],
+        "status": status,
+        "billing_period": row.get("billing_period"),
+        "payment_method": row.get("payment_method"),
+        "limit": limit,
+        "used": used,
+        "remaining": max(limit - used, 0),
+        "reset_at": row.get("period_end"),
+        "renews_at": row.get("renews_at"),
+        "canceled_at": row.get("canceled_at"),
+        "pending_checkout": row.get("pending_checkout"),
+        "history": list(row.get("history") or [])[:20],
     }
+
+
+def set_subscription_plan(
+    owner_uid: str,
+    *,
+    tier: str,
+    billing_period: str | None = None,
+    payment_method: str | None = None,
+    amount: float | None = None,
+) -> dict:
+    """Subscribe, change plan, or switch back to free (immediate). Prefer webhook for premium."""
+    tier = (tier or "free").strip().lower()
+    if tier not in {"free", "premium"}:
+        raise ValueError("Plan must be free or premium.")
+    if tier == "premium":
+        billing_period = (billing_period or "monthly").strip().lower()
+        if billing_period not in {"monthly", "annual"}:
+            raise ValueError("Billing period must be monthly or annual.")
+        payment_method = (payment_method or "paymongo").strip().lower()
+    else:
+        billing_period = None
+        payment_method = None
+
+    now = _now()
+    now_text = _iso(now)
+    start, end = _month_bounds(now)
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+
+    def apply(current):
+        row = _normalized_subscription(current, now)
+        row["owner_uid"] = owner_uid
+        previous_tier = row.get("tier") or "free"
+        if tier == "premium":
+            action = "changed" if previous_tier == "premium" else "subscribed"
+            row.update(
+                {
+                    "tier": "premium",
+                    "status": "active",
+                    "billing_period": billing_period,
+                    "payment_method": payment_method,
+                    "renews_at": _renewal_date(now, billing_period),
+                    "canceled_at": None,
+                    "pending_checkout": None,
+                    "period_start": row.get("period_start") or start,
+                    "period_end": row.get("period_end") or end,
+                    "updated_at": now_text,
+                }
+            )
+            if not row.get("created_at"):
+                row["created_at"] = now_text
+            _append_history(
+                row,
+                {
+                    "id": str(uuid.uuid4()),
+                    "action": action,
+                    "plan": "premium",
+                    "billing_period": billing_period,
+                    "payment_method": payment_method,
+                    "amount": amount,
+                    "at": now_text,
+                },
+            )
+        else:
+            row.update(
+                {
+                    "tier": "free",
+                    "status": "none",
+                    "billing_period": None,
+                    "payment_method": None,
+                    "renews_at": None,
+                    "pending_checkout": None,
+                    "canceled_at": now_text if previous_tier == "premium" else row.get("canceled_at"),
+                    "updated_at": now_text,
+                }
+            )
+            if previous_tier == "premium":
+                _append_history(
+                    row,
+                    {
+                        "id": str(uuid.uuid4()),
+                        "action": "canceled",
+                        "plan": "free",
+                        "billing_period": None,
+                        "payment_method": None,
+                        "amount": 0,
+                        "at": now_text,
+                    },
+                )
+        return row
+
+    ref.transaction(apply)
+    return subscription_snapshot(owner_uid)
+
+
+def cancel_subscription(owner_uid: str, *, immediate: bool = True) -> dict:
+    """Cancel Premium. immediate=True downgrades now; otherwise keep access until renews_at."""
+    now = _now()
+    now_text = _iso(now)
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+
+    def apply(current):
+        row = _normalized_subscription(current, now)
+        row["owner_uid"] = owner_uid
+        if row.get("tier") != "premium":
+            return row
+        row["canceled_at"] = now_text
+        row["updated_at"] = now_text
+        row["pending_checkout"] = None
+        _append_history(
+            row,
+            {
+                "id": str(uuid.uuid4()),
+                "action": "canceled",
+                "plan": "premium" if not immediate else "free",
+                "billing_period": row.get("billing_period"),
+                "payment_method": row.get("payment_method"),
+                "amount": 0,
+                "at": now_text,
+            },
+        )
+        if immediate:
+            row.update(
+                {
+                    "tier": "free",
+                    "status": "none",
+                    "billing_period": None,
+                    "payment_method": None,
+                    "renews_at": None,
+                }
+            )
+        else:
+            row["status"] = "canceled"
+        return row
+
+    ref.transaction(apply)
+    return subscription_snapshot(owner_uid)
+
+
+def store_pending_checkout(
+    owner_uid: str,
+    *,
+    checkout_session_id: str,
+    billing_period: str,
+    amount: float,
+    checkout_url: str,
+) -> None:
+    """Remember an unpaid PayMongo checkout so the webhook can activate Premium."""
+    now = _now()
+    now_text = _iso(now)
+    pending = {
+        "checkout_session_id": checkout_session_id,
+        "owner_uid": owner_uid,
+        "billing_period": billing_period,
+        "amount": amount,
+        "checkout_url": checkout_url,
+        "status": "pending",
+        "created_at": now_text,
+    }
+    _reference(f"{ROOT}/checkout_sessions/{checkout_session_id}").set(pending)
+
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+
+    def apply(current):
+        row = _normalized_subscription(current, now)
+        row["owner_uid"] = owner_uid
+        row["pending_checkout"] = pending
+        row["updated_at"] = now_text
+        if not row.get("created_at"):
+            row["created_at"] = now_text
+        return row
+
+    ref.transaction(apply)
+
+
+def get_pending_checkout(checkout_session_id: str) -> dict | None:
+    item = _reference(f"{ROOT}/checkout_sessions/{checkout_session_id}").get()
+    return item if isinstance(item, dict) else None
+
+
+def activate_premium_from_payment(
+    owner_uid: str,
+    *,
+    billing_period: str,
+    payment_method: str | None = None,
+    amount: float | None = None,
+    checkout_session_id: str | None = None,
+    payment_id: str | None = None,
+) -> dict:
+    """Activate or renew Premium after PayMongo confirms payment (webhook)."""
+    billing_period = (billing_period or "monthly").strip().lower()
+    if billing_period not in {"monthly", "annual"}:
+        raise ValueError("Billing period must be monthly or annual.")
+    method = (payment_method or "paymongo").strip().lower() or "paymongo"
+
+    now = _now()
+    now_text = _iso(now)
+    start, end = _month_bounds(now)
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+
+    def apply(current):
+        row = _normalized_subscription(current, now)
+        row["owner_uid"] = owner_uid
+        previous_tier = row.get("tier") or "free"
+        # Idempotent: same checkout already applied.
+        history = list(row.get("history") or [])
+        if checkout_session_id and any(
+            isinstance(entry, dict) and entry.get("checkout_session_id") == checkout_session_id
+            for entry in history
+        ):
+            return row
+
+        action = "changed" if previous_tier == "premium" else "subscribed"
+        if previous_tier == "premium" and row.get("status") == "active":
+            action = "renewed"
+        row.update(
+            {
+                "tier": "premium",
+                "status": "active",
+                "billing_period": billing_period,
+                "payment_method": method,
+                "renews_at": _renewal_date(now, billing_period),
+                "canceled_at": None,
+                "pending_checkout": None,
+                "period_start": row.get("period_start") or start,
+                "period_end": row.get("period_end") or end,
+                "updated_at": now_text,
+                "last_checkout_session_id": checkout_session_id,
+                "last_payment_id": payment_id,
+            }
+        )
+        if not row.get("created_at"):
+            row["created_at"] = now_text
+        _append_history(
+            row,
+            {
+                "id": str(uuid.uuid4()),
+                "action": action,
+                "plan": "premium",
+                "billing_period": billing_period,
+                "payment_method": method,
+                "amount": amount,
+                "checkout_session_id": checkout_session_id,
+                "payment_id": payment_id,
+                "at": now_text,
+            },
+        )
+        return row
+
+    ref.transaction(apply)
+    if checkout_session_id:
+        _reference(f"{ROOT}/checkout_sessions/{checkout_session_id}").update(
+            {"status": "paid", "paid_at": now_text, "payment_id": payment_id}
+        )
+    return subscription_snapshot(owner_uid)
+
+
+def _increment_scans_used(owner_uid: str) -> dict:
+    now = _now()
+    now_text = _iso(now)
+    ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
+
+    def apply(current):
+        row = _normalized_subscription(current, now)
+        row["owner_uid"] = owner_uid
+        row["scans_used"] = int(row.get("scans_used", 0) or 0) + 1
+        row["updated_at"] = now_text
+        if not row.get("created_at"):
+            row["created_at"] = now_text
+        return row
+
+    return ref.transaction(apply)
 
 
 def require_premium(owner_uid: str) -> None:
@@ -550,18 +924,19 @@ def persist_scan(
     issues: list[dict],
     sections: list[dict],
 ) -> dict:
+    # Enforce limits against RTDB subscription before writing the scan row.
+    sub = check_scan_eligibility(owner_uid, manuscript_id, version_id)
     scan_id, created = str(uuid.uuid4()), _iso(_now())
     with _write_lock, connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        sub = _subscription(conn, owner_uid)
-        limit = settings.premium_scan_limit if sub["tier"] == "premium" else settings.free_scan_limit
         current = conn.execute(
             "SELECT current_version_id FROM manuscripts WHERE id = ? AND owner_uid = ?",
             (manuscript_id, owner_uid),
         ).fetchone()
         version = conn.execute(
             """SELECT 1 FROM manuscript_versions
-               WHERE id = ? AND manuscript_id = ?""", (version_id, manuscript_id)
+               WHERE id = ? AND manuscript_id = ?""",
+            (version_id, manuscript_id),
         ).fetchone()
         mechanics = conn.execute(
             "SELECT 1 FROM mechanics WHERE id = ? AND owner_uid = ?", (mechanics_id, owner_uid)
@@ -569,9 +944,6 @@ def persist_scan(
         if not current or not version or not mechanics:
             conn.rollback()
             raise LookupError("Requested scan input was not found.")
-        if (sub["tier"] != "premium" and current["current_version_id"] != version_id) or sub["scans_used"] >= limit:
-            conn.rollback()
-            raise UpgradeRequired(sub["tier"], limit, sub["scans_used"])
         conn.execute(
             """INSERT INTO compliance_scans
                (id, owner_uid, manuscript_version_id, mechanics_id, overall_score, issues_json, created_at)
@@ -584,15 +956,20 @@ def persist_scan(
                    (scan_id, section_name, formatting_score, issue_count, issues_json)
                    VALUES (?, ?, ?, ?, ?)""",
                 (
-                    scan_id, section["section"], section["formatting_score"],
-                    section["issue_count"], json.dumps(section.get("issues", [])),
+                    scan_id,
+                    section["section"],
+                    section["formatting_score"],
+                    section["issue_count"],
+                    json.dumps(section.get("issues", [])),
                 ),
             )
-        conn.execute(
-            "UPDATE subscriptions SET scans_used = scans_used + 1, updated_at = ? WHERE owner_uid = ?",
-            (created, owner_uid),
-        )
         conn.commit()
+    try:
+        _increment_scans_used(owner_uid)
+    except Exception:
+        # Scan already persisted; leave usage bump to next successful write path.
+        pass
+    del sub
     return get_scan(owner_uid, scan_id)
 
 

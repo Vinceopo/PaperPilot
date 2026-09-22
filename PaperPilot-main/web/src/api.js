@@ -302,7 +302,7 @@ export function getSubscription() {
   return authorizedFetch("/subscription");
 }
 
-export function subscribeToPlan({ plan, billingPeriod, paymentMethod }) {
+export function subscribeToPlan({ plan, billingPeriod, paymentMethod } = {}) {
   return authorizedFetch("/subscription/subscribe", {
     method: "POST",
     body: JSON.stringify({
