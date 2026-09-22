@@ -25,7 +25,9 @@ import NotificationsScreen from "./components/cockpit/NotificationsScreen.jsx";
 import UpgradePrompt from "./components/cockpit/UpgradePrompt.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import Spinner from "./components/Spinner.jsx";
+import FileTypeIcon from "./components/FileTypeIcon.jsx";
 import { useScanFlow } from "./hooks/useScanFlow.js";
+import { isScanReady, isServerId, scanTargetIds } from "./lib/scanMapper.js";
 import {
   loadScannedManuscripts,
   normalizeTitle,
@@ -184,6 +186,12 @@ export default function App() {
 
   const currentManuscriptRef = useRef(null);
   currentManuscriptRef.current = currentManuscript;
+  const currentVersionRef = useRef(null);
+  currentVersionRef.current = currentVersion;
+  const mechanicsRef = useRef(mechanics);
+  mechanicsRef.current = mechanics;
+  const selectedMechanicsIdRef = useRef(selectedMechanicsId);
+  selectedMechanicsIdRef.current = selectedMechanicsId;
 
   const getActiveManuscript = useCallback(() => {
     const m = currentManuscriptRef.current;
@@ -191,10 +199,30 @@ export default function App() {
     return { id: m.id, title: m.title };
   }, []);
 
+  const getScanTarget = useCallback(async () => {
+    const version = currentVersionRef.current;
+    const manuscript = currentManuscriptRef.current;
+    const { versionId, manuscriptId, ready } = scanTargetIds(version, manuscript);
+    if (!ready) {
+      throw new Error("Wait until the manuscript finishes uploading, then analyse.");
+    }
+    const mechanicsId = selectedMechanicsIdRef.current;
+    const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
+    const citationStyle = String(profile?.rules?.citation_style || "APA").toUpperCase();
+    return {
+      manuscriptId,
+      versionId,
+      citationStyle,
+      pageCount: version?.page_count,
+      versionNumber: version?.version_number,
+    };
+  }, []);
+
   const scanFlow = useScanFlow({
     mechanicsId: selectedMechanicsId,
     resolveManuscript,
     getActiveManuscript,
+    getScanTarget,
   });
 
   useEffect(() => {
@@ -280,22 +308,9 @@ export default function App() {
       return undefined;
     }
 
-    let booted = false;
-    // Always start at the login screen when the app loads / localhost restarts.
-    // Firebase otherwise restores the previous session and skips Auth.
-    signOut(auth)
-      .catch(() => {})
-      .finally(() => {
-        booted = true;
-        setUser(null);
-        setGuest(false);
-        setRegistrationSuccess(null);
-        setAuthReady(true);
-      });
-
+    // Restore the cached Firebase session (localPersistence when "Remember me"
+    // was checked). Only sign out when the user chooses to, or when tokens are revoked.
     const unsub = onAuthStateChanged(auth, (next) => {
-      // Ignore the restored-session event that fires before our forced sign-out finishes.
-      if (!booted && next) return;
       setUser(next);
       if (next) {
         setGuest(false);
@@ -498,9 +513,11 @@ export default function App() {
       setError("Enter a manuscript title.");
       return false;
     }
+    if (!selectedMechanicsId) {
+      setError("Select a format mechanics profile before uploading a manuscript.");
+      return false;
+    }
 
-    // Unique titles only when creating a new manuscript (case-insensitive).
-    // Source of truth = My Manuscripts library (shared with Upload choices).
     if (!manuscriptId) {
       const takenInLibrary = scannedLibraryRef.current.some(
         (m) => normalizeTitle(m.title) === normalizeTitle(resolvedTitle)
@@ -514,44 +531,15 @@ export default function App() {
     setManuscriptBusy(true);
     const sessionId = ++uploadSessionRef.current;
 
-    // Prefer existing library entry when uploading a new version.
     const libraryEntry = manuscriptId
       ? scannedLibraryRef.current.find((m) => m.id === manuscriptId)
       : null;
-    const nextId = manuscriptId || `local-${Date.now()}`;
     const nextVersionNumber = libraryEntry
       ? Math.max(0, ...(libraryEntry.versions || []).map((v) => Number(v.versionNumber) || 0)) + 1
       : 1;
 
-    // Show File details immediately — do not wait on API parsing.
-    scanFlow.selectFile(file);
-    setCurrentManuscript({
-      id: nextId,
-      title: resolvedTitle,
-    });
-    setCurrentVersion({
-      id: `local-ver-${Date.now()}`,
-      source_filename: file.name,
-      filename: file.name,
-      version_number: nextVersionNumber,
-    });
-    setManuscriptReady(true);
-    advanceUploadWizard(3);
-    focusFileDetails("Manuscript uploaded completely and ready to scan.");
-    setManuscriptBusy(false);
-    appendNotifications(notificationFromUpload(resolvedTitle, nextVersionNumber));
-
-    // Resolve the Firebase manuscript id for version uploads.
-    // Library rows often use local-/doc- ids after mock scans — match the API row by title.
-    const isServerId = (id) =>
-      Boolean(id) &&
-      !String(id).startsWith("local-") &&
-      !String(id).startsWith("doc-");
-
     const resolveApiManuscriptId = () => {
-      if (isServerId(libraryEntry?.serverManuscriptId)) {
-        return libraryEntry.serverManuscriptId;
-      }
+      if (isServerId(libraryEntry?.serverManuscriptId)) return libraryEntry.serverManuscriptId;
       if (isServerId(manuscriptId)) return manuscriptId;
       const titleKey = normalizeTitle(resolvedTitle);
       const fromApi = manuscripts.find(
@@ -560,108 +548,104 @@ export default function App() {
       return fromApi?.id || "";
     };
 
-    // Sync to the API in the background without blocking File details.
-    void (async () => {
+    try {
+      let apiManuscriptId = resolveApiManuscriptId();
+      let created;
       try {
-        let apiManuscriptId = resolveApiManuscriptId();
-        let created;
-        try {
+        created = await uploadManuscriptVersion({
+          file,
+          title: resolvedTitle,
+          manuscriptId: apiManuscriptId || undefined,
+          mechanicsId: selectedMechanicsId,
+        });
+      } catch (firstErr) {
+        const missingParent =
+          firstErr?.status === 404 &&
+          apiManuscriptId &&
+          /manuscript was not found/i.test(firstErr?.message || "");
+        const isConflict =
+          firstErr?.status === 409 || /already exists/i.test(firstErr?.message || "");
+        if (missingParent) {
           created = await uploadManuscriptVersion({
             file,
             title: resolvedTitle,
-            manuscriptId: apiManuscriptId || undefined,
             mechanicsId: selectedMechanicsId,
           });
-        } catch (firstErr) {
-          // Version upload with a local library id can miss the server id — retry by title.
-          const isConflict =
-            firstErr?.status === 409 || /already exists/i.test(firstErr?.message || "");
-          if (!isConflict || !manuscriptId) throw firstErr;
-
-          const titleKey = normalizeTitle(resolvedTitle);
-          const fromApi = (await listManuscripts().catch(() => null));
+        } else if (isConflict && manuscriptId) {
+          const fromApi = await listManuscripts().catch(() => null);
           const apiList = itemsFrom(fromApi, "manuscripts");
           if (apiList.length) setManuscripts(apiList);
           const matched = apiList.find(
-            (m) => normalizeTitle(m.title) === titleKey && isServerId(m.id)
+            (m) => normalizeTitle(m.title) === normalizeTitle(resolvedTitle) && isServerId(m.id)
           );
           if (!matched?.id) throw firstErr;
-
-          apiManuscriptId = matched.id;
           created = await uploadManuscriptVersion({
             file,
             title: resolvedTitle,
-            manuscriptId: apiManuscriptId,
+            manuscriptId: matched.id,
             mechanicsId: selectedMechanicsId,
           });
-        }
-
-        // Cancel abandoned this staging session — ignore late API results.
-        if (uploadSessionRef.current !== sessionId) return;
-
-        const version = created.version || {
-          id: created.version_id,
-          manuscript_id: created.manuscript_id || apiManuscriptId || nextId,
-          version_number: created.version_number,
-          source_filename: created.source_filename || created.filename || file.name,
-          page_count: created.page_count,
-        };
-        const manuscript = created.manuscript || created.created_manuscript || {
-          id: version.manuscript_id || created.manuscript_id || nextId,
-          title: resolvedTitle,
-        };
-        const resolvedId = manuscript.id || version.manuscript_id || apiManuscriptId || nextId;
-        // Keep library id stable when this was an existing My Manuscripts entry.
-        setCurrentManuscript({
-          id: manuscriptId || resolvedId,
-          title: manuscript.title || resolvedTitle,
-        });
-        setCurrentVersion({
-          ...version,
-          version_number: version.version_number || nextVersionNumber,
-        });
-
-        // Remember the server id on the library row so later versions attach correctly.
-        if (manuscriptId && isServerId(resolvedId)) {
-          setScannedLibrary((prev) => {
-            const next = prev.map((m) =>
-              m.id === manuscriptId || normalizeTitle(m.title) === normalizeTitle(resolvedTitle)
-                ? { ...m, serverManuscriptId: resolvedId }
-                : m
-            );
-            saveScannedManuscripts(next, user?.uid);
-            return next;
-          });
-        }
-
-        const data = await listManuscripts();
-        if (uploadSessionRef.current !== sessionId) return;
-        setManuscripts(itemsFrom(data, "manuscripts"));
-      } catch (err) {
-        if (uploadSessionRef.current !== sessionId) return;
-        if (err?.status === 409 || /already exists/i.test(err?.message || "")) {
-          // Only block brand-new manuscripts; version uploads should never land here.
-          if (!manuscriptId) {
-            setError(err.message || "A manuscript with this title already exists.");
-            setManuscriptReady(false);
-            setFileDetailsNotice("");
-            setCurrentVersion(null);
-            scanFlow.selectFile(null);
-          } else {
-            console.warn(
-              "Version upload hit a title conflict after retry; scan remains available from File details.",
-              err
-            );
-          }
-          return;
-        }
-        if (!handleGateError(err)) {
-          console.warn("Manuscript API upload failed; scan remains available from File details.", err);
+        } else {
+          throw firstErr;
         }
       }
-    })();
 
-    return true;
+      if (uploadSessionRef.current !== sessionId) return false;
+
+      const version = created.version || {};
+      const resolvedManuscriptId =
+        version.manuscript_id ||
+        created.manuscript_id ||
+        created.created_manuscript?.id ||
+        apiManuscriptId;
+      if (!isServerId(version.id) || !isServerId(resolvedManuscriptId)) {
+        throw new Error("The server did not return a saved manuscript. Please upload again.");
+      }
+
+      scanFlow.selectFile(file);
+      setCurrentManuscript({
+        id: manuscriptId || resolvedManuscriptId,
+        title: resolvedTitle,
+        serverManuscriptId: resolvedManuscriptId,
+      });
+      setCurrentVersion({
+        ...version,
+        manuscript_id: resolvedManuscriptId,
+        version_number: version.version_number || nextVersionNumber,
+        source_filename: version.source_filename || file.name,
+        filename: file.name,
+      });
+      if (manuscriptId) {
+        setScannedLibrary((prev) => {
+          const next = prev.map((m) =>
+            m.id === manuscriptId || normalizeTitle(m.title) === normalizeTitle(resolvedTitle)
+              ? { ...m, serverManuscriptId: resolvedManuscriptId }
+              : m
+          );
+          saveScannedManuscripts(next, user?.uid);
+          return next;
+        });
+      }
+      const data = await listManuscripts();
+      if (uploadSessionRef.current !== sessionId) return false;
+      setManuscripts(itemsFrom(data, "manuscripts"));
+      setManuscriptReady(true);
+      advanceUploadWizard(3);
+      focusFileDetails("Manuscript uploaded completely and ready to scan.");
+      appendNotifications(notificationFromUpload(resolvedTitle, version.version_number || nextVersionNumber));
+      return true;
+    } catch (err) {
+      if (uploadSessionRef.current !== sessionId) return false;
+      if (handleGateError(err)) return false;
+      setError(err.message || "Could not upload the manuscript. Please try again.");
+      setManuscriptReady(false);
+      setFileDetailsNotice("");
+      setCurrentVersion(null);
+      scanFlow.selectFile(null);
+      return false;
+    } finally {
+      if (uploadSessionRef.current === sessionId) setManuscriptBusy(false);
+    }
   }
 
   if (!authReady) {
@@ -706,6 +690,7 @@ export default function App() {
   const limit = Number(subscription?.limit ?? (tier === "premium" ? 50 : 3));
   const remaining = Number(subscription?.remaining ?? Math.max(limit - used, 0));
   const selectedMechanics = mechanics.find((item) => item.id === selectedMechanicsId);
+  const scanReady = isScanReady(currentVersion, currentManuscript);
 
   async function doSignOut() {
     try {
@@ -1168,7 +1153,14 @@ export default function App() {
                   <div>
                     <p className="mb-2 text-xs font-semibold text-slate-600">Format Mechanics</p>
                     <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-[#fafbfc] p-4">
-                      <span className="h-7 w-5 rounded-sm border-2 border-slate-300 bg-white" />
+                      <FileTypeIcon
+                        fileType={selectedMechanics?.file_type}
+                        filename={
+                          selectedMechanics?.source_filename ||
+                          selectedMechanics?.filename ||
+                          selectedMechanics?.name
+                        }
+                      />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-slate-700">
                           {selectedMechanics?.source_filename || selectedMechanics?.filename || selectedMechanics?.name || "No format guide selected"}
@@ -1189,7 +1181,14 @@ export default function App() {
                   <div>
                     <p className="mb-2 text-xs font-semibold text-slate-600">Academic Document</p>
                     <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-[#fafbfc] p-4">
-                      <span className="h-7 w-5 rounded-sm border-2 border-slate-300 bg-white" />
+                      <FileTypeIcon
+                        fileType={currentVersion?.file_type}
+                        filename={
+                          scanFlow.file?.name ||
+                          currentVersion?.source_filename ||
+                          currentVersion?.filename
+                        }
+                      />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold text-slate-700">
                           {scanFlow.file?.name ||
@@ -1201,7 +1200,7 @@ export default function App() {
                           {currentManuscript?.title || "Manuscript"}
                         </p>
                       </div>
-                      {scanFlow.file || currentVersion ? (
+                      {scanReady ? (
                         <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-semibold text-emerald-700">
                           ✓ Ready to scan
                         </span>
@@ -1242,7 +1241,7 @@ export default function App() {
                       }
                       setFileDetailsConfirm("analyse");
                     }}
-                    disabled={(!scanFlow.file && !currentVersion) || !selectedMechanicsId}
+                    disabled={!scanReady || !selectedMechanicsId}
                     className="inline-flex min-w-44 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-7 py-3 text-xs font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Analyse document
@@ -1303,6 +1302,11 @@ export default function App() {
             if (fileDetailsConfirm === "cancel") {
               cancelManuscriptUpload();
               setFileDetailsConfirm(null);
+              return;
+            }
+            if (!scanReady) {
+              setFileDetailsConfirm(null);
+              setError("Wait until the manuscript finishes uploading, then analyse.");
               return;
             }
             setFileDetailsNotice("");

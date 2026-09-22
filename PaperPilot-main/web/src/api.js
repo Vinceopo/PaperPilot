@@ -1,8 +1,7 @@
 import { auth } from "./firebase.js";
+import { uploadToCloudinary } from "./lib/cloudinaryUpload.js";
 
-const API = import.meta.env.DEV
-  ? ""
-  : import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+const API = import.meta.env.VITE_API_URL || "/api";
 
 function detailMessage(err, fallback) {
   const detail = err?.detail;
@@ -75,11 +74,17 @@ async function authorizedFetch(path, options = {}) {
   }
   try {
     const res = await fetch(`${API}${path}`, { ...options, headers });
+    // Only clear the session when Firebase says the token itself is invalid —
+    // a backend 401 (misconfig, expired server session, etc.) must not force logout.
     if (res.status === 401 && auth?.currentUser) {
       try {
-        await auth.signOut();
+        await auth.currentUser.getIdToken(true);
       } catch {
-        // Session already gone.
+        try {
+          await auth.signOut();
+        } catch {
+          // Session already gone.
+        }
       }
     }
     return await responseData(res);
@@ -93,10 +98,11 @@ export async function analyzeManuscript({ title, abstract, text }) {
 }
 
 export async function extractPdf(file) {
-  const body = new FormData();
-  body.append("file", file);
-  const res = await fetch(`${API}/extract-pdf`, { method: "POST", body });
-  return responseData(res);
+  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  return postJson("/extract-pdf", {
+    cloudinary_url: uploaded.url,
+    filename: file.name || uploaded.originalFilename,
+  });
 }
 
 export async function sendOtp({ email, purpose }) {
@@ -149,10 +155,15 @@ export function listMechanics() {
   return authorizedFetch("/mechanics");
 }
 
-export function extractMechanics(file) {
-  const body = new FormData();
-  body.append("file", file);
-  return authorizedFetch("/mechanics/extract", { method: "POST", body });
+export async function extractMechanics(file) {
+  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  return authorizedFetch("/mechanics/extract", {
+    method: "POST",
+    body: JSON.stringify({
+      cloudinary_url: uploaded.url,
+      filename: file.name || uploaded.originalFilename,
+    }),
+  });
 }
 
 export function saveMechanicsProfile({
@@ -174,11 +185,16 @@ export function saveMechanicsProfile({
   });
 }
 
-export function uploadMechanics(file, name = "") {
-  const body = new FormData();
-  body.append("file", file);
-  if (name.trim()) body.append("name", name.trim());
-  return authorizedFetch("/mechanics", { method: "POST", body });
+export async function uploadMechanics(file, name = "") {
+  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  return authorizedFetch("/mechanics", {
+    method: "POST",
+    body: JSON.stringify({
+      cloudinary_url: uploaded.url,
+      filename: file.name || uploaded.originalFilename,
+      name: name.trim() || undefined,
+    }),
+  });
 }
 
 export function renameMechanics(mechanicsId, name) {
@@ -235,19 +251,29 @@ export function listManuscripts() {
   return authorizedFetch("/manuscripts");
 }
 
-export function previewManuscript(file) {
-  const body = new FormData();
-  body.append("file", file);
-  return authorizedFetch("/manuscripts/preview", { method: "POST", body });
+export async function previewManuscript(file) {
+  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  return authorizedFetch("/manuscripts/preview", {
+    method: "POST",
+    body: JSON.stringify({
+      cloudinary_url: uploaded.url,
+      filename: file.name || uploaded.originalFilename,
+    }),
+  });
 }
 
-export function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
-  const body = new FormData();
-  body.append("file", file);
-  body.append("mechanics_id", mechanicsId);
-  body.append("title", title.trim());
-  if (manuscriptId) body.append("manuscript_id", manuscriptId);
-  return authorizedFetch("/manuscripts/versions", { method: "POST", body });
+export async function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
+  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  return authorizedFetch("/manuscripts/versions", {
+    method: "POST",
+    body: JSON.stringify({
+      cloudinary_url: uploaded.url,
+      filename: file.name || uploaded.originalFilename,
+      mechanics_id: mechanicsId,
+      title: title.trim(),
+      manuscript_id: manuscriptId || undefined,
+    }),
+  });
 }
 
 export function listManuscriptVersions(manuscriptId, includeHistory = true) {

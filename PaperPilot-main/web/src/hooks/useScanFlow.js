@@ -9,12 +9,12 @@
  *   "error"        – analysis failed; user can retry
  *
  * Components should be purely presentational and consume this hook.
- * Swapping mock → real API: replace the body of `analyzeDocument` in
- * web/src/lib/mockAnalysis.js only — this hook stays unchanged.
+ * Swapping mock → real API: analyzeDocument now calls the live scan endpoint.
  */
 
 import { useCallback, useState } from "react";
 import { analyzeDocument, downloadReport as downloadReportFn, ACCEPTED_EXTENSIONS, MAX_FILE_BYTES } from "../lib/mockAnalysis";
+import { isServerId } from "../lib/scanMapper";
 
 // ─── File validation ──────────────────────────────────────────────────────────
 
@@ -39,9 +39,16 @@ function titleFromFile(file) {
  *   mechanicsId?: string,
  *   resolveManuscript?: (title: string, documentId: string|null) => ({ id: string, versions?: any[] }|null),
  *   getActiveManuscript?: () => ({ id?: string, title?: string }|null),
+ *   getScanTarget?: () => Promise<{
+ *     manuscriptId?: string,
+ *     versionId?: string,
+ *     citationStyle?: string,
+ *     pageCount?: number,
+ *     versionNumber?: number,
+ *   }|null>,
  * }} [opts]
  */
-export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript } = {}) {
+export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript, getScanTarget } = {}) {
   // ── Core state machine ────────────────────────────────────────────────────
   const [step, setStep] = useState("idle"); // idle | fileSelected | analyzing | results | error
 
@@ -73,11 +80,11 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   }, []);
 
   /**
-   * Runs the (mock) analysis.
+   * Runs the live compliance scan against the selected format mechanics.
    * Uses the uploaded manuscript title/id so My Manuscripts stays consistent.
    */
   const analyze = useCallback(async () => {
-    if (!file || fileError || step === "analyzing") return;
+    if ((!file && !getScanTarget) || fileError || step === "analyzing") return;
     setStep("analyzing");
     setResult(null);
     setError("");
@@ -96,21 +103,28 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
         ...((existing?.versions || []).map((v) => Number(v.versionNumber) || 0))
       );
       const nextVersion = existing || preferredId ? maxVer + 1 : 1;
+      const target = (await getScanTarget?.()) || {};
 
-      const scanResult = await analyzeDocument(file, mechanicsId, reuseId, { title });
-      // Keep title from the manuscript form, not only the file name.
+      const scanResult = await analyzeDocument(file, mechanicsId, reuseId, {
+        title,
+        manuscriptId: target.manuscriptId,
+        versionId: target.versionId,
+        citationStyle: target.citationStyle,
+        pageCount: target.pageCount,
+      });
       if (title) scanResult.documentTitle = title;
       if (reuseId) scanResult.documentId = reuseId;
+      if (isServerId(target.manuscriptId)) scanResult.documentId = target.manuscriptId;
 
       setDocumentId(scanResult.documentId);
-      setVersionNumber(nextVersion);
+      setVersionNumber(Number(target.versionNumber) || nextVersion);
       setResult(scanResult);
       setStep("results");
     } catch (err) {
       setError(err?.message ?? "Analysis failed. Please try again.");
       setStep("error");
     }
-  }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript]);
+  }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
 
   /** Returns the user to the upload screen from the error state. */
   const retry = useCallback(() => {

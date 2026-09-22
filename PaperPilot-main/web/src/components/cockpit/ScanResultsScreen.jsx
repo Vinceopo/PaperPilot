@@ -105,7 +105,7 @@ function CircularScore({ score }) {
       >
         {band.label}
       </span>
-      <p className="text-center text-xs text-slate-400">Overall compliance score</p>
+      <p className="text-center text-xs text-slate-400">Average of the formatting breakdown scores</p>
     </div>
   );
 }
@@ -173,6 +173,7 @@ export default function ScanResultsScreen({
     scoreBreakdown = [],
     formatChecks = [],
     pageCount = 0,
+    pagination = null,
   } = result;
 
   // ── Derived stats ─────────────────────────────────────────────────────────
@@ -249,13 +250,27 @@ export default function ScanResultsScreen({
 
         {/* Card 2 — Score Breakdown */}
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-            Score Breakdown
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Score Breakdown
+            </p>
+            <p className="text-[10px] font-medium text-slate-400">Formatting metrics only</p>
+          </div>
           <div className="mt-5 space-y-4">
             {scoreBreakdown.map((item) => (
-              <ScoreBar key={item.metric} metric={item.metric} score={item.score} />
+              <ScoreBar key={item.metric} metric={item.metric} score={Math.round(item.score)} />
             ))}
+          </div>
+          <div className="mt-5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" /> Good (≥80%)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-amber-400" /> Needs review (50–79%)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-rose-500" /> Critical (&lt;50%)
+            </span>
           </div>
         </div>
 
@@ -325,7 +340,7 @@ export default function ScanResultsScreen({
           <div>
             <h3 className="text-sm font-bold text-slate-800">Issues detected</h3>
             <p className="mt-0.5 text-xs text-slate-400">
-              Findings are mapped to the exact page and line where the formatting check failed.
+              Each page starts at line 1. Findings are listed page by page, then line by line.
             </p>
           </div>
           {issuesFound > 0 && (
@@ -334,7 +349,11 @@ export default function ScanResultsScreen({
             </span>
           )}
         </div>
-        <IssuesDetectedPanel formatChecks={formatChecks} pageCount={pageCount} />
+        <IssuesDetectedPanel
+          formatChecks={formatChecks}
+          pageCount={pageCount}
+          pagination={pagination}
+        />
       </div>
 
       {/* ── Footer actions ────────────────────────────────────────────────── */}

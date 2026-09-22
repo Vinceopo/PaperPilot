@@ -1,16 +1,11 @@
 /**
  * IssuesDetectedPanel
  *
- * Shows every detected formatting issue with an explicit "Page X, Line Y"
- * location label.  Lines are per-page (the PDF parser resets line_index per
- * page; DOCX uses document-level lines when page info is unavailable).
- *
- * Severity pills are clickable filters.
+ * Lists every detected formatting issue in one place so authors can fix them
+ * together. Severity pills are optional filters — default view is ALL issues.
  */
 
 import { useEffect, useMemo, useState } from "react";
-
-// ── Severity config ──────────────────────────────────────────────────────────
 
 const SEVERITY = {
   minor: {
@@ -20,9 +15,7 @@ const SEVERITY = {
     badge: "bg-amber-400 text-white",
     border: "border-l-amber-400",
     rowBg: "bg-amber-50/40",
-    text: "text-amber-700",
     tag: "bg-amber-100 text-amber-700 border-amber-200",
-    iconBg: "bg-amber-100 text-amber-600",
   },
   moderate: {
     label: "Moderate",
@@ -31,9 +24,7 @@ const SEVERITY = {
     badge: "bg-orange-500 text-white",
     border: "border-l-orange-400",
     rowBg: "bg-orange-50/40",
-    text: "text-orange-700",
     tag: "bg-orange-100 text-orange-700 border-orange-200",
-    iconBg: "bg-orange-100 text-orange-600",
   },
   critical: {
     label: "Critical",
@@ -42,13 +33,9 @@ const SEVERITY = {
     badge: "bg-rose-500 text-white",
     border: "border-l-rose-500",
     rowBg: "bg-rose-50/40",
-    text: "text-rose-700",
     tag: "bg-rose-100 text-rose-700 border-rose-200",
-    iconBg: "bg-rose-100 text-rose-600",
   },
 };
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function normalizeSeverity(raw, result) {
   const v = String(raw || "").toLowerCase();
@@ -71,21 +58,22 @@ function worstSeverity(list) {
   );
 }
 
-/**
- * Expand formatChecks into flat location entries.
- * Each entry = one {page, line} pair  +  the issue details.
- * If a check has no location info, it gets a document-level entry (page=null, line=null).
- */
 export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
   const entries = [];
   let maxPage = Math.max(0, Number(pageCountHint) || 0);
+  let hiddenLocations = 0;
 
   formatChecks.forEach((check, checkIdx) => {
     if (!check || check.result === "PASS") return;
     const severity = normalizeSeverity(check.severity, check.result);
-    const rawLocs = Array.isArray(check.locations) && check.locations.length
-      ? check.locations
-      : [{ page: null, line: null, section: check.section || "General" }];
+    const rawLocs =
+      Array.isArray(check.locations) && check.locations.length
+        ? check.locations
+        : [{ page: null, line: null, section: check.section || "General" }];
+    const reported = Number(check.count);
+    if (Number.isFinite(reported) && reported > rawLocs.length) {
+      hiddenLocations += reported - rawLocs.length;
+    }
 
     rawLocs.forEach((loc, locIdx) => {
       const page = loc?.page == null || loc.page === "" ? null : Number(loc.page);
@@ -97,12 +85,16 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
         line: line != null && !Number.isNaN(line) ? line : null,
         section: loc?.section || check.section || "General",
         severity,
-        title: check.name || check.title || check.issue_type || "Formatting issue",
         finding:
-          check.finding || check.details || check.description || check.name ||
+          check.finding ||
+          check.details ||
+          check.description ||
+          check.name ||
           "Formatting discrepancy detected",
         explanation:
-          check.explanation || check.details || check.description ||
+          check.explanation ||
+          check.details ||
+          check.description ||
           "This formatting rule does not match the confirmed mechanics.",
         recommendation: check.recommendation || "",
         result: check.result,
@@ -110,22 +102,18 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
     });
   });
 
-  // Sort: page asc, line asc, severity desc
   entries.sort((a, b) => {
-    const pa = a.page ?? 999999, pb = b.page ?? 999999;
+    const pa = a.page ?? 999999;
+    const pb = b.page ?? 999999;
     if (pa !== pb) return pa - pb;
-    const la = a.line ?? 999999, lb = b.line ?? 999999;
+    const la = a.line ?? 999999;
+    const lb = b.line ?? 999999;
     if (la !== lb) return la - lb;
     return severityRank(b.severity) - severityRank(a.severity);
   });
 
-  return {
-    entries,
-    pageCount: maxPage,   // real max page found in locations; sidebar only shows pages WITH issues
-  };
+  return { entries, pageCount: maxPage, hiddenLocations };
 }
-
-// ── Location badge ────────────────────────────────────────────────────────────
 
 function LocationBadge({ page, line }) {
   const pageStr = page != null ? `Page ${page}` : "Doc";
@@ -133,81 +121,57 @@ function LocationBadge({ page, line }) {
   return (
     <span className="inline-flex shrink-0 items-center rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] font-semibold text-slate-600 shadow-sm">
       {pageStr}
-      {lineStr && <span className="ml-0.5 text-[#16bfa8]">{lineStr}</span>}
+      {lineStr ? <span className="ml-0.5 text-[#16bfa8]">{lineStr}</span> : null}
     </span>
   );
 }
 
-// ── Severity icon ─────────────────────────────────────────────────────────────
-
 function SeverityIcon({ severity, className = "h-4 w-4" }) {
-  if (severity === "minor") {
-    return (
-      <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-      </svg>
-    );
-  }
-  if (severity === "moderate") {
-    return (
-      <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-        <circle cx="12" cy="12" r="9" />
-        <path strokeLinecap="round" d="M12 8v5m0 3h.01" />
-      </svg>
-    );
-  }
   return (
     <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path strokeLinecap="round" d="M12 7v6m0 3h.01" />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
+      />
     </svg>
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
-
-export default function IssuesDetectedPanel({ formatChecks = [], pageCount: pageCountProp = 0 }) {
-  // ── State (must come before any useMemo that references these) ────────────
+export default function IssuesDetectedPanel({
+  formatChecks = [],
+  pageCount: pageCountProp = 0,
+  pagination = null,
+}) {
   const [severityFilter, setSeverityFilter] = useState(null);
   const [selectedPage, setSelectedPage] = useState("all");
   const [reviewed, setReviewed] = useState(() => new Set());
-  const [expandedXai, setExpandedXai] = useState(() => new Set());
 
-  // ── Derived data ──────────────────────────────────────────────────────────
-  const { entries, pageCount } = useMemo(
+  const { entries, pageCount, hiddenLocations } = useMemo(
     () => normalizeDetectedIssues(formatChecks, pageCountProp),
     [formatChecks, pageCountProp]
   );
 
   const counts = useMemo(() => {
     const c = { minor: 0, moderate: 0, critical: 0 };
-    entries.forEach((e) => { c[e.severity] = (c[e.severity] || 0) + 1; });
+    entries.forEach((e) => {
+      c[e.severity] = (c[e.severity] || 0) + 1;
+    });
     return c;
   }, [entries]);
 
-  // Only pages that actually have at least one issue (respects active severity filter).
-  // A 200-page thesis with issues on pp. 3, 47, 89 shows only those 3 pages.
   const pages = useMemo(() => {
-    const sourceEntries = severityFilter
-      ? entries.filter((e) => e.severity === severityFilter)
-      : entries;
-    return [
-      ...new Set(sourceEntries.map((e) => e.page).filter((p) => p != null)),
-    ].sort((a, b) => a - b);
-  }, [entries, severityFilter]);
+    const fromIssues = entries.map((e) => e.page).filter((p) => p != null);
+    const total = Math.max(Number(pageCountProp) || 0, pageCount, ...fromIssues, 0);
+    if (total > 0) return Array.from({ length: total }, (_, i) => i + 1);
+    return [...new Set(fromIssues)].sort((a, b) => a - b);
+  }, [entries, pageCount, pageCountProp]);
 
-  // Reset when new scan arrives
   useEffect(() => {
     setSeverityFilter(null);
     setSelectedPage("all");
     setReviewed(new Set());
-    setExpandedXai(new Set());
   }, [formatChecks]);
-
-  // When filter changes, jump to All so results are visible
-  useEffect(() => {
-    if (severityFilter) setSelectedPage("all");
-  }, [severityFilter]);
 
   const visibleEntries = useMemo(() => {
     let list = entries;
@@ -219,36 +183,28 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
     return list;
   }, [entries, severityFilter, selectedPage]);
 
-  // Same page + same severity → one block (multiple findings listed inside).
   const issueBlocks = useMemo(() => {
     const map = new Map();
     visibleEntries.forEach((entry) => {
-      const key = `${entry.page ?? "doc"}::${entry.severity}`;
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          page: entry.page,
-          severity: entry.severity,
-          items: [],
-        });
-      }
+      const key = `${entry.page ?? "doc"}`;
+      if (!map.has(key)) map.set(key, { key, page: entry.page, items: [] });
       map.get(key).items.push(entry);
     });
     return [...map.values()]
       .map((block) => ({
         ...block,
+        severity: worstSeverity(block.items),
         items: [...block.items].sort((a, b) => {
           const lineA = a.line == null ? Number.MAX_SAFE_INTEGER : Number(a.line);
           const lineB = b.line == null ? Number.MAX_SAFE_INTEGER : Number(b.line);
           if (lineA !== lineB) return lineA - lineB;
-          return String(a.finding || "").localeCompare(String(b.finding || ""));
+          return severityRank(b.severity) - severityRank(a.severity);
         }),
       }))
       .sort((a, b) => {
         const pageA = a.page == null ? Number.MAX_SAFE_INTEGER : Number(a.page);
         const pageB = b.page == null ? Number.MAX_SAFE_INTEGER : Number(b.page);
-        if (pageA !== pageB) return pageA - pageB;
-        return severityRank(b.severity) - severityRank(a.severity);
+        return pageA - pageB;
       });
   }, [visibleEntries]);
 
@@ -264,29 +220,8 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
   }, [entries, severityFilter]);
 
   const isReviewed = reviewed.has(String(selectedPage));
-
-  function toggleReviewed() {
-    setReviewed((prev) => {
-      const next = new Set(prev);
-      const key = String(selectedPage);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
-    });
-  }
-
-  function toggleXai(id) {
-    setExpandedXai((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
-
-  function toggleSeverity(key) {
-    setSeverityFilter((cur) => (cur === key ? null : key));
-  }
-
   const totalVisible = severityFilter ? counts[severityFilter] : entries.length;
+  const paginationNote = pagination?.note || "";
 
   if (!entries.length) {
     return (
@@ -301,8 +236,22 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 bg-[#f8fffd] px-5 py-3">
+        <p className="text-sm font-bold text-slate-800">
+          All {entries.length} finding{entries.length === 1 ? "" : "s"} listed below
+        </p>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+          {counts.critical} critical · {counts.moderate} moderate · {counts.minor} minor.
+          Leave severity pills unselected to fix everything together in one pass.
+          {hiddenLocations > 0
+            ? ` ${hiddenLocations} additional matching locations are counted in the totals.`
+            : ""}
+        </p>
+        {paginationNote ? (
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{paginationNote}</p>
+        ) : null}
+      </div>
 
-      {/* ── Severity filter pills ───────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-5 py-4">
         {[["minor", counts.minor], ["moderate", counts.moderate], ["critical", counts.critical]].map(
           ([key, count]) => {
@@ -312,9 +261,11 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
               <button
                 key={key}
                 type="button"
-                onClick={() => toggleSeverity(key)}
+                onClick={() => {
+                  setSeverityFilter((cur) => (cur === key ? null : key));
+                  setSelectedPage("all");
+                }}
                 aria-pressed={active}
-                title={active ? `Clear ${s.label} filter` : `Show only ${key} issues`}
                 className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition hover:brightness-95 ${
                   active ? s.pillActive : s.pill
                 } ${count === 0 ? "opacity-40" : ""}`}
@@ -329,27 +280,23 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
           <button
             type="button"
             onClick={() => setSeverityFilter(null)}
-            className="text-[11px] font-semibold text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline"
+            className="text-[11px] font-semibold text-[#0d9488] underline-offset-2 hover:underline"
           >
-            Clear filter ×
+            Show all issues ×
           </button>
         ) : (
           <p className="ml-auto hidden text-[11px] text-slate-400 sm:block">
-            Click a severity to filter · checked page by page · line by line
+            Optional filter only — default is every issue
           </p>
         )}
       </div>
 
       <div className="grid lg:grid-cols-[200px_minmax(0,1fr)]">
-
-        {/* ── Pages sidebar — only pages with issues are listed ────────── */}
-        <aside className="flex max-h-[min(32rem,70vh)] flex-col border-b border-slate-100 bg-[#fafbfc] lg:border-b-0 lg:border-r">
+        <aside className="flex max-h-[min(40rem,78vh)] flex-col border-b border-slate-100 bg-[#fafbfc] lg:border-b-0 lg:border-r">
           <p className="shrink-0 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
-            Pages with issues
+            Pages
           </p>
           <nav className="pp-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3" aria-label="Issue pages">
-
-            {/* All-issues summary row */}
             <button
               type="button"
               onClick={() => setSelectedPage("all")}
@@ -360,7 +307,7 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
               }`}
             >
               <span className="font-medium">All issues</span>
-              {totalVisible > 0 && (
+              {totalVisible > 0 ? (
                 <span
                   className={`grid h-5 min-w-5 place-items-center rounded-full px-1.5 text-[10px] font-bold ${
                     severityFilter
@@ -370,65 +317,67 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
                 >
                   {totalVisible}
                 </span>
-              )}
+              ) : null}
             </button>
-
-            {/* Only pages that have at least one issue */}
-            {pages.length === 0 && (
-              <p className="px-3 py-2 text-xs text-slate-400">No page-level issues.</p>
-            )}
             {pages.map((page) => {
               const pageEntries = entriesByPage.get(page) || [];
               const count = pageEntries.length;
-              const active = selectedPage === page;
               return (
                 <button
                   key={page}
                   type="button"
                   onClick={() => setSelectedPage(page)}
                   className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm transition ${
-                    active
+                    selectedPage === page
                       ? "bg-slate-200/80 font-bold text-slate-800"
                       : "text-slate-600 hover:bg-slate-100"
                   }`}
                 >
                   <span>Page {page}</span>
-                  <span
-                    className={`grid h-5 min-w-5 place-items-center rounded-full px-1.5 text-[10px] font-bold ${
-                      SEVERITY[worstSeverity(pageEntries)].badge
-                    }`}
-                  >
-                    {count}
-                  </span>
+                  {count > 0 ? (
+                    <span
+                      className={`grid h-5 min-w-5 place-items-center rounded-full px-1.5 text-[10px] font-bold ${
+                        SEVERITY[worstSeverity(pageEntries)].badge
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-slate-300">0</span>
+                  )}
                 </button>
               );
             })}
           </nav>
         </aside>
 
-        {/* ── Main findings pane ─────────────────────────────────────────── */}
-        <section className="flex max-h-[min(32rem,70vh)] min-w-0 flex-col">
-
-          {/* Header */}
+        <section className="flex max-h-[min(40rem,78vh)] min-w-0 flex-col">
           <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 px-5 pb-0 pt-5 md:px-6 md:pt-6">
             <div>
               <h3 className="text-base font-bold text-slate-800">
                 {selectedPage === "all"
                   ? severityFilter
                     ? `All ${SEVERITY[severityFilter].label} issues`
-                    : "All pages"
+                    : "All issues (every severity)"
                   : `Page ${selectedPage}`}
                 <span className="ml-1 font-normal text-slate-400">
                   · {visibleEntries.length} issue{visibleEntries.length !== 1 ? "s" : ""}
                 </span>
               </h3>
-              {isReviewed && (
+              {isReviewed ? (
                 <p className="mt-0.5 text-[11px] font-semibold text-emerald-600">✓ Marked as reviewed</p>
-              )}
+              ) : null}
             </div>
             <button
               type="button"
-              onClick={toggleReviewed}
+              onClick={() => {
+                setReviewed((prev) => {
+                  const next = new Set(prev);
+                  const key = String(selectedPage);
+                  next.has(key) ? next.delete(key) : next.add(key);
+                  return next;
+                });
+              }}
               className="shrink-0 text-sm font-semibold text-[#16bfa8] underline-offset-2 hover:underline"
             >
               {isReviewed ? "Undo reviewed" : "Mark reviewed"}
@@ -444,63 +393,31 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
                 const lines = [
                   ...new Set(block.items.map((item) => item.line).filter((line) => line != null)),
                 ].sort((a, b) => a - b);
-                const blockOpen = block.items.some((item) => expandedXai.has(item.id));
                 return (
                   <div
                     key={block.key}
-                    className={`overflow-hidden rounded-xl border border-slate-200 border-l-4 ${s.border} ${s.rowBg} transition`}
+                    className={`overflow-hidden rounded-xl border border-slate-200 border-l-4 ${s.border} ${s.rowBg}`}
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200/70 px-4 py-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <LocationBadge
-                            page={block.page}
-                            line={lines.length === 1 ? lines[0] : null}
-                          />
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${s.tag}`}
-                          >
-                            {s.label}
-                          </span>
-                          <span className="text-[11px] font-semibold text-slate-500">
-                            {block.items.length} issue{block.items.length !== 1 ? "s" : ""}
-                            {lines.length > 1 ? ` · lines ${lines.join(", ")}` : ""}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-[11px] text-slate-400">
-                          Grouped by same page and same severity
-                        </p>
+                    <div className="border-b border-slate-200/70 px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <LocationBadge page={block.page} line={lines.length === 1 ? lines[0] : null} />
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${s.tag}`}
+                        >
+                          {block.items.length} on this page
+                        </span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const shouldOpen = !blockOpen;
-                          setExpandedXai((prev) => {
-                            const next = new Set(prev);
-                            block.items.forEach((item) => {
-                              if (shouldOpen) next.add(item.id);
-                              else next.delete(item.id);
-                            });
-                            return next;
-                          });
-                        }}
-                        className="shrink-0 text-xs font-semibold text-[#16bfa8] underline-offset-2 hover:underline"
-                      >
-                        {blockOpen ? "Hide details" : "Show details"}
-                      </button>
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          On each page, line 1 is the first typeable/visible line; numbers restart at 1
+                        </p>
                     </div>
 
                     <ul className="divide-y divide-slate-200/70">
                       {block.items.map((entry) => {
-                        const xaiOpen = expandedXai.has(entry.id);
+                        const entrySeverity = SEVERITY[entry.severity] || SEVERITY.minor;
                         return (
-                          <li key={entry.id}>
-                            <button
-                              type="button"
-                              onClick={() => toggleXai(entry.id)}
-                              className="flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-white/50"
-                              aria-expanded={xaiOpen}
-                            >
+                          <li key={entry.id} className="bg-white/70 px-4 py-4">
+                            <div className="flex flex-wrap items-start gap-3">
                               {entry.line != null ? (
                                 <span className="mt-0.5 shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-[#0d9488]">
                                   Line {entry.line}
@@ -510,46 +427,50 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
                                   Page
                                 </span>
                               )}
-                              <p className="min-w-0 flex-1 pt-0.5 text-sm font-semibold text-slate-700">
-                                {entry.finding}
-                              </p>
-                              <svg
-                                viewBox="0 0 24 24"
-                                className={`mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform ${xaiOpen ? "rotate-180" : ""}`}
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                aria-hidden="true"
-                              >
-                                <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-                              </svg>
-                            </button>
-
-                            {xaiOpen && (
-                              <div className="border-t border-slate-200/80 bg-white px-4 py-4">
-                                <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${entrySeverity.tag}`}
+                                  >
+                                    {entrySeverity.label}
+                                  </span>
+                                  <span className="text-[11px] font-semibold text-slate-400">
+                                    {entry.section}
+                                  </span>
+                                </div>
+                                <p className="mt-1 text-sm font-semibold text-slate-800">{entry.finding}</p>
+                                <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
                                   XAI explanation
                                 </p>
-                                <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                                <p className="mt-1 text-sm leading-relaxed text-slate-600">
                                   {entry.explanation}
                                 </p>
-                                {entry.recommendation && (
+                                {entry.recommendation ? (
                                   <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#16bfa8]/30 bg-[#f0fdfb] px-3 py-2">
-                                    <svg viewBox="0 0 24 24" className="mt-0.5 h-4 w-4 shrink-0 text-[#16bfa8]" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    <svg
+                                      viewBox="0 0 24 24"
+                                      className="mt-0.5 h-4 w-4 shrink-0 text-[#16bfa8]"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                                      />
                                     </svg>
-                                    <p className="text-xs font-medium text-[#0d7a6a]">
-                                      {entry.recommendation}
-                                    </p>
+                                    <p className="text-xs font-medium text-[#0d7a6a]">{entry.recommendation}</p>
                                   </div>
-                                )}
+                                ) : null}
                                 <p className="mt-2 text-[11px] text-slate-400">
                                   {entry.page != null ? `Page ${entry.page}` : "Document-level"}
                                   {entry.line != null ? `, Line ${entry.line}` : ""}
                                   {entry.section ? ` · ${entry.section}` : ""}
                                 </p>
                               </div>
-                            )}
+                            </div>
                           </li>
                         );
                       })}

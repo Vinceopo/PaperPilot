@@ -1,179 +1,59 @@
 /**
- * Mock document-analysis functions.
- *
- * Swap the body of `analyzeDocument` for a real API call when the backend is
- * ready — the hook and all UI components stay unchanged.
+ * Document analysis + PDF report helpers.
+ * analyzeDocument calls the live compliance API against saved format mechanics.
  */
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+import { runComplianceScan, uploadManuscriptVersion } from "../api.js";
+import { isServerId, mapComplianceScanToResult } from "./scanMapper.js";
 
 export const ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
-export const MAX_FILE_BYTES = 25_000_000; // 25 MB
+export const MAX_FILE_BYTES = 100_000_000;
 
-// ─── analyzeDocument ─────────────────────────────────────────────────────────
+function titleFromFile(file) {
+  return file?.name?.replace(/\.(pdf|docx)$/i, "") || "Manuscript";
+}
 
-/**
- * @param {File}   file
- * @param {string} [mechanicsId]
- * @param {string} [documentId]   Pass an existing ID to get a "new version" result.
- * @param {{ title?: string }} [opts]
- * @returns {Promise<object>}
- */
 export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) {
-  // Simulate network + AI processing delay (~2 s)
-  await new Promise((resolve) => setTimeout(resolve, 2200));
+  if (!mechanicsId) {
+    throw new Error("Select a format mechanics profile before analysing.");
+  }
 
-  // ── Uncomment to test the error state ──────────────────────────────────────
-  // if (Math.random() < 0.25)
-  //   throw new Error("Simulated error: document could not be parsed.");
-  // ──────────────────────────────────────────────────────────────────────────
+  let manuscriptId = isServerId(opts.manuscriptId) ? opts.manuscriptId : "";
+  let versionId = isServerId(opts.versionId) ? opts.versionId : "";
+  const title = String(opts.title || titleFromFile(file) || "").trim();
 
-  const id = documentId ?? `doc-${crypto.randomUUID().slice(0, 8)}`;
-  const documentTitle =
-    (opts.title && String(opts.title).trim()) ||
-    file.name.replace(/\.(pdf|docx)$/i, "");
+  if (!manuscriptId || !versionId) {
+    if (!file) {
+      throw new Error("Upload a manuscript before analysing.");
+    }
+    const created = await uploadManuscriptVersion({
+      file,
+      mechanicsId,
+      title,
+      manuscriptId: isServerId(documentId) ? documentId : manuscriptId || undefined,
+    });
+    const version = created.version || created;
+    manuscriptId =
+      version.manuscript_id ||
+      created.manuscript_id ||
+      created.manuscript?.id ||
+      created.created_manuscript?.id ||
+      manuscriptId;
+    versionId = version.id || created.version_id || versionId;
+  }
 
-  return {
-    documentId: id,
-    documentTitle,
-    campus: "Main Campus",
-    college: "College of Engineering",
-    scannedAt: new Date().toISOString(),
-    citationStyle: "APA 7th Edition",
-    overallScore: 62,
+  if (!isServerId(manuscriptId) || !isServerId(versionId)) {
+    throw new Error("The manuscript is not saved on the server yet. Upload it again, then analyse.");
+  }
 
-    scoreBreakdown: [
-      { metric: "Font & Size",    score: 45 },
-      { metric: "Line Spacing",   score: 70 },
-      { metric: "Page Margins",   score: 100 },
-      { metric: "Headings",       score: 60 },
-      { metric: "Citations",      score: 55 },
-      { metric: "Pagination",     score: 90 },
-    ],
-
-    formatChecks: [
-      {
-        id: "title-page",
-        name: "Missing institution on title page",
-        description: "Title page must include institution, title, author, and date",
-        result: "REVIEW",
-        severity: "minor",
-        finding: "Title page: institution name not found",
-        explanation: "The title page is missing the institution name required by the format mechanics.",
-        recommendation: "Add the institution name on the title page.",
-        locations: [{ page: 1, line: 3, section: "Title page" }],
-      },
-      {
-        id: "font-family-p2",
-        name: "Font family differs",
-        description: "Body text must use Times New Roman 12pt throughout",
-        result: "FAIL",
-        severity: "critical",
-        finding: "Font family: Arial detected, expected Times New Roman",
-        explanation: "Body text on this page uses Arial instead of the mechanics-approved Times New Roman.",
-        recommendation: "Apply Times New Roman to the body text on this page.",
-        locations: [{ page: 2, line: 8, section: "Introduction" }],
-      },
-      {
-        id: "line-spacing-p4",
-        name: "Line spacing too tight",
-        description: "All paragraphs must be double-spaced (2.0)",
-        result: "REVIEW",
-        severity: "minor",
-        finding: "Line spacing: 1.15 detected, expected 2.0",
-        explanation:
-          "Paragraph 1 is single-and-a-quarter spaced instead of the required double spacing.",
-        recommendation: "Set paragraph line spacing to 2.0.",
-        locations: [{ page: 4, line: 1, section: "Body" }],
-      },
-      {
-        id: "indent-p4",
-        name: "Inconsistent paragraph indentation",
-        description: "First line of each paragraph must be indented 0.5 inch",
-        result: "REVIEW",
-        severity: "moderate",
-        finding: "First-line indent: 0.75in on 3 paragraphs",
-        explanation:
-          "Three paragraphs use a 0.75in first-line indent instead of the 0.5in used elsewhere.",
-        recommendation: "Set first-line indent to 0.5 inch for these paragraphs.",
-        locations: [
-          { page: 4, line: 2, section: "Body" },
-          { page: 4, line: 3, section: "Body" },
-          { page: 4, line: 4, section: "Body" },
-        ],
-      },
-      {
-        id: "heading-p3",
-        name: "Heading hierarchy mismatch",
-        description: "Headings must follow APA Level 1–5 style rules",
-        result: "REVIEW",
-        severity: "moderate",
-        finding: "Heading level: Level-3 styled as Level-2",
-        explanation: "A Level-3 heading is formatted with Level-2 styling on this page.",
-        recommendation: "Apply the correct Level-3 heading style.",
-        locations: [{ page: 3, line: 5, section: "Chapter 2" }],
-      },
-      {
-        id: "citation-format",
-        name: "In-text citation year missing",
-        description: "Every in-text citation must follow APA 7th edition format",
-        result: "FAIL",
-        severity: "critical",
-        finding: "Citation format: publication year missing",
-        explanation: "An in-text citation is missing the publication year required by APA.",
-        recommendation: "Add the publication year inside the citation parentheses.",
-        locations: [{ page: 5, line: 12, section: "Discussion" }],
-      },
-      {
-        id: "reference-list",
-        name: "Reference list hanging indent",
-        description: "Hanging indent, alphabetical order, consistent APA style",
-        result: "FAIL",
-        severity: "critical",
-        finding: "Reference list: hanging indent not applied",
-        explanation: "Reference entries do not use the hanging-indent formatting required by the mechanics.",
-        recommendation: "Apply a 0.5 inch hanging indent to the reference list.",
-        locations: [
-          { page: 5, line: 20, section: "References" },
-          { page: 5, line: 21, section: "References" },
-          { page: 5, line: 22, section: "References" },
-        ],
-      },
-      {
-        id: "font-size-p3",
-        name: "Font size out of spec",
-        description: "Body text must use 12 pt throughout",
-        result: "FAIL",
-        severity: "critical",
-        finding: "Font size: 10 pt detected, expected 12 pt",
-        explanation: "Two lines in Chapter 2 body text use 10 pt instead of the required 12 pt.",
-        recommendation: "Select the paragraph text and change the font size to 12 pt.",
-        locations: [
-          { page: 3, line: 9, section: "Chapter 2" },
-          { page: 3, line: 11, section: "Chapter 2" },
-        ],
-      },
-      {
-        id: "margins",
-        name: "Page Margins",
-        description: "All four margins must be exactly 1 inch",
-        result: "PASS",
-      },
-      {
-        id: "page-numbers",
-        name: "Page Numbering",
-        description: "Page numbers must be centered at the bottom from Chapter 1",
-        result: "PASS",
-      },
-      {
-        id: "paper-size",
-        name: "Paper Size",
-        description: "Document must be formatted for Letter (8.5 × 11 in)",
-        result: "PASS",
-      },
-    ],
-    pageCount: 5,
-  };
+  const scan = await runComplianceScan({ manuscriptId, versionId, mechanicsId });
+  return mapComplianceScanToResult(scan, {
+    documentId: manuscriptId,
+    documentTitle: title,
+    citationStyle: opts.citationStyle || "APA",
+    pageCount: opts.pageCount,
+    mechanicsId,
+  });
 }
 
 // ─── downloadReport ──────────────────────────────────────────────────────────

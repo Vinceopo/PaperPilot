@@ -8,7 +8,7 @@ function validateFile(file) {
   if (!file) return "Choose a manuscript.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
   if (![".pdf", ".docx"].includes(ext)) return "Manuscript must be a PDF or DOCX file.";
-  if (file.size > 25_000_000) return "File must be 25 MB or smaller.";
+  if (file.size > 100_000_000) return "File must be 100 MB or smaller.";
   return "";
 }
 
@@ -81,7 +81,7 @@ export default function ManuscriptPanel({
       setPreview({
         filename: nextFile.name,
         text_preview: "",
-        error: err.message || "Could not preview this file.",
+        page_count: 0,
       });
     } finally {
       if (previewRequest.current === requestId) setPreviewBusy(false);
@@ -137,6 +137,9 @@ export default function ManuscriptPanel({
         setSuccess("Manuscript uploaded completely.");
         setConfirmOpen(false);
         setPendingUpload(null);
+      } else {
+        setConfirmOpen(false);
+        setPendingUpload(null);
       }
     } finally {
       setConfirmBusy(false);
@@ -145,6 +148,8 @@ export default function ManuscriptPanel({
 
   const showPreview = Boolean(file);
   const panelBusy = busy || previewBusy || confirmBusy;
+  const previewUploading = Boolean(busy || confirmBusy);
+  const previewPreparing = Boolean(previewBusy && file && !previewUploading);
 
   return (
     <section
@@ -155,15 +160,6 @@ export default function ManuscriptPanel({
       }`}
       aria-disabled={!mechanicsSelected}
     >
-      {busy && !confirmBusy && (
-        <div className="absolute inset-0 z-10 grid place-items-center rounded-xl bg-white/70 backdrop-blur-[1px]">
-          <div className="flex flex-col items-center gap-3 text-[#16bfa8]">
-            <Spinner className="h-10 w-10 border-[3px]" />
-            <p className="text-sm font-bold text-slate-700">Uploading manuscript…</p>
-          </div>
-        </div>
-      )}
-
       <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#16bfa8]">Step 2 of 3</p>
       <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Manuscript</h2>
       <p className="mt-1 text-xs leading-relaxed text-slate-400">
@@ -212,34 +208,33 @@ export default function ManuscriptPanel({
         <div className={`grid gap-4 ${showPreview ? "lg:grid-cols-2" : ""}`}>
           <label
             className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 text-center ${
-              mechanicsSelected
+              mechanicsSelected && !panelBusy
                 ? "cursor-pointer border-[#18bda9] bg-[#f7fcfc] hover:bg-[#f0fbf9]"
-                : "cursor-not-allowed border-slate-300 bg-slate-50"
+                : mechanicsSelected
+                  ? "cursor-wait border-[#18bda9] bg-[#f7fcfc]"
+                  : "cursor-not-allowed border-slate-300 bg-slate-50"
             }`}
           >
-            {previewBusy ? (
-              <span className="flex flex-col items-center gap-3 text-[#16bfa8]">
-                <Spinner className="h-10 w-10 border-[3px]" />
-                <span className="text-sm font-bold text-slate-700">Preparing preview…</span>
+            <>
+              <span className="grid h-11 w-11 place-items-center rounded-full bg-[#dcf7f2] text-3xl font-light text-[#16bfa8]">
+                ↑
               </span>
-            ) : (
-              <>
-                <span className="grid h-11 w-11 place-items-center rounded-full bg-[#dcf7f2] text-3xl font-light text-[#16bfa8]">
-                  ↑
-                </span>
-                <p className="mt-3 text-sm font-bold text-slate-700">
-                  {file ? file.name : "Drop your manuscript here"}
-                </p>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  {file
-                    ? "Preview appears beside this panel — confirm Upload when ready"
-                    : "Supports .pdf and .docx · Max 25 MB"}
-                </p>
-                <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
-                  Browse files
-                </span>
-              </>
-            )}
+              <p className="mt-3 text-sm font-bold text-slate-700">
+                {file ? file.name : "Drop your manuscript here"}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {file
+                  ? previewPreparing
+                    ? "Preparing document preview on the right…"
+                    : previewUploading
+                      ? "Uploading — see progress beside this panel"
+                      : "Preview appears beside this panel — confirm Upload when ready"
+                  : "Supports .pdf and .docx · Max 100 MB"}
+              </p>
+              <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
+                Browse files
+              </span>
+            </>
             <input
               ref={inputRef}
               type="file"
@@ -258,38 +253,69 @@ export default function ManuscriptPanel({
           </label>
 
           {showPreview && (
-            <div className="flex min-h-44 flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
+            <div className="relative flex min-h-44 flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
               <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2.5">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   Manuscript preview
                 </p>
-                {preview?.page_count ? (
+                {previewUploading ? (
+                  <span className="text-[10px] font-semibold text-[#0d9488]">Uploading…</span>
+                ) : previewPreparing ? (
+                  <span className="text-[10px] font-semibold text-[#0d9488]">Preparing…</span>
+                ) : preview?.page_count && file?.name?.toLowerCase().endsWith(".pdf") ? (
                   <span className="text-[10px] font-semibold text-slate-400">
                     {preview.page_count} page{preview.page_count === 1 ? "" : "s"} · scroll to read
                   </span>
                 ) : (
-                  <span className="text-[10px] font-semibold text-slate-400">Scroll to read</span>
+                  <span className="text-[10px] font-semibold text-slate-400">
+                    Original document · scroll to read
+                  </span>
                 )}
               </div>
 
-              <div className="pp-scroll max-h-[min(36rem,72vh)] min-h-[22rem] flex-1 overflow-y-auto px-3 py-4 sm:px-5">
-                {previewBusy && (
-                  <div className="flex h-48 items-center justify-center gap-2 text-xs text-slate-500">
-                    <Spinner className="h-4 w-4 text-[#16bfa8]" />
-                    Preparing document pages…
-                  </div>
-                )}
-                {!previewBusy && preview?.error && (
+              <div
+                className={`relative max-h-[min(36rem,72vh)] min-h-[22rem] flex-1 ${
+                  file?.name?.toLowerCase().endsWith(".pdf")
+                    ? "overflow-hidden bg-white"
+                    : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
+                }`}
+              >
+                {preview?.error ? (
                   <p className="rounded-lg bg-white px-4 py-3 text-xs text-rose-500 shadow-sm">
                     {preview.error}
                   </p>
+                ) : (
+                  <DocumentPagePreview
+                    file={file}
+                    preview={preview}
+                    emptyLabel="No manuscript preview available yet."
+                  />
                 )}
-                {!previewBusy && !preview?.error && (
-                  <DocumentPagePreview preview={preview} />
+
+                {(previewPreparing || previewUploading) && (
+                  <div
+                    className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-[#e8ecf1]/88 backdrop-blur-[2px]"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <Spinner className="h-12 w-12 border-[3px] text-[#16bfa8]" />
+                    <p className="text-sm font-bold text-slate-800">
+                      {previewUploading ? "Uploading manuscript…" : "Opening manuscript preview…"}
+                    </p>
+                    <p className="max-w-[16rem] text-center text-[11px] leading-relaxed text-slate-500">
+                      {previewUploading
+                        ? "Please wait while your academic document is saved. The upload button unlocks when this finishes."
+                        : "Please wait while your academic document is prepared for display."}
+                    </p>
+                  </div>
                 )}
               </div>
               <p className="border-t border-slate-200/80 bg-[#f3f5f7] px-4 py-2 text-[10px] text-slate-400">
-                Live preview of your uploaded manuscript — scroll to see pages below.
+                {previewUploading
+                  ? "Uploading in progress — stay on this page until it completes."
+                  : previewPreparing
+                    ? "Preparing live preview of your academic document…"
+                    : "Live preview of your uploaded manuscript — scroll to see pages below."}
               </p>
             </div>
           )}
@@ -307,9 +333,13 @@ export default function ManuscriptPanel({
           disabled={!mechanicsSelected || !file || panelBusy}
           className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-2.5 text-xs font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {busy ? (
+          {previewUploading ? (
             <>
               <Spinner /> Uploading…
+            </>
+          ) : previewPreparing ? (
+            <>
+              <Spinner /> Preparing preview…
             </>
           ) : manuscriptId ? (
             "Upload new version"
@@ -324,7 +354,7 @@ export default function ManuscriptPanel({
         title={manuscriptId ? "Upload new version?" : "Upload manuscript?"}
         message={
           pendingUpload
-            ? `Upload “${pendingUpload.file?.name}” as “${pendingUpload.title}” and continue to File Details?`
+            ? `Save “${pendingUpload.file?.name}” as “${pendingUpload.title}” on the server? File Details opens only after the upload finishes.`
             : ""
         }
         confirmLabel={manuscriptId ? "Upload version" : "Upload & continue"}

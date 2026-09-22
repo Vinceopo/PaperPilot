@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { browserLocalPersistence, getAuth, setPersistence } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 import { getStorage } from "firebase/storage";
 
@@ -22,3 +22,9 @@ export const firebaseReady = configured;
 export const auth = app ? getAuth(app) : null;
 export const db = app ? getDatabase(app) : null;
 export const storage = app ? getStorage(app) : null;
+
+// Keep signed-in users across refreshes and browser restarts by default.
+// Login/register can still switch to session-only when "Remember me" is off.
+if (auth) {
+  setPersistence(auth, browserLocalPersistence).catch(() => {});
+}

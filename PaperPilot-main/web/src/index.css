@@ -272,3 +272,18 @@ input[type="checkbox"] {
     overscroll-behavior: contain;
   }
 }
+
+.pp-docx-host {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+.pp-docx-host .docx-wrapper {
+  background: transparent !important;
+  padding: 8px 0 !important;
+}
+
+.pp-docx-host .docx-wrapper > section {
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  margin: 0 auto 1.25rem !important;
+}

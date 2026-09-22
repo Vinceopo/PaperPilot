@@ -23,7 +23,7 @@ function validateFile(file) {
   if (!file) return "Choose a mechanics document.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
   if (!ACCEPTED.includes(ext)) return "Mechanics must be a PDF or DOCX file.";
-  if (file.size > 25_000_000) return "File must be 25 MB or smaller.";
+  if (file.size > 100_000_000) return "File must be 100 MB or smaller.";
   return "";
 }
 
@@ -580,7 +580,7 @@ export default function MechanicsPanel({
                   <span className="mt-1 text-[11px] text-slate-400">
                     {file
                       ? "Confirm extraction to fill Format Fields beside this panel"
-                      : "Supports .pdf and .docx · Max 25 MB"}
+                      : "Supports .pdf and .docx · Max 100 MB"}
                   </span>
                   <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                     Browse files
@@ -606,20 +606,28 @@ export default function MechanicsPanel({
                   <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     Mechanics preview
                   </p>
-                  {extractMeta.page_count ? (
+                  {file?.name?.toLowerCase().endsWith(".pdf") && extractMeta.page_count ? (
                     <span className="text-[10px] font-semibold text-slate-400">
                       {extractMeta.page_count} page
                       {extractMeta.page_count === 1 ? "" : "s"} · scroll to read
                     </span>
                   ) : (
-                    <span className="text-[10px] font-semibold text-slate-400">Scroll to read</span>
+                    <span className="text-[10px] font-semibold text-slate-400">
+                      Original document · scroll to read
+                    </span>
                   )}
                 </div>
-                <div className="pp-scroll max-h-[min(36rem,72vh)] min-h-[20rem] flex-1 overflow-y-auto px-3 py-4 sm:px-5">
+                <div
+                  className={`max-h-[min(36rem,72vh)] min-h-[20rem] flex-1 ${
+                    file?.name?.toLowerCase().endsWith(".pdf")
+                      ? "overflow-hidden bg-white"
+                      : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
+                  }`}
+                >
                   <DocumentPagePreview
+                    file={file}
                     preview={extractMeta}
                     emptyLabel="No mechanics preview available yet."
-                    centerFirstPage={false}
                   />
                 </div>
               </div>
