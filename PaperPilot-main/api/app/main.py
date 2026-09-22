@@ -2,9 +2,10 @@ import io
 import json
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pypdf import PdfReader
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import settings
 from app.compliance import run_compliance_scan
@@ -12,11 +13,14 @@ from app.compliance_db import (
     MechanicsInUse,
     MechanicsNameConflict,
     UpgradeRequired,
+    activate_premium_from_payment,
+    cancel_subscription,
     check_scan_eligibility,
     create_mechanics,
     create_version,
     delete_mechanics,
     get_mechanics,
+    get_pending_checkout,
     get_scan,
     get_version,
     init_db as init_compliance_db,
@@ -26,6 +30,8 @@ from app.compliance_db import (
     list_versions,
     persist_scan,
     require_premium,
+    set_subscription_plan,
+    store_pending_checkout,
     subscription_snapshot,
     update_mechanics,
 )
@@ -40,11 +46,21 @@ from app.emailer import send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
 from app.otp import PURPOSES, can_send, consume_challenge, generate_code, init_db, store_otp, verify_otp
+from app.paymongo import (
+    PayMongoError,
+    PREMIUM_AMOUNT_PESOS,
+    create_checkout_session,
+    extract_checkout_session,
+    extract_event_type,
+    payment_method_from_session,
+    verify_webhook_signature,
+)
 from app.profiles import release_username, reserve_username, save_profile, username_taken
 from app.rules import evaluate_manuscript
 from app.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
+    CancelSubscriptionRequest,
     OtpSendRequest,
     OtpVerifyRequest,
     RegisterCheckRequest,
@@ -54,10 +70,32 @@ from app.schemas import (
     ComplianceScanRequest,
     MechanicsSaveRequest,
     MechanicsUpdateRequest,
+    SubscribeRequest,
 )
 from app.validators import email_error, name_error, normalize_email, password_error, username_error
 
+
+class StripApiPrefixMiddleware:
+    """Vercel serves the API under /api/*; strip that prefix before FastAPI routing."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] in {"http", "websocket"}:
+            path = scope.get("path") or ""
+            if path == "/api" or path.startswith("/api/"):
+                stripped = path[4:] or "/"
+                scope = dict(scope)
+                scope["path"] = stripped
+                raw = scope.get("raw_path")
+                if isinstance(raw, (bytes, bytearray)):
+                    scope["raw_path"] = stripped.encode("utf-8")
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title="PaperPilot API", version="0.1.0")  # reload settings after .env
+app.add_middleware(StripApiPrefixMiddleware)
 init_db()
 init_compliance_db()
 
@@ -537,6 +575,149 @@ def compliance_scan_detail(scan_id: str, uid: str = Depends(authenticated_uid)):
 @app.get("/subscription")
 def subscription_detail(uid: str = Depends(authenticated_uid)):
     return subscription_snapshot(uid)
+
+
+@app.post("/subscription/subscribe")
+def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authenticated_uid)):
+    """
+    Free → immediate downgrade.
+    Premium → create PayMongo Hosted Checkout session and return checkout_url.
+    Premium is activated only after webhook checkout_session.payment.paid.
+    """
+    plan = body.plan.strip().lower()
+    try:
+        if plan == "free":
+            return set_subscription_plan(uid, tier="free")
+
+        billing_period = (body.billing_period or "monthly").strip().lower()
+        if billing_period not in {"monthly", "annual"}:
+            raise HTTPException(status_code=400, detail="Billing period must be monthly or annual.")
+
+        session = create_checkout_session(owner_uid=uid, billing_period=billing_period)
+        store_pending_checkout(
+            uid,
+            checkout_session_id=session["id"],
+            billing_period=billing_period,
+            amount=float(session["amount"]),
+            checkout_url=session["checkout_url"],
+        )
+        return {
+            "status": "pending_payment",
+            "checkout_url": session["checkout_url"],
+            "checkout_session_id": session["id"],
+            "billing_period": billing_period,
+            "amount": session["amount"],
+            "amount_centavos": session["amount_centavos"],
+            "currency": "PHP",
+            "message": "Redirect the user to checkout_url to complete payment on PayMongo.",
+        }
+    except PayMongoError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.post("/subscription/cancel")
+def subscription_cancel(
+    body: CancelSubscriptionRequest | None = None,
+    uid: str = Depends(authenticated_uid),
+):
+    current = subscription_snapshot(uid)
+    if current.get("tier") != "premium" and current.get("status") not in {"active", "canceled"}:
+        raise HTTPException(status_code=400, detail="No active Premium subscription to cancel.")
+    immediate = True if body is None else bool(body.immediate)
+    try:
+        return cancel_subscription(uid, immediate=immediate)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.get("/subscription/history")
+def subscription_history(uid: str = Depends(authenticated_uid)):
+    snap = subscription_snapshot(uid)
+    return {"history": snap.get("history") or []}
+
+
+@app.post("/webhooks/paymongo")
+async def paymongo_webhook(request: Request):
+    """
+    Public PayMongo webhook (no Firebase auth).
+    Verify Paymongo-Signature, then activate Premium on checkout_session.payment.paid.
+    """
+    raw_body = await request.body()
+    signature = request.headers.get("Paymongo-Signature") or request.headers.get("paymongo-signature")
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body.") from None
+
+    event_type = extract_event_type(payload)
+    livemode = None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(data, dict) and "livemode" in data:
+        livemode = bool(data.get("livemode"))
+
+    try:
+        if not verify_webhook_signature(raw_body, signature, livemode=livemode):
+            raise HTTPException(status_code=400, detail="Invalid Paymongo-Signature.")
+    except PayMongoError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    if event_type == "checkout_session.payment.paid":
+        session = extract_checkout_session(payload)
+        if not session:
+            return {"ok": True, "ignored": True, "reason": "missing_checkout_session"}
+
+        session_id = str(session.get("id") or "")
+        attrs = session.get("attributes") if isinstance(session.get("attributes"), dict) else {}
+        metadata = attrs.get("metadata") if isinstance(attrs.get("metadata"), dict) else {}
+        pending = get_pending_checkout(session_id) if session_id else None
+
+        owner_uid = (
+            (pending or {}).get("owner_uid")
+            or metadata.get("owner_uid")
+            or metadata.get("uid")
+        )
+        billing_period = (
+            (pending or {}).get("billing_period")
+            or metadata.get("billing_period")
+            or "monthly"
+        )
+        if not owner_uid:
+            return {"ok": True, "ignored": True, "reason": "missing_owner_uid"}
+
+        amount = None
+        if pending and pending.get("amount") is not None:
+            amount = float(pending["amount"])
+        else:
+            amount = PREMIUM_AMOUNT_PESOS.get(str(billing_period).lower(), 949.0)
+
+        payments = attrs.get("payments") if isinstance(attrs.get("payments"), list) else []
+        payment_id = None
+        if payments and isinstance(payments[0], dict):
+            payment_id = payments[0].get("id")
+
+        method = payment_method_from_session(session) or "paymongo"
+        try:
+            snap = activate_premium_from_payment(
+                str(owner_uid),
+                billing_period=str(billing_period),
+                payment_method=method,
+                amount=amount,
+                checkout_session_id=session_id or None,
+                payment_id=str(payment_id) if payment_id else None,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        return {"ok": True, "activated": True, "tier": snap.get("tier"), "uid": owner_uid}
+
+    # Ack other subscribed events (payment.paid, payment.failed, refunds, subscriptions).
+    return {"ok": True, "ignored": True, "event": event_type or "unknown"}
 
 
 def _require(error: str | None) -> None:

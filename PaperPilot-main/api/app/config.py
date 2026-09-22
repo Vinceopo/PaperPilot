@@ -43,5 +43,11 @@ class Settings(BaseSettings):
     premium_scan_limit: int = 50
     max_upload_bytes: int = 25_000_000
 
+    # PayMongo Hosted Checkout (server-only secrets — never ship to the web client).
+    paymongo_secret_key: str = ""
+    paymongo_webhook_secret: str = ""
+    app_public_url: str = "https://paperpilotph.vercel.app"
+    paymongo_payment_methods: str = "card,gcash,paymaya"
+
 
 settings = Settings()

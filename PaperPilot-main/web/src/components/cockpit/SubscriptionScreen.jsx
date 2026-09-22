@@ -1,10 +1,10 @@
 /**
- * Subscription management — view plans, billing period, payment, subscribe,
- * manage/cancel, renewal date, and history. Payments are simulated (demo).
+ * Subscription management — plan picker + PayMongo Hosted Checkout redirect.
+ * Card / GCash / Maya are collected on PayMongo's hosted page, not in-app.
  */
 
-import { useMemo, useState } from "react";
-import { cancelSubscription, subscribeToPlan } from "../../api.js";
+import { useEffect, useMemo, useState } from "react";
+import { cancelSubscription, getSubscription, subscribeToPlan } from "../../api.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 
@@ -51,6 +51,8 @@ export default function SubscriptionScreen({
   onSubscriptionChange,
   onBack,
   onBackToDashboard,
+  billingReturn = null,
+  onBillingReturnHandled,
 }) {
   const tier = String(subscription?.tier || "free").toLowerCase();
   const isPremium = tier === "premium";
@@ -58,16 +60,7 @@ export default function SubscriptionScreen({
   const [billingPeriod, setBillingPeriod] = useState(
     subscription?.billing_period === "annual" ? "annual" : "monthly"
   );
-  const [selectedPlan, setSelectedPlan] = useState(isPremium ? "premium" : "premium");
-  const [paymentMethod, setPaymentMethod] = useState("card");
-  const [card, setCard] = useState({
-    number: "",
-    expiry: "",
-    cvv: "",
-    name: "",
-    email: "",
-  });
-  const [walletId, setWalletId] = useState("");
+  const [selectedPlan, setSelectedPlan] = useState("premium");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -81,73 +74,79 @@ export default function SubscriptionScreen({
   const price = billingPeriod === "annual" ? PREMIUM_ANNUAL : PREMIUM_MONTHLY;
   const subscribeCta =
     billingPeriod === "annual"
-      ? `Subscribe Now — ${peso(PREMIUM_ANNUAL)}/year`
-      : `Subscribe Now — ${peso(PREMIUM_MONTHLY)}/month`;
+      ? `Continue to PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
+      : `Continue to PayMongo — ${peso(PREMIUM_MONTHLY)}/month`;
 
   const history = useMemo(
     () => (Array.isArray(subscription?.history) ? subscription.history : []),
     [subscription]
   );
 
-  function resetCheckout() {
-    setError("");
-    setSuccess("");
-    setCard({ number: "", expiry: "", cvv: "", name: "", email: "" });
-    setWalletId("");
-    setPaymentMethod("card");
-    setSelectedPlan("premium");
-  }
-
-  function cancelPayment() {
-    resetCheckout();
-    setCheckoutOpen(false);
-    setSuccess("Payment canceled. No charges were made.");
-    setPaymentCanceled(true);
-  }
-
-  function validatePayment() {
-    if (selectedPlan !== "premium") return "";
-    if (paymentMethod === "card") {
-      const digits = card.number.replace(/\D/g, "");
-      if (digits.length < 13) return "Enter a valid card number.";
-      if (!/^\d{2}\s*\/\s*\d{2}$/.test(card.expiry.trim())) return "Enter expiry as MM / YY.";
-      if (card.cvv.replace(/\D/g, "").length < 3) return "Enter a valid CVV.";
-      if (!card.name.trim()) return "Enter the name on the card.";
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(card.email.trim())) return "Enter a valid billing email.";
-      return "";
+  useEffect(() => {
+    if (!billingReturn) return;
+    if (billingReturn === "canceled") {
+      setPaymentCanceled(true);
+      setSuccess("Payment canceled on PayMongo. No charges were made.");
+      setCheckoutOpen(true);
+      onBillingReturnHandled?.();
+      return;
     }
-    if (!walletId.trim() || walletId.replace(/\D/g, "").length < 11) {
-      return `Enter a valid ${paymentMethod === "gcash" ? "GCash" : "Maya"} mobile number.`;
+    if (billingReturn === "success") {
+      setPaymentCanceled(false);
+      setBusy(true);
+      setSuccess("Payment received. Activating Premium…");
+      let cancelled = false;
+      (async () => {
+        try {
+          // Webhook may land slightly after the redirect — poll briefly.
+          for (let i = 0; i < 8; i += 1) {
+            const next = await getSubscription();
+            if (cancelled) return;
+            onSubscriptionChange?.(next);
+            if (String(next?.tier || "").toLowerCase() === "premium") {
+              setCheckoutOpen(false);
+              setSuccess("Welcome to Premium! Your subscription is now active.");
+              return;
+            }
+            await new Promise((r) => setTimeout(r, 1500));
+          }
+          setSuccess(
+            "Payment submitted. Premium will activate when PayMongo confirms the payment (usually a few seconds)."
+          );
+        } catch (err) {
+          if (!cancelled) {
+            setError(err.message || "Could not refresh subscription status.");
+          }
+        } finally {
+          if (!cancelled) {
+            setBusy(false);
+            onBillingReturnHandled?.();
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
     }
-    return "";
-  }
+  }, [billingReturn, onBillingReturnHandled, onSubscriptionChange]);
 
-  async function handleSubscribe(e) {
+  function handleSubscribe(e) {
     e?.preventDefault?.();
     setError("");
     setSuccess("");
+    setPaymentCanceled(false);
 
     if (selectedPlan === "free") {
       if (!isPremium) {
         setSuccess("You are already on the Free plan.");
         return;
       }
-      setConfirmPayOpen(true);
       setPendingPayEvent({ plan: "free" });
+      setConfirmPayOpen(true);
       return;
     }
 
-    const issue = validatePayment();
-    if (issue) {
-      setError(issue);
-      return;
-    }
-
-    setPendingPayEvent({
-      plan: "premium",
-      billingPeriod,
-      paymentMethod,
-    });
+    setPendingPayEvent({ plan: "premium", billingPeriod });
     setConfirmPayOpen(true);
   }
 
@@ -162,25 +161,32 @@ export default function SubscriptionScreen({
         onSubscriptionChange?.(next);
         setCheckoutOpen(false);
         setSuccess("Switched to Free plan.");
-      } else {
-        const next = await subscribeToPlan({
-          plan: "premium",
-          billingPeriod: pendingPayEvent.billingPeriod,
-          paymentMethod: pendingPayEvent.paymentMethod,
-        });
-        onSubscriptionChange?.(next);
-        setCheckoutOpen(false);
-        resetCheckout();
-        setSuccess(
-          isPremium
-            ? "Premium plan updated successfully."
-            : "Welcome to Premium! Your subscription is now active."
-        );
+        setConfirmPayOpen(false);
+        setPendingPayEvent(null);
+        return;
       }
+
+      const result = await subscribeToPlan({
+        plan: "premium",
+        billingPeriod: pendingPayEvent.billingPeriod,
+      });
+
+      if (result?.checkout_url) {
+        setSuccess("Redirecting to PayMongo secure checkout…");
+        window.location.assign(result.checkout_url);
+        return;
+      }
+
+      // Fallback if API ever returns an activated snapshot (e.g. free path).
+      onSubscriptionChange?.(result);
+      setCheckoutOpen(false);
+      setSuccess("Subscription updated.");
       setConfirmPayOpen(false);
       setPendingPayEvent(null);
     } catch (err) {
-      setError(err.message || "Payment could not be completed.");
+      setError(err.message || "Could not start checkout.");
+      setConfirmPayOpen(false);
+      setPendingPayEvent(null);
     } finally {
       setBusy(false);
     }
@@ -220,7 +226,7 @@ export default function SubscriptionScreen({
           <p className="mt-1 text-sm text-slate-500">
             {isPremium && !checkoutOpen
               ? "View status, renewal date, and billing history."
-              : "Built for student budgets."}
+              : "Built for student budgets. Pay securely via PayMongo."}
           </p>
         </div>
         {isPremium && (
@@ -261,7 +267,6 @@ export default function SubscriptionScreen({
         </div>
       )}
 
-      {/* Manage current subscription */}
       {isPremium && !checkoutOpen && (
         <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -366,11 +371,9 @@ export default function SubscriptionScreen({
         </section>
       )}
 
-      {/* Checkout / change plan */}
       {checkoutOpen && (
         <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <section className="space-y-5">
-            {/* Billing period */}
             <div className="inline-flex rounded-full border border-slate-200 bg-white p-1 shadow-sm">
               {[
                 { id: "monthly", label: "Monthly" },
@@ -392,7 +395,6 @@ export default function SubscriptionScreen({
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              {/* Free */}
               <div
                 role="button"
                 tabIndex={0}
@@ -423,7 +425,6 @@ export default function SubscriptionScreen({
                 </span>
               </div>
 
-              {/* Premium */}
               <div
                 role="button"
                 tabIndex={0}
@@ -464,108 +465,13 @@ export default function SubscriptionScreen({
             </div>
           </section>
 
-          {/* Payment panel */}
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h3 className="text-base font-bold text-[#172033]">Payment details</h3>
-            <p className="mt-0.5 text-xs text-slate-400">Demo checkout — no real charge is made.</p>
-
-            <div className="mt-4 flex gap-2">
-              {[
-                { id: "card", label: "Card" },
-                { id: "gcash", label: "GCash" },
-                { id: "maya", label: "Maya" },
-              ].map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  disabled={selectedPlan === "free"}
-                  onClick={() => setPaymentMethod(m.id)}
-                  className={`flex-1 rounded-lg border px-3 py-2 text-xs font-bold transition disabled:opacity-40 ${
-                    paymentMethod === m.id
-                      ? "border-[#16bfa8] bg-[#e8faf7] text-[#0f766e]"
-                      : "border-slate-200 text-slate-500 hover:bg-slate-50"
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+            <h3 className="text-base font-bold text-[#172033]">Checkout</h3>
+            <p className="mt-0.5 text-xs text-slate-400">
+              You will complete payment on PayMongo&apos;s secure Hosted Checkout (card, GCash, Maya).
+            </p>
 
             <form onSubmit={handleSubscribe} className="mt-5 space-y-3" noValidate>
-              {selectedPlan === "premium" && paymentMethod === "card" && (
-                <>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    Card number
-                    <input
-                      value={card.number}
-                      onChange={(e) =>
-                        setCard((c) => ({
-                          ...c,
-                          number: e.target.value.replace(/[^\d ]/g, "").slice(0, 19),
-                        }))
-                      }
-                      placeholder="4242 4242 4242 4242"
-                      className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm outline-none focus:border-[#16bfa8]"
-                    />
-                  </label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      Expiry date
-                      <input
-                        value={card.expiry}
-                        onChange={(e) => setCard((c) => ({ ...c, expiry: e.target.value.slice(0, 7) }))}
-                        placeholder="08 / 28"
-                        className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm outline-none focus:border-[#16bfa8]"
-                      />
-                    </label>
-                    <label className="block text-[11px] font-semibold text-slate-600">
-                      CVV
-                      <input
-                        value={card.cvv}
-                        onChange={(e) =>
-                          setCard((c) => ({ ...c, cvv: e.target.value.replace(/\D/g, "").slice(0, 4) }))
-                        }
-                        placeholder="•••"
-                        type="password"
-                        autoComplete="off"
-                        className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm outline-none focus:border-[#16bfa8]"
-                      />
-                    </label>
-                  </div>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    Name on card
-                    <input
-                      value={card.name}
-                      onChange={(e) => setCard((c) => ({ ...c, name: e.target.value }))}
-                      placeholder="Juan Rivera"
-                      className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm outline-none focus:border-[#16bfa8]"
-                    />
-                  </label>
-                  <label className="block text-[11px] font-semibold text-slate-600">
-                    Billing email
-                    <input
-                      type="email"
-                      value={card.email}
-                      onChange={(e) => setCard((c) => ({ ...c, email: e.target.value }))}
-                      placeholder="you@email.com"
-                      className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm outline-none focus:border-[#16bfa8]"
-                    />
-                  </label>
-                </>
-              )}
-
-              {selectedPlan === "premium" && paymentMethod !== "card" && (
-                <label className="block text-[11px] font-semibold text-slate-600">
-                  {paymentMethod === "gcash" ? "GCash" : "Maya"} mobile number
-                  <input
-                    value={walletId}
-                    onChange={(e) => setWalletId(e.target.value.replace(/\D/g, "").slice(0, 11))}
-                    placeholder="09xxxxxxxxx"
-                    className="mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm outline-none focus:border-[#16bfa8]"
-                  />
-                </label>
-              )}
-
               <div className="rounded-xl border border-slate-100 bg-[#f8f9fb] px-4 py-3">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                   Payment summary
@@ -588,6 +494,14 @@ export default function SubscriptionScreen({
                 </div>
               </div>
 
+              {selectedPlan === "premium" && (
+                <ul className="space-y-1.5 text-xs text-slate-500">
+                  <li>• Card, GCash, and Maya are available on PayMongo checkout</li>
+                  <li>• Premium activates after PayMongo confirms payment</li>
+                  <li>• Cancel anytime from this screen</li>
+                </ul>
+              )}
+
               <button
                 type="submit"
                 disabled={busy}
@@ -603,18 +517,22 @@ export default function SubscriptionScreen({
                     : subscribeCta}
               </button>
 
-              {selectedPlan === "premium" && (
+              {selectedPlan === "premium" && isPremium && (
                 <button
                   type="button"
-                  onClick={cancelPayment}
+                  onClick={() => {
+                    setCheckoutOpen(false);
+                    setError("");
+                    setSuccess("");
+                  }}
                   className="w-full rounded-xl border border-slate-200 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                 >
-                  Cancel payment
+                  Back to current plan
                 </button>
               )}
 
               <p className="text-center text-[10px] text-slate-400">
-                Secure checkout · Cancel anytime · Terms &amp; Privacy Policy
+                Secure PayMongo checkout · Cancel anytime · Terms &amp; Privacy Policy
               </p>
             </form>
           </section>
@@ -637,13 +555,15 @@ export default function SubscriptionScreen({
 
       <ConfirmDialog
         open={confirmPayOpen}
-        title={pendingPayEvent?.plan === "free" ? "Switch to Free plan?" : "Confirm payment?"}
+        title={pendingPayEvent?.plan === "free" ? "Switch to Free plan?" : "Continue to PayMongo?"}
         message={
           pendingPayEvent?.plan === "free"
             ? "Your Premium subscription will end and you will move to the Free plan."
-            : `Charge ${peso(price)} via ${String(pendingPayEvent?.paymentMethod || "card").toUpperCase()} and activate Premium? (Demo checkout — no real charge.)`
+            : `You will be redirected to PayMongo to pay ${peso(price)} for Premium (${
+                pendingPayEvent?.billingPeriod === "annual" ? "annual" : "monthly"
+              }). Premium activates after payment is confirmed.`
         }
-        confirmLabel={pendingPayEvent?.plan === "free" ? "Switch to Free" : "Confirm & pay"}
+        confirmLabel={pendingPayEvent?.plan === "free" ? "Switch to Free" : "Continue to PayMongo"}
         busy={busy}
         onCancel={() => {
           if (busy) return;
