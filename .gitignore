@@ -2,5 +2,5 @@
 **/.expo/
 **/dist/
 .vercel
-
-
+.runner/
+.DS_Store
