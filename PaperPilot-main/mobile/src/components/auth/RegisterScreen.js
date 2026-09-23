@@ -3,7 +3,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import { useAuthRequest } from "expo-auth-session/providers/google";
 import Constants from "expo-constants";
-import { completeRegister, registerCheck, sendOtp } from "../../api";
+import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../api";
 import { auth, db, firebaseReady } from "../../firebase";
 import { FIREBASE_MISSING, GOOGLE_EXPO_GO_HINT, authMessage } from "../../lib/messages";
 import { passwordChecks, registerErrors, registerFieldError } from "../../lib/validation";
@@ -89,6 +89,11 @@ export default function RegisterScreen({ onGoToLogin, onContinueAsGuest, onRegis
     try {
       await registerCheck({ email, username: values.username.trim() });
       const res = await sendOtp({ email, purpose: "verify_email" });
+      const bypass = otpBypassToken(res, "verify_email");
+      if (bypass) {
+        await onVerified(bypass);
+        return;
+      }
       setOtpMeta({
         expiresIn: res.expires_in,
         resendIn: res.resend_in,

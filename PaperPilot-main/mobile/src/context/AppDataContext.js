@@ -130,6 +130,8 @@ export function AppDataProvider({ children }) {
       citationStyle,
       pageCount: version?.page_count,
       versionNumber: version?.version_number,
+      cloudinaryUrl: version?.cloudinary_url || "",
+      documentPreview: version?.parsed_data || version?.preview || null,
     };
   }, []);
 
@@ -228,7 +230,7 @@ export function AppDataProvider({ children }) {
   }, [user?.uid]);
 
   useEffect(() => {
-    if (scanFlow.step !== "results" || !scanFlow.result) return;
+    if (!scanFlow.result || !["summary", "results"].includes(scanFlow.step)) return;
     const key = `${scanFlow.result.documentId}|${scanFlow.versionNumber}|${scanFlow.result.scannedAt || ""}`;
     if (lastSavedScanKey.current === key) return;
     lastSavedScanKey.current = key;

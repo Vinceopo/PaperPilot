@@ -19,12 +19,19 @@ import RegistrationSuccessScreen from "./components/auth/RegistrationSuccessScre
 import MechanicsPanel from "./components/cockpit/MechanicsPanel.jsx";
 import ManuscriptPanel from "./components/cockpit/ManuscriptPanel.jsx";
 import ScanResultsScreen from "./components/cockpit/ScanResultsScreen.jsx";
+import ScanSummaryModal from "./components/cockpit/ScanSummaryModal.jsx";
+import ReferenceTracingView from "./components/cockpit/ReferenceTracingView.jsx";
 import AccountSettingsScreen from "./components/cockpit/AccountSettingsScreen.jsx";
 import MyManuscriptsScreen from "./components/cockpit/MyManuscriptsScreen.jsx";
 import SubscriptionScreen from "./components/cockpit/SubscriptionScreen.jsx";
 import NotificationsScreen from "./components/cockpit/NotificationsScreen.jsx";
 import UpgradePrompt from "./components/cockpit/UpgradePrompt.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
+import UploadJourneyModal, {
+  ShowStepsRow,
+  markUploadJourneySeen,
+  uploadJourneySeen,
+} from "./components/cockpit/UploadJourneyModal.jsx";
 import Spinner from "./components/Spinner.jsx";
 import FileTypeIcon from "./components/FileTypeIcon.jsx";
 import { useScanFlow } from "./hooks/useScanFlow.js";
@@ -98,6 +105,7 @@ export default function App() {
   const [uploadCancelKey, setUploadCancelKey] = useState(0);
   const [uploadWizardStep, setUploadWizardStep] = useState(1); // 1 | 2 | 3
   const [wizardMaxStep, setWizardMaxStep] = useState(1);
+  const [journeyOpen, setJourneyOpen] = useState(false);
   const [fileDetailsConfirm, setFileDetailsConfirm] = useState(null); // "cancel" | "analyse" | null
   const [fileDetailsConfirmBusy, setFileDetailsConfirmBusy] = useState(false);
   const uploadSessionRef = useRef(0);
@@ -111,11 +119,10 @@ export default function App() {
     scanFlow.backToDashboard();
   }
 
-  const WIZARD_STEPS = [
-    { step: 1, label: "Upload Academic Documents" },
-    { step: 2, label: "Upload Manuscript" },
-    { step: 3, label: "File Details" },
-  ];
+  const dismissJourney = useCallback(() => {
+    markUploadJourneySeen();
+    setJourneyOpen(false);
+  }, []);
 
   function goToUploadWizardStep(step) {
     if (step < 1 || step > wizardMaxStep) return;
@@ -217,6 +224,8 @@ export default function App() {
       citationStyle,
       pageCount: version?.page_count,
       versionNumber: version?.version_number,
+      cloudinaryUrl: version?.cloudinary_url || version?.cloudinaryUrl || "",
+      preview: version?.preview || version?.parsed_preview || null,
     };
   }, []);
 
@@ -261,7 +270,7 @@ export default function App() {
   }, [user?.uid]);
 
   useEffect(() => {
-    if (scanFlow.step !== "results" || !scanFlow.result) return;
+    if (!["summary", "tracing", "results"].includes(scanFlow.step) || !scanFlow.result) return;
     const key = `${scanFlow.result.documentId}|${scanFlow.versionNumber}|${scanFlow.result.scannedAt || ""}`;
     if (lastSavedScanKey.current === key) return;
     lastSavedScanKey.current = key;
@@ -411,6 +420,14 @@ export default function App() {
   useEffect(() => {
     if (signedIn) loadDashboard();
   }, [signedIn, loadDashboard]);
+
+  useEffect(() => {
+    const wizard =
+      activePage === "upload" &&
+      (scanFlow.step === "idle" || scanFlow.step === "fileSelected");
+    if (!wizard || uploadJourneySeen()) return;
+    setJourneyOpen(true);
+  }, [activePage, scanFlow.step]);
 
   function handleGateError(err) {
     if (err?.code === "upgrade_required" || err?.detail?.code === "upgrade_required") {
@@ -725,9 +742,6 @@ export default function App() {
   }
 
   // Page metadata driven by activePage
-  const uploadWizardActive =
-    activePage === "upload" &&
-    (scanFlow.step === "idle" || scanFlow.step === "fileSelected");
   const pageTitle =
     activePage === "account"
       ? "Account Settings"
@@ -739,11 +753,15 @@ export default function App() {
             ? "My Manuscripts"
             : activePage === "upload" && scanFlow.step === "results"
               ? "Scan Results"
-              : activePage === "upload" && scanFlow.step === "analyzing"
-                ? "Analysing Document"
-                : activePage === "upload" && scanFlow.step === "error"
-                  ? "Analysis Failed"
-                  : "Upload Academic Documents";
+              : activePage === "upload" && scanFlow.step === "tracing"
+                ? "Reference Tracing"
+                : activePage === "upload" && scanFlow.step === "summary"
+                  ? "Scan Summary"
+                  : activePage === "upload" && scanFlow.step === "analyzing"
+                    ? "Analysing Document"
+                    : activePage === "upload" && scanFlow.step === "error"
+                      ? "Analysis Failed"
+                      : "Upload Mechanics";
   const breadcrumb =
     activePage === "account"
       ? "Dashboard / Settings"
@@ -760,10 +778,10 @@ export default function App() {
   }
 
   return (
-    <div className={`min-h-screen bg-[#f3f5f7] text-[#172033] transition-[padding] duration-300 ${sidebarOpen ? "md:pl-52" : "md:pl-0"}`}>
+    <div className={`min-h-screen bg-[#f3f5f7] text-[#172033] transition-[padding] duration-300 ${sidebarOpen ? "md:pl-80" : "md:pl-0"}`}>
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-52 flex-col bg-[#101a30] px-4 py-5 text-white transition-transform duration-300 md:flex ${
+        className={`fixed inset-y-0 left-0 z-40 w-80 flex-col bg-[#101a30] px-5 py-6 text-white transition-transform duration-300 md:flex ${
           sidebarOpen ? "flex translate-x-0" : "hidden -translate-x-full md:hidden"
         }`}
       >
@@ -808,7 +826,7 @@ export default function App() {
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            <span className="text-[#22c9b4]">↑</span> Upload Academic Documents
+            <span className="text-[#22c9b4]">↑</span> Upload Mechanics
           </button>
           <button
             onClick={() => setActivePage("manuscripts")}
@@ -862,58 +880,21 @@ export default function App() {
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{breadcrumb}</p>
             <div className="flex flex-wrap items-center gap-2.5">
-              {uploadWizardActive ? (
-                <nav
-                  aria-label="Upload wizard"
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 text-lg font-bold tracking-tight md:text-xl"
-                >
-                  {WIZARD_STEPS.filter((item) => item.step <= wizardMaxStep).map((item, index) => {
-                    const isCurrent = item.step === uploadWizardStep;
-                    const canJump = !isCurrent && item.step <= wizardMaxStep;
-                    return (
-                      <span key={item.step} className="inline-flex items-center gap-2">
-                        {index > 0 && (
-                          <span className="font-semibold text-slate-300" aria-hidden="true">
-                            /
-                          </span>
-                        )}
-                        {canJump ? (
-                          <button
-                            type="button"
-                            onClick={() => goToUploadWizardStep(item.step)}
-                            className="text-slate-400 transition hover:text-[#16bfa8] hover:underline"
-                          >
-                            {item.label}
-                          </button>
-                        ) : (
-                          <span
-                            className={isCurrent ? "text-[#16bfa8]" : "text-slate-400"}
-                            aria-current={isCurrent ? "step" : undefined}
-                          >
-                            {item.label}
-                          </span>
-                        )}
-                      </span>
-                    );
-                  })}
-                </nav>
-              ) : (
-                <div>
-                  <h1 className="text-xl font-bold tracking-tight text-[#172033]">{pageTitle}</h1>
-                  {activePage === "upload" && scanFlow.step === "results" && (
-                    <button
-                      type="button"
-                      onClick={handleBackToDashboard}
-                      className="mt-1 inline-flex items-center text-xs font-semibold text-slate-500 transition hover:text-[#172033]"
-                    >
-                      <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-                      </svg>
-                      Back to Dashboard
-                    </button>
-                  )}
-                </div>
-              )}
+              <div>
+                <h1 className="text-xl font-bold tracking-tight text-[#172033]">{pageTitle}</h1>
+                {activePage === "upload" && scanFlow.step === "results" && (
+                  <button
+                    type="button"
+                    onClick={handleBackToDashboard}
+                    className="mt-1 inline-flex items-center text-xs font-semibold text-slate-500 transition hover:text-[#172033]"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                    </svg>
+                    Back to Dashboard
+                  </button>
+                )}
+              </div>
               {activePage === "notifications" && notificationUnread > 0 && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e8f3ff] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-[#2f6fed]">
                   <span className="h-1.5 w-1.5 rounded-full bg-[#16bfa8]" />
@@ -1038,13 +1019,32 @@ export default function App() {
         {activePage === "upload" && (<>
 
         {/* ── Results screen ─────────────────────────────────────────────── */}
+        <ScanSummaryModal
+          open={scanFlow.step === "summary"}
+          result={scanFlow.result}
+          onViewDocument={scanFlow.openReferenceTracing}
+          onViewFullResult={scanFlow.openFullResults}
+        />
+
+        {scanFlow.step === "tracing" && scanFlow.result && (
+          <ReferenceTracingView
+            result={scanFlow.result}
+            file={scanFlow.file}
+            onBack={scanFlow.backToSummary}
+            onViewFullResult={scanFlow.openFullResults}
+          />
+        )}
+
         {scanFlow.step === "results" && (
           <ScanResultsScreen
             result={scanFlow.result}
             versionNumber={scanFlow.versionNumber}
+            file={scanFlow.file}
             downloadBusy={scanFlow.downloadBusy}
             downloadError={scanFlow.downloadError}
             onDownload={scanFlow.downloadReport}
+            onViewDocument={scanFlow.openReferenceTracing}
+            onBackToSummary={scanFlow.backToSummary}
             onUploadNewVersion={() => {
               setManuscriptReady(false);
               setFileDetailsNotice("");
@@ -1053,24 +1053,42 @@ export default function App() {
               scanFlow.uploadNewVersion();
               resetUploadWizard(selectedMechanicsId ? 2 : 1);
             }}
-            onBackToDashboard={handleBackToDashboard}
+            onBackToDashboard={() => {
+              setActivePage("dashboard");
+              scanFlow.backToDashboard();
+            }}
           />
         )}
 
         {/* ── Analysing state ────────────────────────────────────────────── */}
         {scanFlow.step === "analyzing" && (
           <div className="grid min-h-[60vh] place-items-center rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
-            <div className="flex flex-col items-center gap-5 text-center">
-              <Spinner className="h-14 w-14 border-4 text-[#16bfa8]" />
-              <div>
-                <p className="text-base font-bold text-slate-800">Analysing your document…</p>
-                <p className="mt-1 text-sm text-slate-400">
-                  Checking fonts, spacing, margins, citations, and more.
-                </p>
-                <p className="mt-3 text-xs text-slate-400">
-                  Format checks only — grammar and content are not evaluated.
-                </p>
+            <div className="flex w-full max-w-md flex-col items-center gap-5 text-center">
+              <p className="text-base font-bold text-slate-800">Analysing your document…</p>
+              <div className="w-full">
+                <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
+                  <span className="capitalize">{scanFlow.scanProgress.stage || "queued"}</span>
+                  <span>{Math.round(Number(scanFlow.scanProgress.percent) || 0)}%</span>
+                </div>
+                <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-[#16bfa8] transition-[width] duration-500 ease-out"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, Number(scanFlow.scanProgress.percent) || 0))}%`,
+                    }}
+                  />
+                </div>
+                {scanFlow.scanProgress.message ? (
+                  <p className="mt-2 text-xs text-slate-400">{scanFlow.scanProgress.message}</p>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-400">
+                    Checking fonts, spacing, margins, and citation format.
+                  </p>
+                )}
               </div>
+              <p className="text-xs text-slate-400">
+                Format checks only — grammar and content are not evaluated.
+              </p>
             </div>
           </div>
         )}
@@ -1116,6 +1134,7 @@ export default function App() {
                     onRename={onMechanicsRename}
                     onDelete={onMechanicsDelete}
                     onContinue={() => advanceUploadWizard(2)}
+                    onShowSteps={() => setJourneyOpen(true)}
                     busy={mechanicsBusy}
                   />
                 )}
@@ -1137,6 +1156,7 @@ export default function App() {
                       scanFlow.selectFile(null);
                       setWizardMaxStep((max) => Math.min(max, 2));
                     }}
+                    onShowSteps={() => setJourneyOpen(true)}
                     busy={manuscriptBusy}
                   />
                 )}
@@ -1151,7 +1171,7 @@ export default function App() {
                     : "border-slate-200"
                 }`}
               >
-                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#16bfa8]">Step 3 of 3</p>
+                <ShowStepsRow step={3} onShowSteps={() => setJourneyOpen(true)} />
                 <div className="mt-1 border-b border-slate-100 pb-4">
                   <h2 className="text-lg font-bold text-[#172033]">File details</h2>
                   <p className="text-xs text-slate-400">Review attached files then run compliance analysis</p>
@@ -1341,6 +1361,8 @@ export default function App() {
           }
         }}
       />
+
+      <UploadJourneyModal open={journeyOpen} current={uploadWizardStep} onClose={dismissJourney} />
 
       <UpgradePrompt
         message={upgradeMessage}

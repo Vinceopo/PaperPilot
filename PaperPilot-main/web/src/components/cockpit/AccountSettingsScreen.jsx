@@ -14,7 +14,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { sendOtp, resetPasswordWithOtp, getProfile, updateUserProfile } from "../../api.js";
+import { sendOtp, resetPasswordWithOtp, getProfile, updateUserProfile, otpBypassToken } from "../../api.js";
 import { markPasswordChanged } from "../../services/auth.js";
 import OtpStep from "../auth/OtpStep.jsx";
 import { nameError, phoneError, usernameError } from "../auth/validation.js";
@@ -353,6 +353,14 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
     setSendOtpError("");
     try {
       const res = await sendOtp({ email, purpose: "reset_password" });
+      const bypass = otpBypassToken(res, "reset_password");
+      if (bypass) {
+        setResetToken(bypass);
+        setPw({ newPw: "", confirm: "" });
+        setPwError("");
+        setView("pwNew");
+        return;
+      }
       setOtpMeta(res);
       setView("pwOtp");
     } catch (err) {

@@ -4,19 +4,16 @@
  * Steps:
  *   "idle"         – no file selected
  *   "fileSelected" – valid file ready to analyse
- *   "analyzing"    – analysis in flight
- *   "results"      – ScanResult ready to display
+ *   "analyzing"    – analysis in flight (progress polling)
+ *   "summary"      – compact score modal after scan
+ *   "tracing"      – document + issue reference tracing
+ *   "results"      – full ScanResultsScreen
  *   "error"        – analysis failed; user can retry
- *
- * Components should be purely presentational and consume this hook.
- * Swapping mock → real API: analyzeDocument now calls the live scan endpoint.
  */
 
 import { useCallback, useState } from "react";
 import { analyzeDocument, downloadReport as downloadReportFn, ACCEPTED_EXTENSIONS, MAX_FILE_BYTES } from "../lib/mockAnalysis";
 import { isServerId } from "../lib/scanMapper";
-
-// ─── File validation ──────────────────────────────────────────────────────────
 
 function validateFile(file) {
   if (!file) return "";
@@ -32,7 +29,7 @@ function titleFromFile(file) {
   return file?.name?.replace(/\.(pdf|docx)$/i, "") || "";
 }
 
-// ─── Hook ─────────────────────────────────────────────────────────────────────
+const INITIAL_PROGRESS = { percent: 0, stage: "queued", message: "Starting analysis…" };
 
 /**
  * @param {{
@@ -45,32 +42,27 @@ function titleFromFile(file) {
  *     citationStyle?: string,
  *     pageCount?: number,
  *     versionNumber?: number,
+ *     cloudinaryUrl?: string,
+ *     preview?: object,
  *   }|null>,
  * }} [opts]
  */
 export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript, getScanTarget } = {}) {
-  // ── Core state machine ────────────────────────────────────────────────────
-  const [step, setStep] = useState("idle"); // idle | fileSelected | analyzing | results | error
+  const [step, setStep] = useState("idle");
 
-  // ── File ──────────────────────────────────────────────────────────────────
   const [file, setFileInner] = useState(null);
   const [fileError, setFileError] = useState("");
 
-  // ── Results ───────────────────────────────────────────────────────────────
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [scanProgress, setScanProgress] = useState(INITIAL_PROGRESS);
 
-  // ── Versioning ────────────────────────────────────────────────────────────
   const [documentId, setDocumentId] = useState(null);
   const [versionNumber, setVersionNumber] = useState(1);
 
-  // ── Download ──────────────────────────────────────────────────────────────
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
 
-  // ─── Actions ──────────────────────────────────────────────────────────────
-
-  /** Called when the user selects or drops a file. */
   const selectFile = useCallback((f) => {
     const err = f ? validateFile(f) : "";
     setFileInner(f ?? null);
@@ -79,15 +71,12 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setStep(f && !err ? "fileSelected" : "idle");
   }, []);
 
-  /**
-   * Runs the live compliance scan against the selected format mechanics.
-   * Uses the uploaded manuscript title/id so My Manuscripts stays consistent.
-   */
   const analyze = useCallback(async () => {
     if ((!file && !getScanTarget) || fileError || step === "analyzing") return;
     setStep("analyzing");
     setResult(null);
     setError("");
+    setScanProgress(INITIAL_PROGRESS);
     try {
       const active = getActiveManuscript?.() || {};
       const title = String(active.title || titleFromFile(file) || "").trim();
@@ -111,31 +100,51 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
         versionId: target.versionId,
         citationStyle: target.citationStyle,
         pageCount: target.pageCount,
+        cloudinaryUrl: target.cloudinaryUrl,
+        preview: target.preview,
+        onProgress: (payload) => {
+          setScanProgress({
+            percent: Number(payload?.percent ?? 0),
+            stage: String(payload?.stage || "queued"),
+            message: String(payload?.message || ""),
+          });
+        },
       });
       if (title) scanResult.documentTitle = title;
       if (reuseId) scanResult.documentId = reuseId;
       if (isServerId(target.manuscriptId)) scanResult.documentId = target.manuscriptId;
+      if (target.cloudinaryUrl && !scanResult.cloudinaryUrl) {
+        scanResult.cloudinaryUrl = target.cloudinaryUrl;
+      }
 
       setDocumentId(scanResult.documentId);
       setVersionNumber(Number(target.versionNumber) || nextVersion);
       setResult(scanResult);
-      setStep("results");
+      setScanProgress({ percent: 100, stage: "done", message: "Analysis complete" });
+      setStep("summary");
     } catch (err) {
       setError(err?.message ?? "Analysis failed. Please try again.");
       setStep("error");
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
 
-  /** Returns the user to the upload screen from the error state. */
+  const openReferenceTracing = useCallback(() => {
+    if (result) setStep("tracing");
+  }, [result]);
+
+  const openFullResults = useCallback(() => {
+    if (result) setStep("results");
+  }, [result]);
+
+  const backToSummary = useCallback(() => {
+    if (result) setStep("summary");
+  }, [result]);
+
   const retry = useCallback(() => {
     setError("");
     setStep(file ? "fileSelected" : "idle");
   }, [file]);
 
-  /**
-   * Downloads the analysis report.
-   * Safe to call multiple times — guarded by `downloadBusy`.
-   */
   const downloadReport = useCallback(async () => {
     if (downloadBusy || !result) return;
     setDownloadBusy(true);
@@ -149,29 +158,22 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     }
   }, [downloadBusy, result, versionNumber]);
 
-  /**
-   * "Upload New Version" — returns to upload, keeps `documentId` so the
-   * next successful scan is treated as an incremented version.
-   */
   const uploadNewVersion = useCallback(() => {
     setFileInner(null);
     setFileError("");
     setError("");
     setResult(null);
+    setScanProgress(INITIAL_PROGRESS);
     setStep("idle");
-    // documentId intentionally kept
   }, []);
 
-  /**
-   * "Back to Dashboard" — clears file/result. Manuscript identity is resolved
-   * again on the next scan by title / kept documentId.
-   */
   const backToDashboard = useCallback(() => {
     setFileInner(null);
     setFileError("");
     setResult(null);
     setError("");
     setDownloadError("");
+    setScanProgress(INITIAL_PROGRESS);
     setStep("idle");
   }, []);
 
@@ -181,6 +183,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     fileError,
     result,
     error,
+    scanProgress,
     documentId,
     versionNumber,
     downloadBusy,
@@ -191,5 +194,8 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     downloadReport,
     uploadNewVersion,
     backToDashboard,
+    openReferenceTracing,
+    openFullResults,
+    backToSummary,
   };
 }

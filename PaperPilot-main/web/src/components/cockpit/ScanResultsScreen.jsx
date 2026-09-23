@@ -1,18 +1,11 @@
 /**
- * ScanResultsScreen
- *
- * Full results screen: document header band → 3-column card row
- * (Overall Score ring / Score Breakdown bars / Scan Summary) →
- * Format Checks table → footer actions.
- *
- * All values are derived from the `result` prop — nothing is hardcoded.
- * Ring and bar animations run once on mount.
+ * ScanResultsScreen — full results with right/wrong, per-category scores,
+ * issues panel, and optional document preview for jump-back.
  */
 
 import { useEffect, useRef, useState } from "react";
 import IssuesDetectedPanel from "./IssuesDetectedPanel.jsx";
-
-// ─── Score helpers ────────────────────────────────────────────────────────────
+import DocumentPagePreview from "./DocumentPagePreview.jsx";
 
 function scoreBand(score) {
   if (score >= 80)
@@ -46,8 +39,6 @@ function barColorClass(score) {
   return "bg-rose-500";
 }
 
-// ─── Animated circular ring ───────────────────────────────────────────────────
-
 function CircularScore({ score }) {
   const RADIUS = 52;
   const circumference = 2 * Math.PI * RADIUS;
@@ -60,24 +51,21 @@ function CircularScore({ score }) {
     const start = performance.now();
     const tick = (now) => {
       const t = Math.min((now - start) / DURATION, 1);
-      const eased = 1 - (1 - t) ** 3; // ease-out cubic
+      const eased = 1 - (1 - t) ** 3;
       setProgress(eased * score);
       if (t < 1) rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [score]); // run once per score value
+  }, [score]);
 
   const offset = circumference - (progress / 100) * circumference;
 
   return (
     <div className="flex flex-col items-center gap-4 py-4">
-      {/* SVG ring */}
       <div className="relative">
         <svg width="148" height="148" viewBox="0 0 148 148" className="-rotate-90">
-          {/* Track */}
           <circle cx="74" cy="74" r={RADIUS} fill="none" stroke="#e2e8f0" strokeWidth="14" />
-          {/* Progress arc */}
           <circle
             cx="74"
             cy="74"
@@ -88,60 +76,61 @@ function CircularScore({ score }) {
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
-            style={{ transition: "stroke-dashoffset 0s" }}
           />
         </svg>
-        {/* Center label */}
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <span className="text-3xl font-extrabold text-slate-800">{Math.round(progress)}</span>
           <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">/100</span>
         </div>
       </div>
-
-      {/* Band badge */}
       <span
         className={`rounded-full border px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider
           ${band.textColor} ${band.badgeBg} ${band.badgeBorder}`}
       >
         {band.label}
       </span>
-      <p className="text-center text-xs text-slate-400">Average of the formatting breakdown scores</p>
+      <p className="text-center text-xs text-slate-400">
+        Average of categories that were actually measured
+      </p>
     </div>
   );
 }
 
-// ─── Animated score bar ───────────────────────────────────────────────────────
-
-function ScoreBar({ metric, score }) {
+function ScoreBar({ metric, score, issueCount = 0 }) {
   const [width, setWidth] = useState(0);
+  const safe = Math.max(0, Math.min(100, Number(score) || 0));
 
   useEffect(() => {
-    // Defer one frame so the initial 0-width is painted before transitioning
     const raf = requestAnimationFrame(() => {
-      setTimeout(() => setWidth(score), 60);
+      setTimeout(() => setWidth(safe), 60);
     });
     return () => cancelAnimationFrame(raf);
-  }, [score]);
+  }, [safe]);
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-xs">
-        <span className="text-slate-600">{metric}</span>
+        <span className="font-medium text-slate-600">
+          {metric}
+          {issueCount > 0 ? (
+            <span className="ml-1.5 font-normal text-slate-400">
+              · {issueCount} issue{issueCount === 1 ? "" : "s"}
+            </span>
+          ) : (
+            <span className="ml-1.5 font-normal text-emerald-600">· pass</span>
+          )}
+        </span>
         <span
-          className={`font-bold ${
-            score >= 80
-              ? "text-emerald-600"
-              : score >= 50
-              ? "text-amber-600"
-              : "text-rose-500"
+          className={`font-bold tabular-nums ${
+            safe >= 80 ? "text-emerald-600" : safe >= 50 ? "text-amber-600" : "text-rose-500"
           }`}
         >
-          {score}%
+          {Math.round(safe * 10) / 10}%
         </span>
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
         <div
-          className={`h-2 rounded-full transition-all duration-700 ease-out ${barColorClass(score)}`}
+          className={`h-2 rounded-full transition-all duration-700 ease-out ${barColorClass(safe)}`}
           style={{ width: `${width}%` }}
         />
       </div>
@@ -149,18 +138,18 @@ function ScoreBar({ metric, score }) {
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
-
 export default function ScanResultsScreen({
   result,
   versionNumber = 1,
+  file = null,
   downloadBusy = false,
   downloadError = "",
   onDownload,
   onUploadNewVersion,
   onBackToDashboard,
+  onViewDocument,
+  onBackToSummary,
 }) {
-  // Edge-case guard: never render a broken empty screen
   if (!result) return null;
 
   const {
@@ -170,18 +159,25 @@ export default function ScanResultsScreen({
     scannedAt,
     citationStyle = "APA",
     overallScore = 0,
+    rightPct,
+    wrongPct,
     scoreBreakdown = [],
     formatChecks = [],
     pageCount = 0,
     pagination = null,
+    cloudinaryUrl = "",
+    documentPreview = null,
+    unitsChecked,
+    unitsFailed,
   } = result;
 
-  // ── Derived stats ─────────────────────────────────────────────────────────
   const totalErrors = formatChecks.filter((c) => c.result === "FAIL").length;
-  const warnings    = formatChecks.filter((c) => c.result === "REVIEW").length;
-  const checksRun   = formatChecks.length;
+  const warnings = formatChecks.filter((c) => c.result === "REVIEW").length;
+  const checksRun = formatChecks.length;
   const issuesFound = totalErrors + warnings;
-  const passCount   = checksRun - totalErrors - warnings;
+  const passCount = Math.max(0, checksRun - totalErrors - warnings);
+  const right = Number(rightPct ?? overallScore ?? 0);
+  const wrong = Number(wrongPct ?? Math.max(0, 100 - right));
 
   const scannedDate = scannedAt
     ? new Date(scannedAt).toLocaleDateString("en-US", {
@@ -192,14 +188,35 @@ export default function ScanResultsScreen({
     : "—";
 
   const versionLabel = `v${versionNumber}.0`;
+  const hasPreview = Boolean(file || cloudinaryUrl || documentPreview);
 
   return (
     <div className="space-y-6">
-      {/* ── Dark document header band ─────────────────────────────────────── */}
       <div className="rounded-xl bg-[#172033] p-6 text-white">
         <div className="flex flex-wrap items-start justify-between gap-5">
-          {/* Left: title + breadcrumb */}
           <div className="min-w-0">
+            {(onBackToSummary || onBackToDashboard) && (
+              <div className="mb-2 flex flex-wrap gap-3">
+                {onBackToSummary ? (
+                  <button
+                    type="button"
+                    onClick={onBackToSummary}
+                    className="text-[11px] font-semibold text-[#16bfa8] hover:underline"
+                  >
+                    ← Back to summary
+                  </button>
+                ) : null}
+                {onViewDocument ? (
+                  <button
+                    type="button"
+                    onClick={onViewDocument}
+                    className="text-[11px] font-semibold text-slate-300 hover:text-white hover:underline"
+                  >
+                    Open reference tracing
+                  </button>
+                ) : null}
+              </div>
+            )}
             <span className="inline-block rounded-full border border-[#16bfa8]/40 bg-[#16bfa8]/10 px-3 py-0.5 text-[10px] font-bold uppercase tracking-widest text-[#16bfa8]">
               SCOPE: FORMATTING ONLY
             </span>
@@ -211,7 +228,6 @@ export default function ScanResultsScreen({
             )}
           </div>
 
-          {/* Right: meta grid */}
           <div className="shrink-0">
             <table className="text-xs">
               <tbody>
@@ -231,34 +247,49 @@ export default function ScanResultsScreen({
             </table>
           </div>
         </div>
-
         <p className="mt-4 text-xs text-slate-500">
           Structure and content are not evaluated — results reflect formatting compliance only.
         </p>
       </div>
 
-      {/* ── 3-column card row ─────────────────────────────────────────────── */}
-      <div className="grid gap-5 lg:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-4 text-center">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Right (passed units)</p>
+          <p className="mt-1 text-3xl font-extrabold text-emerald-700">{Math.round(right * 10) / 10}%</p>
+        </div>
+        <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-4 py-4 text-center">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Wrong (failed units)</p>
+          <p className="mt-1 text-3xl font-extrabold text-rose-700">{Math.round(wrong * 10) / 10}%</p>
+        </div>
+      </div>
+      {unitsChecked != null ? (
+        <p className="-mt-3 text-center text-[11px] text-slate-500">
+          Based on {unitsChecked} measured formatting unit{unitsChecked === 1 ? "" : "s"}
+          {unitsFailed != null ? ` (${unitsFailed} failed)` : ""}
+        </p>
+      ) : null}
 
-        {/* Card 1 — Overall Score */}
+      <div className="grid gap-5 lg:grid-cols-3">
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-            Overall Score
-          </p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Overall Score</p>
           <CircularScore score={overallScore} />
         </div>
 
-        {/* Card 2 — Score Breakdown */}
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
               Score Breakdown
             </p>
-            <p className="text-[10px] font-medium text-slate-400">Formatting metrics only</p>
+            <p className="text-[10px] font-medium text-slate-400">Per category</p>
           </div>
           <div className="mt-5 space-y-4">
             {scoreBreakdown.map((item) => (
-              <ScoreBar key={item.metric} metric={item.metric} score={Math.round(item.score)} />
+              <ScoreBar
+                key={item.metric}
+                metric={item.metric}
+                score={item.score}
+                issueCount={item.issueCount}
+              />
             ))}
           </div>
           <div className="mt-5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400">
@@ -274,19 +305,13 @@ export default function ScanResultsScreen({
           </div>
         </div>
 
-        {/* Card 3 — Scan Summary */}
         <div className="flex flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-            Scan Summary
-          </p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Scan Summary</p>
 
-          {/* Stat grid */}
           <div className="mt-4 grid grid-cols-3 gap-2">
             <div className="rounded-lg bg-rose-50 p-3 text-center">
               <p className="text-2xl font-extrabold text-rose-600">{totalErrors}</p>
-              <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-500">
-                Errors
-              </p>
+              <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-500">Errors</p>
             </div>
             <div className="rounded-lg bg-amber-50 p-3 text-center">
               <p className="text-2xl font-extrabold text-amber-600">{warnings}</p>
@@ -302,7 +327,6 @@ export default function ScanResultsScreen({
             </div>
           </div>
 
-          {/* Tags */}
           <div className="mt-4 flex flex-wrap gap-2">
             <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
               {passCount} passed
@@ -315,37 +339,67 @@ export default function ScanResultsScreen({
             </span>
           </div>
 
-          {/* Download error */}
           {downloadError && (
             <p className="mt-3 text-xs text-rose-500" role="alert">
               {downloadError}
             </p>
           )}
 
-          {/* Download button */}
           <button
             type="button"
             onClick={onDownload}
             disabled={downloadBusy}
-            className="mt-auto pt-5 w-full rounded-lg border border-slate-200 bg-white py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-auto flex w-full items-center justify-center gap-2 rounded-xl bg-[#172033] py-3 text-xs font-bold text-white shadow-sm transition hover:bg-[#243049] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {downloadBusy ? "Generating PDF…" : `⬇  Download Analysis (PDF) · ${versionLabel}`}
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v12m0 0 4-4m-4 4-4-4M4 20h16" />
+            </svg>
+            {downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
           </button>
         </div>
       </div>
 
-      {/* ── Issues detected (page / line) ─────────────────────────────────── */}
+      {hasPreview ? (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-[#f8fffd] px-5 py-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Document preview</h3>
+              <p className="text-[11px] text-slate-500">
+                Use reference tracing to jump to a page and highlight a finding.
+              </p>
+            </div>
+            {onViewDocument ? (
+              <button
+                type="button"
+                onClick={onViewDocument}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-emerald-700"
+              >
+                Trace issues in document
+              </button>
+            ) : null}
+          </div>
+          <div className="bg-[#e8ecf1] p-3">
+            <DocumentPagePreview
+              file={file}
+              documentUrl={cloudinaryUrl}
+              preview={documentPreview}
+              emptyLabel="Preview unavailable for this version."
+            />
+          </div>
+        </div>
+      ) : null}
+
       <div>
         <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
           <div>
             <h3 className="text-sm font-bold text-slate-800">Issues detected</h3>
             <p className="mt-0.5 text-xs text-slate-400">
-              Each page starts at line 1. Findings are listed page by page, then line by line.
+              Grouped by page with explanations and fix suggestions. Each page starts at line 1.
             </p>
           </div>
           {issuesFound > 0 && (
             <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">
-              {issuesFound} issue{issuesFound === 1 ? "" : "s"} found
+              {issuesFound} issue type{issuesFound === 1 ? "" : "s"}
             </span>
           )}
         </div>
@@ -356,7 +410,6 @@ export default function ScanResultsScreen({
         />
       </div>
 
-      {/* ── Footer actions ────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center justify-end gap-3 pb-6">
         <button
           type="button"

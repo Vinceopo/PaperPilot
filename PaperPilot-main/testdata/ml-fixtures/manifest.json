@@ -1,0 +1,38 @@
+[
+  {
+    "id": "01_compliant_apa",
+    "manuscript": "docs/01_compliant_apa.docx",
+    "mechanics_guide": "mechanics/apa_format_mechanics_guide.docx",
+    "mechanics_guide_pdf": "mechanics/apa_format_mechanics_guide.pdf",
+    "expect": "pass",
+    "notes": "This manuscript intentionally matches the APA Capstone Format Mechanics Guide: Times New Roman, 12 pt, one-inch margins, double spacing, half-inch first-line indent, and left-aligned body text.",
+    "pages_target": 5
+  },
+  {
+    "id": "02_wrong_font",
+    "manuscript": "docs/02_wrong_font.docx",
+    "mechanics_guide": "mechanics/apa_format_mechanics_guide.docx",
+    "mechanics_guide_pdf": "mechanics/apa_format_mechanics_guide.pdf",
+    "expect": "fail_fonts",
+    "notes": "This manuscript uses Arial instead of Times New Roman required by the uploaded mechanics guide. Expect Font category failures while margins and spacing remain compliant.",
+    "pages_target": 5
+  },
+  {
+    "id": "03_tight_margins_single_space",
+    "manuscript": "docs/03_tight_margins_single_space.docx",
+    "mechanics_guide": "mechanics/apa_format_mechanics_guide.docx",
+    "mechanics_guide_pdf": "mechanics/apa_format_mechanics_guide.pdf",
+    "expect": "fail_margins_spacing",
+    "notes": "This manuscript uses half-inch margins and single spacing instead of one-inch margins and double spacing required by the guide. Expect Margins and Spacing failures.",
+    "pages_target": 5
+  },
+  {
+    "id": "04_mixed_ok_and_bad",
+    "manuscript": "docs/04_mixed_ok_and_bad.docx",
+    "mechanics_guide": "mechanics/apa_format_mechanics_guide.docx",
+    "mechanics_guide_pdf": "mechanics/apa_format_mechanics_guide.pdf",
+    "expect": "partial",
+    "notes": "This manuscript keeps Times New Roman and one-inch margins, but centers body text and removes first-line indentation. Expect Alignment and Indentation issues with stronger Font and Margin scores.",
+    "pages_target": 5
+  }
+]

@@ -9,6 +9,7 @@ import ScanResultScreen from "../screens/ScanResultScreen";
 import AccountScreen from "../screens/AccountScreen";
 import SubscriptionScreen from "../screens/SubscriptionScreen";
 import NotificationsScreen from "../screens/NotificationsScreen";
+import DocumentReferenceScreen from "../screens/DocumentReferenceScreen";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -81,6 +82,11 @@ export default function MainNavigator() {
           name="Notifications"
           component={NotificationsScreen}
           options={{ title: "Notifications" }}
+        />
+        <Stack.Screen
+          name="DocumentReference"
+          component={DocumentReferenceScreen}
+          options={{ title: "View Document" }}
         />
       </Stack.Navigator>
     </NavigationContainer>

@@ -229,6 +229,7 @@ def create_version(
     text: str,
     parsed: dict,
     manuscript_id: str | None,
+    cloudinary_url: str | None = None,
 ) -> tuple[dict, bool]:
     created, version_id = _iso(_now()), str(uuid.uuid4())
     if not get_mechanics(owner_uid, mechanics_id):
@@ -266,6 +267,8 @@ def create_version(
         "parsed_data": parsed,
         "created_at": created,
     }
+    if cloudinary_url:
+        version["cloudinary_url"] = cloudinary_url.strip()
     _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").set(version)
     ms_ref.update(
         {
@@ -349,7 +352,16 @@ def get_version_full(owner_uid: str, manuscript_id: str, version_id: str) -> dic
         "created_at": row["created_at"],
         "text": row.get("extracted_text") or "",
         "parsed_data": row.get("parsed_data") or {},
+        "cloudinary_url": row.get("cloudinary_url") or "",
     }
+
+
+def get_version_document_url(owner_uid: str, manuscript_id: str, version_id: str) -> str | None:
+    row = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
+    if not isinstance(row, dict):
+        return None
+    url = (row.get("cloudinary_url") or "").strip()
+    return url or None
 
 
 def list_versions(owner_uid: str, manuscript_id: str, history: bool) -> tuple[list[dict] | None, str | None]:
@@ -826,16 +838,12 @@ def check_scan_eligibility(owner_uid: str, manuscript_id: str, version_id: str) 
     return sub
 
 
-def persist_scan(
+def _assert_scan_inputs(
     owner_uid: str,
     manuscript_id: str,
     version_id: str,
     mechanics_id: str,
-    overall_score: float,
-    issues: list[dict],
-    sections: list[dict],
-) -> dict:
-    scan_id, created = str(uuid.uuid4()), _iso(_now())
+) -> tuple[dict, dict, dict, dict]:
     sub = _subscription_row(owner_uid)
     limit = settings.premium_scan_limit if sub.get("tier") == "premium" else settings.free_scan_limit
     manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
@@ -848,30 +856,29 @@ def persist_scan(
     limit_hit = (not settings.disable_scan_limit) and int(sub.get("scans_used") or 0) >= limit
     if old_version or limit_hit:
         raise UpgradeRequired(sub.get("tier") or "free", limit, int(sub.get("scans_used") or 0))
+    return sub, manuscript, version, mechanics
 
-    scan = {
-        "id": scan_id,
-        "owner_uid": owner_uid,
-        "manuscript_version_id": version_id,
-        "mechanics_id": mechanics_id,
-        "overall_score": float(overall_score),
-        "issues": issues,
-        "created_at": created,
-    }
-    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(scan)
 
-    for index, section in enumerate(sections):
+def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) -> None:
+    for index, section in enumerate(sections or []):
+        if not isinstance(section, dict):
+            continue
+        name = section.get("section") or section.get("section_name")
+        if not name:
+            continue
         check = {
             "id": str(index + 1),
-            "section_name": section["section"],
-            "formatting_score": float(section["formatting_score"]),
-            "issue_count": int(section["issue_count"]),
+            "section_name": name,
+            "formatting_score": float(section.get("formatting_score") or 0),
+            "issue_count": int(section.get("issue_count") or 0),
             "issues": section.get("issues") or [],
         }
         _reference(
             f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}/{check['id']}"
         ).set(check)
 
+
+def _increment_scan_usage(owner_uid: str, sub: dict, created: str) -> None:
     if not settings.disable_scan_limit:
         _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
             {
@@ -879,6 +886,130 @@ def persist_scan(
                 "updated_at": created,
             }
         )
+
+
+def create_pending_scan(
+    owner_uid: str,
+    manuscript_id: str,
+    version_id: str,
+    mechanics_id: str,
+    *,
+    scan_id: str | None = None,
+    ml_job_id: str | None = None,
+) -> dict:
+    """Reserve a scan row while the Render ML job runs."""
+    scan_id = scan_id or str(uuid.uuid4())
+    created = _iso(_now())
+    _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id)
+    scan = {
+        "id": scan_id,
+        "owner_uid": owner_uid,
+        "manuscript_id": manuscript_id,
+        "manuscript_version_id": version_id,
+        "mechanics_id": mechanics_id,
+        "ml_job_id": ml_job_id or scan_id,
+        "status": "running",
+        "created_at": created,
+        "updated_at": created,
+    }
+    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(scan)
+    return get_scan(owner_uid, scan_id) or scan
+
+
+def finalize_scan_from_ml(
+    owner_uid: str,
+    scan_id: str,
+    result: dict,
+    *,
+    failed: bool = False,
+    error: str | None = None,
+) -> dict:
+    row = _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").get()
+    if not isinstance(row, dict):
+        raise LookupError("Compliance scan not found.")
+    if row.get("status") == "done":
+        return get_scan(owner_uid, scan_id) or row
+    if row.get("status") == "failed":
+        return get_scan(owner_uid, scan_id) or row
+
+    created = row.get("created_at") or _iso(_now())
+    updated = _iso(_now())
+    manuscript_id = row.get("manuscript_id") or ""
+    version_id = row.get("manuscript_version_id") or ""
+    mechanics_id = row.get("mechanics_id") or ""
+
+    if failed:
+        row.update(
+            {
+                "status": "failed",
+                "error": error or "Analysis failed.",
+                "updated_at": updated,
+            }
+        )
+        _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").update(row)
+        return get_scan(owner_uid, scan_id) or row
+
+    sub, _, _, _ = _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id)
+    issues = result.get("issues") or []
+    sections = result.get("sections") or []
+    overall_score = float(result.get("overall_score") or 0)
+
+    row.update(
+        {
+            "status": "done",
+            "overall_score": overall_score,
+            "right_pct": result.get("right_pct"),
+            "wrong_pct": result.get("wrong_pct"),
+            "category_wrong_pct": result.get("category_wrong_pct") or [],
+            "severity_pct": result.get("severity_pct") or {},
+            "units_checked": result.get("units_checked"),
+            "units_failed": result.get("units_failed"),
+            "issues": issues,
+            "sections": sections,
+            "page_count": result.get("page_count") or 0,
+            "pagination": result.get("pagination") or {},
+            "updated_at": updated,
+            "error": None,
+        }
+    )
+    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(row)
+    _write_section_checks(owner_uid, scan_id, sections)
+    _increment_scan_usage(owner_uid, sub, created)
+    return get_scan(owner_uid, scan_id) or row
+
+
+def persist_scan(
+    owner_uid: str,
+    manuscript_id: str,
+    version_id: str,
+    mechanics_id: str,
+    overall_score: float,
+    issues: list[dict],
+    sections: list[dict],
+    *,
+    extra: dict | None = None,
+) -> dict:
+    scan_id, created = str(uuid.uuid4()), _iso(_now())
+    sub, _, _, _ = _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id)
+
+    scan = {
+        "id": scan_id,
+        "owner_uid": owner_uid,
+        "manuscript_id": manuscript_id,
+        "manuscript_version_id": version_id,
+        "mechanics_id": mechanics_id,
+        "overall_score": float(overall_score),
+        "issues": issues,
+        "status": "done",
+        "ml_job_id": scan_id,
+        "created_at": created,
+        "updated_at": created,
+    }
+    if extra:
+        scan.update(extra)
+    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(scan)
+    _write_section_checks(owner_uid, scan_id, sections)
+    _increment_scan_usage(owner_uid, sub, created)
     return get_scan(owner_uid, scan_id)
 
 
@@ -901,12 +1032,49 @@ def get_scan(owner_uid: str, scan_id: str) -> dict | None:
                     "issues": item.get("issues") or [],
                 }
             )
-    return {
+    status = row.get("status") or ("done" if row.get("overall_score") is not None else "running")
+    if not section_items:
+        embedded = row.get("sections") or []
+        if isinstance(embedded, list):
+            for item in embedded:
+                if not isinstance(item, dict):
+                    continue
+                section_items.append(
+                    {
+                        "section": item.get("section") or item.get("section_name"),
+                        "formatting_score": round(float(item.get("formatting_score") or 0), 2),
+                        "issue_count": int(item.get("issue_count") or 0),
+                        "issues": item.get("issues") or [],
+                    }
+                )
+    payload = {
         "id": row["id"],
+        "manuscript_id": row.get("manuscript_id"),
         "manuscript_version_id": row["manuscript_version_id"],
         "mechanics_id": row["mechanics_id"],
+        "status": status,
+        "ml_job_id": row.get("ml_job_id") or row["id"],
         "overall_score": round(float(row.get("overall_score") or 0), 2),
         "issues": row.get("issues") or [],
         "sections": section_items,
         "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "error": row.get("error"),
     }
+    if row.get("right_pct") is not None:
+        payload["right_pct"] = round(float(row["right_pct"]), 2)
+    if row.get("wrong_pct") is not None:
+        payload["wrong_pct"] = round(float(row["wrong_pct"]), 2)
+    if row.get("category_wrong_pct") is not None:
+        payload["category_wrong_pct"] = row.get("category_wrong_pct") or []
+    if row.get("severity_pct") is not None:
+        payload["severity_pct"] = row.get("severity_pct") or {}
+    if row.get("units_checked") is not None:
+        payload["units_checked"] = int(row.get("units_checked") or 0)
+    if row.get("units_failed") is not None:
+        payload["units_failed"] = int(row.get("units_failed") or 0)
+    if row.get("page_count") is not None:
+        payload["page_count"] = int(row.get("page_count") or 0)
+    if row.get("pagination") is not None:
+        payload["pagination"] = row.get("pagination") or {}
+    return payload

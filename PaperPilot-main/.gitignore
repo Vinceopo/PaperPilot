@@ -4,7 +4,6 @@ api/data/
 api/venv/
 __pycache__/
 *.pyc
-.env
 *.egg-info/
 
 # Node

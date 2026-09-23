@@ -1,0 +1,575 @@
+#!/usr/bin/env bash
+# PaperPilot local runner — macOS / Linux / Windows (Git Bash, WSL)
+# Usage:
+#   ./runner              Interactive TUI
+#   ./runner status
+#   ./runner api|web|mobile|ml
+#   ./runner stack        API + ML + Web
+#   ./runner stop
+#   ./runner ml local|remote|off
+#   ./runner help
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP="$ROOT/PaperPilot-main"
+API_DIR="$APP/api"
+WEB_DIR="$APP/web"
+MOBILE_DIR="$APP/mobile"
+ML_DIR="$APP/machinelearning"
+STATE_DIR="$ROOT/.runner"
+LOG_DIR="$STATE_DIR/logs"
+PID_DIR="$STATE_DIR/pids"
+ML_REMOTE_FILE="$STATE_DIR/ml-remote.url"
+
+API_PORT=8000
+ML_PORT=8001
+WEB_PORT=5173
+EXPO_PORT=8081
+DEFAULT_ML_REMOTE="https://paperpilot-ml.onrender.com"
+LOCAL_ML_URL="http://127.0.0.1:${ML_PORT}"
+
+# --- colors (disable if not a TTY) ---
+if [[ -t 1 ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_CYAN=$'\033[36m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_RED=$'\033[31m'
+  C_MAGENTA=$'\033[35m'
+  C_BLUE=$'\033[34m'
+else
+  C_RESET= C_BOLD= C_DIM= C_CYAN= C_GREEN= C_YELLOW= C_RED= C_MAGENTA= C_BLUE=
+fi
+
+is_windows() {
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) return 0 ;;
+  esac
+  [[ "${OS:-}" == "Windows_NT" ]]
+}
+
+mkdir -p "$LOG_DIR" "$PID_DIR"
+[[ -f "$ML_REMOTE_FILE" ]] || printf '%s\n' "$DEFAULT_ML_REMOTE" >"$ML_REMOTE_FILE"
+
+remote_ml_url() {
+  local u
+  u="$(tr -d '\r\n' <"$ML_REMOTE_FILE" 2>/dev/null || true)"
+  [[ -n "$u" ]] || u="$DEFAULT_ML_REMOTE"
+  printf '%s' "$u"
+}
+
+resolve_python() {
+  local candidates=()
+  if is_windows; then
+    candidates+=(
+      "$1/.venv/Scripts/python.exe"
+      "$APP/.venv/Scripts/python.exe"
+    )
+  fi
+  candidates+=(
+    "$1/.venv/bin/python"
+    "$APP/.venv/bin/python"
+  )
+  local c
+  for c in "${candidates[@]}"; do
+    if [[ -x "$c" || -f "$c" ]]; then
+      printf '%s' "$c"
+      return 0
+    fi
+  done
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "python3"
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    printf '%s' "python"
+    return 0
+  fi
+  return 1
+}
+
+port_open() {
+  local port="$1"
+  local host="${2:-127.0.0.1}"
+  if command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
+    local py
+    py="$(command -v python3 2>/dev/null || command -v python)"
+    "$py" - "$host" "$port" <<'PY' 2>/dev/null
+import socket, sys
+host, port = sys.argv[1], int(sys.argv[2])
+s = socket.socket()
+s.settimeout(0.4)
+try:
+    s.connect((host, port))
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+    return $?
+  fi
+  # bash /dev/tcp fallback (works in Git Bash too)
+  (echo >/dev/tcp/"$host"/"$port") >/dev/null 2>&1
+}
+
+http_ok() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
+pid_alive() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+read_pid() {
+  local name="$1"
+  local f="$PID_DIR/$name.pid"
+  [[ -f "$f" ]] || { printf ''; return 0; }
+  tr -d ' \t\r\n' <"$f"
+}
+
+write_pid() {
+  printf '%s\n' "$1" >"$PID_DIR/$2.pid"
+}
+
+clear_pid() {
+  rm -f "$PID_DIR/$1.pid"
+}
+
+# Update KEY=value in a .env file (create key if missing). Empty value allowed.
+set_env_key() {
+  local file="$1" key="$2" value="$3"
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ppenv.XXXXXX")"
+  if [[ ! -f "$file" ]]; then
+    printf '%s=%s\n' "$key" "$value" >"$file"
+    rm -f "$tmp"
+    return 0
+  fi
+  # strip CR for Windows-edited files, rewrite key
+  if awk -v k="$key" -v v="$value" '
+    BEGIN { done=0 }
+    {
+      line=$0
+      sub(/\r$/, "", line)
+      if (line ~ ("^" k "=")) {
+        print k "=" v
+        done=1
+      } else {
+        print line
+      }
+    }
+    END { if (!done) print k "=" v }
+  ' "$file" >"$tmp"; then
+    mv "$tmp" "$file"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+get_env_key() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || { printf ''; return 0; }
+  awk -v k="$key" -F= '
+    $0 ~ ("^" k "=") {
+      sub(/\r$/, "", $0)
+      sub("^" k "=", "", $0)
+      print $0
+      exit
+    }
+  ' "$file"
+}
+
+ml_mode() {
+  local url
+  url="$(get_env_key "$API_DIR/.env" "ML_SERVICE_URL")"
+  if [[ -z "$url" ]]; then
+    printf 'off'
+  elif [[ "$url" == *"127.0.0.1"* || "$url" == *"localhost"* ]]; then
+    printf 'local'
+  else
+    printf 'remote'
+  fi
+}
+
+status_dot() {
+  if [[ "$1" == "up" ]]; then
+    printf '%s●%s' "$C_GREEN" "$C_RESET"
+  else
+    printf '%s○%s' "$C_DIM" "$C_RESET"
+  fi
+}
+
+service_state() {
+  # prints: up|down
+  local name="$1" port="$2" health_url="${3:-}"
+  if [[ -n "$health_url" ]] && http_ok "$health_url"; then
+    printf 'up'
+    return
+  fi
+  if port_open "$port"; then
+    printf 'up'
+    return
+  fi
+  local pid
+  pid="$(read_pid "$name")"
+  if pid_alive "$pid"; then
+    printf 'up'
+    return
+  fi
+  printf 'down'
+}
+
+print_status() {
+  local api_s ml_s web_s mobile_s mode url key
+  api_s="$(service_state api "$API_PORT" "http://127.0.0.1:${API_PORT}/health")"
+  ml_s="$(service_state ml "$ML_PORT" "http://127.0.0.1:${ML_PORT}/health")"
+  web_s="$(service_state web "$WEB_PORT")"
+  mobile_s="$(service_state mobile "$EXPO_PORT")"
+  mode="$(ml_mode)"
+  url="$(get_env_key "$API_DIR/.env" "ML_SERVICE_URL")"
+  key="$(get_env_key "$API_DIR/.env" "ML_SERVICE_KEY")"
+
+  echo
+  printf '%s%s PaperPilot runner — status%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  echo "────────────────────────────────────────"
+  printf '  %s  API      :%s  %s\n' "$(status_dot "$api_s")" "$API_PORT" "$api_s"
+  printf '  %s  ML       :%s  %s\n' "$(status_dot "$ml_s")" "$ML_PORT" "$ml_s"
+  printf '  %s  Web      :%s  %s\n' "$(status_dot "$web_s")" "$WEB_PORT" "$web_s"
+  printf '  %s  Mobile   :%s  %s  %s(Expo)%s\n' "$(status_dot "$mobile_s")" "$EXPO_PORT" "$mobile_s" "$C_DIM" "$C_RESET"
+  echo "────────────────────────────────────────"
+  case "$mode" in
+    local)  printf '  ML mode  : %sLOCAL%s → %s\n' "$C_GREEN" "$C_RESET" "${url:-$LOCAL_ML_URL}" ;;
+    remote) printf '  ML mode  : %sREMOTE%s → %s\n' "$C_MAGENTA" "$C_RESET" "$url" ;;
+    off)    printf '  ML mode  : %sOFF%s %s(gateway in-process fallback)%s\n' "$C_YELLOW" "$C_RESET" "$C_DIM" "$C_RESET" ;;
+  esac
+  if [[ -n "$key" ]]; then
+    printf '  ML key   : %s…%s\n' "$C_DIM" "${key: -4}"
+  else
+    printf '  ML key   : %s(unset)%s\n' "$C_YELLOW" "$C_RESET"
+  fi
+  printf '  Remote   : %s\n' "$(remote_ml_url)"
+  echo
+}
+
+start_bg_cwd() {
+  local name="$1" cwd="$2"
+  shift 2
+  local logfile="$LOG_DIR/$name.log"
+  local pid
+
+  pid="$(read_pid "$name")"
+  if pid_alive "$pid"; then
+    printf '%s%s already running%s (pid %s) — log: %s\n' "$C_YELLOW" "$name" "$C_RESET" "$pid" "$logfile"
+    return 0
+  fi
+
+  (
+    cd "$cwd" || exit 1
+    if is_windows; then
+      "$@" >>"$logfile" 2>&1 &
+      echo $! >"$PID_DIR/$name.pid"
+    else
+      nohup "$@" >>"$logfile" 2>&1 &
+      echo $! >"$PID_DIR/$name.pid"
+    fi
+  )
+  sleep 0.7
+  pid="$(read_pid "$name")"
+  printf '%s→ started %s%s (pid %s)\n' "$C_GREEN" "$name" "$C_RESET" "$pid"
+  printf '  cwd: %s\n' "$cwd"
+  printf '  log: %s\n' "$logfile"
+}
+
+start_api() {
+  local py
+  if ! py="$(resolve_python "$API_DIR")"; then
+    echo "${C_RED}Python not found. Create PaperPilot-main/api/.venv first.${C_RESET}"
+    return 1
+  fi
+  if [[ "$(service_state api "$API_PORT" "http://127.0.0.1:${API_PORT}/health")" == "up" ]]; then
+    echo "${C_YELLOW}API already up on :$API_PORT${C_RESET}"
+    return 0
+  fi
+  start_bg_cwd api "$API_DIR" "$py" -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$API_PORT"
+}
+
+start_ml() {
+  local py
+  if ! py="$(resolve_python "$ML_DIR")"; then
+    echo "${C_RED}Python not found. Create PaperPilot-main/machinelearning/.venv first.${C_RESET}"
+    return 1
+  fi
+  if [[ "$(service_state ml "$ML_PORT" "http://127.0.0.1:${ML_PORT}/health")" == "up" ]]; then
+    echo "${C_YELLOW}ML already up on :$ML_PORT${C_RESET}"
+    return 0
+  fi
+  # Point gateway at local ML if currently empty/off
+  if [[ "$(ml_mode)" == "off" ]]; then
+    set_ml_mode local
+  fi
+  start_bg_cwd ml "$ML_DIR" "$py" -m uvicorn app.main:app --reload --host 0.0.0.0 --port "$ML_PORT"
+}
+
+start_web() {
+  if [[ ! -d "$WEB_DIR/node_modules" ]]; then
+    echo "${C_YELLOW}web/node_modules missing — running npm install…${C_RESET}"
+    (cd "$WEB_DIR" && npm install)
+  fi
+  if [[ "$(service_state web "$WEB_PORT")" == "up" ]]; then
+    echo "${C_YELLOW}Web already up on :$WEB_PORT${C_RESET}"
+    return 0
+  fi
+  # Use vite directly so we don't also spawn API via npm run dev
+  start_bg_cwd web "$WEB_DIR" npm run web -- --host 0.0.0.0 --port "$WEB_PORT"
+}
+
+start_mobile() {
+  if [[ ! -d "$MOBILE_DIR/node_modules" ]]; then
+    echo "${C_YELLOW}mobile/node_modules missing — running npm install…${C_RESET}"
+    (cd "$MOBILE_DIR" && npm install)
+  fi
+  if [[ "$(service_state mobile "$EXPO_PORT")" == "up" ]]; then
+    echo "${C_YELLOW}Expo already up on :$EXPO_PORT${C_RESET}"
+    return 0
+  fi
+  start_bg_cwd mobile "$MOBILE_DIR" npx expo start --port "$EXPO_PORT"
+}
+
+start_stack() {
+  set_ml_mode local
+  start_api
+  start_ml
+  start_web
+  echo
+  print_status
+  echo "${C_DIM}Tip: open http://127.0.0.1:${WEB_PORT} — API :${API_PORT} — ML :${ML_PORT}${C_RESET}"
+}
+
+stop_one() {
+  local name="$1" port="${2:-}"
+  local pid
+  pid="$(read_pid "$name")"
+  if pid_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    sleep 0.3
+    kill -9 "$pid" 2>/dev/null || true
+    echo "${C_GREEN}stopped $name${C_RESET} (pid $pid)"
+  else
+    echo "${C_DIM}$name not tracked / already stopped${C_RESET}"
+  fi
+  clear_pid "$name"
+
+  # Best-effort free port (Unix)
+  if [[ -n "$port" ]] && ! is_windows && command -v lsof >/dev/null 2>&1; then
+    local pids
+    pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -n "$pids" ]]; then
+      # shellcheck disable=SC2086
+      kill $pids 2>/dev/null || true
+      sleep 0.2
+      # shellcheck disable=SC2086
+      kill -9 $pids 2>/dev/null || true
+    fi
+  fi
+}
+
+stop_all() {
+  stop_one mobile "$EXPO_PORT"
+  stop_one web "$WEB_PORT"
+  stop_one ml "$ML_PORT"
+  stop_one api "$API_PORT"
+}
+
+set_ml_mode() {
+  local mode="$1"
+  local url="" key
+  key="$(get_env_key "$API_DIR/.env" "ML_SERVICE_KEY")"
+  case "$mode" in
+    local)
+      url="$LOCAL_ML_URL"
+      if [[ -z "$key" ]]; then
+        key="$(get_env_key "$ML_DIR/.env" "ML_SERVICE_KEY")"
+        [[ -n "$key" ]] || key="paperpilot-ml-dev"
+        set_env_key "$API_DIR/.env" "ML_SERVICE_KEY" "$key"
+      fi
+      set_env_key "$API_DIR/.env" "ML_SERVICE_URL" "$url"
+      printf '%sML → LOCAL%s  %s\n' "$C_GREEN" "$C_RESET" "$url"
+      echo "${C_DIM}Restart API if it is already running so it reloads .env.${C_RESET}"
+      ;;
+    remote)
+      url="$(remote_ml_url)"
+      set_env_key "$API_DIR/.env" "ML_SERVICE_URL" "$url"
+      printf '%sML → REMOTE%s  %s\n' "$C_MAGENTA" "$C_RESET" "$url"
+      echo "${C_DIM}Restart API if it is already running so it reloads .env.${C_RESET}"
+      ;;
+    off)
+      set_env_key "$API_DIR/.env" "ML_SERVICE_URL" ""
+      printf '%sML → OFF%s  (gateway in-process fallback)\n' "$C_YELLOW" "$C_RESET"
+      echo "${C_DIM}Restart API if it is already running so it reloads .env.${C_RESET}"
+      ;;
+    *)
+      echo "Usage: ./runner ml local|remote|off"
+      return 1
+      ;;
+  esac
+}
+
+set_remote_url() {
+  local url="${1:-}"
+  if [[ -z "$url" ]]; then
+    printf 'Remote ML URL [%s]: ' "$(remote_ml_url)"
+    read -r url || true
+  fi
+  [[ -n "$url" ]] || return 0
+  printf '%s\n' "$url" >"$ML_REMOTE_FILE"
+  echo "${C_GREEN}Saved remote URL:${C_RESET} $url"
+  if [[ "$(ml_mode)" == "remote" ]]; then
+    set_ml_mode remote
+  fi
+}
+
+tail_logs() {
+  local name="${1:-}"
+  if [[ -z "$name" ]]; then
+    echo "Available logs:"; ls -1 "$LOG_DIR" 2>/dev/null || true
+    return 0
+  fi
+  local f="$LOG_DIR/$name.log"
+  if [[ ! -f "$f" ]]; then
+    echo "${C_RED}No log for '$name'${C_RESET}"
+    return 1
+  fi
+  echo "${C_DIM}--- $f (last 40 lines) ---${C_RESET}"
+  tail -n 40 "$f"
+}
+
+print_help() {
+  cat <<EOF
+${C_BOLD}${C_CYAN}PaperPilot ./runner${C_RESET}
+
+${C_BOLD}Interactive${C_RESET}
+  ./runner                 Open TUI menu
+
+${C_BOLD}Quick commands${C_RESET}
+  ./runner status          Ports + ML mode
+  ./runner api             Start API  (:$API_PORT)
+  ./runner web             Start Web  (:$WEB_PORT)
+  ./runner mobile          Start Expo (:$EXPO_PORT)
+  ./runner ml              Start local ML (:$ML_PORT)
+  ./runner stack           API + ML + Web (ML→local)
+  ./runner stop            Stop tracked services
+  ./runner logs [name]     Tail log (api|web|mobile|ml)
+  ./runner ml local        Point api/.env → local ML
+  ./runner ml remote       Point api/.env → Render URL
+  ./runner ml off          Clear ML_SERVICE_URL (fallback)
+  ./runner ml-url [url]    Set saved remote ML URL
+  ./runner help
+
+${C_DIM}Windows: use Git Bash, WSL, or runner.cmd${C_RESET}
+EOF
+}
+
+draw_menu() {
+  clear 2>/dev/null || true
+  printf '%s%s╔══════════════════════════════════════════╗%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '%s%s║         PaperPilot  ·  local runner      ║%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  printf '%s%s╚══════════════════════════════════════════╝%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET"
+  print_status
+  cat <<EOF
+  ${C_BOLD}Start${C_RESET}
+    ${C_GREEN}1${C_RESET}) API
+    ${C_GREEN}2${C_RESET}) Web
+    ${C_GREEN}3${C_RESET}) Mobile (Expo)
+    ${C_GREEN}4${C_RESET}) ML service (local)
+    ${C_GREEN}5${C_RESET}) Stack  (API + ML + Web)
+
+  ${C_BOLD}ML target${C_RESET}  ${C_DIM}(writes PaperPilot-main/api/.env)${C_RESET}
+    ${C_BLUE}6${C_RESET}) Use LOCAL ML   (:$ML_PORT)
+    ${C_MAGENTA}7${C_RESET}) Use REMOTE ML  (Render)
+    ${C_YELLOW}8${C_RESET}) ML OFF         (in-process fallback)
+    ${C_DIM}9${C_RESET}) Set remote URL
+
+  ${C_BOLD}Ops${C_RESET}
+    ${C_CYAN}s${C_RESET}) Refresh status
+    ${C_CYAN}l${C_RESET}) View logs
+    ${C_RED}x${C_RESET}) Stop all
+    ${C_DIM}q${C_RESET}) Quit
+
+EOF
+  printf '%sSelect:%s ' "$C_BOLD" "$C_RESET"
+}
+
+interactive() {
+  local choice name
+  while true; do
+    draw_menu
+    read -r choice || choice=q
+    echo
+    case "$choice" in
+      1) start_api ;;
+      2) start_web ;;
+      3) start_mobile ;;
+      4) start_ml ;;
+      5) start_stack ;;
+      6) set_ml_mode local ;;
+      7) set_ml_mode remote ;;
+      8) set_ml_mode off ;;
+      9) set_remote_url ;;
+      s|S) print_status ;;
+      l|L)
+        printf 'Log name [api|web|mobile|ml]: '
+        read -r name || true
+        tail_logs "${name:-}"
+        ;;
+      x|X) stop_all ;;
+      q|Q|0) echo "Bye."; exit 0 ;;
+      *) echo "${C_YELLOW}Unknown option${C_RESET}" ;;
+    esac
+    echo
+    printf '%sPress Enter…%s' "$C_DIM" "$C_RESET"
+    read -r _ || true
+  done
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    "" ) interactive ;;
+    help|-h|--help) print_help ;;
+    status|st) print_status ;;
+    api) start_api ;;
+    web) start_web ;;
+    mobile|expo) start_mobile ;;
+    ml)
+      if [[ "${1:-}" == "local" || "${1:-}" == "remote" || "${1:-}" == "off" ]]; then
+        set_ml_mode "$1"
+      else
+        start_ml
+      fi
+      ;;
+    ml-url) set_remote_url "${1:-}" ;;
+    stack|all) start_stack ;;
+    stop) stop_all ;;
+    logs|log) tail_logs "${1:-}" ;;
+    *)
+      echo "${C_RED}Unknown command:${C_RESET} $cmd"
+      print_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

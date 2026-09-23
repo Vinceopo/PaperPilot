@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { completeRegister, registerCheck, sendOtp } from "../../api.js";
+import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../api.js";
 import { auth, db, firebaseReady } from "../../firebase.js";
 import { registerWithEmail, saveUserProfile, signInWithEmail, signInWithGoogle } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
@@ -88,6 +88,11 @@ export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGues
       // Fail fast on a taken email or username before spending an OTP.
       await registerCheck({ email, username: values.username.trim() });
       const res = await sendOtp({ email, purpose: "verify_email" });
+      const bypass = otpBypassToken(res, "verify_email");
+      if (bypass) {
+        await onVerified(bypass);
+        return;
+      }
       setOtpMeta({
         expiresIn: res.expires_in,
         resendIn: res.resend_in,

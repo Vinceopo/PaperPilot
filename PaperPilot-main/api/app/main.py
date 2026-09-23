@@ -1,6 +1,8 @@
+import base64
 import io
 import json
 import time
+import uuid
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -18,11 +20,13 @@ from app.compliance_db import (
     cancel_user_subscription,
     check_scan_eligibility,
     create_mechanics,
+    create_pending_scan,
     create_version,
     delete_mechanics,
     get_mechanics,
     get_scan,
     get_version,
+    get_version_document_url,
     get_version_full,
     init_db as init_compliance_db,
     is_current_version,
@@ -35,6 +39,8 @@ from app.compliance_db import (
     subscription_snapshot,
     update_mechanics,
 )
+from app.ml_service_client import MLServiceError, create_analyze_job, ml_service_configured
+from app.scan_ml_sync import hydrate_scan_from_ml, scan_progress_payload
 from app.paymongo import (
     PayMongoError,
     create_checkout_session,
@@ -52,7 +58,16 @@ from app.documents import (
 from app.emailer import send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
-from app.otp import PURPOSES, can_send, consume_challenge, generate_code, init_db, store_otp, verify_otp
+from app.otp import (
+    PURPOSES,
+    can_send,
+    consume_challenge,
+    generate_code,
+    init_db,
+    issue_challenge,
+    store_otp,
+    verify_otp,
+)
 from app.profiles import release_username, reserve_username, save_profile, username_taken
 from app.rules import evaluate_manuscript
 from app.schemas import (
@@ -514,6 +529,7 @@ async def manuscript_version_create(
             parsed["text"],
             parsed,
             manuscript_id,
+            cloudinary_url=body.cloudinary_url,
         )
         return {"created_manuscript": created_parent, "version": version}
     except CloudinaryFetchError as exc:
@@ -589,9 +605,66 @@ def compliance_scan_create(
         _raise_upgrade(exc)
     except LookupError:
         raise HTTPException(status_code=404, detail="Manuscript not found.") from None
+
+    if ml_service_configured():
+        document_url = (version.get("cloudinary_url") or "").strip() or get_version_document_url(
+            uid, manuscript_id, version_id
+        )
+        if not document_url:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This manuscript version has no stored Cloudinary URL. "
+                    "Upload the document again, then run the scan."
+                ),
+            )
+        # ML cannot authenticate Cloudinary restricted formats; gateway fetches bytes.
+        try:
+            raw_bytes, _hint = fetch_cloudinary_bytes(document_url)
+        except CloudinaryFetchError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not download the document for analysis: {exc}",
+            ) from None
+        scan_id = str(uuid.uuid4())
+        try:
+            create_analyze_job(
+                job_id=scan_id,
+                document_url=None,
+                document_base64=base64.b64encode(raw_bytes).decode("ascii"),
+                filename=version.get("source_filename") or "document.pdf",
+                mechanics_rules=mechanics["rules"],
+                tier=subscription["tier"],
+            )
+        except MLServiceError as exc:
+            status = exc.status_code if exc.status_code and exc.status_code < 500 else 502
+            raise HTTPException(status_code=status, detail=str(exc)) from None
+        try:
+            return create_pending_scan(
+                uid,
+                manuscript_id,
+                version_id,
+                body.mechanics_id,
+                scan_id=scan_id,
+                ml_job_id=scan_id,
+            )
+        except UpgradeRequired as exc:
+            _raise_upgrade(exc)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
+
     result = run_compliance_scan(
         version["parsed_data"], mechanics["rules"], subscription["tier"]
     )
+    extra = {
+        "page_count": result.get("page_count") or 0,
+        "pagination": result.get("pagination") or {},
+    }
+    for key in ("right_pct", "wrong_pct", "category_wrong_pct", "severity_pct", "units_checked", "units_failed"):
+        if key in result:
+            extra[key] = result[key]
     try:
         scan = persist_scan(
             uid,
@@ -601,6 +674,7 @@ def compliance_scan_create(
             result["overall_score"],
             result["issues"],
             result["sections"],
+            extra=extra,
         )
     except UpgradeRequired as exc:
         _raise_upgrade(exc)
@@ -611,9 +685,27 @@ def compliance_scan_create(
     return scan
 
 
+@app.get("/scans/{scan_id}/progress")
+def compliance_scan_progress(scan_id: str, uid: str = Depends(authenticated_uid)):
+    if not get_scan(uid, scan_id):
+        raise HTTPException(status_code=404, detail="Compliance scan not found.")
+    try:
+        payload = scan_progress_payload(uid, scan_id)
+    except MLServiceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    if not payload:
+        raise HTTPException(status_code=404, detail="Compliance scan not found.")
+    return payload
+
+
 @app.get("/scans/{scan_id}")
 def compliance_scan_detail(scan_id: str, uid: str = Depends(authenticated_uid)):
-    scan = get_scan(uid, scan_id)
+    if not get_scan(uid, scan_id):
+        raise HTTPException(status_code=404, detail="Compliance scan not found.")
+    try:
+        scan = hydrate_scan_from_ml(uid, scan_id)
+    except MLServiceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
     if not scan:
         raise HTTPException(status_code=404, detail="Compliance scan not found.")
     return scan
@@ -778,6 +870,20 @@ def auth_otp_send(body: OtpSendRequest):
     if body.purpose == "reset_password" and registered is False:
         raise HTTPException(status_code=404, detail="No account found for this email.")
 
+    # Local/dev bypass: skip email and return a challenge token immediately.
+    if not settings.otp_enabled:
+        token = issue_challenge(email, body.purpose)
+        key = "signup_token" if body.purpose == "verify_email" else "reset_token"
+        return {
+            "ok": True,
+            "otp_bypassed": True,
+            "expires_in": settings.otp_ttl_seconds,
+            "resend_in": 0,
+            "max_attempts": settings.otp_max_attempts,
+            "message": "OTP is disabled; email verification was skipped.",
+            key: token,
+        }
+
     allowed, _wait, reason = can_send(email, body.purpose)
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
@@ -803,12 +909,15 @@ def auth_otp_send(body: OtpSendRequest):
 @app.post("/auth/otp/verify")
 def auth_otp_verify(body: OtpVerifyRequest):
     email = normalize_email(body.email)
-    try:
-        token = verify_otp(email, body.purpose, body.code)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not settings.otp_enabled:
+        token = issue_challenge(email, body.purpose)
+    else:
+        try:
+            token = verify_otp(email, body.purpose, body.code)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     key = "signup_token" if body.purpose == "verify_email" else "reset_token"
-    return {"ok": True, key: token, "expires_in": settings.otp_ttl_seconds}
+    return {"ok": True, "otp_bypassed": not settings.otp_enabled, key: token, "expires_in": settings.otp_ttl_seconds}
 
 
 @app.post("/auth/register")

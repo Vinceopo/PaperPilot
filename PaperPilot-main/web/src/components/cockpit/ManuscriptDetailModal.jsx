@@ -25,9 +25,15 @@ function formatDate(iso) {
 }
 
 function severityClass(severity) {
-  if (severity === "critical") return "border-rose-200 bg-rose-50 text-rose-700";
-  if (severity === "warning") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (severity === "critical" || severity === "major") return "border-rose-200 bg-rose-50 text-rose-800";
+  if (severity === "moderate" || severity === "warning") return "border-orange-200 bg-orange-50 text-orange-800";
+  if (severity === "minor") return "border-amber-200 bg-amber-50 text-amber-800";
   return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function formatLocationChip(loc) {
+  if (loc?.page == null) return loc?.section || "Document";
+  return `Page ${loc.page}${loc.line != null ? `, line ${loc.line}` : ""}`;
 }
 
 /**
@@ -237,37 +243,81 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
                 </section>
 
                 <section className="mt-7">
-                  <h3 className="text-sm font-bold text-[#0F1729]">
-                    Detected issues{" "}
-                    <span className="font-normal text-slate-400">({issues.length})</span>
-                  </h3>
+                  <div className="flex flex-wrap items-end justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-bold text-[#0F1729]">
+                        Detected issues{" "}
+                        <span className="font-normal text-slate-400">({issues.length})</span>
+                      </h3>
+                      <p className="mt-0.5 text-[11px] text-slate-500">
+                        Each card is one rule finding — expand locations to see every page/line hit.
+                      </p>
+                    </div>
+                  </div>
+
                   {issues.length === 0 ? (
                     <p className="mt-3 text-sm text-slate-400">No issues recorded for this version.</p>
                   ) : (
-                    <ul className="mt-3 space-y-2">
-                      {issues.map((issue, idx) => (
-                        <li
-                          key={`${issue.category}-${idx}`}
-                          className={`rounded-xl border px-3 py-2.5 text-xs ${severityClass(issue.severity)}`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold">{issue.category}</span>
-                            <span className="uppercase tracking-wide opacity-80">{issue.severity}</span>
-                          </div>
-                          <p className="mt-1 leading-relaxed opacity-90">{issue.description}</p>
-                          {Array.isArray(issue.locations) && issue.locations.length > 0 && (
-                            <p className="mt-1.5 text-[10px] font-semibold uppercase tracking-wide opacity-70">
-                              {issue.locations
-                                .map((loc) =>
-                                  loc.page != null
-                                    ? `p.${loc.page}${loc.line != null ? ` · line ${loc.line}` : ""}`
-                                    : loc.section || "Document"
-                                )
-                                .join(" · ")}
-                            </p>
-                          )}
-                        </li>
-                      ))}
+                    <ul className="mt-4 space-y-3">
+                      {issues.map((issue, idx) => {
+                        const locs = Array.isArray(issue.locations) ? issue.locations : [];
+                        const pages = [
+                          ...new Set(locs.map((loc) => loc.page).filter((p) => p != null)),
+                        ].sort((a, b) => a - b);
+                        return (
+                          <li
+                            key={`${issue.category}-${idx}`}
+                            className={`rounded-xl border px-4 py-3 ${severityClass(issue.severity)}`}
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-sm font-bold leading-snug">{issue.category}</p>
+                                <p className="mt-1 text-xs leading-relaxed opacity-90">
+                                  {issue.explanation || issue.description}
+                                </p>
+                              </div>
+                              <span className="shrink-0 rounded-full border border-current/20 bg-white/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
+                                {issue.severity}
+                              </span>
+                            </div>
+
+                            {issue.recommendation ? (
+                              <p className="mt-2 rounded-lg border border-emerald-200/60 bg-white/70 px-3 py-2 text-[11px] font-medium text-emerald-800">
+                                Fix: {issue.recommendation}
+                              </p>
+                            ) : null}
+
+                            {locs.length > 0 ? (
+                              <details className="mt-3 group">
+                                <summary className="cursor-pointer list-none text-[11px] font-bold uppercase tracking-wide opacity-80">
+                                  <span className="underline-offset-2 group-open:underline">
+                                    {locs.length} location{locs.length === 1 ? "" : "s"}
+                                    {pages.length
+                                      ? ` · pages ${pages.slice(0, 6).join(", ")}${pages.length > 6 ? "…" : ""}`
+                                      : ""}
+                                  </span>
+                                </summary>
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  {locs.slice(0, 40).map((loc, locIdx) => (
+                                    <span
+                                      key={`${idx}-${locIdx}`}
+                                      className="rounded-md border border-current/15 bg-white/80 px-2 py-1 font-mono text-[10px] font-semibold"
+                                    >
+                                      {formatLocationChip(loc)}
+                                      {loc.section ? ` · ${loc.section}` : ""}
+                                    </span>
+                                  ))}
+                                  {locs.length > 40 ? (
+                                    <span className="rounded-md bg-white/60 px-2 py-1 text-[10px] font-semibold">
+                                      +{locs.length - 40} more
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </details>
+                            ) : null}
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </section>
@@ -282,12 +332,12 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
                     type="button"
                     onClick={onDownload}
                     disabled={downloadBusy}
-                    className="inline-flex items-center gap-2 rounded-xl bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-[#0F1729] shadow-sm transition hover:bg-[#12ae99] disabled:opacity-50"
+                    className="inline-flex items-center gap-2 rounded-xl bg-[#172033] px-5 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#243049] disabled:opacity-50"
                   >
                     <Download className="h-3.5 w-3.5" />
                     {downloadBusy
                       ? "Generating PDF…"
-                      : `Download Report (PDF) · ${versionLabel}`}
+                      : `Download full report (PDF) · ${versionLabel}`}
                   </button>
                 </div>
               </>

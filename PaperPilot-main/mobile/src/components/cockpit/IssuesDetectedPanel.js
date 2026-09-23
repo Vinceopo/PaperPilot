@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
+import { normalizeIssueLocation } from "../../lib/scanMapper";
 
 const SEVERITY = {
   minor: {
@@ -72,14 +73,17 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
         : [{ page: null, line: null, section: check.section || "General" }];
 
     rawLocs.forEach((loc, locIdx) => {
-      const page = loc?.page == null || loc.page === "" ? null : Number(loc.page);
-      const line = loc?.line == null || loc.line === "" ? null : Number(loc.line);
+      const normalized = normalizeIssueLocation(loc);
+      const page =
+        normalized.page == null || Number.isNaN(normalized.page) ? null : normalized.page;
+      const line =
+        normalized.line == null || Number.isNaN(normalized.line) ? null : normalized.line;
       if (page != null && !Number.isNaN(page)) maxPage = Math.max(maxPage, page);
       entries.push({
         id: `${check.id || check.issue_type || "chk"}-${checkIdx}-${locIdx}`,
         page,
         line: line != null && !Number.isNaN(line) ? line : null,
-        section: loc?.section || check.section || "General",
+        section: normalized.section || check.section || "General",
         severity,
         title: check.name || check.title || check.issue_type || "Formatting issue",
         finding:
@@ -112,15 +116,29 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
   return { entries, pageCount: maxPage };
 }
 
-function IssueRow({ entry }) {
+function IssueRow({ entry, onIssuePress, selected }) {
   const [open, setOpen] = useState(false);
   const s = SEVERITY[entry.severity] || SEVERITY.minor;
   const pageStr = entry.page != null ? `Page ${entry.page}` : "Doc";
   const lineStr = entry.line != null ? `, Line ${entry.line}` : "";
 
+  function handlePress() {
+    if (onIssuePress) {
+      onIssuePress(entry);
+      return;
+    }
+    setOpen((v) => !v);
+  }
+
   return (
-    <View style={[styles.issue, { borderLeftColor: s.borderLeft, backgroundColor: s.rowBg }]}>
-      <Pressable style={styles.issueHead} onPress={() => setOpen((v) => !v)}>
+    <View
+      style={[
+        styles.issue,
+        { borderLeftColor: s.borderLeft, backgroundColor: s.rowBg },
+        selected ? styles.issueSelected : null,
+      ]}
+    >
+      <Pressable style={styles.issueHead} onPress={handlePress}>
         <View style={styles.locBadge}>
           <Text style={styles.locText}>
             {pageStr}
@@ -160,7 +178,13 @@ function IssueRow({ entry }) {
   );
 }
 
-export default function IssuesDetectedPanel({ formatChecks = [], pageCount: pageCountProp = 0 }) {
+export default function IssuesDetectedPanel({
+  formatChecks = [],
+  pageCount: pageCountProp = 0,
+  onIssuePress,
+  selectedIssueId,
+  compact,
+}) {
   const [severityFilter, setSeverityFilter] = useState(null);
   const [selectedPage, setSelectedPage] = useState("all");
 
@@ -214,8 +238,8 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
     );
   }
 
-  return (
-    <View style={styles.wrap}>
+  const body = (
+    <>
       <View style={styles.pills}>
         {(["minor", "moderate", "critical"]).map((key) => {
           const s = SEVERITY[key];
@@ -278,13 +302,26 @@ export default function IssuesDetectedPanel({ formatChecks = [], pageCount: page
 
       <View style={{ gap: 10, marginTop: 12 }}>
         {visibleEntries.length ? (
-          visibleEntries.map((entry) => <IssueRow key={entry.id} entry={entry} />)
+          visibleEntries.map((entry) => (
+            <IssueRow
+              key={entry.id}
+              entry={entry}
+              onIssuePress={onIssuePress}
+              selected={selectedIssueId === entry.id}
+            />
+          ))
         ) : (
           <Text style={styles.muted}>No issues found here.</Text>
         )}
       </View>
-    </View>
+    </>
   );
+
+  if (compact) {
+    return <View style={styles.wrapCompact}>{body}</View>;
+  }
+
+  return <View style={styles.wrap}>{body}</View>;
 }
 
 const styles = StyleSheet.create({
@@ -295,6 +332,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     overflow: "hidden",
     paddingBottom: 14,
+  },
+  wrapCompact: {
+    flex: 1,
+    overflow: "hidden",
+  },
+  issueSelected: {
+    borderColor: colors.rose,
+    borderWidth: 2,
   },
   empty: {
     borderRadius: 12,
