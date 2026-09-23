@@ -164,6 +164,12 @@ export async function verifyOtp({ email, purpose, code }) {
   return postJson("/auth/otp/verify", { email, purpose, code });
 }
 
+/** When OTP_ENABLED=false, /auth/otp/send returns a challenge token immediately. */
+export function otpBypassToken(res, purpose) {
+  if (!res?.otp_bypassed) return null;
+  return purpose === "verify_email" ? res.signup_token : res.reset_token;
+}
+
 /** Checks email/username availability before an OTP is sent. */
 export async function registerCheck({ email, username }) {
   return postJson("/auth/register/check", { email, username });
@@ -368,6 +374,11 @@ export function runComplianceScan({ manuscriptId, versionId, mechanicsId }) {
 
 export function getComplianceScan(scanId) {
   return authorizedFetch(`/scans/${encodeURIComponent(scanId)}`);
+}
+
+/** Poll while ML job runs (gateway proxies Render progress). */
+export function getScanProgress(scanId) {
+  return authorizedFetch(`/scans/${encodeURIComponent(scanId)}/progress`);
 }
 
 export function getSubscription() {

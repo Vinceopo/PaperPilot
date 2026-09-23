@@ -11,6 +11,7 @@ import {
   sampleMechanicsForm,
 } from "../../lib/formatMechanicsForm.js";
 import { downloadSampleMechanics } from "../../api.js";
+import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
 const ACCEPTED = [".pdf", ".docx"];
 const MODES = [
@@ -48,6 +49,7 @@ export default function MechanicsPanel({
   onRename,
   onDelete,
   onContinue,
+  onShowSteps,
   busy,
 }) {
   const inputRef = useRef(null);
@@ -69,6 +71,7 @@ export default function MechanicsPanel({
   const [confirmAction, setConfirmAction] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [sampleBusy, setSampleBusy] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const selected = items.find((item) => item.id === selectedId);
 
   const form =
@@ -371,6 +374,31 @@ export default function MechanicsPanel({
   const showSavedEditor = mode === "saved" && Boolean(selected);
   const showCustomizeEditor = mode === "customize";
   const panelBusy = busy || extracting || sampleBusy;
+  const canPickGuide = Boolean(!extracting && !busy);
+
+  function onDropZoneDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!canPickGuide) return;
+    setDragOver(true);
+  }
+
+  function onDropZoneDragLeave(e) {
+    e.preventDefault();
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setDragOver(false);
+  }
+
+  function onDropZoneDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    if (!canPickGuide) return;
+    const next = e.dataTransfer?.files?.[0] || null;
+    if (!next) return;
+    requestExtract(next);
+    if (inputRef.current) inputRef.current.value = "";
+  }
 
   return (
     <section className="relative w-full rounded-xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
@@ -385,7 +413,7 @@ export default function MechanicsPanel({
         </div>
       )}
 
-      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#16bfa8]">Step 1 of 3</p>
+      <ShowStepsRow step={1} onShowSteps={onShowSteps} />
       <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Format Mechanics</h2>
       <p className="mt-1 text-xs leading-relaxed text-slate-400">
         Choose a saved format, upload a guide for extraction, or customize fields manually. Format
@@ -563,7 +591,19 @@ export default function MechanicsPanel({
       {mode === "upload" && (
         <div className={`mt-6 grid gap-4 ${showUploadEditor ? "lg:grid-cols-2" : ""}`}>
           <div>
-            <label className="relative flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#18bda9] bg-[#f7fcfc] px-5 text-center hover:bg-[#f0fbf9]">
+            <label
+              onDragEnter={onDropZoneDragOver}
+              onDragOver={onDropZoneDragOver}
+              onDragLeave={onDropZoneDragLeave}
+              onDrop={onDropZoneDrop}
+              className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 text-center transition ${
+                extracting || busy
+                  ? "cursor-wait border-[#18bda9] bg-[#f7fcfc]"
+                  : dragOver
+                    ? "cursor-copy border-[#0d9488] bg-[#e7faf6] ring-2 ring-[#16bfa8]/35"
+                    : "cursor-pointer border-[#18bda9] bg-[#f7fcfc] hover:bg-[#f0fbf9]"
+              }`}
+            >
               {extracting ? (
                 <span className="flex flex-col items-center gap-3 text-[#16bfa8]">
                   <Spinner className="h-10 w-10 border-[3px]" />
@@ -575,12 +615,16 @@ export default function MechanicsPanel({
                     ↑
                   </span>
                   <span className="mt-3 text-sm font-bold text-slate-700">
-                    {file ? file.name : "Drop your format guide here"}
+                    {dragOver
+                      ? "Release to upload"
+                      : file
+                        ? file.name
+                        : "Drop your format guide here"}
                   </span>
                   <span className="mt-1 text-[11px] text-slate-400">
                     {file
                       ? "Confirm extraction to fill Format Fields beside this panel"
-                      : "Supports .pdf and .docx · Max 100 MB"}
+                      : "Drag & drop or browse · .pdf and .docx · Max 100 MB"}
                   </span>
                   <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                     Browse files

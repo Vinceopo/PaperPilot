@@ -190,6 +190,34 @@ def store_otp(email: str, purpose: str, code: str) -> int:
     return settings.otp_ttl_seconds
 
 
+def issue_challenge(email: str, purpose: str) -> str:
+    """Issue a single-use challenge token without verifying an email code (OTP bypass)."""
+    now = time.time()
+    email_key = _email_key(email)
+    token = secrets.token_urlsafe(32)
+    token_hash = _token_key(token)
+
+    def write(root):
+        root = copy.deepcopy(root) if isinstance(root, dict) else {}
+        # Drop any pending code for this purpose so a later enablement stays clean.
+        root.setdefault("otps", {}).setdefault(email_key, {}).pop(purpose, None)
+        root.setdefault("challenges", {})[token_hash] = {
+            "email_key": email_key,
+            "purpose": purpose,
+            "expires_at": now + settings.otp_ttl_seconds,
+            "created_at": now,
+        }
+        (
+            root.setdefault("challenge_index", {})
+            .setdefault(email_key, {})
+            .setdefault(purpose, {})
+        )[token_hash] = True
+        return root
+
+    _reference(ROOT).transaction(write)
+    return token
+
+
 def verify_otp(email: str, purpose: str, code: str) -> str:
     """Check a code and exchange it for a single-use challenge token."""
     now = time.time()

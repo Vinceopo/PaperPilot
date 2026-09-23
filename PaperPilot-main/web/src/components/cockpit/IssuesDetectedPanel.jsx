@@ -238,11 +238,11 @@ export default function IssuesDetectedPanel({
     <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 bg-[#f8fffd] px-5 py-3">
         <p className="text-sm font-bold text-slate-800">
-          All {entries.length} finding{entries.length === 1 ? "" : "s"} listed below
+          {entries.length} formatting finding{entries.length === 1 ? "" : "s"} to review
         </p>
         <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
           {counts.critical} critical · {counts.moderate} moderate · {counts.minor} minor.
-          Leave severity pills unselected to fix everything together in one pass.
+          Each card explains what failed, why it matters, and how to fix it — filter by severity or page if you want a smaller pass.
           {hiddenLocations > 0
             ? ` ${hiddenLocations} additional matching locations are counted in the totals.`
             : ""}

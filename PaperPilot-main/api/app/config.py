@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     resend_from: str = "onboarding@resend.dev"
 
+    # When false, register / reset skip email codes (local/dev). Never disable in production.
+    otp_enabled: bool = True
     otp_ttl_seconds: int = 300
     otp_resend_seconds: int = 60
     otp_rate_window_seconds: int = 3600  # window for otp_max_sends_per_hour
@@ -60,6 +62,10 @@ class Settings(BaseSettings):
     paymongo_payment_methods: str = "card,gcash,paymaya,grab_pay,qrph"
     # Public web app URL used for Checkout success/cancel redirects.
     app_public_url: str = "https://paperpilotph.vercel.app"
+
+    # Render ML analyze service (gateway-only; never expose key to clients).
+    ml_service_url: str = ""
+    ml_service_key: str = ""
 
 
 settings = Settings()

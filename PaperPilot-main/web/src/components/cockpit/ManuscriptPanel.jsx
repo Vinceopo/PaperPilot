@@ -3,6 +3,7 @@ import { normalizeTitle } from "../../lib/scannedLibrary.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
+import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
 function validateFile(file) {
   if (!file) return "Choose a manuscript.";
@@ -24,6 +25,7 @@ export default function ManuscriptPanel({
   onFilePick,
   onPreview,
   uploadCancelKey = 0,
+  onShowSteps,
   busy,
 }) {
   const inputRef = useRef(null);
@@ -38,6 +40,7 @@ export default function ManuscriptPanel({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [pendingUpload, setPendingUpload] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
     if (selectedManuscriptId && manuscripts.some((m) => m.id === selectedManuscriptId)) {
@@ -150,6 +153,40 @@ export default function ManuscriptPanel({
   const panelBusy = busy || previewBusy || confirmBusy;
   const previewUploading = Boolean(busy || confirmBusy);
   const previewPreparing = Boolean(previewBusy && file && !previewUploading);
+  const canPickFile = Boolean(mechanicsSelected && !panelBusy);
+
+  function applyFile(next) {
+    if (!canPickFile && next) return;
+    setFile(next);
+    setError(next ? validateFile(next) : "");
+    setSuccess("");
+    onFilePick?.(next);
+    void loadPreview(next);
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
+  function onDropZoneDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!canPickFile) return;
+    setDragOver(true);
+  }
+
+  function onDropZoneDragLeave(e) {
+    e.preventDefault();
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setDragOver(false);
+  }
+
+  function onDropZoneDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    if (!canPickFile) return;
+    const next = e.dataTransfer?.files?.[0] || null;
+    if (!next) return;
+    applyFile(next);
+  }
 
   return (
     <section
@@ -160,7 +197,7 @@ export default function ManuscriptPanel({
       }`}
       aria-disabled={!mechanicsSelected}
     >
-      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#16bfa8]">Step 2 of 3</p>
+      <ShowStepsRow step={2} onShowSteps={onShowSteps} />
       <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Manuscript</h2>
       <p className="mt-1 text-xs leading-relaxed text-slate-400">
         Upload the manuscript you want to check against the confirmed format guide.
@@ -207,12 +244,18 @@ export default function ManuscriptPanel({
 
         <div className={`grid gap-4 ${showPreview ? "lg:grid-cols-2" : ""}`}>
           <label
-            className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 text-center ${
-              mechanicsSelected && !panelBusy
-                ? "cursor-pointer border-[#18bda9] bg-[#f7fcfc] hover:bg-[#f0fbf9]"
-                : mechanicsSelected
-                  ? "cursor-wait border-[#18bda9] bg-[#f7fcfc]"
-                  : "cursor-not-allowed border-slate-300 bg-slate-50"
+            onDragEnter={onDropZoneDragOver}
+            onDragOver={onDropZoneDragOver}
+            onDragLeave={onDropZoneDragLeave}
+            onDrop={onDropZoneDrop}
+            className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 text-center transition ${
+              dragOver && canPickFile
+                ? "cursor-copy border-[#0d9488] bg-[#e7faf6] ring-2 ring-[#16bfa8]/35"
+                : canPickFile
+                  ? "cursor-pointer border-[#18bda9] bg-[#f7fcfc] hover:bg-[#f0fbf9]"
+                  : mechanicsSelected
+                    ? "cursor-wait border-[#18bda9] bg-[#f7fcfc]"
+                    : "cursor-not-allowed border-slate-300 bg-slate-50"
             }`}
           >
             <>
@@ -220,7 +263,11 @@ export default function ManuscriptPanel({
                 ↑
               </span>
               <p className="mt-3 text-sm font-bold text-slate-700">
-                {file ? file.name : "Drop your manuscript here"}
+                {dragOver && canPickFile
+                  ? "Release to upload"
+                  : file
+                    ? file.name
+                    : "Drop your manuscript here"}
               </p>
               <p className="mt-1 text-[11px] text-slate-400">
                 {file
@@ -229,7 +276,7 @@ export default function ManuscriptPanel({
                     : previewUploading
                       ? "Uploading — see progress beside this panel"
                       : "Preview appears beside this panel — confirm Upload when ready"
-                  : "Supports .pdf and .docx · Max 100 MB"}
+                  : "Drag & drop or browse · .pdf and .docx · Max 100 MB"}
               </p>
               <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                 Browse files
@@ -238,16 +285,12 @@ export default function ManuscriptPanel({
             <input
               ref={inputRef}
               type="file"
-              disabled={!mechanicsSelected || panelBusy}
+              disabled={!canPickFile}
               accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               className="sr-only"
               onChange={(e) => {
                 const next = e.target.files?.[0] || null;
-                setFile(next);
-                setError(validateFile(next));
-                setSuccess("");
-                onFilePick?.(next);
-                void loadPreview(next);
+                applyFile(next);
               }}
             />
           </label>

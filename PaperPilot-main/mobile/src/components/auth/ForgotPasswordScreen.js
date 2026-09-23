@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { resetPasswordWithOtp, sendOtp } from "../../api";
+import { otpBypassToken, resetPasswordWithOtp, sendOtp } from "../../api";
 import {
   confirmPasswordError,
   emailError,
@@ -47,6 +47,12 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
     setBusy(true);
     try {
       const res = await sendOtp({ email: email.trim(), purpose: "reset_password" });
+      const bypass = otpBypassToken(res, "reset_password");
+      if (bypass) {
+        setResetToken(bypass);
+        setStep("password");
+        return;
+      }
       setOtpMeta({ expiresIn: res.expires_in, resendIn: res.resend_in, devCode: res.dev_code });
       setStep("otp");
     } catch (err2) {

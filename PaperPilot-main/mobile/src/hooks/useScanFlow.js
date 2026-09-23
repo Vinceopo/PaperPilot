@@ -28,6 +28,8 @@ function titleFromFile(file) {
   return file?.name?.replace(/\.(pdf|docx)$/i, "") || "";
 }
 
+const INITIAL_PROGRESS = { percent: 0, stage: "queued", message: "" };
+
 export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript, getScanTarget } = {}) {
   const [step, setStep] = useState("idle");
   const [file, setFileInner] = useState(null);
@@ -38,12 +40,15 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const [versionNumber, setVersionNumber] = useState(1);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  const [analyzeProgress, setAnalyzeProgress] = useState(INITIAL_PROGRESS);
+  const [traceHighlight, setTraceHighlight] = useState(null);
 
   const selectFile = useCallback((f) => {
     const err = f ? validateFile(f) : "";
     setFileInner(f ?? null);
     setFileError(err);
     setError("");
+    setTraceHighlight(null);
     setStep(f && !err ? "fileSelected" : "idle");
   }, []);
 
@@ -52,6 +57,8 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setStep("analyzing");
     setResult(null);
     setError("");
+    setTraceHighlight(null);
+    setAnalyzeProgress({ percent: 0, stage: "queued", message: "Preparing analysis…" });
     try {
       const active = getActiveManuscript?.() || {};
       const title = String(active.title || titleFromFile(file) || "").trim();
@@ -75,6 +82,9 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
         versionId: target.versionId,
         citationStyle: target.citationStyle,
         pageCount: target.pageCount,
+        cloudinaryUrl: target.cloudinaryUrl,
+        documentPreview: target.documentPreview,
+        onProgress: setAnalyzeProgress,
       });
       if (title) scanResult.documentTitle = title;
       if (reuseId) scanResult.documentId = reuseId;
@@ -83,12 +93,32 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
       setDocumentId(scanResult.documentId);
       setVersionNumber(Number(target.versionNumber) || nextVersion);
       setResult(scanResult);
-      setStep("results");
+      setAnalyzeProgress({ percent: 100, stage: "done", message: "Analysis complete." });
+      setStep("summary");
     } catch (err) {
       setError(err?.message ?? "Analysis failed. Please try again.");
       setStep("error");
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
+
+  const openFullResult = useCallback(() => {
+    if (!result) return;
+    setStep("results");
+  }, [result]);
+
+  const openDocumentTrace = useCallback((highlight) => {
+    if (highlight) setTraceHighlight(highlight);
+    setStep("documentTrace");
+  }, []);
+
+  const dismissSummary = useCallback(() => {
+    setStep(file ? "fileSelected" : "idle");
+  }, [file]);
+
+  const selectTraceIssue = useCallback((entry) => {
+    if (!entry) return;
+    setTraceHighlight({ page: entry.page, line: entry.line, id: entry.id });
+  }, []);
 
   const retry = useCallback(() => {
     setError("");
@@ -114,6 +144,8 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setFileError("");
     setError("");
     setResult(null);
+    setTraceHighlight(null);
+    setAnalyzeProgress(INITIAL_PROGRESS);
     setStep("idle");
   }, []);
 
@@ -123,6 +155,8 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setResult(null);
     setError("");
     setDownloadError("");
+    setTraceHighlight(null);
+    setAnalyzeProgress(INITIAL_PROGRESS);
     setStep("idle");
   }, []);
 
@@ -136,11 +170,17 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     versionNumber,
     downloadBusy,
     downloadError,
+    analyzeProgress,
+    traceHighlight,
     selectFile,
     analyze,
     retry,
     downloadReport,
     uploadNewVersion,
     backToDashboard,
+    openFullResult,
+    openDocumentTrace,
+    dismissSummary,
+    selectTraceIssue,
   };
-}
+};

@@ -5,6 +5,7 @@
 
 import { runComplianceScan, uploadManuscriptVersion } from "../api.js";
 import { isServerId, mapComplianceScanToResult } from "./scanMapper.js";
+import { fetchScanWithProgress } from "./scanPoll.js";
 
 export const ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
 export const MAX_FILE_BYTES = 100_000_000;
@@ -46,13 +47,19 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
     throw new Error("The manuscript is not saved on the server yet. Upload it again, then analyse.");
   }
 
-  const scan = await runComplianceScan({ manuscriptId, versionId, mechanicsId });
+  const scan = await fetchScanWithProgress(
+    () => runComplianceScan({ manuscriptId, versionId, mechanicsId }),
+    opts.onProgress
+  );
+
   return mapComplianceScanToResult(scan, {
     documentId: manuscriptId,
     documentTitle: title,
     citationStyle: opts.citationStyle || "APA",
     pageCount: opts.pageCount,
     mechanicsId,
+    cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || "",
+    preview: opts.preview || scan?.preview,
   });
 }
 
@@ -78,12 +85,16 @@ export async function downloadReport(result, opts = {}) {
     scannedAt,
     citationStyle = "APA",
     overallScore = 0,
+    rightPct,
+    wrongPct,
     scoreBreakdown = [],
     formatChecks = [],
   } = result;
 
   const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
   const versionLabel = `v${versionNumber}.0`;
+  const right = Number(rightPct ?? overallScore ?? 0);
+  const wrong = Number(wrongPct ?? Math.max(0, 100 - right));
 
   // ── Derived stats ─────────────────────────────────────────────────────────
   const totalErrors = formatChecks.filter((c) => c.result === "FAIL").length;
@@ -204,6 +215,10 @@ export async function downloadReport(result, opts = {}) {
   doc.text(band, ML + 49, Y + 9);
   doc.setFontSize(8).setFont(undefined, "normal").setTextColor(...SLATE);
   doc.text("Overall compliance score", ML + 49, Y + 15);
+  doc.setFontSize(8).setFont(undefined, "bold").setTextColor(...PASS_C);
+  doc.text(`Right ${Math.round(right * 10) / 10}%`, ML + 49, Y + 20);
+  doc.setTextColor(...FAIL_C);
+  doc.text(`Wrong ${Math.round(wrong * 10) / 10}%`, ML + 78, Y + 20);
 
   // Stat boxes
   const stats = [
@@ -271,16 +286,31 @@ export async function downloadReport(result, opts = {}) {
   );
   Y += 10;
 
-  const tableRows = formatChecks.map((c) => [
-    c.name,
-    c.description + (c.details && c.result !== "PASS" ? `\n${c.details}` : ""),
-    c.result,
-  ]);
+  const tableRows = formatChecks.map((c) => {
+    const locs = (c.locations || [])
+      .slice(0, 8)
+      .map((loc) =>
+        loc.page != null
+          ? `p.${loc.page}${loc.line != null ? ` L${loc.line}` : ""}`
+          : loc.section || ""
+      )
+      .filter(Boolean)
+      .join(", ");
+    const detail = [
+      c.finding || c.description || "",
+      c.explanation ? `Why: ${c.explanation}` : "",
+      c.recommendation ? `Fix: ${c.recommendation}` : "",
+      locs ? `Where: ${locs}${(c.locations || []).length > 8 ? "…" : ""}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return [c.name, detail, c.result];
+  });
 
   autoTable(doc, {
     startY: Y,
     margin: { left: ML, right: MR },
-    head: [["Check", "Description / Details", "Result"]],
+    head: [["Finding", "Explanation / locations", "Result"]],
     body: tableRows,
     styles: { fontSize: 8, cellPadding: 3.5, lineColor: [226, 232, 240], lineWidth: 0.3 },
     headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 7.5 },

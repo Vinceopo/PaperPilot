@@ -23,6 +23,9 @@ import {
 } from "../lib/formatMechanicsForm";
 import { ACCEPTED_EXTENSIONS, MAX_FILE_BYTES } from "../lib/mockAnalysis";
 import { isScanReady } from "../lib/scanMapper";
+import AnalyzeProgressBar from "../components/cockpit/AnalyzeProgressBar";
+import ScanSummaryModal from "../components/cockpit/ScanSummaryModal";
+import { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
 
 const MIME = [
   "application/pdf",
@@ -139,6 +142,9 @@ export default function UploadScreen({ navigation }) {
   useEffect(() => {
     if (scanFlow.step === "results" && scanFlow.result) {
       navigation.navigate("Results");
+    }
+    if (scanFlow.step === "documentTrace" && scanFlow.result) {
+      navigation.navigate("DocumentReference");
     }
   }, [scanFlow.step, scanFlow.result, navigation]);
 
@@ -336,13 +342,7 @@ export default function UploadScreen({ navigation }) {
   }
 
   if (scanFlow.step === "analyzing") {
-    return (
-      <View style={styles.fullCenter}>
-        <ActivityIndicator size="large" color={colors.accent} />
-        <Text style={styles.analyseTitle}>Analysing…</Text>
-        <Text style={styles.analyseSub}>Checking formatting against your mechanics profile.</Text>
-      </View>
-    );
+    return <AnalyzeProgressBar progress={scanFlow.analyzeProgress} />;
   }
 
   if (scanFlow.step === "error") {
@@ -355,7 +355,7 @@ export default function UploadScreen({ navigation }) {
     );
   }
 
-  if (scanFlow.step === "results") {
+  if (scanFlow.step === "results" || scanFlow.step === "documentTrace") {
     return null;
   }
 
@@ -825,6 +825,22 @@ export default function UploadScreen({ navigation }) {
           setUpgradeMessage("");
           navigation.navigate("Subscription");
         }}
+      />
+
+      <ScanSummaryModal
+        visible={scanFlow.step === "summary" && Boolean(scanFlow.result)}
+        result={scanFlow.result}
+        onViewDocument={() => {
+          const { entries } = normalizeDetectedIssues(
+            scanFlow.result?.formatChecks,
+            scanFlow.result?.pageCount
+          );
+          const first = entries[0];
+          if (first) scanFlow.selectTraceIssue(first);
+          scanFlow.openDocumentTrace(first || null);
+        }}
+        onViewFullResult={() => scanFlow.openFullResult()}
+        onDismiss={() => scanFlow.dismissSummary()}
       />
     </View>
   );

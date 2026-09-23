@@ -71,6 +71,61 @@ npx expo start
 
 Do **not** install Go, Express, or Xcode/Swift for v1.
 
+## 7. Render ML service + Vercel gateway env
+
+Document compliance scans run on a **Render** Web Service (`PaperPilot-main/machinelearning/`). The Vercel **api/** gateway starts jobs, stores results in Firebase, and exposes progress — browsers and mobile never call Render directly.
+
+### Render (ML service)
+
+1. Create a **Web Service** on [Render](https://render.com/) connected to this repo.
+2. **Root directory:** `PaperPilot-main/machinelearning`
+3. **Start command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (or use the included `Dockerfile`).
+4. **Health check path:** `/health`
+5. Environment variables on Render:
+
+| Variable | Required | Notes |
+|----------|----------|--------|
+| `ML_SERVICE_KEY` | Yes | Long random secret; must match Vercel `ML_SERVICE_KEY` |
+| `GEMINI_API_KEY` | No | Optional issue wording / severity enrichment |
+| `GEMINI_MODEL` | No | Default `gemini-2.0-flash` |
+| `MAX_DOCUMENT_BYTES` | No | Default 25 MiB |
+| `JOB_TTL_SECONDS` | No | In-memory job retention (default 3600) |
+
+Copy the service public URL (e.g. `https://paperpilot-ml.onrender.com`) for Vercel.
+
+Local ML run (optional):
+
+```powershell
+cd PaperPilot-main\machinelearning
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
+# set ML_SERVICE_KEY in .env
+uvicorn app.main:app --reload --port 8001
+```
+
+### Vercel (api gateway)
+
+In the Vercel project that deploys `PaperPilot-main/api`, set:
+
+| Variable | Required | Notes |
+|----------|----------|--------|
+| `ML_SERVICE_URL` | Yes* | Render service URL, no trailing slash |
+| `ML_SERVICE_KEY` | Yes* | Same value as on Render |
+
+\*If both are unset, scans fall back to in-process compliance on the gateway (local dev only).
+
+Existing gateway vars (`FIREBASE_*`, `CLOUDINARY_*`, `GEMINI_API_KEY`, PayMongo, etc.) stay unchanged — see `api/.env.example`.
+
+### Scan API (clients poll via gateway)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/manuscripts/{id}/versions/{id}/scan` | Start scan; returns `scan_id`, `status: running` when ML is configured |
+| `GET` | `/scans/{scan_id}/progress` | `{ percent, stage, message, status }` |
+| `GET` | `/scans/{scan_id}` | Full result (hydrates from ML when still running) |
+
 ## If PowerShell blocks venv activate
 
 ```powershell

@@ -53,10 +53,16 @@ export default function ScanResultScreen({ navigation }) {
     scannedAt,
     citationStyle = "APA",
     overallScore = 0,
+    rightPct,
+    wrongPct,
+    categoryWrongPct = [],
     scoreBreakdown = [],
     formatChecks = [],
     pageCount = 0,
   } = result;
+
+  const displayRight = Number(rightPct ?? overallScore ?? 0);
+  const displayWrong = Number(wrongPct ?? Math.max(0, 100 - displayRight));
 
   const band = scoreBand(overallScore);
   const totalErrors = formatChecks.filter((c) => c.result === "FAIL").length;
@@ -129,7 +135,17 @@ export default function ScanResultScreen({ navigation }) {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardKicker}>Overall score</Text>
+        <Text style={styles.cardKicker}>Compliance score</Text>
+        <View style={styles.dualScoreRow}>
+          <View style={[styles.dualScore, styles.dualRight]}>
+            <Text style={styles.dualLabel}>Right</Text>
+            <Text style={styles.dualValue}>{Math.round(displayRight)}%</Text>
+          </View>
+          <View style={[styles.dualScore, styles.dualWrong]}>
+            <Text style={styles.dualLabel}>Wrong</Text>
+            <Text style={styles.dualValue}>{Math.round(displayWrong)}%</Text>
+          </View>
+        </View>
         <View style={styles.scoreRow}>
           <View style={[styles.scoreRing, { borderColor: ringColor }]}>
             <Text style={styles.scoreValue}>{Math.round(overallScore)}</Text>
@@ -139,9 +155,26 @@ export default function ScanResultScreen({ navigation }) {
             <View style={[styles.bandPill, { backgroundColor: pillBg, borderColor: pillBorder }]}>
               <Text style={[styles.bandText, { color: pillText }]}>{band.label}</Text>
             </View>
-            <Text style={styles.scoreHint}>Average of the formatting breakdown scores</Text>
+            <Text style={styles.scoreHint}>Legacy overall score · unit right/wrong above</Text>
           </View>
         </View>
+        {categoryWrongPct.length ? (
+          <View style={{ marginTop: 12, gap: 6 }}>
+            {categoryWrongPct.slice(0, 4).map((item) => (
+              <Text key={item.section} style={styles.catLine}>
+                {item.section}: {Math.round(item.pctOfWrong)}% of wrong
+              </Text>
+            ))}
+          </View>
+        ) : null}
+        <PrimaryButton
+          title="View document & trace issues"
+          onPress={() => {
+            scanFlow.openDocumentTrace(null);
+            navigation.navigate("DocumentReference");
+          }}
+          style={{ marginTop: 14 }}
+        />
       </View>
 
       {scoreBreakdown.length ? (
@@ -207,7 +240,15 @@ export default function ScanResultScreen({ navigation }) {
             </Text>
           ) : null}
         </View>
-        <IssuesDetectedPanel formatChecks={formatChecks} pageCount={pageCount} />
+        <IssuesDetectedPanel
+          formatChecks={formatChecks}
+          pageCount={pageCount}
+          onIssuePress={(entry) => {
+            scanFlow.selectTraceIssue(entry);
+            scanFlow.openDocumentTrace(entry);
+            navigation.navigate("DocumentReference");
+          }}
+        />
       </View>
 
       <Pressable style={styles.newVersionBtn} onPress={onUploadNewVersion}>
@@ -273,6 +314,25 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     color: colors.muted,
   },
+  dualScoreRow: { marginTop: 12, flexDirection: "row", gap: 8 },
+  dualScore: {
+    flex: 1,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  dualRight: { backgroundColor: colors.emeraldBg, borderColor: "#a7f3d0" },
+  dualWrong: { backgroundColor: colors.roseBg, borderColor: colors.roseBorder },
+  dualLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+    color: colors.muted,
+  },
+  dualValue: { marginTop: 2, fontSize: 22, fontWeight: "800", color: colors.text },
+  catLine: { fontSize: 12, color: colors.slate },
   scoreRow: { marginTop: 14, flexDirection: "row", alignItems: "center", gap: 16 },
   scoreRing: {
     width: 96,

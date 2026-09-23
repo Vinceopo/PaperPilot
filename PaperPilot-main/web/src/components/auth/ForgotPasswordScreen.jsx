@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { signOut } from "firebase/auth";
-import { resetPasswordWithOtp, sendOtp } from "../../api.js";
+import { otpBypassToken, resetPasswordWithOtp, sendOtp } from "../../api.js";
 import { auth } from "../../firebase.js";
 import { markPasswordChanged } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
@@ -61,6 +61,12 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
     setBusy(true);
     try {
       const res = await sendOtp({ email: email.trim(), purpose: "reset_password" });
+      const bypass = otpBypassToken(res, "reset_password");
+      if (bypass) {
+        setResetToken(bypass);
+        setStep("password");
+        return;
+      }
       setOtpMeta({ expiresIn: res.expires_in, resendIn: res.resend_in, devCode: res.dev_code });
       setCooldownUntil(Date.now() + (res.resend_in || 60) * 1000);
       setStep("otp");
