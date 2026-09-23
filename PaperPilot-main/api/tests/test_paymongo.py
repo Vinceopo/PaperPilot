@@ -69,6 +69,23 @@ class PayMongoHelpersTest(unittest.TestCase):
         self.assertEqual(resource.get("id"), "pay_9")
         self.assertEqual(event_id, "evt_123")
 
+    def test_checkout_session_is_paid(self):
+        from app.paymongo import checkout_session_is_paid
+
+        unpaid = {"data": {"id": "cs_1", "attributes": {"payments": []}}}
+        self.assertFalse(checkout_session_is_paid(unpaid))
+        paid = {
+            "data": {
+                "id": "cs_1",
+                "attributes": {
+                    "payments": [
+                        {"id": "pay_1", "attributes": {"status": "paid", "amount": 94900}}
+                    ]
+                },
+            }
+        }
+        self.assertTrue(checkout_session_is_paid(paid))
+
     def test_handler_acks_source_chargeable(self):
         # No Firebase in unit test — merchant log may no-op / raise; we only assert no crash
         # when claim/complete skip empty event ids.

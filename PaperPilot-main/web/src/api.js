@@ -396,6 +396,16 @@ export function subscribeToPlan({ plan, billingPeriod, paymentMethod }) {
   });
 }
 
+/** After PayMongo redirect — verify paid session and activate Premium. */
+export function confirmCheckoutPayment({ checkoutSessionId } = {}) {
+  return authorizedFetch("/subscription/confirm", {
+    method: "POST",
+    body: JSON.stringify({
+      checkout_session_id: checkoutSessionId || undefined,
+    }),
+  });
+}
+
 export function cancelSubscription({ immediate = true } = {}) {
   return authorizedFetch("/subscription/cancel", {
     method: "POST",

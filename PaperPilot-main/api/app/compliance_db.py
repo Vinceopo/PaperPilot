@@ -499,11 +499,24 @@ def save_pending_checkout(
             "updated_at": now,
         }
     )
+    # Pointer so return-from-PayMongo confirm can find the session without the cs id in the URL.
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
+        {
+            "pending_checkout_session_id": checkout_session_id,
+            "updated_at": now,
+        }
+    )
 
 
 def get_pending_checkout(checkout_session_id: str) -> dict | None:
     row = _reference(f"{ROOT}/paymongo_checkouts/{checkout_session_id}").get()
     return row if isinstance(row, dict) else None
+
+
+def latest_pending_checkout_id(owner_uid: str) -> str | None:
+    row = _subscription_row(owner_uid)
+    sid = str(row.get("pending_checkout_session_id") or "").strip()
+    return sid or None
 
 
 def activate_premium_from_payment(

@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { cancelSubscription, getSubscription, subscribeToPlan } from "../../api.js";
+import { cancelSubscription, confirmCheckoutPayment, getSubscription, subscribeToPlan } from "../../api.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 
@@ -83,34 +83,85 @@ export default function SubscriptionScreen({
 
   useEffect(() => {
     if (billingReturn === "success") {
-      setSuccess("Payment received. Activating Premium… if it is not active yet, wait a few seconds and refresh.");
+      setSuccess("Payment received. Activating Premium…");
       setPaymentCanceled(false);
       setCheckoutOpen(false);
+      let cancelled = false;
+      let timer = null;
       let tries = 0;
-      const timer = setInterval(async () => {
-        tries += 1;
+
+      async function activate() {
+        const storedCs = (() => {
+          try {
+            return sessionStorage.getItem("pp_checkout_cs") || "";
+          } catch {
+            return "";
+          }
+        })();
         try {
-          const next = await getSubscription();
+          const next = await confirmCheckoutPayment({
+            checkoutSessionId: storedCs || undefined,
+          });
+          if (cancelled) return true;
           onSubscriptionChange?.(next);
-          if (String(next?.tier || "").toLowerCase() === "premium") {
+          if (String(next?.tier || "").toLowerCase() === "premium" || next?.confirmed) {
             setSuccess("Welcome to Premium! Your PayMongo payment was confirmed.");
+            try {
+              sessionStorage.removeItem("pp_checkout_cs");
+            } catch {
+              // ignore
+            }
+            return true;
+          }
+        } catch {
+          // Fall through to polling — webhook may still arrive.
+        }
+        return false;
+      }
+
+      void (async () => {
+        if (await activate()) return;
+        timer = setInterval(async () => {
+          tries += 1;
+          if (await activate()) {
             clearInterval(timer);
-          } else if (tries >= 8) {
+            return;
+          }
+          try {
+            const next = await getSubscription();
+            if (cancelled) return;
+            onSubscriptionChange?.(next);
+            if (String(next?.tier || "").toLowerCase() === "premium") {
+              setSuccess("Welcome to Premium! Your PayMongo payment was confirmed.");
+              clearInterval(timer);
+              return;
+            }
+          } catch {
+            // keep trying
+          }
+          if (tries >= 10) {
             setSuccess(
               "Payment received — Premium is still activating. Refresh in a moment if your plan has not updated."
             );
             clearInterval(timer);
           }
-        } catch {
-          if (tries >= 8) clearInterval(timer);
-        }
-      }, 2000);
-      return () => clearInterval(timer);
+        }, 2000);
+      })();
+
+      return () => {
+        cancelled = true;
+        if (timer) clearInterval(timer);
+      };
     }
     if (billingReturn === "canceled") {
       setPaymentCanceled(true);
       setSuccess("Payment canceled. No charges were made.");
       setCheckoutOpen(true);
+      try {
+        sessionStorage.removeItem("pp_checkout_cs");
+      } catch {
+        // ignore
+      }
     }
     return undefined;
   }, [billingReturn, onSubscriptionChange]);
@@ -138,6 +189,13 @@ export default function SubscriptionScreen({
       const url = result?.checkout_url;
       if (!url) {
         throw new Error("PayMongo checkout URL was not returned.");
+      }
+      try {
+        if (result.checkout_session_id) {
+          sessionStorage.setItem("pp_checkout_cs", String(result.checkout_session_id));
+        }
+      } catch {
+        // Private mode — confirm will use latest pending checkout on the server.
       }
       window.location.assign(url);
     } catch (err) {
