@@ -3,10 +3,11 @@
  * Card / GCash / Maya fields live on PayMongo Hosted Checkout (not in-app forms).
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { cancelSubscription, getSubscription, subscribeToPlan } from "../../api.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { cancelSubscription, confirmCheckoutPayment, getSubscription, subscribeToPlan } from "../../api.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
+import paymongoLogo from "../../assets/paymongo-logo.png";
 
 export const PREMIUM_MONTHLY = 949;
 export const PREMIUM_ANNUAL = 9490;
@@ -32,7 +33,7 @@ function formatDate(iso) {
 function statusLabel(subscription) {
   const tier = String(subscription?.tier || "free").toLowerCase();
   const status = String(subscription?.status || "").toLowerCase();
-  if (tier === "premium" && status === "canceled") return "Canceled (active until renewal)";
+  if (status === "canceled" || status === "cancelled") return "Free";
   if (tier === "premium") return "Active";
   if (status === "expired") return "Expired";
   return "Free";
@@ -53,6 +54,7 @@ export default function SubscriptionScreen({
   onBack,
   onBackToDashboard,
   billingReturn,
+  onBillingSettled,
 }) {
   const tier = String(subscription?.tier || "free").toLowerCase();
   const isPremium = tier === "premium";
@@ -71,8 +73,11 @@ export default function SubscriptionScreen({
   const [confirmFreeOpen, setConfirmFreeOpen] = useState(false);
 
   const price = billingPeriod === "annual" ? PREMIUM_ANNUAL : PREMIUM_MONTHLY;
-  const subscribeCta =
-    billingPeriod === "annual"
+  const subscribeCta = isPremium
+    ? billingPeriod === "annual"
+      ? `Renew with PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
+      : `Renew with PayMongo — ${peso(PREMIUM_MONTHLY)}/month`
+    : billingPeriod === "annual"
       ? `Pay with PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
       : `Pay with PayMongo — ${peso(PREMIUM_MONTHLY)}/month`;
 
@@ -80,40 +85,116 @@ export default function SubscriptionScreen({
     () => (Array.isArray(subscription?.history) ? subscription.history : []),
     [subscription]
   );
+  const onChangeRef = useRef(onSubscriptionChange);
+  const onSettledRef = useRef(onBillingSettled);
+  onChangeRef.current = onSubscriptionChange;
+  onSettledRef.current = onBillingSettled;
+
+  function applyPremium(next) {
+    const tierNow = String(next?.tier || "").toLowerCase();
+    if (tierNow !== "premium") return false;
+    onChangeRef.current?.(next);
+    setError("");
+    setCheckoutOpen(false);
+    setSuccess("Welcome to Premium! Your PayMongo payment was confirmed.");
+    try {
+      sessionStorage.removeItem("pp_checkout_cs");
+    } catch {
+      // ignore
+    }
+    onSettledRef.current?.();
+    return true;
+  }
+
+  function showPayAgain(message) {
+    setSuccess("");
+    setError(message);
+    setSelectedPlan("premium");
+    setCheckoutOpen(true);
+    onSettledRef.current?.();
+  }
 
   useEffect(() => {
     if (billingReturn === "success") {
-      setSuccess("Payment received. Activating Premium… if it is not active yet, wait a few seconds and refresh.");
+      setSuccess("Payment received. Activating Premium…");
       setPaymentCanceled(false);
-      setCheckoutOpen(false);
+      setError("");
+      setSelectedPlan("premium");
+      setCheckoutOpen(true);
+      let cancelled = false;
+      let timer = null;
       let tries = 0;
-      const timer = setInterval(async () => {
-        tries += 1;
-        try {
-          const next = await getSubscription();
-          onSubscriptionChange?.(next);
-          if (String(next?.tier || "").toLowerCase() === "premium") {
-            setSuccess("Welcome to Premium! Your PayMongo payment was confirmed.");
-            clearInterval(timer);
-          } else if (tries >= 8) {
-            setSuccess(
-              "Payment received — Premium is still activating. Refresh in a moment if your plan has not updated."
-            );
-            clearInterval(timer);
+
+      async function activate() {
+        const storedCs = (() => {
+          try {
+            return sessionStorage.getItem("pp_checkout_cs") || "";
+          } catch {
+            return "";
           }
+        })();
+        try {
+          const next = await confirmCheckoutPayment({
+            checkoutSessionId: storedCs || undefined,
+          });
+          if (cancelled) return true;
+          if (applyPremium(next)) return true;
+          if (next) onChangeRef.current?.(next);
         } catch {
-          if (tries >= 8) clearInterval(timer);
+          // Fall through to polling — webhook may still arrive.
         }
-      }, 2000);
-      return () => clearInterval(timer);
+        return false;
+      }
+
+      void (async () => {
+        if (await activate()) return;
+        timer = setInterval(async () => {
+          tries += 1;
+          if (await activate()) {
+            clearInterval(timer);
+            return;
+          }
+          try {
+            const next = await getSubscription();
+            if (cancelled) return;
+            if (applyPremium(next)) {
+              clearInterval(timer);
+              return;
+            }
+            if (next) onChangeRef.current?.(next);
+          } catch {
+            // keep trying
+          }
+          if (tries >= 8) {
+            clearInterval(timer);
+            if (!cancelled) {
+              showPayAgain(
+                "That return from PayMongo did not turn Premium on. You can pay again below. If your last Premium plan still has time and scans left, those stay available."
+              );
+            }
+          }
+        }, 2000);
+      })();
+
+      return () => {
+        cancelled = true;
+        if (timer) clearInterval(timer);
+      };
     }
     if (billingReturn === "canceled") {
       setPaymentCanceled(true);
       setSuccess("Payment canceled. No charges were made.");
       setCheckoutOpen(true);
+      setSelectedPlan("premium");
+      try {
+        sessionStorage.removeItem("pp_checkout_cs");
+      } catch {
+        // ignore
+      }
+      onSettledRef.current?.();
     }
     return undefined;
-  }, [billingReturn, onSubscriptionChange]);
+  }, [billingReturn]);
 
   async function handleSubscribe(e) {
     e?.preventDefault?.();
@@ -138,6 +219,13 @@ export default function SubscriptionScreen({
       const url = result?.checkout_url;
       if (!url) {
         throw new Error("PayMongo checkout URL was not returned.");
+      }
+      try {
+        if (result.checkout_session_id) {
+          sessionStorage.setItem("pp_checkout_cs", String(result.checkout_session_id));
+        }
+      } catch {
+        // Private mode — confirm will use latest pending checkout on the server.
       }
       window.location.assign(url);
     } catch (err) {
@@ -175,7 +263,8 @@ export default function SubscriptionScreen({
       const next = await cancelSubscription({ immediate: true });
       onSubscriptionChange?.(next);
       setCheckoutOpen(true);
-      setSuccess("Premium subscription canceled. You are now on the Free plan.");
+      setSelectedPlan("premium");
+      setSuccess("Subscription canceled. You are on the Free plan — 3 scans this month.");
       setConfirmCancelOpen(false);
     } catch (err) {
       setError(err.message || "Could not cancel subscription.");
@@ -231,6 +320,19 @@ export default function SubscriptionScreen({
       {success && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3" role="status">
           <p className="text-sm text-emerald-800">{success}</p>
+          {!isPremium && (
+            <button
+              type="button"
+              onClick={() => {
+                setSuccess("");
+                setSelectedPlan("premium");
+                setCheckoutOpen(true);
+              }}
+              className="mt-3 rounded-lg bg-[#16bfa8] px-5 py-2 text-xs font-bold text-[#092823] hover:bg-[#12ae99]"
+            >
+              Pay for Premium again
+            </button>
+          )}
           {paymentCanceled && onBackToDashboard && (
             <button
               type="button"
@@ -275,7 +377,8 @@ export default function SubscriptionScreen({
               <div className="flex justify-between gap-3">
                 <dt className="text-slate-500">Scan allowance</dt>
                 <dd className="font-semibold text-slate-800">
-                  {subscription?.remaining ?? 0} of {subscription?.limit ?? 50} remaining
+                  {Math.max((isPremium ? 50 : 3) - Number(subscription?.used || 0), 0)} of{" "}
+                  {isPremium ? 50 : 3} remaining
                 </dd>
               </div>
             </dl>
@@ -288,7 +391,9 @@ export default function SubscriptionScreen({
                 }}
                 className="rounded-lg bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-white hover:bg-[#12ae99]"
               >
-                Change plan
+                {String(subscription?.status || "").toLowerCase() === "canceled"
+                  ? "Pay again"
+                  : "Change plan"}
               </button>
               <button
                 type="button"
@@ -491,9 +596,16 @@ export default function SubscriptionScreen({
                     : subscribeCta}
               </button>
 
-              <p className="text-center text-[10px] text-slate-400">
-                Payments processed by PayMongo · Cancel anytime · Terms &amp; Privacy Policy
-              </p>
+              <div className="flex flex-col items-center gap-2 text-center">
+                <img
+                  src={paymongoLogo}
+                  alt="PayMongo"
+                  className="h-8 w-auto max-w-[11rem] rounded-md bg-slate-950 object-contain px-2 py-1"
+                />
+                <p className="text-[10px] text-slate-400">
+                  Payments processed by PayMongo · Cancel anytime · Terms &amp; Privacy Policy
+                </p>
+              </div>
             </form>
           </section>
         </div>
@@ -502,7 +614,7 @@ export default function SubscriptionScreen({
       <ConfirmDialog
         open={confirmCancelOpen}
         title="Cancel Premium subscription?"
-        message="You will return to the Free plan immediately. This cannot be undone from this screen."
+        message="You will return to the Free plan immediately, with 3 scans this month. You can subscribe to Premium again whenever you want."
         confirmLabel="Cancel subscription"
         tone="danger"
         busy={busy}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import threading
 from pathlib import Path
@@ -26,7 +28,7 @@ def _discover_credentials_file() -> Path | None:
 
 
 def _resolve_credentials_path(raw: str) -> Path | None:
-    """Resolve a service-account path from cwd, api/, project, or parent folder."""
+    """Resolve an explicit service-account path. Do not substitute a different file."""
     path = Path(raw.strip().strip('"').strip("'")).expanduser()
     candidates = []
     if path.is_absolute():
@@ -49,8 +51,40 @@ def _resolve_credentials_path(raw: str) -> Path | None:
                 return candidate.resolve()
         except OSError:
             continue
+    return None
 
-    return _discover_credentials_file()
+
+def _normalize_private_key(info: dict) -> dict:
+    pk = info.get("private_key")
+    if isinstance(pk, str):
+        info["private_key"] = pk.replace("\\n", "\n")
+    return info
+
+
+def _parse_service_account(raw: str) -> dict | None:
+    """Load a service account from raw JSON or base64(JSON).
+
+    Base64 is the reliable form for Vercel: a PEM pasted into an env var often
+    loses newlines, and Google then rejects the JWT as an invalid signature.
+    """
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    if not text.startswith("{"):
+        try:
+            decoded = base64.b64decode(text, validate=True).decode("utf-8").strip()
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return None
+        if not decoded.startswith("{"):
+            return None
+        text = decoded
+    try:
+        info = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(info, dict) or not info.get("private_key") or not info.get("client_email"):
+        return None
+    return _normalize_private_key(info)
 
 
 def firebase_admin_app():
@@ -69,14 +103,15 @@ def firebase_admin_app():
                 _app = firebase_admin.get_app()
                 return _app
 
-            if creds.startswith("{"):
-                info = json.loads(creds)
-                credential = credentials.Certificate(info)
-            elif creds:
-                path = _resolve_credentials_path(creds)
-                if not path:
-                    return None
-                credential = credentials.Certificate(str(path))
+            if creds:
+                info = _parse_service_account(creds)
+                if info:
+                    credential = credentials.Certificate(info)
+                else:
+                    path = _resolve_credentials_path(creds)
+                    if not path:
+                        return None
+                    credential = credentials.Certificate(str(path))
             else:
                 # Dev convenience: pick up a local service-account JSON if env is blank.
                 path = _discover_credentials_file()

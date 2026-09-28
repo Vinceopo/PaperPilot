@@ -149,6 +149,20 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setStep("idle");
   }, []);
 
+  const showSavedResult = useCallback((saved, version) => {
+    setResult(saved && typeof saved === "object" ? saved : null);
+    setVersionNumber(Number(version) || 1);
+    setError("");
+    setDownloadError("");
+    setTraceHighlight(null);
+    setAnalyzeProgress(INITIAL_PROGRESS);
+    setStep(saved ? "results" : "idle");
+  }, []);
+
+  const backToSummary = useCallback(() => {
+    if (result) setStep("summary");
+  }, [result]);
+
   const backToDashboard = useCallback(() => {
     setFileInner(null);
     setFileError("");
@@ -178,6 +192,8 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     downloadReport,
     uploadNewVersion,
     backToDashboard,
+    showSavedResult,
+    backToSummary,
     openFullResult,
     openDocumentTrace,
     dismissSummary,

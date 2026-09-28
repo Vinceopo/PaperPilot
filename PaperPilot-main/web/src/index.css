@@ -287,3 +287,31 @@ input[type="checkbox"] {
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
   margin: 0 auto 1.25rem !important;
 }
+
+.pp-docx-host--paged .docx-wrapper {
+  padding: 0 !important;
+}
+
+.pp-issue-hit {
+  background-color: var(--pp-hit-bg) !important;
+  box-shadow: inset 0 0 0 2px var(--pp-hit-edge) !important;
+  border-radius: 2px;
+}
+
+.pp-issue-box {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border-radius: 3px;
+  background: var(--pp-hit-bg);
+  box-shadow: inset 0 0 0 2px var(--pp-hit-edge);
+  mix-blend-mode: multiply;
+}
+
+.pp-issue-margin {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  background: var(--pp-hit-bg);
+  box-shadow: inset 0 0 0 2px var(--pp-hit-edge);
+}

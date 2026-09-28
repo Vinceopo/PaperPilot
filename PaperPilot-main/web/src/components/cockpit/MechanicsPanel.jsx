@@ -11,6 +11,8 @@ import {
   sampleMechanicsForm,
 } from "../../lib/formatMechanicsForm.js";
 import { downloadSampleMechanics } from "../../api.js";
+import { MAX_FILE_BYTES } from "../../lib/mockAnalysis.js";
+import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
 import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
 const ACCEPTED = [".pdf", ".docx"];
@@ -24,7 +26,7 @@ function validateFile(file) {
   if (!file) return "Choose a mechanics document.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
   if (!ACCEPTED.includes(ext)) return "Mechanics must be a PDF or DOCX file.";
-  if (file.size > 100_000_000) return "File must be 100 MB or smaller.";
+  if (file.size > MAX_FILE_BYTES) return "oversize";
   return "";
 }
 
@@ -53,6 +55,8 @@ export default function MechanicsPanel({
   busy,
 }) {
   const inputRef = useRef(null);
+  const dropRef = useRef(null);
+  const pulseTimer = useRef(0);
   const [mode, setMode] = useState(items.length ? "saved" : "upload");
   const [file, setFile] = useState(null);
   const [error, setError] = useState("");
@@ -72,6 +76,8 @@ export default function MechanicsPanel({
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [sampleBusy, setSampleBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [oversizeBytes, setOversizeBytes] = useState(null);
+  const [dropPulse, setDropPulse] = useState(false);
   const selected = items.find((item) => item.id === selectedId);
 
   const form =
@@ -121,9 +127,27 @@ export default function MechanicsPanel({
     }
   }
 
+  function rejectOversize(nextFile) {
+    setFile(null);
+    setExtractMeta(null);
+    setError("");
+    setSuccess("");
+    if (inputRef.current) inputRef.current.value = "";
+    setOversizeBytes(nextFile.size);
+    setDropPulse(true);
+    window.clearTimeout(pulseTimer.current);
+    pulseTimer.current = window.setTimeout(() => setDropPulse(false), 1600);
+    dropRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    dropRef.current?.focus();
+  }
+
   async function runExtract(nextFile) {
     const issue = validateFile(nextFile);
-    setError(issue);
+    if (issue === "oversize") {
+      rejectOversize(nextFile);
+      return;
+    }
+    setError(issue === "oversize" ? "" : issue);
     setSuccess("");
     setFile(nextFile);
     setExtractMeta(null);
@@ -157,6 +181,10 @@ export default function MechanicsPanel({
   function requestExtract(nextFile) {
     if (!nextFile) return;
     const issue = validateFile(nextFile);
+    if (issue === "oversize") {
+      rejectOversize(nextFile);
+      return;
+    }
     if (issue) {
       setError(issue);
       setFile(nextFile);
@@ -592,12 +620,16 @@ export default function MechanicsPanel({
         <div className={`mt-6 grid gap-4 ${showUploadEditor ? "lg:grid-cols-2" : ""}`}>
           <div>
             <label
+              ref={dropRef}
+              tabIndex={-1}
               onDragEnter={onDropZoneDragOver}
               onDragOver={onDropZoneDragOver}
               onDragLeave={onDropZoneDragLeave}
               onDrop={onDropZoneDrop}
-              className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 text-center transition ${
-                extracting || busy
+              className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 text-center outline-none transition ${
+                dropPulse
+                  ? "border-rose-400 bg-rose-50 ring-2 ring-rose-300"
+                  : extracting || busy
                   ? "cursor-wait border-[#18bda9] bg-[#f7fcfc]"
                   : dragOver
                     ? "cursor-copy border-[#0d9488] bg-[#e7faf6] ring-2 ring-[#16bfa8]/35"
@@ -623,8 +655,8 @@ export default function MechanicsPanel({
                   </span>
                   <span className="mt-1 text-[11px] text-slate-400">
                     {file
-                      ? "Confirm extraction to fill Format Fields beside this panel"
-                      : "Drag & drop or browse · .pdf and .docx · Max 100 MB"}
+                      ? `${formatFileSize(file.size)} · Confirm extraction to fill Format Fields beside this panel`
+                      : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_BYTES)}`}
                   </span>
                   <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                     Browse files
@@ -767,6 +799,15 @@ export default function MechanicsPanel({
           setConfirmAction(null);
         }}
         onConfirm={() => void runConfirmedAction()}
+      />
+      <ConfirmDialog
+        open={oversizeBytes != null}
+        title="File Too Large"
+        message={oversizeFileMessage(oversizeBytes, MAX_FILE_BYTES)}
+        confirmLabel="OK"
+        cancelLabel=""
+        onCancel={() => setOversizeBytes(null)}
+        onConfirm={() => setOversizeBytes(null)}
       />
     </section>
   );

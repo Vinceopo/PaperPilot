@@ -7,6 +7,8 @@ import {
   getSubscription,
   listManuscripts,
   listMechanics,
+  deleteManuscript as deleteManuscriptRequest,
+  getScanDocument,
   previewManuscript,
   renameMechanics as renameMechanicsRequest,
   saveMechanicsProfile,
@@ -15,6 +17,7 @@ import {
   warmApi,
 } from "./api.js";
 import AuthScreen from "./components/AuthScreen.jsx";
+import PaperPilotLogo from "./components/PaperPilotLogo.jsx";
 import RegistrationSuccessScreen from "./components/auth/RegistrationSuccessScreen.jsx";
 import MechanicsPanel from "./components/cockpit/MechanicsPanel.jsx";
 import ManuscriptPanel from "./components/cockpit/ManuscriptPanel.jsx";
@@ -41,13 +44,17 @@ import {
   normalizeTitle,
   saveScannedManuscripts,
   upsertFromScanResult,
+  versionToScanResult,
 } from "./lib/scannedLibrary.js";
+import { latestVersion } from "./lib/scoreBand.js";
+import { formatFileSize } from "./lib/formatFileSize.js";
 import {
   loadNotifications,
   saveNotifications,
   unreadCount,
   markAllRead,
   markOneRead,
+  removeNotification,
   pushNotification,
   notificationFromScan,
   notificationFromSubscription,
@@ -60,6 +67,29 @@ function itemsFrom(data, key) {
 }
 
 const REGISTRATION_SUCCESS_KEY = "paperpilot.registrationSuccess";
+
+function subscriptionCacheKey(uid) {
+  return uid ? `paperpilot.subscription.${uid}` : "";
+}
+
+function readCachedSubscription(uid) {
+  try {
+    const raw = localStorage.getItem(subscriptionCacheKey(uid));
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedSubscription(uid, next) {
+  if (!uid || !next) return;
+  try {
+    localStorage.setItem(subscriptionCacheKey(uid), JSON.stringify(next));
+  } catch {
+    // Ignore quota / private mode failures.
+  }
+}
 
 function pendingRegistration(user) {
   try {
@@ -98,6 +128,8 @@ export default function App() {
   const lastSavedScanKey = useRef("");
   const scannedLibraryRef = useRef([]);
   const notificationsRef = useRef([]);
+  const notificationsRootRef = useRef(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const fileDetailsRef = useRef(null);
   const [fileDetailsNotice, setFileDetailsNotice] = useState("");
   const [manuscriptReady, setManuscriptReady] = useState(false);
@@ -226,8 +258,11 @@ export default function App() {
       versionNumber: version?.version_number,
       cloudinaryUrl: version?.cloudinary_url || version?.cloudinaryUrl || "",
       preview: version?.preview || version?.parsed_preview || null,
+      sourceFilename: version?.source_filename || version?.filename || "",
     };
   }, []);
+
+  const [analysisShown, setAnalysisShown] = useState(0);
 
   const scanFlow = useScanFlow({
     mechanicsId: selectedMechanicsId,
@@ -235,6 +270,60 @@ export default function App() {
     getActiveManuscript,
     getScanTarget,
   });
+
+  useEffect(() => {
+    if (!notificationsOpen) return undefined;
+    function onPointerDown(event) {
+      if (notificationsRootRef.current?.contains(event.target)) return;
+      setNotificationsOpen(false);
+    }
+    function onKey(event) {
+      if (event.key === "Escape") setNotificationsOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [notificationsOpen]);
+
+  useEffect(() => {
+    if (scanFlow.step !== "analyzing") {
+      setAnalysisShown(0);
+      return undefined;
+    }
+    const target = Math.min(100, Math.max(0, Number(scanFlow.scanProgress.percent) || 0));
+    const ceiling = target >= 100 ? 100 : Math.min(97, target + 8);
+    let frame = 0;
+    const tick = () => {
+      setAnalysisShown((current) => {
+        if (current < target - 0.15) {
+          return Math.min(target, current + Math.max(0.35, (target - current) * 0.14));
+        }
+        if (target >= 100) return 100;
+        return current < ceiling ? Math.min(ceiling, Math.max(current, target) + 0.02) : current;
+      });
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [scanFlow.step, scanFlow.scanProgress.percent]);
+
+  useEffect(() => {
+    if (!user || (scanFlow.step !== "summary" && scanFlow.step !== "results")) return undefined;
+    let cancelled = false;
+    getSubscription()
+      .then((next) => {
+        if (cancelled || !next) return;
+        setSubscription(next);
+        writeCachedSubscription(user.uid, next);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [scanFlow.step, user]);
 
   useEffect(() => {
     if (!fileDetailsFocusKey || !manuscriptReady) return;
@@ -270,6 +359,7 @@ export default function App() {
   }, [user?.uid]);
 
   useEffect(() => {
+    if (!scanFlow.persistScan) return;
     if (!["summary", "tracing", "results"].includes(scanFlow.step) || !scanFlow.result) return;
     const key = `${scanFlow.result.documentId}|${scanFlow.versionNumber}|${scanFlow.result.scannedAt || ""}`;
     if (lastSavedScanKey.current === key) return;
@@ -280,7 +370,7 @@ export default function App() {
       return next;
     });
     appendNotifications(notificationFromScan(scanFlow.result, scanFlow.versionNumber));
-  }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, user?.uid]);
+  }, [scanFlow.persistScan, scanFlow.step, scanFlow.result, scanFlow.versionNumber, user?.uid]);
 
   // Upload "Upload to" choices = same library as My Manuscripts (shared source of truth).
   // Hooks must stay above any conditional returns.
@@ -312,18 +402,52 @@ export default function App() {
     if (m) setCurrentManuscript({ id: m.id, title: m.title });
   }, []);
 
+  const scanFlowRef = useRef(null);
+  scanFlowRef.current = scanFlow;
+
   const updateScannedLibrary = useCallback(
     (next) => {
+      const previous = scannedLibraryRef.current;
       setScannedLibrary(next);
       saveScannedManuscripts(next, user?.uid);
-      setCurrentManuscript((current) => {
-        if (current?.id && !next.some((m) => m.id === current.id)) {
+      const current = currentManuscriptRef.current;
+      const before = previous.find(
+        (m) => m.id === current?.id || (current?.title && normalizeTitle(m.title) === normalizeTitle(current.title))
+      );
+      const after = next.find(
+        (m) => m.id === current?.id || (current?.title && normalizeTitle(m.title) === normalizeTitle(current.title))
+      );
+      const beforeCount = before?.versions?.length || 0;
+      const afterCount = after?.versions?.length || 0;
+      if (before && afterCount < beforeCount) {
+        const latest = after ? latestVersion(after) : null;
+        const flow = scanFlowRef.current;
+        const viewingThis =
+          flow?.result &&
+          (flow.result.documentId === before.id || flow.result.documentId === after?.id);
+        const onVersionScreen = ["summary", "tracing", "results"].includes(flow?.step);
+        if (!latest) {
+          setCurrentVersion(null);
+          setManuscriptReady(false);
+          setFileDetailsNotice("");
+          if (viewingThis && onVersionScreen) flow.backToDashboard();
+        } else {
+          setCurrentVersion((ver) => (ver ? { ...ver, version_number: latest.versionNumber } : ver));
+          if (viewingThis && onVersionScreen) {
+            const saved = versionToScanResult(after, latest);
+            if (saved) flow.showSavedResult(saved, latest.versionNumber);
+            else flow.syncVersionNumber(latest.versionNumber);
+          }
+        }
+      }
+      setCurrentManuscript((open) => {
+        if (open?.id && !next.some((m) => m.id === open.id)) {
           setCurrentVersion(null);
           setManuscriptReady(false);
           setFileDetailsNotice("");
           return null;
         }
-        return current;
+        return open;
       });
     },
     [user?.uid]
@@ -342,6 +466,8 @@ export default function App() {
       if (next) {
         setGuest(false);
         setRegistrationSuccess(pendingRegistration(next));
+        const cached = readCachedSubscription(next.uid);
+        if (cached) setSubscription(cached);
       }
       setAuthReady(true);
     });
@@ -404,6 +530,7 @@ export default function App() {
       }
       if (subscriptionResult.status === "fulfilled") {
         setSubscription(subscriptionResult.value);
+        writeCachedSubscription(auth.currentUser?.uid, subscriptionResult.value);
       } else {
         failures.push(subscriptionResult.reason?.message || "Could not load subscription.");
       }
@@ -581,11 +708,7 @@ export default function App() {
     const resolveApiManuscriptId = () => {
       if (isServerId(libraryEntry?.serverManuscriptId)) return libraryEntry.serverManuscriptId;
       if (isServerId(manuscriptId)) return manuscriptId;
-      const titleKey = normalizeTitle(resolvedTitle);
-      const fromApi = manuscripts.find(
-        (m) => normalizeTitle(m.title) === titleKey && isServerId(m.id)
-      );
-      return fromApi?.id || "";
+      return "";
     };
 
     try {
@@ -727,8 +850,8 @@ export default function App() {
 
   const tier = String(subscription?.tier || "free").toLowerCase();
   const used = Number(subscription?.used ?? subscription?.scans_used ?? 0);
-  const limit = Number(subscription?.limit ?? (tier === "premium" ? 50 : 3));
-  const remaining = Number(subscription?.remaining ?? Math.max(limit - used, 0));
+  const limit = tier === "premium" ? 50 : 3;
+  const remaining = Math.max(limit - Math.max(0, used), 0);
   const selectedMechanics = mechanics.find((item) => item.id === selectedMechanicsId);
   const scanReady = isScanReady(currentVersion, currentManuscript);
 
@@ -761,7 +884,7 @@ export default function App() {
                     ? "Analysing Document"
                     : activePage === "upload" && scanFlow.step === "error"
                       ? "Analysis Failed"
-                      : "Upload Mechanics";
+                      : "Dashboard";
   const breadcrumb =
     activePage === "account"
       ? "Dashboard / Settings"
@@ -772,10 +895,28 @@ export default function App() {
           : activePage === "manuscripts"
             ? "Dashboard / My Manuscripts"
             : "Dashboard";
+  const hidePageHeading =
+    activePage === "subscription" ||
+    (activePage === "upload" &&
+      ["idle", "fileSelected", "tracing", "analyzing", "summary"].includes(scanFlow.step));
 
-  function openUploadPage() {
+  function openUploadMechanics() {
     setActivePage("upload");
+    handleBackToDashboard();
   }
+
+  function openUploadManuscript() {
+    setActivePage("upload");
+    setManuscriptReady(false);
+    setFileDetailsNotice("");
+    setCurrentVersion(null);
+    scanFlow.backToDashboard();
+    setUploadWizardStep(2);
+    setWizardMaxStep((max) => Math.max(max, 2));
+  }
+
+  const showingUploadFace =
+    activePage === "upload" && (scanFlow.step === "idle" || scanFlow.step === "fileSelected");
 
   return (
     <div className={`min-h-screen bg-[#f3f5f7] text-[#172033] transition-[padding] duration-300 ${sidebarOpen ? "md:pl-80" : "md:pl-0"}`}>
@@ -788,20 +929,11 @@ export default function App() {
         <div className="relative flex items-center gap-2.5 px-2">
           <button
             type="button"
-            onClick={openUploadPage}
-            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-            aria-label="Paper Pilot home"
+            onClick={openUploadMechanics}
+            className="flex min-w-0 flex-1 items-center rounded-xl px-1 py-1 text-left transition hover:bg-white/5"
+            aria-label="PaperPilot, go to upload mechanics"
           >
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-white text-[#101a30]">
-              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
-                <path d="M5 5.5h9.5A4.5 4.5 0 0 1 19 10v8.5H9.5A4.5 4.5 0 0 1 5 14V5.5Z" stroke="currentColor" strokeWidth="1.8" />
-                <path d="M8 9h7M8 12h7M8 15h4" stroke="#16bfa8" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-bold tracking-tight">PAPER PILOT</p>
-              <p className="text-[9px] uppercase tracking-[0.2em] text-slate-500">Compliance</p>
-            </div>
+            <PaperPilotLogo tone="dark" markClassName="h-11 w-11" wordClassName="text-[15px]" />
           </button>
           <button
             type="button"
@@ -817,16 +949,26 @@ export default function App() {
         </div>
 
         <nav className="mt-10">
-          <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Main menu</p>
+          <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Dashboard</p>
           <button
-            onClick={openUploadPage}
+            onClick={openUploadMechanics}
             className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm font-semibold transition ${
-              activePage === "upload"
+              showingUploadFace && uploadWizardStep === 1
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
                 : "text-slate-400 hover:text-white"
             }`}
           >
             <span className="text-[#22c9b4]">↑</span> Upload Mechanics
+          </button>
+          <button
+            onClick={openUploadManuscript}
+            className={`mt-1 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm font-semibold transition ${
+              showingUploadFace && uploadWizardStep === 2
+                ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <span className="text-[#22c9b4]">↑</span> Upload Manuscript
           </button>
           <button
             onClick={() => setActivePage("manuscripts")}
@@ -862,7 +1004,7 @@ export default function App() {
       </aside>
 
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 flex min-h-[76px] items-center justify-between border-b border-slate-200 bg-white px-5 md:px-8">
+      <header className={`sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white px-5 md:px-8 ${hidePageHeading ? "min-h-16" : "min-h-[76px]"}`}>
         <div className="flex items-center gap-3">
           {!sidebarOpen && (
             <button
@@ -877,6 +1019,7 @@ export default function App() {
               </svg>
             </button>
           )}
+          {!hidePageHeading && (
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{breadcrumb}</p>
             <div className="flex flex-wrap items-center gap-2.5">
@@ -903,6 +1046,7 @@ export default function App() {
               )}
             </div>
           </div>
+          )}
         </div>
         <div className="flex items-center gap-4">
           {activePage !== "notifications" && (
@@ -920,20 +1064,25 @@ export default function App() {
               </button>
             </>
           )}
+          <div className="relative" ref={notificationsRootRef}>
           <button
             type="button"
-            onClick={() => setActivePage("notifications")}
+            onClick={() => setNotificationsOpen((open) => !open)}
             className={`relative grid h-9 w-9 place-items-center rounded-full transition ${
-              activePage === "notifications"
+              notificationsOpen
                 ? "bg-amber-100 text-amber-600"
                 : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
+            aria-expanded={notificationsOpen}
+            aria-haspopup="dialog"
             aria-label={
-              notificationUnread
-                ? `Notifications, ${notificationUnread} unread`
-                : "Notifications"
+              notificationsOpen
+                ? "Close notifications"
+                : notificationUnread
+                  ? `Open notifications, ${notificationUnread} unread`
+                  : "Open notifications"
             }
-            title="Notifications"
+            title={notificationsOpen ? "Close notifications" : "Notifications"}
           >
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden="true">
               <path d="M12 2a7 7 0 0 0-7 7v.7c0 1.5-.4 3-.9 4.3l-.5 1.2a1 1 0 0 0 .9 1.4h15a1 1 0 0 0 .9-1.4l-.5-1.2A11 11 0 0 1 19 9.7V9a7 7 0 0 0-7-7Zm0 20a3 3 0 0 0 2.8-2H9.2A3 3 0 0 0 12 22Z" />
@@ -944,6 +1093,18 @@ export default function App() {
               </span>
             )}
           </button>
+          {notificationsOpen && (
+            <div className="absolute right-0 top-12 z-50 w-[min(24rem,calc(100vw-1.5rem))]">
+              <NotificationsScreen
+                items={notifications}
+                unread={notificationUnread}
+                onMarkAllRead={() => persistNotifications(markAllRead(notifications))}
+                onMarkRead={(id) => persistNotifications(markOneRead(notifications, id))}
+                onDelete={(id) => persistNotifications(removeNotification(notifications, id))}
+              />
+            </div>
+          )}
+          </div>
           <button className="text-sm text-slate-500 md:hidden" onClick={doSignOut}>
             Sign out
           </button>
@@ -976,22 +1137,15 @@ export default function App() {
           <SubscriptionScreen
             subscription={subscription}
             billingReturn={billingReturn}
+            onBillingSettled={() => setBillingReturn(null)}
             onSubscriptionChange={(next) => {
               setSubscription(next);
+              writeCachedSubscription(user?.uid, next);
               const note = notificationFromSubscription(next);
               if (note) appendNotifications(note);
             }}
             onBack={() => setActivePage("account")}
             onBackToDashboard={() => setActivePage("upload")}
-          />
-        )}
-
-        {activePage === "notifications" && (
-          <NotificationsScreen
-            items={notifications}
-            unread={notificationUnread}
-            onMarkAllRead={() => persistNotifications(markAllRead(notifications))}
-            onMarkRead={(id) => persistNotifications(markOneRead(notifications, id))}
           />
         )}
 
@@ -1009,6 +1163,60 @@ export default function App() {
             onUploadNew={() => {
               resetUploadWizard(1);
               setActivePage("upload");
+            }}
+            onOpenSavedResult={(manuscript, version) => {
+              const saved = versionToScanResult(manuscript, version);
+              if (!saved) return;
+              setActivePage("upload");
+              scanFlow.showSavedResult(saved, version?.versionNumber);
+              if (saved.cloudinaryUrl || !isServerId(saved.scanId)) return;
+              getScanDocument(saved.scanId)
+                .then((doc) => {
+                  const url = String(doc?.cloudinary_url || "").trim();
+                  if (!url) return;
+                  const patch = {
+                    cloudinaryUrl: url,
+                    documentName: saved.documentName || doc?.source_filename || "",
+                    versionId: saved.versionId || doc?.manuscript_version_id || "",
+                  };
+                  scanFlowRef.current?.patchResult(patch);
+                  updateScannedLibrary(
+                    scannedLibraryRef.current.map((m) =>
+                      m.id !== manuscript.id
+                        ? m
+                        : {
+                            ...m,
+                            versions: (m.versions || []).map((v) =>
+                              v.id === version.id && v.scanResult
+                                ? { ...v, scanResult: { ...v.scanResult, ...patch } }
+                                : v
+                            ),
+                          }
+                    )
+                  );
+                })
+                .catch(() => {});
+            }}
+            onPermanentDelete={async (manuscript) => {
+              const title = manuscript?.title || "";
+              const titleKey = normalizeTitle(title);
+              await deleteManuscriptRequest({
+                manuscriptId: manuscript?.serverManuscriptId || manuscript?.id,
+                title,
+              });
+              setManuscripts((list) =>
+                list.filter(
+                  (item) =>
+                    item.id !== manuscript?.id &&
+                    item.id !== manuscript?.serverManuscriptId &&
+                    normalizeTitle(item.title) !== titleKey
+                )
+              );
+              updateScannedLibrary(
+                scannedLibraryRef.current.filter(
+                  (item) => item.id !== manuscript?.id && normalizeTitle(item.title) !== titleKey
+                )
+              );
             }}
           />
         )}
@@ -1054,8 +1262,8 @@ export default function App() {
               resetUploadWizard(selectedMechanicsId ? 2 : 1);
             }}
             onBackToDashboard={() => {
-              setActivePage("dashboard");
-              scanFlow.backToDashboard();
+              setActivePage("upload");
+              handleBackToDashboard();
             }}
           />
         )}
@@ -1067,28 +1275,21 @@ export default function App() {
               <p className="text-base font-bold text-slate-800">Analysing your document…</p>
               <div className="w-full">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
-                  <span className="capitalize">{scanFlow.scanProgress.stage || "queued"}</span>
-                  <span>{Math.round(Number(scanFlow.scanProgress.percent) || 0)}%</span>
+                  <span className="capitalize">
+                    {String(scanFlow.scanProgress.stage || "queued").replace(/_/g, " ")}
+                  </span>
+                  <span>{Math.round(analysisShown)}%</span>
                 </div>
                 <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-100">
                   <div
-                    className="h-full rounded-full bg-[#16bfa8] transition-[width] duration-500 ease-out"
-                    style={{
-                      width: `${Math.min(100, Math.max(0, Number(scanFlow.scanProgress.percent) || 0))}%`,
-                    }}
+                    className="h-full rounded-full bg-[#16bfa8]"
+                    style={{ width: `${Math.min(100, Math.max(0, analysisShown))}%` }}
                   />
                 </div>
                 {scanFlow.scanProgress.message ? (
                   <p className="mt-2 text-xs text-slate-400">{scanFlow.scanProgress.message}</p>
-                ) : (
-                  <p className="mt-2 text-xs text-slate-400">
-                    Checking fonts, spacing, margins, and citation format.
-                  </p>
-                )}
+                ) : null}
               </div>
-              <p className="text-xs text-slate-400">
-                Format checks only — grammar and content are not evaluated.
-              </p>
             </div>
           </div>
         )}
@@ -1143,7 +1344,6 @@ export default function App() {
                   <ManuscriptPanel
                     mechanicsSelected={Boolean(selectedMechanicsId)}
                     manuscripts={uploadTargets}
-                    selectedManuscriptId={currentManuscript?.id || ""}
                     onSelectManuscript={selectUploadTarget}
                     onUpload={onManuscriptUpload}
                     onPreview={previewManuscript}
@@ -1241,6 +1441,7 @@ export default function App() {
                             "No manuscript uploaded"}
                         </p>
                         <p className="text-[11px] text-slate-400">
+                          {scanFlow.file?.size ? `${formatFileSize(scanFlow.file.size)} · ` : ""}
                           {currentManuscript?.title || "Manuscript"}
                         </p>
                       </div>
@@ -1261,7 +1462,7 @@ export default function App() {
                 {currentVersion && (
                   <div className="mt-5 max-w-xs">
                     <label className="text-xs font-semibold text-slate-600">Version label</label>
-                    <div className="mt-2 rounded-lg border border-slate-200 bg-[#f8f9fb] px-4 py-3 text-sm font-semibold text-slate-700">
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-[#f8f9fb] px-4 py-3 text-xs font-medium text-slate-400">
                       v{currentVersion.version_number || scanFlow.versionNumber || "1.0"}
                     </div>
                   </div>

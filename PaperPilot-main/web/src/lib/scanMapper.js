@@ -310,6 +310,8 @@ export function mapComplianceScanToResult(scan, meta = {}) {
     pageCount: Number(scan?.page_count || meta.pageCount || maxIssuePage || 0),
     pagination: scan?.pagination || meta.pagination || null,
     scanId: scan?.id,
+    versionId: scan?.manuscript_version_id || meta.versionId || "",
+    documentName: meta.documentName || "",
     mechanicsId: scan?.mechanics_id || meta.mechanicsId,
     cloudinaryUrl: scan?.cloudinary_url || meta.cloudinaryUrl || "",
     documentPreview: scan?.preview || meta.preview || null,

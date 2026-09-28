@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../firebase";
 import { enforceAuthSession } from "../services/auth";
@@ -39,7 +40,32 @@ import {
   unreadCount,
   markAllRead as markAllReadEntries,
   markOneRead as markOneReadEntries,
+  removeNotification as removeNotificationEntry,
 } from "../lib/notifications";
+
+function subscriptionCacheKey(uid) {
+  return uid ? `paperpilot.subscription.${uid}` : "";
+}
+
+async function readCachedSubscription(uid) {
+  if (!uid) return null;
+  try {
+    const raw = await AsyncStorage.getItem(subscriptionCacheKey(uid));
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCachedSubscription(uid, next) {
+  if (!uid || !next) return;
+  try {
+    await AsyncStorage.setItem(subscriptionCacheKey(uid), JSON.stringify(next));
+  } catch {
+    // Ignore quota failures.
+  }
+}
 
 const AppDataContext = createContext(null);
 
@@ -66,6 +92,8 @@ export function AppDataProvider({ children }) {
   const [wizardMaxStep, setWizardMaxStep] = useState(1);
 
   const lastSavedScanKey = useRef("");
+  const subscriptionLoadedRef = useRef("");
+  const authUidRef = useRef("");
   const scannedLibraryRef = useRef([]);
   const notificationsRef = useRef([]);
   const uploadSessionRef = useRef(0);
@@ -200,9 +228,18 @@ export function AppDataProvider({ children }) {
       }
       if (cancelled) return;
       unsubscribe = onAuthStateChanged(auth, (next) => {
-        if (!cancelled) {
-          setUser(next);
-          setAuthReady(true);
+        if (cancelled) return;
+        setUser(next);
+        authUidRef.current = next?.uid || "";
+        setAuthReady(true);
+        if (next?.uid) {
+          const uid = next.uid;
+          void readCachedSubscription(uid).then((cached) => {
+            if (cancelled || !cached) return;
+            if (authUidRef.current !== uid) return;
+            if (subscriptionLoadedRef.current === uid) return;
+            setSubscription(cached);
+          });
         }
       });
     })();
@@ -241,7 +278,11 @@ export function AppDataProvider({ children }) {
     });
     appendNotifications(notificationFromScan(scanFlow.result, scanFlow.versionNumber));
     void getSubscription()
-      .then((data) => setSubscription(data))
+      .then((data) => {
+        if (!data) return;
+        setSubscription(data);
+        void writeCachedSubscription(user?.uid, data);
+      })
       .catch(() => {});
   }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, user?.uid]);
 
@@ -259,6 +300,8 @@ export function AppDataProvider({ children }) {
       setMechanics(nextMechanics);
       setManuscripts(itemsFrom(manuscriptsData, "manuscripts"));
       setSubscription(subscriptionData);
+      subscriptionLoadedRef.current = auth.currentUser?.uid || "";
+      void writeCachedSubscription(auth.currentUser?.uid, subscriptionData);
       setSelectedMechanicsId((current) => current || nextMechanics[0]?.id || "");
     } catch (err) {
       setError(err.message);
@@ -272,6 +315,8 @@ export function AppDataProvider({ children }) {
     try {
       const data = await getSubscription();
       setSubscription(data);
+      subscriptionLoadedRef.current = auth.currentUser?.uid || "";
+      void writeCachedSubscription(auth.currentUser?.uid, data);
       return data;
     } catch {
       return null;
@@ -281,6 +326,7 @@ export function AppDataProvider({ children }) {
   useEffect(() => {
     if (user) loadDashboard();
     else {
+      subscriptionLoadedRef.current = "";
       setMechanics([]);
       setManuscripts([]);
       setSubscription(null);
@@ -572,8 +618,8 @@ export function AppDataProvider({ children }) {
 
   const tier = String(subscription?.tier || "free").toLowerCase();
   const used = Number(subscription?.used ?? subscription?.scans_used ?? 0);
-  const limit = Number(subscription?.limit ?? (tier === "premium" ? 50 : 3));
-  const remaining = Number(subscription?.remaining ?? Math.max(limit - used, 0));
+  const limit = tier === "premium" ? 50 : 3;
+  const remaining = Math.max(limit - Math.max(0, used), 0);
   const notificationUnread = useMemo(() => unreadCount(notifications), [notifications]);
 
   const value = useMemo(
@@ -604,6 +650,8 @@ export function AppDataProvider({ children }) {
       markNotificationsAllRead: () => persistNotifications(markAllReadEntries(notificationsRef.current)),
       markNotificationRead: (id) =>
         persistNotifications(markOneReadEntries(notificationsRef.current, id)),
+      deleteNotification: (id) =>
+        persistNotifications(removeNotificationEntry(notificationsRef.current, id)),
       tier,
       used,
       limit,

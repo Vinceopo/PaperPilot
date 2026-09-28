@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -23,6 +24,7 @@ import {
 } from "../lib/formatMechanicsForm";
 import { ACCEPTED_EXTENSIONS, MAX_FILE_BYTES } from "../lib/mockAnalysis";
 import { isScanReady } from "../lib/scanMapper";
+import { normalizeTitle } from "../lib/scannedLibrary";
 import AnalyzeProgressBar from "../components/cockpit/AnalyzeProgressBar";
 import ScanSummaryModal from "../components/cockpit/ScanSummaryModal";
 import { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
@@ -110,6 +112,7 @@ export default function UploadScreen({ navigation }) {
     uploadTargets,
     selectUploadTarget,
     scanFlow,
+    notificationUnread,
   } = useAppData();
 
   const [mode, setMode] = useState(mechanics.length ? "saved" : "upload");
@@ -129,6 +132,10 @@ export default function UploadScreen({ navigation }) {
   const [msError, setMsError] = useState("");
   const [preview, setPreview] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [titleOpen, setTitleOpen] = useState(false);
+  const [titleMode, setTitleMode] = useState("new");
+  const [existingId, setExistingId] = useState("");
+  const [titleError, setTitleError] = useState("");
 
   const selectedMechanics = mechanics.find((item) => item.id === selectedMechanicsId);
   const scanReady = isScanReady(currentVersion, currentManuscript);
@@ -137,6 +144,9 @@ export default function UploadScreen({ navigation }) {
     setMsFile(null);
     setPreview(null);
     setMsError("");
+    setMsTitle("");
+    setTitleOpen(false);
+    setTitleError("");
   }, [uploadCancelKey]);
 
   useEffect(() => {
@@ -292,23 +302,107 @@ export default function UploadScreen({ navigation }) {
     }
   }
 
-  async function confirmManuscriptUpload() {
-    const issue = validateFile(msFile);
-    if (!manuscriptId && !msTitle.trim()) {
-      setMsError("Enter a unique title for a new manuscript.");
+  function queueUpload(pending) {
+    Alert.alert(
+      pending.manuscriptId ? "Upload new version?" : "Upload manuscript?",
+      `Save “${pending.file?.name}” as “${pending.title}” on the server? File Details opens only after the upload finishes.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: pending.manuscriptId ? "Upload version" : "Upload & continue",
+          onPress: () => {
+            void (async () => {
+              const ok = await onManuscriptUpload({
+                file: pending.file,
+                title: pending.title,
+                manuscriptId: pending.manuscriptId || undefined,
+              });
+              if (ok) {
+                setMsFile(null);
+                setPreview(null);
+                setMsTitle("");
+              }
+            })();
+          },
+        },
+      ]
+    );
+  }
+
+  function useExistingManuscript(id) {
+    const selected = uploadTargets.find((item) => item.id === id);
+    if (!selected) {
+      setTitleError("Choose a manuscript to add this version to.");
       return;
     }
+    setManuscriptId(selected.id);
+    selectUploadTarget(selected.id);
+    setMsTitle("");
+    setTitleError("");
+    setMsError("");
+    setTitleOpen(false);
+    queueUpload({
+      file: msFile,
+      title: selected.title,
+      manuscriptId: selected.id,
+    });
+  }
+
+  function submitTitle() {
+    if (titleMode === "existing") {
+      useExistingManuscript(existingId);
+      return;
+    }
+    const resolvedTitle = msTitle.trim();
+    if (!resolvedTitle) {
+      setTitleError("Enter a title for a new manuscript.");
+      return;
+    }
+    const match = uploadTargets.find(
+      (item) => normalizeTitle(item.title) === normalizeTitle(resolvedTitle)
+    );
+    if (match) {
+      setExistingId(match.id);
+      setTitleMode("existing");
+      setTitleError(
+        "That title is already in your library. Continue to save this file as a new version, or enter a different name."
+      );
+      return;
+    }
+    setTitleError("");
+    setMsError("");
+    setTitleOpen(false);
+    setManuscriptId("");
+    selectUploadTarget("");
+    queueUpload({
+      file: msFile,
+      title: resolvedTitle,
+      manuscriptId: "",
+    });
+  }
+
+  function requestManuscriptUpload() {
+    const issue = validateFile(msFile);
     setMsError(issue);
     if (issue) return;
-    const ok = await onManuscriptUpload({
-      file: msFile,
-      title: msTitle || msFile.name.replace(/\.(pdf|docx)$/i, ""),
-      manuscriptId: manuscriptId || undefined,
-    });
-    if (ok) {
-      setMsFile(null);
-      setPreview(null);
+    if (!manuscriptId) {
+      setTitleError("");
+      setTitleMode(uploadTargets.length ? "existing" : "new");
+      setExistingId(uploadTargets[0]?.id || "");
+      setTitleOpen(true);
+      return;
     }
+    const selected = uploadTargets.find((item) => item.id === manuscriptId);
+    const resolvedTitle = (
+      selected?.title ||
+      msTitle ||
+      msFile.name.replace(/\.(pdf|docx)$/i, "")
+    ).trim();
+    queueUpload({
+      file: msFile,
+      title: resolvedTitle,
+      manuscriptId,
+    });
   }
 
   function onAnalyse() {
@@ -383,9 +477,18 @@ export default function UploadScreen({ navigation }) {
           <Pressable
             style={styles.iconBtn}
             onPress={() => navigation.navigate("Notifications")}
-            accessibilityLabel="Notifications"
+            accessibilityLabel={
+              notificationUnread
+                ? `Open notifications, ${notificationUnread} unread`
+                : "Open notifications"
+            }
           >
             <Text style={styles.iconBtnText}>🔔</Text>
+            {notificationUnread > 0 ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{notificationUnread > 9 ? "9+" : notificationUnread}</Text>
+              </View>
+            ) : null}
           </Pressable>
         </View>
       </View>
@@ -616,7 +719,7 @@ export default function UploadScreen({ navigation }) {
                 <Text style={styles.step}>Step 2 of 3</Text>
                 <Text style={styles.cardTitle}>Upload Manuscript</Text>
                 <Text style={styles.cardHint}>
-                  Give the manuscript a unique title, or upload a new version of an existing one.
+                  Upload the manuscript you want to check against the confirmed format guide.
                 </Text>
 
                 {uploadTargets.length ? (
@@ -651,18 +754,11 @@ export default function UploadScreen({ navigation }) {
                       );
                     })}
                   </>
-                ) : null}
-
-                {!manuscriptId ? (
-                  <TextInput
-                    style={styles.input}
-                    value={msTitle}
-                    onChangeText={setMsTitle}
-                    placeholder="Unique manuscript title"
-                    placeholderTextColor={colors.muted}
-                    editable={!manuscriptBusy}
-                  />
-                ) : null}
+                ) : (
+                  <Text style={styles.cardHint}>
+                    No manuscripts in My Manuscripts yet — create a new one below, then scan it.
+                  </Text>
+                )}
 
                 <Pressable
                   style={styles.dropzone}
@@ -701,11 +797,13 @@ export default function UploadScreen({ navigation }) {
                   title={
                     manuscriptBusy
                       ? "Uploading…"
-                      : manuscriptId
-                        ? "Confirm upload (new version)"
-                        : "Confirm upload"
+                      : previewBusy
+                        ? "Preparing preview…"
+                        : manuscriptId
+                          ? "Upload new version"
+                          : "Upload manuscript"
                   }
-                  onPress={confirmManuscriptUpload}
+                  onPress={requestManuscriptUpload}
                   busy={manuscriptBusy}
                   disabled={!msFile || previewBusy}
                   style={{ marginTop: 12 }}
@@ -827,6 +925,99 @@ export default function UploadScreen({ navigation }) {
         }}
       />
 
+      <Modal
+        visible={titleOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTitleOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Manuscript title</Text>
+            <Text style={styles.modalBody}>
+              {uploadTargets.length
+                ? "Save this file as a new version of a title you already have, or give it a new title."
+                : "This name must be unique. You can still change the file before you confirm the upload."}
+            </Text>
+            {uploadTargets.length > 0 ? (
+              <View style={styles.modeRow}>
+                <Pressable
+                  style={[styles.modeBtn, titleMode === "existing" && styles.modeBtnActive]}
+                  onPress={() => {
+                    setTitleMode("existing");
+                    setTitleError("");
+                    if (!existingId) setExistingId(uploadTargets[0]?.id || "");
+                  }}
+                >
+                  <Text style={[styles.modeBtnText, titleMode === "existing" && styles.modeBtnTextActive]}>
+                    Use an existing title
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.modeBtn, titleMode === "new" && styles.modeBtnActive]}
+                  onPress={() => {
+                    setTitleMode("new");
+                    setTitleError("");
+                  }}
+                >
+                  <Text style={[styles.modeBtnText, titleMode === "new" && styles.modeBtnTextActive]}>
+                    New title
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+            {titleMode === "existing" && uploadTargets.length > 0 ? (
+              <View style={{ marginTop: 14 }}>
+                <Text style={styles.label}>Existing title</Text>
+                <ScrollView style={styles.titleList} nestedScrollEnabled>
+                  {uploadTargets.map((item) => {
+                    const versionCount = Number(
+                      item.version_count ?? item.current_version_number ?? item.versions?.length ?? 0
+                    );
+                    const active = existingId === item.id;
+                    return (
+                      <Pressable
+                        key={item.id}
+                        style={[styles.listRow, active && styles.listRowActive]}
+                        onPress={() => {
+                          setExistingId(item.id);
+                          setTitleError("");
+                        }}
+                      >
+                        <Text style={styles.listRowText} numberOfLines={2}>
+                          {item.title} · version {versionCount + 1}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : (
+              <TextInput
+                style={[styles.input, { marginTop: 14 }]}
+                value={msTitle}
+                onChangeText={(value) => {
+                  setMsTitle(value);
+                  setTitleError("");
+                }}
+                placeholder="Enter a title"
+                placeholderTextColor={colors.muted}
+                autoFocus
+              />
+            )}
+            {titleError ? <Text style={styles.fieldError}>{titleError}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable style={styles.secondaryBtn} onPress={() => setTitleOpen(false)}>
+                <Text style={styles.secondaryBtnText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.primaryBtn} onPress={submitTitle}>
+                <Text style={styles.primaryBtnText}>Continue</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <ScanSummaryModal
         visible={scanFlow.step === "summary" && Boolean(scanFlow.result)}
         result={scanFlow.result}
@@ -895,6 +1086,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   iconBtnText: { fontSize: 16 },
+  badge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    backgroundColor: "#f43f5e",
+    borderWidth: 2,
+    borderColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  badgeText: { fontSize: 9, fontWeight: "700", color: colors.white },
   stepChips: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1209,4 +1415,39 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   primaryBtnText: { fontSize: 12, fontWeight: "700", color: colors.white },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.4)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 420,
+    borderRadius: 16,
+    backgroundColor: colors.white,
+    padding: 22,
+  },
+  modalTitle: { fontSize: 18, fontWeight: "700", color: colors.text },
+  modalBody: { marginTop: 6, fontSize: 12, lineHeight: 18, color: colors.slate },
+  modeRow: { marginTop: 16, flexDirection: "row", gap: 8 },
+  modeBtn: {
+    flex: 1,
+    borderRadius: 10,
+    backgroundColor: colors.fileBg,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  modeBtnActive: { backgroundColor: "#e7f8f5", borderWidth: 1, borderColor: colors.accent },
+  modeBtnText: { fontSize: 12, fontWeight: "600", color: colors.slate, textAlign: "center" },
+  modeBtnTextActive: { color: "#0f766e" },
+  titleList: { maxHeight: 180, marginTop: 8 },
+  modalActions: {
+    marginTop: 18,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 8,
+  },
 });

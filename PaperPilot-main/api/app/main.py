@@ -11,25 +11,29 @@ from fastapi.responses import JSONResponse
 from pypdf import PdfReader
 
 from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes
-from app.config import settings
+from app.config import document_byte_limit, settings
 from app.compliance import run_compliance_scan
 from app.compliance_db import (
     MechanicsInUse,
     MechanicsNameConflict,
     UpgradeRequired,
+    activate_premium_from_payment,
     cancel_user_subscription,
     check_scan_eligibility,
     create_mechanics,
     create_pending_scan,
     create_version,
     delete_mechanics,
+    delete_manuscript,
     get_mechanics,
+    get_pending_checkout,
     get_scan,
     get_version,
     get_version_document_url,
     get_version_full,
     init_db as init_compliance_db,
     is_current_version,
+    latest_pending_checkout_id,
     list_manuscripts,
     list_mechanics,
     list_versions,
@@ -43,11 +47,13 @@ from app.ml_service_client import MLServiceError, create_analyze_job, ml_service
 from app.scan_ml_sync import hydrate_scan_from_ml, scan_progress_payload
 from app.paymongo import (
     PayMongoError,
+    checkout_session_is_paid,
     create_checkout_session,
     plan_amount_pesos,
+    retrieve_checkout_session,
     verify_webhook_signature,
 )
-from app.paymongo_events import handle_paymongo_event
+from app.paymongo_events import fulfill_checkout_paid, handle_paymongo_event
 from app.documents import (
     DocumentError,
     derive_mechanics_rules,
@@ -75,6 +81,7 @@ from app.schemas import (
     AnalyzeResponse,
     CancelSubscriptionRequest,
     CloudinaryDocumentRequest,
+    ConfirmCheckoutRequest,
     OtpSendRequest,
     OtpVerifyRequest,
     RegisterCheckRequest,
@@ -202,7 +209,7 @@ def authenticated_uid(authorization: str | None = Header(default=None)) -> str:
 
 
 def _read_document_bytes(filename: str, data: bytes) -> tuple[str, str, dict]:
-    file_type = validate_document(filename, data, settings.max_upload_bytes)
+    file_type = validate_document(filename, data, document_byte_limit())
     parsed = parse_document(data, file_type)
     return filename, file_type, parsed
 
@@ -549,6 +556,17 @@ async def manuscript_version_create(
         ) from None
 
 
+@app.delete("/manuscripts/{manuscript_id}")
+def manuscript_delete(
+    manuscript_id: str,
+    title: str = Query(default=""),
+    uid: str = Depends(authenticated_uid),
+):
+    """Permanently remove this manuscript, its versions, and its scans."""
+    deleted = delete_manuscript(uid, manuscript_id, title)
+    return {"deleted": deleted}
+
+
 @app.get("/manuscripts/{manuscript_id}/versions")
 def manuscript_versions_list(
     manuscript_id: str,
@@ -698,6 +716,25 @@ def compliance_scan_progress(scan_id: str, uid: str = Depends(authenticated_uid)
     return payload
 
 
+@app.get("/scans/{scan_id}/document")
+def compliance_scan_document(scan_id: str, uid: str = Depends(authenticated_uid)):
+    """Original upload for a saved scan, so old results can show and trace the document."""
+    scan = get_scan(uid, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Compliance scan not found.")
+    manuscript_id = scan.get("manuscript_id") or ""
+    version_id = scan.get("manuscript_version_id") or ""
+    version = get_version(uid, manuscript_id, version_id) if manuscript_id and version_id else None
+    url = get_version_document_url(uid, manuscript_id, version_id) if version else None
+    return {
+        "scan_id": scan_id,
+        "manuscript_id": manuscript_id,
+        "manuscript_version_id": version_id,
+        "cloudinary_url": url or "",
+        "source_filename": (version or {}).get("source_filename") or "",
+    }
+
+
 @app.get("/scans/{scan_id}")
 def compliance_scan_detail(scan_id: str, uid: str = Depends(authenticated_uid)):
     if not get_scan(uid, scan_id):
@@ -735,7 +772,7 @@ def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authentica
     base = (settings.app_public_url or "https://paperpilotph.vercel.app").rstrip("/")
     success_url = f"{base}/?billing=success"
     cancel_url = f"{base}/?billing=canceled"
-    reference = f"pp-{uid[:8]}-{int(time.time())}"
+    reference = f"pp-{uid[:8]}-{uuid.uuid4().hex[:12]}"
 
     customer_email = None
     customer_name = None
@@ -790,6 +827,101 @@ def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authentica
 @app.post("/subscription/cancel")
 def subscription_cancel(body: CancelSubscriptionRequest, uid: str = Depends(authenticated_uid)):
     return cancel_user_subscription(uid, immediate=bool(body.immediate))
+
+
+@app.post("/subscription/confirm")
+def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authenticated_uid)):
+    """
+    After PayMongo redirects back (?billing=success), the client calls this.
+    We re-fetch the Checkout Session with the secret key and activate Premium when paid.
+    Works even if the webhook is delayed or misconfigured.
+    """
+    session_id = (body.checkout_session_id or "").strip() or latest_pending_checkout_id(uid)
+    if not session_id:
+        snap = subscription_snapshot(uid)
+        if str(snap.get("tier") or "").lower() == "premium":
+            return {**snap, "confirmed": True, "already_premium": True}
+        raise HTTPException(
+            status_code=404,
+            detail="No pending PayMongo checkout found for this account.",
+        )
+
+    pending = get_pending_checkout(session_id)
+    if pending and str(pending.get("owner_uid") or "") not in ("", uid):
+        raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
+
+    # This exact checkout was already applied. A newer paid session still activates below
+    # so a second Premium purchase is not treated as "already subscribed".
+    current = subscription_snapshot(uid)
+    already_applied = str(current.get("last_checkout_session_id") or "") == session_id
+    if already_applied:
+        return {
+            **current,
+            "confirmed": str(current.get("tier") or "").lower() == "premium",
+            "already_applied": True,
+            "checkout_session_id": session_id,
+        }
+
+    try:
+        payload = retrieve_checkout_session(session_id)
+    except PayMongoError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    if not checkout_session_is_paid(payload):
+        snap = subscription_snapshot(uid)
+        return {
+            **snap,
+            "confirmed": False,
+            "pending": True,
+            "checkout_session_id": session_id,
+            "message": "Payment is not marked paid yet. Try again in a few seconds.",
+        }
+
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    meta = attrs.get("metadata") if isinstance(attrs.get("metadata"), dict) else {}
+    meta_uid = str(meta.get("uid") or "").strip()
+    if meta_uid and meta_uid != uid:
+        raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
+
+    handled = fulfill_checkout_paid(data if isinstance(data, dict) else {"id": session_id})
+    if not handled:
+        # Session is paid and owned by this user — activate even if webhook metadata was missing.
+        billing_period = str(
+            (pending or {}).get("billing_period")
+            or meta.get("billing_period")
+            or "monthly"
+        ).lower()
+        payments = attrs.get("payments") if isinstance(attrs.get("payments"), list) else []
+        payment_id = None
+        amount_pesos = (pending or {}).get("amount")
+        payment_method = "paymongo"
+        if payments and isinstance(payments[0], dict):
+            payment_id = payments[0].get("id")
+            pay_attrs = (
+                payments[0].get("attributes")
+                if isinstance(payments[0].get("attributes"), dict)
+                else {}
+            )
+            if isinstance(pay_attrs.get("amount"), int):
+                amount_pesos = pay_attrs["amount"] // 100
+            source = pay_attrs.get("source") if isinstance(pay_attrs.get("source"), dict) else {}
+            payment_method = source.get("type") or payment_method
+        activate_premium_from_payment(
+            uid,
+            billing_period=billing_period if billing_period in ("monthly", "annual") else "monthly",
+            payment_method=payment_method,
+            amount_pesos=int(amount_pesos) if amount_pesos is not None else None,
+            checkout_session_id=session_id,
+            payment_id=str(payment_id) if payment_id else None,
+            reference_number=str(attrs.get("reference_number") or "") or None,
+        )
+
+    return {
+        **subscription_snapshot(uid),
+        "confirmed": True,
+        "checkout_session_id": session_id,
+    }
 
 
 @app.post("/subscription/create-checkout")

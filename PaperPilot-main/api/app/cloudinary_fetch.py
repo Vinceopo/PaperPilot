@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from app.config import settings
+from app.config import document_byte_limit, settings
 
 _ALLOWED_HOST_SUFFIXES = (
     "res.cloudinary.com",
@@ -120,7 +120,7 @@ def _signed_admin_download(
         headers={"User-Agent": "PaperPilot/1.0"},
     )
     try:
-        with urlopen(request, timeout=60, context=ssl.create_default_context()) as response:
+        with urlopen(request, timeout=180, context=ssl.create_default_context()) as response:
             return _read_limited(response, max_bytes)
     except HTTPError as exc:
         detail = ""
@@ -138,7 +138,7 @@ def _signed_admin_download(
 
 def fetch_cloudinary_bytes(url: str, max_bytes: int | None = None) -> tuple[bytes, str]:
     """Return (bytes, filename_hint). Raises CloudinaryFetchError on failure."""
-    limit = max_bytes if max_bytes is not None else settings.max_upload_bytes
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
     raw = (url or "").strip()
     if not raw.startswith("https://"):
         raise CloudinaryFetchError("Cloudinary URL must use HTTPS.")
@@ -149,7 +149,7 @@ def fetch_cloudinary_bytes(url: str, max_bytes: int | None = None) -> tuple[byte
     filename = parsed.path.rsplit("/", 1)[-1] or "document"
     request = Request(raw, method="GET", headers={"User-Agent": "PaperPilot/1.0"})
     try:
-        with urlopen(request, timeout=60, context=ssl.create_default_context()) as response:
+        with urlopen(request, timeout=180, context=ssl.create_default_context()) as response:
             return _read_limited(response, limit), filename
     except CloudinaryFetchError:
         raise

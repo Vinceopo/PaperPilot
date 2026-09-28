@@ -78,7 +78,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               className={inputClass}
             />
           </Field>
-          <Field label="Spacing" hint="Line spacing">
+          <Field label="Spacing" hint="Line spacing, e.g. 1.5 or Double">
             <input
               disabled={disabled}
               value={form.spacing}
@@ -92,13 +92,27 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               <option value="2" />
             </datalist>
           </Field>
-          <Field label="Indention">
+          <Field label="Indention" hint="e.g. 0.5 inch, 1/2 inch, 1.27 cm">
             <input
               disabled={disabled}
               value={form.indention}
               onChange={set("indention")}
               className={inputClass}
             />
+          </Field>
+          <Field label="Alignment" hint="Body text alignment">
+            <select
+              disabled={disabled}
+              value={form.alignment || ""}
+              onChange={set("alignment")}
+              className={inputClass}
+            >
+              <option value="">Left or justified (not specified)</option>
+              <option value="Justified">Justified</option>
+              <option value="Left">Left</option>
+              <option value="Center">Center</option>
+              <option value="Right">Right</option>
+            </select>
           </Field>
         </div>
       </Section>

@@ -39,6 +39,10 @@ export function markOneRead(items, id) {
   return (items || []).map((n) => (n.id === id ? { ...n, read: true } : n));
 }
 
+export function removeNotification(items, id) {
+  return (items || []).filter((n) => n.id !== id);
+}
+
 export function pushNotification(items, partial) {
   const list = Array.isArray(items) ? items : [];
   const id = partial.id || `ntf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

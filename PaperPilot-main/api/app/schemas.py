@@ -99,3 +99,9 @@ class SubscribeRequest(BaseModel):
 class CancelSubscriptionRequest(BaseModel):
     immediate: bool = True
 
+
+class ConfirmCheckoutRequest(BaseModel):
+    """Optional session id from return URL / sessionStorage; falls back to latest pending."""
+
+    checkout_session_id: str | None = Field(default=None, max_length=80)
+

@@ -2,6 +2,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-nati
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
 import { manuscriptSummary } from "../lib/scoreBand";
+import { versionToScanResult } from "../lib/scannedLibrary";
 
 function formatDate(iso) {
   if (!iso) return "—";
@@ -26,8 +27,8 @@ function bandColors(band) {
   return { bg: colors.roseBg, border: colors.roseBorder, text: colors.rose };
 }
 
-export default function ManuscriptsScreen() {
-  const { scannedLibrary, updateScannedLibrary } = useAppData();
+export default function ManuscriptsScreen({ navigation }) {
+  const { scannedLibrary, updateScannedLibrary, scanFlow } = useAppData();
   const items = Array.isArray(scannedLibrary) ? scannedLibrary : [];
 
   if (!items.length) {
@@ -41,35 +42,26 @@ export default function ManuscriptsScreen() {
     );
   }
 
-  function openDetail(summary) {
-    Alert.alert(
-      summary.title || "Manuscript",
-      [
-        `Score: ${Math.round(summary.latestScore)}/100`,
-        `Status: ${summary.band?.label || "—"}`,
-        `Latest: ${summary.latestVersionLabel}`,
-        `Versions: ${summary.versionCount}`,
-        `Scanned: ${formatDate(summary.scannedDate)}`,
-      ].join("\n"),
-      [
-        { text: "Close", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            Alert.alert("Delete manuscript", `Remove “${summary.title}” from your library?`, [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Delete",
-                style: "destructive",
-                onPress: () =>
-                  updateScannedLibrary(items.filter((m) => m.id !== summary.id)),
-              },
-            ]);
-          },
-        },
-      ]
-    );
+  function viewDocument(manuscript) {
+    const version = manuscript?.versions?.[0];
+    const saved = versionToScanResult(manuscript, version);
+    if (!saved) {
+      Alert.alert("No scan yet", "This manuscript does not have a scan result yet.");
+      return;
+    }
+    scanFlow.showSavedResult(saved, version?.versionNumber);
+    navigation.navigate("Results");
+  }
+
+  function deleteManuscript(summary) {
+    Alert.alert("Delete manuscript", `Remove “${summary.title}” from your library?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => updateScannedLibrary(items.filter((m) => m.id !== summary.id)),
+      },
+    ]);
   }
 
   return (
@@ -82,7 +74,7 @@ export default function ManuscriptsScreen() {
         const summary = manuscriptSummary(item);
         const tone = bandColors(summary.band);
         return (
-          <Pressable key={item.id} style={styles.card} onPress={() => openDetail(summary)}>
+          <View key={item.id} style={styles.card}>
             <View style={styles.cardTop}>
               <Text style={styles.cardTitle} numberOfLines={2}>
                 {summary.title || "Untitled manuscript"}
@@ -103,7 +95,21 @@ export default function ManuscriptsScreen() {
               {summary.versionCount} version{summary.versionCount === 1 ? "" : "s"}
             </Text>
             <Text style={styles.meta}>Scanned {formatDate(summary.scannedDate)}</Text>
-          </Pressable>
+            <View style={styles.actions}>
+              <Pressable
+                onPress={() => viewDocument(item)}
+                accessibilityLabel={`View ${summary.title}`}
+              >
+                <Text style={styles.viewText}>View</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => deleteManuscript(summary)}
+                accessibilityLabel={`Delete ${summary.title}`}
+              >
+                <Text style={styles.deleteText}>Delete</Text>
+              </Pressable>
+            </View>
+          </View>
         );
       })}
     </ScrollView>
@@ -155,4 +161,13 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 10, fontWeight: "800", letterSpacing: 0.6 },
   meta: { marginTop: 6, fontSize: 12, color: colors.slate },
+  actions: {
+    marginTop: 12,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 16,
+  },
+  viewText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  deleteText: { fontSize: 12, fontWeight: "600", color: colors.rose },
 });

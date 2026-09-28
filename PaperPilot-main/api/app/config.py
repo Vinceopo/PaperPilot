@@ -47,9 +47,12 @@ class Settings(BaseSettings):
     firebase_database_url: str = ""
     free_scan_limit: int = 3
     premium_scan_limit: int = 50
-    # TEMP testing bypass. Set False when asked to restore the monthly scan cap.
-    disable_scan_limit: bool = True
-    max_upload_bytes: int = 40_000_000
+    # Each successful scan uses one credit. Free is always 3/month, Premium is always 50/month.
+    # Kept for older env files. The API enforces 3 and 50 even if this is set higher.
+    disable_scan_limit: bool = False
+    # Documents are uploaded with Cloudinary upload_large (20MB chunks).
+    # 100MB matches the client ceiling. A lower env value must not reject those files.
+    max_upload_bytes: int = 100_000_000
 
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
@@ -69,3 +72,11 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# upload_large client ceiling. A smaller MAX_UPLOAD_BYTES in the environment
+# must not reject a file Cloudinary already accepted in chunks.
+UPLOAD_LARGE_MAX_BYTES = 100_000_000
+
+
+def document_byte_limit() -> int:
+    return max(int(settings.max_upload_bytes or 0), UPLOAD_LARGE_MAX_BYTES)

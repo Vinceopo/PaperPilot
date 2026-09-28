@@ -80,6 +80,37 @@ def plan_amount_pesos(billing_period: str) -> int:
     return plan_amount_centavos(billing_period) // 100
 
 
+def retrieve_checkout_session(checkout_session_id: str) -> dict:
+    """GET Checkout Session (secret key) — includes payments when paid."""
+    sid = (checkout_session_id or "").strip()
+    if not sid:
+        raise PayMongoError("Checkout session id is required.", status=400)
+    try:
+        return _request_json("GET", f"{PAYMONGO_API}/v1/checkout_sessions/{sid}")
+    except PayMongoError:
+        return _request_json("GET", f"{PAYMONGO_API}/v2/checkout_sessions/{sid}")
+
+
+def checkout_session_is_paid(session_payload: dict) -> bool:
+    data = session_payload.get("data") if isinstance(session_payload, dict) else None
+    if not isinstance(data, dict):
+        return False
+    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    payments = attrs.get("payments")
+    if isinstance(payments, list):
+        for payment in payments:
+            if not isinstance(payment, dict):
+                continue
+            pay_attrs = payment.get("attributes") if isinstance(payment.get("attributes"), dict) else {}
+            if str(pay_attrs.get("status") or "").lower() == "paid":
+                return True
+    intent = attrs.get("payment_intent") if isinstance(attrs.get("payment_intent"), dict) else {}
+    intent_attrs = intent.get("attributes") if isinstance(intent.get("attributes"), dict) else {}
+    if str(intent_attrs.get("status") or "").lower() in ("succeeded", "paid"):
+        return True
+    return False
+
+
 def create_checkout_session(
     *,
     uid: str,

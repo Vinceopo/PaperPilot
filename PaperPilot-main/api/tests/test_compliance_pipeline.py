@@ -118,7 +118,7 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(result["issues"][0]["severity"], "critical")
         self.assertEqual(
             result["issues"][0]["locations"],
-            [{"page": 2, "line": 1, "section": "Fonts"}],
+            [{"page": 2, "line": 1, "section": "Fonts", "excerpt": "Example line"}],
         )
         self.assertEqual([item["section"] for item in result["sections"]], [
             "Fonts", "Margins", "Indentation", "Spacing", "Alignment",

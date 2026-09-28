@@ -13,6 +13,7 @@
 
 import { useCallback, useState } from "react";
 import { analyzeDocument, downloadReport as downloadReportFn, ACCEPTED_EXTENSIONS, MAX_FILE_BYTES } from "../lib/mockAnalysis";
+import { formatFileSize } from "../lib/formatFileSize.js";
 import { isServerId } from "../lib/scanMapper";
 
 function validateFile(file) {
@@ -21,7 +22,7 @@ function validateFile(file) {
   if (!ACCEPTED_EXTENSIONS.includes(ext))
     return `Only ${ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
   if (file.size > MAX_FILE_BYTES)
-    return `File must be ${MAX_FILE_BYTES / 1_000_000} MB or smaller.`;
+    return `File must be ${formatFileSize(MAX_FILE_BYTES)} or smaller.`;
   return "";
 }
 
@@ -62,13 +63,15 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
 
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  const [persistScan, setPersistScan] = useState(false);
 
   const selectFile = useCallback((f) => {
-    const err = f ? validateFile(f) : "";
-    setFileInner(f ?? null);
-    setFileError(err);
+    const tooBig = Boolean(f && f.size > MAX_FILE_BYTES);
+    const err = f && !tooBig ? validateFile(f) : "";
+    setFileInner(tooBig ? null : (f ?? null));
+    setFileError(tooBig ? `File must be ${formatFileSize(MAX_FILE_BYTES)} or smaller.` : err);
     setError("");
-    setStep(f && !err ? "fileSelected" : "idle");
+    setStep(!tooBig && f && !err ? "fileSelected" : "idle");
   }, []);
 
   const analyze = useCallback(async () => {
@@ -102,6 +105,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
         pageCount: target.pageCount,
         cloudinaryUrl: target.cloudinaryUrl,
         preview: target.preview,
+        documentName: target.sourceFilename,
         onProgress: (payload) => {
           setScanProgress({
             percent: Number(payload?.percent ?? 0),
@@ -118,7 +122,8 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
       }
 
       setDocumentId(scanResult.documentId);
-      setVersionNumber(Number(target.versionNumber) || nextVersion);
+      setVersionNumber(nextVersion);
+      setPersistScan(true);
       setResult(scanResult);
       setScanProgress({ percent: 100, stage: "done", message: "Analysis complete" });
       setStep("summary");
@@ -163,8 +168,30 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setFileError("");
     setError("");
     setResult(null);
+    setPersistScan(false);
     setScanProgress(INITIAL_PROGRESS);
     setStep("idle");
+  }, []);
+
+  const showSavedResult = useCallback((saved, version) => {
+    setPersistScan(false);
+    setFileInner(null);
+    setFileError("");
+    setResult(saved && typeof saved === "object" ? saved : null);
+    setVersionNumber(Number(version) || 1);
+    setError("");
+    setDownloadError("");
+    setScanProgress(INITIAL_PROGRESS);
+    setStep(saved ? "results" : "idle");
+  }, []);
+
+  const patchResult = useCallback((patch) => {
+    setResult((current) => (current ? { ...current, ...patch } : current));
+  }, []);
+
+  const syncVersionNumber = useCallback((version) => {
+    const n = Number(version);
+    setVersionNumber(Number.isFinite(n) && n > 0 ? n : 1);
   }, []);
 
   const backToDashboard = useCallback(() => {
@@ -174,6 +201,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setError("");
     setDownloadError("");
     setScanProgress(INITIAL_PROGRESS);
+    setPersistScan(false);
     setStep("idle");
   }, []);
 
@@ -186,6 +214,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     scanProgress,
     documentId,
     versionNumber,
+    persistScan,
     downloadBusy,
     downloadError,
     selectFile,
@@ -194,6 +223,9 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     downloadReport,
     uploadNewVersion,
     backToDashboard,
+    showSavedResult,
+    patchResult,
+    syncVersionNumber,
     openReferenceTracing,
     openFullResults,
     backToSummary,

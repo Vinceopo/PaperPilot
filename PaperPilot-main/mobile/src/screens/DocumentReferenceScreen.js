@@ -48,11 +48,22 @@ export default function DocumentReferenceScreen({ navigation }) {
   return (
     <View style={styles.root}>
       <View style={styles.toolbar}>
-        <Pressable onPress={() => navigation.goBack()} hitSlop={8}>
-          <Text style={styles.back}>← Back</Text>
+        <Pressable
+          style={styles.backBtn}
+          onPress={() => {
+            scanFlow.backToSummary();
+            navigation.navigate("MainTabs", { screen: "Upload" });
+          }}
+          hitSlop={8}
+        >
+          <Text style={styles.backChevron}>‹</Text>
+          <Text style={styles.back}>Back to summary</Text>
         </Pressable>
         <Text style={styles.toolbarTitle} numberOfLines={1}>
-          Reference · {result.documentTitle}
+          Reference tracing
+        </Text>
+        <Text style={styles.toolbarHint}>
+          Tap an issue to jump to the matching page and line in your document.
         </Text>
         <Pressable
           onPress={() => {
@@ -121,8 +132,6 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   emptyTitle: { fontSize: 16, fontWeight: "700", color: colors.text, marginBottom: 12 },
   toolbar: {
-    flexDirection: "row",
-    alignItems: "center",
     gap: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -130,8 +139,22 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
     backgroundColor: colors.card,
   },
-  back: { fontSize: 13, fontWeight: "600", color: colors.accentText },
-  toolbarTitle: { flex: 1, fontSize: 14, fontWeight: "700", color: colors.text },
+  backBtn: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    backgroundColor: colors.white,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  backChevron: { fontSize: 16, fontWeight: "700", color: colors.accentText, marginTop: -1 },
+  back: { fontSize: 14, fontWeight: "600", color: colors.accentText },
+  toolbarTitle: { marginTop: 10, fontSize: 16, fontWeight: "700", color: colors.text },
+  toolbarHint: { marginTop: 2, fontSize: 12, color: colors.slate },
   fullResult: { fontSize: 12, fontWeight: "700", color: colors.emerald },
   docScroll: { flex: 1, maxHeight: "42%" },
   docContent: { padding: 14, gap: 12, paddingBottom: 20 },

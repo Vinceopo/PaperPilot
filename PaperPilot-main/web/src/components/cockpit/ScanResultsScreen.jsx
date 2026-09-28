@@ -166,6 +166,7 @@ export default function ScanResultsScreen({
     pageCount = 0,
     pagination = null,
     cloudinaryUrl = "",
+    documentName = "",
     documentPreview = null,
     unitsChecked,
     unitsFailed,
@@ -237,7 +238,7 @@ export default function ScanResultsScreen({
                 </tr>
                 <tr>
                   <td className="pr-4 pt-1 text-slate-500">Version</td>
-                  <td className="pt-1 font-medium text-slate-200">{versionLabel}</td>
+                  <td className="pt-1 font-normal text-slate-400">{versionLabel}</td>
                 </tr>
                 <tr>
                   <td className="pr-4 pt-1 text-slate-500">Citation style</td>
@@ -359,13 +360,13 @@ export default function ScanResultsScreen({
         </div>
       </div>
 
-      {hasPreview ? (
+      {hasPreview || onViewDocument ? (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-[#f8fffd] px-5 py-3">
             <div>
               <h3 className="text-sm font-bold text-slate-800">Document preview</h3>
               <p className="text-[11px] text-slate-500">
-                Use reference tracing to jump to a page and highlight a finding.
+                Starts on page 1. Scroll to read every page, or trace an issue to jump to it.
               </p>
             </div>
             {onViewDocument ? (
@@ -378,14 +379,18 @@ export default function ScanResultsScreen({
               </button>
             ) : null}
           </div>
-          <div className="bg-[#e8ecf1] p-3">
-            <DocumentPagePreview
-              file={file}
-              documentUrl={cloudinaryUrl}
-              preview={documentPreview}
-              emptyLabel="Preview unavailable for this version."
-            />
-          </div>
+          {hasPreview ? (
+            <div className="bg-[#e8ecf1] p-3">
+              <DocumentPagePreview
+                file={file}
+                documentUrl={cloudinaryUrl}
+                documentName={documentName}
+                preview={documentPreview}
+                emptyLabel="Preview unavailable for this version."
+                paged
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

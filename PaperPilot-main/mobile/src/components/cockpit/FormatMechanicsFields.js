@@ -9,6 +9,7 @@ import { colors } from "../../theme";
 const ORIENTATIONS = ["Portrait", "Landscape"];
 const CITATIONS = ["APA", "MLA", "IEEE", "CHICAGO"];
 const SPACING_HINTS = ["1", "1.5", "2"];
+const ALIGNMENTS = ["Justified", "Left", "Center", "Right"];
 const FONT_HINTS = ["Times New Roman", "Arial", "Calibri", "Cambria", "Georgia", "Garamond"];
 
 function Field({ label, hint, children }) {
@@ -124,9 +125,8 @@ export default function FormatMechanicsFields({
             style={styles.input}
             value={form.spacing}
             onChangeText={(v) => set("spacing", v)}
-            placeholder="1.5"
+            placeholder="1.5 or Double"
             placeholderTextColor={colors.muted}
-            keyboardType="decimal-pad"
           />
           <ChipRow
             options={SPACING_HINTS}
@@ -143,6 +143,14 @@ export default function FormatMechanicsFields({
             onChangeText={(v) => set("indention", v)}
             placeholder="0.5 inch"
             placeholderTextColor={colors.muted}
+          />
+        </Field>
+        <Field label="Alignment" hint="Body text alignment (leave unselected for left or justified)">
+          <ChipRow
+            options={ALIGNMENTS}
+            value={form.alignment}
+            onSelect={(v) => set("alignment", form.alignment === v ? "" : v)}
+            disabled={disabled}
           />
         </Field>
       </Section>

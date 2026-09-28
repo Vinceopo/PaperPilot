@@ -1,18 +1,49 @@
 /**
  * Shared Format Mechanics form model ↔ API rules dict.
- * Used by Customize (blank) and Upload (AI-filled) Format Fields panel.
+ * Used by Customize, Upload (extracted), and Saved (loaded) Format Fields.
  */
 
+/** Real editable starter values (not empty placeholders). */
+export function sampleMechanicsForm(name = "Sample Capstone Format") {
+  return {
+    name: name || "Sample Capstone Format",
+    paperSize: "8.5 x 11",
+    paperOrientation: "Portrait",
+    paperSubstance: "20",
+    spacing: "1.5",
+    indention: "0.5 inch",
+    alignment: "Justified",
+    marginTop: "1",
+    marginLeft: "1",
+    marginBottom: "1",
+    marginRight: "1",
+    marginGutter: "0",
+    marginHeader: "0.5",
+    marginFooter: "0.5",
+    fontHeading1Size: "16",
+    fontHeading2Size: "14",
+    fontHeading3Size: "12",
+    fontType: "Times New Roman",
+    fontColor: "Black/Automatic",
+    paginationPosition: "Top right",
+    paginationFirstPageRule: "No page number shown",
+    pageBreaks: "Only when starting a new chapter",
+    tableLayout: 'Table <name> above a "TABLE TITLE" caption',
+    figureLayout: "Figure <number>: Figure Title in bold/underlined below the figure",
+    citationFormat: "APA",
+  };
+}
+
+/** Blank form — used before upload extraction. */
 export function emptyMechanicsForm(name = "") {
   return {
     name: name || "",
-    // Paper
     paperSize: "",
     paperOrientation: "Portrait",
     paperSubstance: "",
     spacing: "",
     indention: "",
-    // Margins
+    alignment: "",
     marginTop: "",
     marginLeft: "",
     marginBottom: "",
@@ -20,16 +51,13 @@ export function emptyMechanicsForm(name = "") {
     marginGutter: "",
     marginHeader: "",
     marginFooter: "",
-    // Font
     fontHeading1Size: "",
     fontHeading2Size: "",
     fontHeading3Size: "",
     fontType: "",
     fontColor: "Black/Automatic",
-    // Pagination
     paginationPosition: "",
     paginationFirstPageRule: "",
-    // Layout rules
     pageBreaks: "",
     tableLayout: "",
     figureLayout: "",
@@ -57,12 +85,68 @@ function paperSizeLabel(rules = {}) {
   return name || "";
 }
 
-function parseNumber(value) {
-  if (value == null || String(value).trim() === "") return null;
-  const match = String(value).match(/(\d+(?:\.\d+)?)/);
+const FRACTION_GLYPHS = { "½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125 };
+const UNIT_TO_INCHES = { cm: 1 / 2.54, mm: 1 / 25.4, pt: 1 / 72, point: 1 / 72, points: 1 / 72 };
+
+/** "1.5", "1 ½ inches", "1/2\"", "2.54 cm", "one tab" -> inches. */
+export function parseLengthInches(value) {
+  const text = String(value ?? "").trim().toLowerCase().replace(/,/g, ".");
+  if (!text) return null;
+  if (/\b(?:one\s+)?tab\b/.test(text)) return 0.5;
+  let amount = null;
+  let rest = text;
+  const mixed = text.match(/(\d+)\s+(\d+)\s*\/\s*(\d+)/);
+  const glyph = text.match(/(\d+)?\s*([½¼¾⅓⅔⅛])/);
+  const fraction = text.match(/(\d+)\s*\/\s*(\d+)/);
+  const decimal = text.match(/\d+(?:\.\d+)?/);
+  if (mixed && Number(mixed[3])) {
+    amount = Number(mixed[1]) + Number(mixed[2]) / Number(mixed[3]);
+    rest = text.slice(mixed.index + mixed[0].length);
+  } else if (glyph) {
+    amount = Number(glyph[1] || 0) + FRACTION_GLYPHS[glyph[2]];
+    rest = text.slice(glyph.index + glyph[0].length);
+  } else if (fraction && Number(fraction[2])) {
+    amount = Number(fraction[1]) / Number(fraction[2]);
+    rest = text.slice(fraction.index + fraction[0].length);
+  } else if (decimal) {
+    amount = Number(decimal[0]);
+    rest = text.slice(decimal.index + decimal[0].length);
+  } else if (/\bhalf\b/.test(text)) {
+    amount = 0.5;
+  } else if (/\bone\b/.test(text)) {
+    amount = 1;
+  }
+  if (amount == null || Number.isNaN(amount)) return null;
+  const unit = rest.match(/^\s*(cm|mm|points?|pt)\b/);
+  if (unit) amount *= UNIT_TO_INCHES[unit[1]];
+  amount = Math.round(amount * 10000) / 10000;
+  return amount >= 0 && amount <= 5 ? amount : null;
+}
+
+/** "Double", "single", "1.5 lines", "1.15" -> a line-spacing multiple. */
+export function parseLineSpacing(value) {
+  const text = String(value ?? "").trim().toLowerCase().replace(/,/g, ".");
+  if (!text) return null;
+  if (/\bdouble\b/.test(text)) return 2;
+  if (/\bsingle\b/.test(text)) return 1;
+  if (/one[\s-]+and[\s-]+a[\s-]+half|1\s*½/.test(text)) return 1.5;
+  if (/\d\s*(?:pt|points?)\b/.test(text)) return null;
+  const match = text.match(/\d+(?:\.\d+)?/);
   if (!match) return null;
-  const number = Number(match[1]);
-  return Number.isNaN(number) ? null : number;
+  const number = Number(match[0]);
+  return number >= 0.8 && number <= 3 ? number : null;
+}
+
+const ALIGNMENT_LABELS = { justify: "Justified", left: "Left", center: "Center", right: "Right" };
+
+function alignmentKey(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return "";
+  if (/justif|\bfull\b/.test(text)) return "justify";
+  if (/cent(?:er|re)/.test(text)) return "center";
+  if (/\bright\b/.test(text)) return "right";
+  if (/\bleft\b/.test(text)) return "left";
+  return "";
 }
 
 export function rulesToForm(rules = {}, name = "") {
@@ -101,6 +185,7 @@ export function rulesToForm(rules = {}, name = "") {
     paperSubstance: String(paper.substance || rules.substance || ""),
     spacing,
     indention,
+    alignment: ALIGNMENT_LABELS[alignmentKey(rules.alignment)] || "",
     marginTop: margins.top != null ? String(margins.top) : "",
     marginLeft: margins.left != null ? String(margins.left) : "",
     marginBottom: margins.bottom != null ? String(margins.bottom) : "",
@@ -121,7 +206,11 @@ export function rulesToForm(rules = {}, name = "") {
     paginationFirstPageRule: String(
       pagination.first_page_of_chapter || rules.pagination_first_page_rule || ""
     ),
-    pageBreaks: asText(rules.page_break_requirements || rules.page_breaks),
+    pageBreaks: asText(rules.page_break_requirements || rules.page_breaks)
+      .split(/\n/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 12 && part.split(/\s+/).length >= 3)
+      .join("\n"),
     tableLayout: asText(rules.table_layout_requirements || rules.table_layout),
     figureLayout: asText(rules.figure_layout_requirements || rules.figure_layout),
     citationFormat: String(rules.citation_style || "APA").toUpperCase(),
@@ -166,20 +255,19 @@ export function formToRules(form) {
   const spacingText = String(form.spacing || "").trim();
   if (spacingText) {
     rules.spacing = spacingText;
-    const spacingNum = parseNumber(spacingText);
-    if (spacingNum != null && [1, 1.5, 2].includes(spacingNum)) {
-      rules.line_spacing = spacingNum;
-    }
+    const spacingNum = parseLineSpacing(spacingText);
+    if (spacingNum != null) rules.line_spacing = spacingNum;
   }
 
   const indentionText = String(form.indention || "").trim();
   if (indentionText) {
     rules.indention = indentionText;
-    const indentNum = parseNumber(indentionText);
-    if (indentNum != null && indentNum >= 0 && indentNum <= 2) {
-      rules.first_line_indent_inches = indentNum;
-    }
+    const indentNum = parseLengthInches(indentionText);
+    if (indentNum != null && indentNum <= 2) rules.first_line_indent_inches = indentNum;
   }
+
+  const alignment = alignmentKey(form.alignment);
+  if (alignment) rules.alignment = alignment;
 
   const margins = {};
   for (const [key, field] of [

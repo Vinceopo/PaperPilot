@@ -1,17 +1,21 @@
 /**
- * Universal Cloudinary uploader: simple POST for small files, chunked for large.
- * Uses unsigned upload preset (no API secret in the browser).
+ * Cloudinary upload_large for the browser.
+ * Small files use one POST. Larger files are sent in 20MB chunks, matching
+ * cloudinary.uploader.upload_large (X-Unique-Upload-Id + Content-Range).
+ * Uses an unsigned upload preset — the API secret never goes to the browser.
  */
+
+import { formatFileSize } from "./formatFileSize.js";
 
 const CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || "";
 const PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "uploaded_docs";
 
-/** Files at or below this size use a single request. */
-export const SIMPLE_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
-/** Chunk size for large uploads (Cloudinary recommends ≥5MB chunks). */
-export const CHUNK_SIZE_BYTES = 5 * 1024 * 1024;
-/** Soft client-side ceiling (Cloudinary free tier often allows ~100MB raw). */
-export const MAX_FILE_BYTES = 100 * 1024 * 1024;
+/** upload_large default chunk size (bytes). Non-final chunks must be at least 5MB. */
+export const CHUNK_SIZE_BYTES = 20_000_000;
+/** At or below this size, one request is enough. */
+export const SIMPLE_UPLOAD_MAX_BYTES = 5_000_000;
+/** Matches Cloudinary raw upload and the API document limit. */
+export const MAX_FILE_BYTES = 100_000_000;
 
 function uploadEndpoint(resourceType = "raw") {
   if (!CLOUD) {
@@ -44,11 +48,34 @@ function normalizeResult(json, originalFilename) {
   };
 }
 
+async function postChunk(endpoint, { file, chunk, start, uploadId, resourceName }) {
+  const end = start + chunk.size;
+  const body = new FormData();
+  body.append(
+    "file",
+    new File([chunk], resourceName, { type: file.type || "application/octet-stream" })
+  );
+  body.append("upload_preset", PRESET);
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "X-Unique-Upload-Id": uploadId,
+      "Content-Range": `bytes ${start}-${end - 1}/${file.size}`,
+    },
+    body,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json.error?.message || `Cloudinary upload failed (${res.status}).`);
+  }
+  return json;
+}
+
 async function uploadSimple(file, resourceType) {
   const body = new FormData();
-  body.append("file", file);
+  body.append("file", file, file.name);
   body.append("upload_preset", PRESET);
-  body.append("filename_override", file.name);
   const res = await fetch(uploadEndpoint(resourceType), { method: "POST", body });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -57,36 +84,32 @@ async function uploadSimple(file, resourceType) {
   return normalizeResult(json, file.name);
 }
 
-async function uploadChunked(file, resourceType) {
+/**
+ * Browser equivalent of cloudinary.uploader.upload_large.
+ * Each part except the last is CHUNK_SIZE_BYTES. The same X-Unique-Upload-Id
+ * ties the parts into one asset.
+ */
+async function uploadLarge(file, resourceType) {
   const endpoint = uploadEndpoint(resourceType);
   const uploadId = uniqueUploadId();
+  const resourceName = file.name || "document";
   let lastJson = null;
 
   for (let start = 0; start < file.size; start += CHUNK_SIZE_BYTES) {
-    const end = Math.min(start + CHUNK_SIZE_BYTES, file.size);
-    const chunk = file.slice(start, end);
-    const body = new FormData();
-    body.append("file", chunk);
-    body.append("upload_preset", PRESET);
-    body.append("filename_override", file.name);
-
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "X-Unique-Upload-Id": uploadId,
-        "Content-Range": `bytes ${start}-${end - 1}/${file.size}`,
-      },
-      body,
+    const chunk = file.slice(start, Math.min(start + CHUNK_SIZE_BYTES, file.size));
+    lastJson = await postChunk(endpoint, {
+      file,
+      chunk,
+      start,
+      uploadId,
+      resourceName,
     });
-    lastJson = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(
-        lastJson.error?.message || `Cloudinary chunked upload failed (${res.status}).`
-      );
-    }
   }
 
-  return normalizeResult(lastJson || {}, file.name);
+  if (lastJson?.done === false || !(lastJson?.secure_url || lastJson?.url)) {
+    throw new Error("Cloudinary did not finish the chunked upload. Try the file again.");
+  }
+  return normalizeResult(lastJson, resourceName);
 }
 
 /**
@@ -97,11 +120,11 @@ async function uploadChunked(file, resourceType) {
 export async function uploadToCloudinary(file, options = {}) {
   if (!file) throw new Error("No file to upload.");
   if (file.size > MAX_FILE_BYTES) {
-    throw new Error(`File must be ${Math.floor(MAX_FILE_BYTES / 1e6)} MB or smaller.`);
+    throw new Error(`File must be ${formatFileSize(MAX_FILE_BYTES)} or smaller.`);
   }
   const resourceType = options.resourceType || "raw";
   if (file.size <= SIMPLE_UPLOAD_MAX_BYTES) {
     return uploadSimple(file, resourceType);
   }
-  return uploadChunked(file, resourceType);
+  return uploadLarge(file, resourceType);
 }
