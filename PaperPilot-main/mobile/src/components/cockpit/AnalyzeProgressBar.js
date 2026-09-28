@@ -1,29 +1,39 @@
+import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
 
-const STAGE_LABELS = {
-  queued: "Queued",
-  parsing: "Parsing document",
-  checking: "Checking formatting",
-  scoring: "Scoring results",
-  done: "Complete",
-  failed: "Failed",
-};
-
 export default function AnalyzeProgressBar({ progress }) {
-  const percent = Math.min(100, Math.max(0, Number(progress?.percent ?? 0)));
-  const stage = String(progress?.stage || "checking").toLowerCase();
-  const message = progress?.message || STAGE_LABELS[stage] || "Analysing…";
+  const target = Math.min(100, Math.max(0, Number(progress?.percent) || 0));
+  const [shown, setShown] = useState(0);
+  const stage = String(progress?.stage || "queued");
+  const message = progress?.message || "";
+
+  useEffect(() => {
+    let frame = 0;
+    const tick = () => {
+      setShown((current) => {
+        if (current >= target - 0.15) return target;
+        return Math.min(target, current + Math.max(0.35, (target - current) * 0.14));
+      });
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [target]);
+
+  const width = `${Math.min(100, Math.max(0, shown))}%`;
 
   return (
     <View style={styles.wrap}>
       <Text style={styles.title}>Analysing…</Text>
-      <Text style={styles.message}>{message}</Text>
-      <View style={styles.track}>
-        <View style={[styles.fill, { width: `${percent}%` }]} />
+      <View style={styles.metaRow}>
+        <Text style={styles.stage}>{stage}</Text>
+        <Text style={styles.percent}>{Math.round(shown)}%</Text>
       </View>
-      <Text style={styles.percent}>{Math.round(percent)}%</Text>
-      <Text style={styles.hint}>Checking formatting against your mechanics profile.</Text>
+      <View style={styles.track}>
+        <View style={[styles.fill, { width }]} />
+      </View>
+      {message ? <Text style={styles.message}>{message}</Text> : null}
     </View>
   );
 }
@@ -37,21 +47,33 @@ const styles = StyleSheet.create({
     padding: 28,
   },
   title: { fontSize: 18, fontWeight: "700", color: colors.text },
-  message: { marginTop: 8, fontSize: 13, color: colors.slate, textAlign: "center" },
-  track: {
-    marginTop: 20,
+  metaRow: {
+    marginTop: 16,
     width: "100%",
     maxWidth: 320,
-    height: 10,
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  stage: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.slate,
+    textTransform: "capitalize",
+  },
+  track: {
+    marginTop: 8,
+    width: "100%",
+    maxWidth: 320,
+    height: 12,
     borderRadius: 999,
-    backgroundColor: "#e2e8f0",
+    backgroundColor: "#f1f5f9",
     overflow: "hidden",
   },
   fill: {
-    height: 10,
+    height: 12,
     borderRadius: 999,
     backgroundColor: colors.accent,
   },
-  percent: { marginTop: 8, fontSize: 12, fontWeight: "700", color: colors.accentText },
-  hint: { marginTop: 12, fontSize: 12, color: colors.muted, textAlign: "center" },
+  percent: { fontSize: 12, fontWeight: "600", color: colors.slate },
+  message: { marginTop: 8, fontSize: 12, color: colors.muted, textAlign: "center" },
 });

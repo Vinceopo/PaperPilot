@@ -529,38 +529,99 @@ def _parse_paper_size(value: str) -> dict:
     return out
 
 
-def _parse_spacing(value: str) -> float | None:
-    text = (value or "").strip().lower()
+UNICODE_FRACTIONS = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625}
+WORD_NUMBERS = {"half": 0.5, "one": 1.0, "two": 2.0, "three": 3.0}
+UNIT_TO_INCHES = {"cm": 1 / 2.54, "mm": 1 / 25.4, "pt": 1 / 72, "point": 1 / 72, "points": 1 / 72}
+# A measurement as written in a guide: "1.5", "1 ½", "1/2", "2.54 cm", "25mm", '1"'.
+MEASURE_PATTERN = r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)\s*(?:inches|inch|in|cm|mm|pt|″|\")?"
+
+
+def parse_length_inches(value) -> float | None:
+    """'1.5', '1 ½ inches', '1/2"', '2.54 cm', '25 mm', 'one inch', 'one tab' -> inches."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = float(value)
+        return number if 0 <= number <= 5 else None
+    text = str(value or "").strip().lower().replace(",", ".")
+    if not text:
+        return None
+    if re.search(r"\b(?:one\s+)?tab\b", text):
+        return 0.5
+    amount = None
+    unit_text = text
+    mixed = re.search(r"(\d+)\s+(\d+)\s*/\s*(\d+)", text)
+    fraction = re.search(r"(\d+)\s*/\s*(\d+)", text)
+    glyph = re.search(r"(\d+)?\s*([½¼¾⅓⅔⅛⅜⅝])", text)
+    decimal = re.search(r"\d+(?:\.\d+)?", text)
+    if mixed and int(mixed.group(3)):
+        amount = int(mixed.group(1)) + int(mixed.group(2)) / int(mixed.group(3))
+        unit_text = text[mixed.end():]
+    elif glyph:
+        amount = float(glyph.group(1) or 0) + UNICODE_FRACTIONS[glyph.group(2)]
+        unit_text = text[glyph.end():]
+    elif fraction and int(fraction.group(2)):
+        amount = int(fraction.group(1)) / int(fraction.group(2))
+        unit_text = text[fraction.end():]
+    elif decimal:
+        amount = float(decimal.group(0))
+        unit_text = text[decimal.end():]
+    else:
+        words = re.search(r"\b(half|one|two|three)(?:\s+and\s+a\s+half)?\b", text)
+        if words:
+            amount = WORD_NUMBERS[words.group(1)] + (0.5 if "and a half" in words.group(0) else 0.0)
+            unit_text = text[words.end():]
+    if amount is None:
+        return None
+    unit = re.match(r"\s*(cm|mm|points?|pt)\b", unit_text)
+    if unit:
+        amount *= UNIT_TO_INCHES[unit.group(1)]
+    amount = round(amount, 4)
+    return amount if 0 <= amount <= 5 else None
+
+
+def parse_line_spacing(value) -> float | None:
+    """'Double', 'single', '1.5 lines', 'one and a half', '1.15' -> a line-spacing multiple."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = float(value)
+        return number if 0.8 <= number <= 3.0 else None
+    text = str(value or "").strip().lower().replace(",", ".")
     if not text:
         return None
     if re.search(r"\bdouble\b", text):
         return 2.0
     if re.search(r"\bsingle\b", text):
         return 1.0
-    if re.search(r"one[\s-]+and[\s-]+a[\s-]+half|1\.5", text):
+    if re.search(r"one[\s-]+and[\s-]+a[\s-]+half|1\s*½", text):
         return 1.5
-    number = re.search(r"(\d+(?:\.\d+)?)", text)
+    if re.search(r"\d\s*(?:pt|points?)\b", text):
+        return None
+    number = re.search(r"\d+(?:\.\d+)?", text)
     if not number:
         return None
-    spacing = float(number.group(1))
-    return spacing if spacing in {1.0, 1.5, 2.0} else spacing if 0.5 <= spacing <= 3 else None
+    spacing = float(number.group(0))
+    return spacing if 0.8 <= spacing <= 3.0 else None
+
+
+def parse_alignment(value) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if re.search(r"justif|\bfull\b|\bboth\b", text):
+        return "justify"
+    if re.search(r"cent(?:er|re)", text):
+        return "center"
+    if re.search(r"\bright\b", text):
+        return "right"
+    if re.search(r"\bleft\b", text):
+        return "left"
+    return None
+
+
+def _parse_spacing(value: str) -> float | None:
+    return parse_line_spacing(value)
 
 
 def _parse_inches(value: str) -> float | None:
-    text = (value or "").strip().lower()
-    if not text:
-        return None
-    if re.search(r"\bone\s+inch\b", text):
-        return 1.0
-    if re.search(r"\bhalf\s*(?:an?\s*)?inch\b|½", text):
-        return 0.5
-    if re.search(r"\bone\s+tab\b|\btab\b", text):
-        return 0.5
-    number = re.search(r"(\d+(?:\.\d+)?)", text)
-    if not number:
-        return None
-    amount = float(number.group(1))
-    return amount if 0 <= amount <= 5 else None
+    return parse_length_inches(value)
 
 
 def derive_mechanics_rules(text: str) -> dict:
@@ -578,7 +639,7 @@ def derive_mechanics_rules(text: str) -> dict:
         "Size", "Orientation", "Substance", "Spacing", "Indention", "Indentation",
         "Margins", "Margin", "Font", "Type", "Color", "Pagination", "Citation",
         "Heading", "Table", "Figure", "Page", "Top", "Bottom", "Left", "Right",
-        "Gutter", "Header", "Footer", "Paper", "a.", "b.", "c.", "d.", "e.",
+        "Gutter", "Header", "Footer", "Paper", "Alignment", "Justification", "a.", "b.", "c.", "d.", "e.",
         "i.", "ii.", "iii.", "iv.", "v.", "vi.",
     )
 
@@ -652,12 +713,12 @@ def derive_mechanics_rules(text: str) -> dict:
     if indent_val is None:
         indent_match = re.search(
             r"\b(?:first(?:[\s-]line)?|paragraph)\s+indent(?:ation|ion)?\s*"
-            r"(?:of|:|=|should be|must be)?\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?",
+            rf"(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
             flat,
             re.I,
         )
         if indent_match:
-            indent_val = float(indent_match.group(1))
+            indent_val = parse_length_inches(indent_match.group(1))
         elif re.search(r"\bone\s+tab\b|\bindent(?:ation|ion)?\s*(?:of|:)?\s*one\s+tab\b", flat, re.I):
             indent_val = 0.5
     if indent_val is not None:
@@ -674,27 +735,45 @@ def derive_mechanics_rules(text: str) -> dict:
         amount = _parse_inches(side_raw) if side_raw else None
         if amount is None:
             match = re.search(
-                rf"\b{side}\s+margin\s*(?:of|:|=|should be|must be)?\s*"
-                r"(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?",
+                rf"\b{side}\s+margin\s*(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
                 flat,
                 re.I,
             )
             if match:
-                amount = float(match.group(1))
+                amount = parse_length_inches(match.group(1))
         if amount is not None:
             margins[side] = amount
     if not margins:
         uniform = re.search(
-            r"\b(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")\s+(?:on\s+all\s+sides\s+)?margins?\b"
-            r"|\bmargins?\s*(?:of|:|=)?\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")\s*(?:on\s+all\s+sides)?",
+            rf"\b({MEASURE_PATTERN})\s+(?:on\s+all\s+sides\s+)?margins?\b"
+            rf"|\bmargins?\s*(?:of|:|=)?\s*({MEASURE_PATTERN})\s*(?:on\s+all\s+sides)?",
             flat,
             re.I,
         )
-        if uniform:
-            amount = float(next(group for group in uniform.groups() if group))
+        amount = parse_length_inches(next((group for group in uniform.groups() if group), "")) if uniform else None
+        if amount:
             margins = {side: amount for side in ("top", "bottom", "left", "right")}
     if margins:
         rules["margins_inches"] = margins
+
+    alignment = parse_alignment(
+        _value_after_label(
+            flat, ("Text alignment", "Paragraph alignment", "Alignment", "Justification", "Align"), stop
+        )
+    )
+    if alignment is None:
+        phrase = re.search(
+            r"\b(?:fully\s+|full[\s-])?justified\b|\bflush[\s-]left\b|\bleft[\s-](?:aligned|justified)\b"
+            r"|\bragged[\s-]right\b",
+            flat,
+            re.I,
+        )
+        if phrase:
+            alignment = "justify" if re.search(r"justified", phrase.group(0), re.I) and not re.search(
+                r"left", phrase.group(0), re.I
+            ) else "left"
+    if alignment:
+        rules["alignment"] = alignment
 
     known_fonts = (
         "Times New Roman", "Arial", "Calibri", "Cambria", "Georgia",
@@ -938,52 +1017,35 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     if paper_size_out:
         rules["paper_size"] = paper_size_out
 
-    spacing_raw = raw.get("line_spacing", raw.get("spacing"))
-    try:
-        spacing = float(spacing_raw)
-        if spacing in {1.0, 1.5, 2.0}:
-            rules["line_spacing"] = spacing
-            rules["spacing"] = str(spacing)
-    except (TypeError, ValueError):
-        spacing_text = str(raw.get("spacing") or "").strip()
-        if spacing_text:
-            rules["spacing"] = spacing_text[:80]
-            match = re.search(r"(\d+(?:\.\d+)?)", spacing_text)
-            if match:
-                try:
-                    spacing = float(match.group(1))
-                    if spacing in {1.0, 1.5, 2.0}:
-                        rules["line_spacing"] = spacing
-                except ValueError:
-                    pass
+    # The text the user typed ("Double", "1/2 inch", "1.27 cm") is the source of truth over a pre-parsed number.
+    spacing_text = str(raw.get("spacing") or "").strip()
+    spacing = parse_line_spacing(spacing_text) if spacing_text else None
+    if spacing is None:
+        spacing = parse_line_spacing(raw.get("line_spacing"))
+    if spacing_text:
+        rules["spacing"] = spacing_text[:80]
+    if spacing is not None:
+        rules["line_spacing"] = spacing
+        rules.setdefault("spacing", f"{spacing:g}")
 
     indention = str(raw.get("indention") or "").strip()
     if indention:
         rules["indention"] = indention[:120]
-    try:
-        indent = float(raw.get("first_line_indent_inches"))
-        if 0 <= indent <= 2:
-            rules["first_line_indent_inches"] = indent
-    except (TypeError, ValueError):
-        if indention:
-            match = re.search(r"(\d+(?:\.\d+)?)", indention)
-            if match:
-                try:
-                    indent = float(match.group(1))
-                    if 0 <= indent <= 2:
-                        rules["first_line_indent_inches"] = indent
-                except ValueError:
-                    pass
+    indent = parse_length_inches(indention) if indention else None
+    if indent is None:
+        indent = parse_length_inches(raw.get("first_line_indent_inches"))
+    if indent is not None and indent <= 2:
+        rules["first_line_indent_inches"] = indent
+
+    alignment = parse_alignment(raw.get("alignment") or raw.get("text_alignment"))
+    if alignment:
+        rules["alignment"] = alignment
 
     margins_in = raw.get("margins_inches") if isinstance(raw.get("margins_inches"), dict) else {}
     margins: dict[str, float] = {}
     for side in ("top", "bottom", "left", "right", "gutter", "header", "footer"):
-        value = margins_in.get(side, raw.get(f"margin_{side}"))
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            continue
-        if 0 <= number <= 5:
+        number = parse_length_inches(margins_in.get(side, raw.get(f"margin_{side}")))
+        if number is not None:
             margins[side] = number
     if margins:
         rules["margins_inches"] = margins

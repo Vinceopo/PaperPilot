@@ -8,3 +8,4 @@
 **/.env
 !**/.env.example
 creds.json
+*firebase-adminsdk*.json

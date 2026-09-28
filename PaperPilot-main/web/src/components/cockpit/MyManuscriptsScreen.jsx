@@ -9,6 +9,7 @@ import {
   Upload,
 } from "lucide-react";
 import { manuscriptSummary } from "../../lib/scoreBand.js";
+import { removeManuscriptVersion } from "../../lib/scannedLibrary.js";
 import ManuscriptDetailModal from "./ManuscriptDetailModal.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 
@@ -53,6 +54,8 @@ export default function MyManuscriptsScreen({
   tier = "free",
   onUpgrade,
   onUploadNew,
+  onPermanentDelete,
+  onOpenSavedResult,
 }) {
   const items = Array.isArray(itemsProp) ? itemsProp : [];
   const [query, setQuery] = useState("");
@@ -62,6 +65,7 @@ export default function MyManuscriptsScreen({
   const [viewId, setViewId] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   function setItems(updater) {
     const next = typeof updater === "function" ? updater(items) : updater;
@@ -94,13 +98,21 @@ export default function MyManuscriptsScreen({
   const viewing = items.find((m) => m.id === viewId) || null;
   const pendingDelete = items.find((m) => m.id === deleteId) || null;
 
-  function confirmDelete() {
-    if (!deleteId) return;
+  function deleteVersion(manuscriptId, versionId) {
+    setItems((prev) => removeManuscriptVersion(prev, manuscriptId, versionId));
+  }
+
+  async function confirmDelete() {
+    if (!deleteId || !pendingDelete) return;
     setDeleteBusy(true);
+    setDeleteError("");
     try {
-      setItems((prev) => prev.filter((m) => m.id !== deleteId));
+      if (onPermanentDelete) await onPermanentDelete(pendingDelete);
+      else setItems((prev) => prev.filter((m) => m.id !== deleteId));
       if (viewId === deleteId) setViewId(null);
       setDeleteId(null);
+    } catch (err) {
+      setDeleteError(err?.message || "Could not delete this manuscript.");
     } finally {
       setDeleteBusy(false);
     }
@@ -259,7 +271,10 @@ export default function MyManuscriptsScreen({
                         </button>
                         <button
                           type="button"
-                          onClick={() => setDeleteId(row.id)}
+                          onClick={() => {
+                            setDeleteError("");
+                            setDeleteId(row.id);
+                          }}
                           className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-rose-50 hover:text-rose-600"
                           aria-label={`Delete ${row.title}`}
                           title="Delete"
@@ -339,6 +354,8 @@ export default function MyManuscriptsScreen({
           manuscript={viewing}
           tier={tier}
           onUpgrade={onUpgrade}
+          onDeleteVersion={deleteVersion}
+          onOpenResult={(version) => onOpenSavedResult?.(viewing, version)}
           onClose={() => setViewId(null)}
         />
       )}
@@ -347,12 +364,16 @@ export default function MyManuscriptsScreen({
         <ConfirmDialog
           open
           title="Delete manuscript?"
-          message={`“${pendingDelete.title}” and all of its versions will be removed from this list. This cannot be undone.`}
+          message={
+            deleteError ||
+            `“${pendingDelete.title}” and all of its versions will be removed permanently. Uploading this title again starts at version 1.`
+          }
           confirmLabel="Delete"
           tone="danger"
           busy={deleteBusy}
           onCancel={() => {
             if (deleteBusy) return;
+            setDeleteError("");
             setDeleteId(null);
           }}
           onConfirm={confirmDelete}

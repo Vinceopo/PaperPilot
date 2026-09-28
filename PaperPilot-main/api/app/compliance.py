@@ -162,6 +162,14 @@ def _location(page: int | None, line: int | None, category: str) -> dict:
     }
 
 
+def _unit_location(unit: dict, category: str) -> dict:
+    loc = _location(unit.get("page_index"), unit.get("line_index"), category)
+    excerpt = " ".join(str(unit.get("text") or "").split())[:100]
+    if excerpt:
+        loc["excerpt"] = excerpt
+    return loc
+
+
 def _paper_inches(parsed: dict, rules: dict) -> tuple[float, float]:
     rule = rules.get("paper_size") or {}
     if rule.get("width_inches") and rule.get("height_inches"):
@@ -196,6 +204,60 @@ def _lines_per_page(parsed: dict, rules: dict) -> int:
     usable = max(1.0, height - top - bottom)
     line_height = max(0.12, (font_pt * spacing) / PT_PER_INCH)
     return max(20, int(usable / line_height))
+
+
+def _docx_body_pt(parsed: dict, rules: dict) -> float:
+    """Most-used run font size in the body, weighted by text length."""
+    weights: dict[float, int] = defaultdict(int)
+    for paragraph in parsed.get("paragraphs") or []:
+        if (paragraph.get("source") or "body") in CHROME_SOURCES:
+            continue
+        for run in paragraph.get("runs") or []:
+            size = run.get("size")
+            text = str(run.get("text") or "").strip()
+            if size and text:
+                weights[round(float(size) * 2) / 2] += len(text)
+    if weights:
+        return max(weights.items(), key=lambda item: item[1])[0]
+    font = rules.get("font") or {}
+    sizes = font.get("sizes_points") or []
+    return float(font.get("heading3_content_size") or (min(sizes) if sizes else 12.0))
+
+
+def _docx_page_capacity(parsed: dict, rules: dict) -> tuple[int, int]:
+    """(estimated lines per page, most lines a real page can physically hold)."""
+    _width, height = _paper_inches(parsed, rules)
+    margins = rules.get("margins_inches") or {}
+    sections = parsed.get("sections") or [{}]
+    section = sections[0] if sections else {}
+    top = float(section.get("top_margin_inches") or margins.get("top") or 1.0)
+    bottom = float(section.get("bottom_margin_inches") or margins.get("bottom") or 1.0)
+    usable_pt = max(72.0, (height - top - bottom) * PT_PER_INCH)
+    ceiling = max(20, int(usable_pt / (max(8.0, _docx_body_pt(parsed, rules)) * 1.15)))
+    return min(_lines_per_page(parsed, rules), ceiling), ceiling
+
+
+def _rebalance_docx_pages(units: list[dict], estimate: int, ceiling: int) -> None:
+    """Split pages that ran past what one page can hold (missing Word page breaks)."""
+    if not units:
+        return
+    groups: list[list[dict]] = []
+    for unit in units:
+        if groups and groups[-1][0]["page_index"] == unit["page_index"]:
+            groups[-1].append(unit)
+        else:
+            groups.append([unit])
+    normal = sorted(len(group) for group in groups[:-1] if len(group) <= ceiling)
+    typical = normal[len(normal) // 2] if normal else estimate
+    fill = max(1, min(ceiling, max(estimate, typical)))
+    shift = 0
+    for group in groups:
+        base = group[0]["page_index"] + shift
+        size = fill if len(group) > ceiling else len(group)
+        for offset, unit in enumerate(group):
+            unit["page_index"] = base + offset // size
+            unit["line_index"] = offset % size
+        shift += (len(group) - 1) // size
 
 
 def _visual_chars_per_line(parsed: dict, rules: dict, source: str = "body") -> int:
@@ -407,7 +469,8 @@ def _document_units(parsed: dict, rules: dict) -> list[dict]:
         for run in (paragraph.get("runs") or [])
     )
     use_rendered = rendered_breaks > 0
-    per_page = 10_000 if use_rendered else _lines_per_page(parsed, rules)
+    estimate, ceiling = _docx_page_capacity(parsed, rules)
+    per_page = 10_000 if use_rendered else estimate
     page_index = 0
     line_on_page = 0
     units: list[dict] = []
@@ -477,6 +540,7 @@ def _document_units(parsed: dict, rules: dict) -> list[dict]:
                 line_on_page += 1
         emit_blank(paragraph, after_blanks)
 
+    _rebalance_docx_pages(units, estimate, ceiling)
     extra_line = 1 + max(
         (unit["line_index"] for unit in units if unit["page_index"] == 0),
         default=-1,
@@ -522,7 +586,7 @@ def _pagination_meta(parsed: dict, rules: dict) -> dict:
         "fidelity": "estimated",
         "note": (
             "Line numbers count every typeable visual line (Enter, wraps, spacing gaps), "
-            f"restarting at 1 each page. Pages estimated (~{_lines_per_page(parsed, rules)} lines/page). "
+            f"restarting at 1 each page. Pages estimated (~{_docx_page_capacity(parsed, rules)[0]} lines/page). "
             "Font size is measured only from the text on that line. "
             "Upload a PDF, or open/save the DOCX in Word, for exact page breaks."
         ),
@@ -705,7 +769,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         if shown_font is None:
             family_ok = True
         stats.observe(family_ok and size_ok)
-        loc = _location(unit["page_index"], unit["line_index"], "Fonts")
+        loc = _unit_location(unit, "Fonts")
         if not family_ok:
             collector.add(
                 "font_family",
@@ -986,7 +1050,7 @@ def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collect
                 "Line spacing does not match the mechanics.",
                 f"This line uses {float(actual):g} line spacing; the mechanics specifies {expected:g}.",
                 "Set the paragraph line spacing to the mechanics-specified value.",
-                _location(unit["page_index"], unit["line_index"], "Spacing"),
+                _unit_location(unit, "Spacing"),
             )
 
 
@@ -1045,7 +1109,7 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
                 "Paragraph indentation does not match the mechanics.",
                 f"This paragraph starts at a {actual:g}-inch first-line indent; expected {expected:g} inches.",
                 "Set the first-line indent to the mechanics-specified measurement.",
-                _location(unit["page_index"], unit["line_index"], "Indentation"),
+                _unit_location(unit, "Indentation"),
             )
 
 
@@ -1070,7 +1134,7 @@ def _check_alignment(units: list[dict], rules: dict, stats: CategoryStats, colle
                 "Paragraph alignment does not match the uploaded format mechanics.",
                 f"This line appears {actual}; body text should be {' or '.join(sorted(allowed))}.",
                 "Set body paragraphs to the mechanics-specified alignment.",
-                _location(unit["page_index"], unit["line_index"], "Alignment"),
+                _unit_location(unit, "Alignment"),
             )
 
 
@@ -1170,7 +1234,7 @@ def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -
     want_figure_prefix = "figure" in figure_rules
     for index, unit in enumerate(units):
         text = (unit.get("text") or "").strip()
-        loc = _location(unit["page_index"], unit["line_index"], "Alignment")
+        loc = _unit_location(unit, "Alignment")
         if table_rules and TABLE_CAPTION_RE.match(text):
             title = re.sub(r"^\s*table\s+\d+\s*[:.\-–]?\s*", "", text, flags=re.I).strip()
             if want_table_caps and title and title != title.upper():
@@ -1231,7 +1295,7 @@ def _check_citations(units: list[dict], text: str, rules: dict, collector: Issue
                     f"In-text markers do not follow the uploaded {style} format.",
                     "This check compares citation marker syntax only; it does not validate sources or citation content.",
                     f"Reformat in-text citations using {style} conventions.",
-                    _location(unit["page_index"], unit["line_index"], "Citations"),
+                    _unit_location(unit, "Citations"),
                 )
                 located = True
         if not located:
@@ -1275,7 +1339,7 @@ def _check_citations(units: list[dict], text: str, rules: dict, collector: Issue
                 f"A citation appears to follow {predicted_style} instead of the uploaded {style} format.",
                 f"The citation classifier predicted {predicted_style} with {predicted['style_confidence']:.0%} confidence.",
                 f"Rewrite this citation using {style} format from the uploaded mechanics.",
-                _location(unit["page_index"], unit["line_index"], "Citations"),
+                _unit_location(unit, "Citations"),
             )
 
 

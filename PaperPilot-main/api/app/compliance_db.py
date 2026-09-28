@@ -208,6 +208,52 @@ def delete_mechanics(owner_uid: str, mechanics_id: str) -> bool:
     return True
 
 
+def _title_key(title: str) -> str:
+    """Same matching rules as the web library, so a deleted title can be reused."""
+    text = str(title or "").strip().lower()
+    text = re.sub(r"\.(pdf|docx)$", "", text)
+    text = re.sub(r"[\s_–—−-]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _delete_manuscript_tree(owner_uid: str, manuscript_id: str) -> bool:
+    ref = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}")
+    row = ref.get()
+    if not isinstance(row, dict):
+        return False
+    _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").delete()
+    scans = _reference(f"{ROOT}/compliance_scans/{owner_uid}").get() or {}
+    if isinstance(scans, dict):
+        for scan_id, scan in list(scans.items()):
+            if not isinstance(scan, dict) or scan.get("manuscript_id") != manuscript_id:
+                continue
+            _reference(f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}").delete()
+            _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").delete()
+    ref.delete()
+    return True
+
+
+def delete_manuscript(owner_uid: str, manuscript_id: str | None = None, title: str | None = None) -> int:
+    """Remove a manuscript, every version, and its scans. Match id and the same title."""
+    rows = _reference(f"{ROOT}/manuscripts/{owner_uid}").get() or {}
+    if not isinstance(rows, dict):
+        rows = {}
+    title_key = _title_key(title or "")
+    target_ids: set[str] = set()
+    if manuscript_id and isinstance(rows.get(manuscript_id), dict):
+        target_ids.add(manuscript_id)
+        title_key = title_key or _title_key(rows[manuscript_id].get("title") or "")
+    if title_key:
+        for mid, row in rows.items():
+            if isinstance(row, dict) and _title_key(row.get("title") or "") == title_key:
+                target_ids.add(str(mid))
+    deleted = 0
+    for mid in target_ids:
+        if _delete_manuscript_tree(owner_uid, mid):
+            deleted += 1
+    return deleted
+
+
 def get_mechanics(owner_uid: str, mechanics_id: str, conn=None) -> dict | None:
     del conn  # SQLite compat shim
     row = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}").get()
@@ -255,7 +301,13 @@ def create_version(
     if not isinstance(manuscript, dict):
         raise LookupError("Manuscript not found.")
 
-    next_number = int(manuscript.get("version_counter") or 0) + 1
+    stored_versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get() or {}
+    existing_numbers = [
+        int(row.get("version_number") or 0)
+        for row in (stored_versions.values() if isinstance(stored_versions, dict) else [])
+        if isinstance(row, dict)
+    ]
+    next_number = (max(existing_numbers) if existing_numbers else 0) + 1
     version = {
         "id": version_id,
         "manuscript_id": manuscript_id,
@@ -316,6 +368,7 @@ def _version_row(row: dict, include_content: bool = True) -> dict:
         "source_filename": row["source_filename"],
         "file_type": row["file_type"],
         "created_at": row["created_at"],
+        "cloudinary_url": row.get("cloudinary_url") or "",
     }
     if include_content:
         value["text"] = row.get("extracted_text") or ""
@@ -426,25 +479,129 @@ def _history_list(row: dict) -> list[dict]:
     return []
 
 
+FREE_SCAN_LIMIT = 3
+PREMIUM_SCAN_LIMIT = 50
+
+
+def _plan_limit(tier: str) -> int:
+    """Free is 3 scans and Premium is 50. Env overrides cannot raise those caps."""
+    if str(tier or "").lower() == "premium":
+        configured = int(settings.premium_scan_limit or PREMIUM_SCAN_LIMIT)
+        if configured < 1 or configured > PREMIUM_SCAN_LIMIT:
+            return PREMIUM_SCAN_LIMIT
+        return configured
+    return FREE_SCAN_LIMIT
+
+
+def _parse_iso(value) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _paid_window_open(renews_at) -> bool:
+    end = _parse_iso(renews_at)
+    return bool(end and end >= _now())
+
+
+def _coverage_end(row: dict) -> datetime | None:
+    """Paid-through date. A blank renews_at falls back to the last payment in history."""
+    direct = _parse_iso(row.get("renews_at"))
+    if direct:
+        return direct
+    best = None
+    for entry in _history_list(row):
+        if str(entry.get("action") or "") not in ("subscribed", "renewed"):
+            continue
+        start = _parse_iso(entry.get("at"))
+        if not start:
+            continue
+        days = 365 if entry.get("billing_period") == "annual" else 30
+        end = start + timedelta(days=days)
+        if best is None or end > best:
+            best = end
+    return best
+
+
+def _drop_paid_access(owner_uid: str, *, status: str, end_premium: bool = False) -> dict:
+    """Leave Premium and start a fresh Free allowance of 3 scans."""
+    now = _now()
+    now_text = _iso(now)
+    start, end = _month_bounds(now)
+    patch = {
+        "tier": "free",
+        "status": status,
+        "scans_used": 0,
+        "renews_at": "",
+        "period_start": start,
+        "period_end": end,
+        "pending_checkout_session_id": None,
+        "premium_ended": True if end_premium else False,
+        "updated_at": now_text,
+    }
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(patch)
+    return patch
+
+
 def subscription_snapshot(owner_uid: str) -> dict:
     row = _subscription_row(owner_uid)
-    tier = str(row.get("tier") or "free").lower()
-    # Expire premium when renews_at is in the past (one-time PayMongo checkout model).
+    stored = str(row.get("tier") or "free").lower()
+    status = str(row.get("status") or "").lower()
     renews_at = row.get("renews_at")
-    if tier == "premium" and renews_at and str(renews_at) < _iso(_now()):
-        tier = "free"
-        row = {
-            **row,
-            "tier": "free",
-            "status": "expired",
-            "updated_at": _iso(_now()),
-        }
-        _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
-            {"tier": "free", "status": "expired", "updated_at": row["updated_at"]}
-        )
-    limit = settings.premium_scan_limit if tier == "premium" else settings.free_scan_limit
     used = int(row.get("scans_used") or 0)
-    remaining = limit if settings.disable_scan_limit else max(limit - used, 0)
+    coverage_end = None if row.get("premium_ended") else _coverage_end(row)
+    window_open = bool(coverage_end and coverage_end >= _now())
+    premium_left = PREMIUM_SCAN_LIMIT - used
+    # Uploading mechanics or refreshing the dashboard must not change the plan.
+    # Premium stays on until the paid date, unless the user explicitly cancels.
+    if window_open and stored != "premium":
+        now_text = _iso(_now())
+        restored = {
+            "tier": "premium",
+            "status": "active",
+            "renews_at": _iso(coverage_end),
+            "premium_ended": False,
+            "updated_at": now_text,
+        }
+        _reference(f"{ROOT}/subscriptions/{owner_uid}").update(restored)
+        row = {**row, **restored}
+        stored = "premium"
+        status = "active"
+        renews_at = restored["renews_at"]
+    entitled = window_open and stored == "premium" and premium_left > 0
+    if entitled:
+        tier = "premium"
+        if stored != "premium":
+            now_text = _iso(_now())
+            _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
+                {"tier": "premium", "updated_at": now_text}
+            )
+            row = {**row, "tier": "premium"}
+    elif stored == "premium" and not window_open:
+        dropped = _drop_paid_access(owner_uid, status="expired", end_premium=True)
+        row = {**row, **dropped}
+        tier = "free"
+        used = 0
+    elif stored == "premium" and window_open:
+        tier = "premium"
+    elif stored != "premium" and used > FREE_SCAN_LIMIT and not window_open:
+        dropped = _drop_paid_access(owner_uid, status="free", end_premium=True)
+        row = {**row, **dropped}
+        tier = "free"
+        used = 0
+    else:
+        tier = "free" if stored != "premium" else "premium"
+    limit = _plan_limit(tier)
+    remaining = max(limit - used, 0)
     history = sorted(
         _history_list(row),
         key=lambda h: str(h.get("at") or ""),
@@ -456,6 +613,7 @@ def subscription_snapshot(owner_uid: str) -> dict:
         "billing_period": row.get("billing_period") or None,
         "payment_method": row.get("payment_method") or None,
         "renews_at": row.get("renews_at") or None,
+        "last_checkout_session_id": row.get("last_checkout_session_id") or None,
         "limit": limit,
         "used": used,
         "remaining": remaining,
@@ -544,6 +702,7 @@ def activate_premium_from_payment(
         "period_start": start,
         "period_end": end,
         "scans_used": 0,
+        "premium_ended": False,
         "last_checkout_session_id": checkout_session_id,
         "last_payment_id": payment_id,
         "last_reference_number": reference_number,
@@ -586,20 +745,11 @@ def activate_premium_from_payment(
 
 
 def cancel_user_subscription(owner_uid: str, *, immediate: bool = True) -> dict:
-    now_text = _iso(_now())
+    """End Premium now and start a fresh Free allowance of 3 scans."""
+    _ = immediate
     row = _subscription_row(owner_uid)
-    if immediate:
-        patch = {
-            "tier": "free",
-            "status": "canceled",
-            "updated_at": now_text,
-        }
-    else:
-        patch = {
-            "status": "canceled",
-            "updated_at": now_text,
-        }
-    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(patch)
+    now_text = _iso(_now())
+    _drop_paid_access(owner_uid, status="canceled", end_premium=True)
     _append_history(
         owner_uid,
         {
@@ -846,7 +996,7 @@ def check_scan_eligibility(owner_uid: str, manuscript_id: str, version_id: str) 
         raise LookupError("Manuscript not found.")
     if sub["tier"] != "premium" and not current:
         raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"])
-    if not settings.disable_scan_limit and sub["used"] >= sub["limit"]:
+    if sub["used"] >= sub["limit"]:
         raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"])
     return sub
 
@@ -857,18 +1007,19 @@ def _assert_scan_inputs(
     version_id: str,
     mechanics_id: str,
 ) -> tuple[dict, dict, dict, dict]:
+    snap = subscription_snapshot(owner_uid)
     sub = _subscription_row(owner_uid)
-    limit = settings.premium_scan_limit if sub.get("tier") == "premium" else settings.free_scan_limit
+    limit = snap["limit"]
     manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
     version = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
     mechanics = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}").get()
     if not isinstance(manuscript, dict) or not isinstance(version, dict) or not isinstance(mechanics, dict):
         raise LookupError("Requested scan input was not found.")
 
-    old_version = sub.get("tier") != "premium" and manuscript.get("current_version_id") != version_id
-    limit_hit = (not settings.disable_scan_limit) and int(sub.get("scans_used") or 0) >= limit
+    old_version = snap["tier"] != "premium" and manuscript.get("current_version_id") != version_id
+    limit_hit = int(snap["used"] or 0) >= limit
     if old_version or limit_hit:
-        raise UpgradeRequired(sub.get("tier") or "free", limit, int(sub.get("scans_used") or 0))
+        raise UpgradeRequired(snap["tier"] or "free", limit, int(snap["used"] or 0))
     return sub, manuscript, version, mechanics
 
 
@@ -892,13 +1043,12 @@ def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) ->
 
 
 def _increment_scan_usage(owner_uid: str, sub: dict, created: str) -> None:
-    if not settings.disable_scan_limit:
-        _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
-            {
-                "scans_used": int(sub.get("scans_used") or 0) + 1,
-                "updated_at": created,
-            }
-        )
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
+        {
+            "scans_used": int(sub.get("scans_used") or 0) + 1,
+            "updated_at": created,
+        }
+    )
 
 
 def create_pending_scan(

@@ -1,4 +1,4 @@
-import { Linking, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { useState } from "react";
 import { useAppData } from "../context/AppDataContext";
 import { createSubscriptionCheckout } from "../api";
@@ -6,12 +6,27 @@ import { colors } from "../theme";
 import PrimaryButton from "../components/ui/PrimaryButton";
 import UpgradePrompt from "../components/ui/UpgradePrompt";
 
+const PREMIUM_MONTHLY = 949;
+const PREMIUM_ANNUAL = 9490;
+
+function peso(amount) {
+  return `₱${Number(amount).toLocaleString("en-PH", { minimumFractionDigits: 0 })}`;
+}
+
 export default function SubscriptionScreen() {
   const { tier, remaining, limit, used, upgradeMessage, setUpgradeMessage, refreshSubscription } =
     useAppData();
   const isPremium = tier === "premium";
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [billingPeriod, setBillingPeriod] = useState("monthly");
+  const subscribeCta = isPremium
+    ? billingPeriod === "annual"
+      ? `Renew with PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
+      : `Renew with PayMongo — ${peso(PREMIUM_MONTHLY)}/month`
+    : billingPeriod === "annual"
+      ? `Pay with PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
+      : `Pay with PayMongo — ${peso(PREMIUM_MONTHLY)}/month`;
 
   async function startPayMongoCheckout(billingPeriod = "monthly") {
     setBusy(true);
@@ -67,26 +82,34 @@ export default function SubscriptionScreen() {
         </Text>
       </View>
 
-      {!isPremium ? (
-        <>
-          <PrimaryButton
-            title={busy ? "Opening PayMongo…" : "Pay with PayMongo — ₱949/mo"}
-            onPress={() => startPayMongoCheckout("monthly")}
-            disabled={busy}
-            style={{ marginTop: 16 }}
-          />
-          <PrimaryButton
-            title={busy ? "Opening PayMongo…" : "Pay with PayMongo — ₱9,490/yr"}
-            onPress={() => startPayMongoCheckout("annual")}
-            disabled={busy}
-            style={{ marginTop: 10 }}
-          />
-        </>
-      ) : (
+      {isPremium ? (
         <View style={styles.activeBox}>
           <Text style={styles.activeText}>Your Premium plan is active.</Text>
         </View>
-      )}
+      ) : null}
+
+      <View style={styles.periodRow}>
+        {[
+          { id: "monthly", label: "Monthly" },
+          { id: "annual", label: "Annual" },
+        ].map((opt) => (
+          <Pressable
+            key={opt.id}
+            onPress={() => setBillingPeriod(opt.id)}
+            style={[styles.periodBtn, billingPeriod === opt.id && styles.periodBtnActive]}
+          >
+            <Text style={[styles.periodText, billingPeriod === opt.id && styles.periodTextActive]}>
+              {opt.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      <PrimaryButton
+        title={busy ? "Opening PayMongo…" : subscribeCta}
+        onPress={() => startPayMongoCheckout(billingPeriod)}
+        disabled={busy}
+        style={{ marginTop: 12 }}
+      />
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -159,5 +182,19 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   activeText: { fontSize: 13, fontWeight: "600", color: colors.emerald },
+  periodRow: {
+    marginTop: 16,
+    flexDirection: "row",
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    borderRadius: 999,
+    padding: 4,
+  },
+  periodBtn: { borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 },
+  periodBtnActive: { backgroundColor: colors.accent },
+  periodText: { fontSize: 12, fontWeight: "700", color: colors.slate },
+  periodTextActive: { color: colors.white },
   error: { marginTop: 12, fontSize: 13, color: "#e11d48" },
 });

@@ -84,6 +84,7 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
         page,
         line: line != null && !Number.isNaN(line) ? line : null,
         section: loc?.section || check.section || "General",
+        location: loc && typeof loc === "object" ? loc : null,
         severity,
         finding:
           check.finding ||
@@ -439,8 +440,18 @@ export default function IssuesDetectedPanel({
                                   </span>
                                 </div>
                                 <p className="mt-1 text-sm font-semibold text-slate-800">{entry.finding}</p>
-                                <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
-                                  XAI explanation
+                                <p className="mt-2">
+                                  <span
+                                    className="inline-flex h-5 w-5 items-center justify-center text-slate-400"
+                                    role="img"
+                                    aria-label="XAI explanation"
+                                    title="XAI explanation"
+                                  >
+                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.5 13.6 8.4 18.5 10 13.6 11.6 12 16.5 10.4 11.6 5.5 10 10.4 8.4 12 3.5Z" />
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M18 15.5 18.7 17.3 20.5 18 18.7 18.7 18 20.5 17.3 18.7 15.5 18 17.3 17.3 18 15.5Z" />
+                                    </svg>
+                                  </span>
                                 </p>
                                 <p className="mt-1 text-sm leading-relaxed text-slate-600">
                                   {entry.explanation}

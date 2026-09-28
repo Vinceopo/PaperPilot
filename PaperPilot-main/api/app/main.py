@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from pypdf import PdfReader
 
 from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes
-from app.config import settings
+from app.config import document_byte_limit, settings
 from app.compliance import run_compliance_scan
 from app.compliance_db import (
     MechanicsInUse,
@@ -24,6 +24,7 @@ from app.compliance_db import (
     create_pending_scan,
     create_version,
     delete_mechanics,
+    delete_manuscript,
     get_mechanics,
     get_pending_checkout,
     get_scan,
@@ -208,7 +209,7 @@ def authenticated_uid(authorization: str | None = Header(default=None)) -> str:
 
 
 def _read_document_bytes(filename: str, data: bytes) -> tuple[str, str, dict]:
-    file_type = validate_document(filename, data, settings.max_upload_bytes)
+    file_type = validate_document(filename, data, document_byte_limit())
     parsed = parse_document(data, file_type)
     return filename, file_type, parsed
 
@@ -555,6 +556,17 @@ async def manuscript_version_create(
         ) from None
 
 
+@app.delete("/manuscripts/{manuscript_id}")
+def manuscript_delete(
+    manuscript_id: str,
+    title: str = Query(default=""),
+    uid: str = Depends(authenticated_uid),
+):
+    """Permanently remove this manuscript, its versions, and its scans."""
+    deleted = delete_manuscript(uid, manuscript_id, title)
+    return {"deleted": deleted}
+
+
 @app.get("/manuscripts/{manuscript_id}/versions")
 def manuscript_versions_list(
     manuscript_id: str,
@@ -704,6 +716,25 @@ def compliance_scan_progress(scan_id: str, uid: str = Depends(authenticated_uid)
     return payload
 
 
+@app.get("/scans/{scan_id}/document")
+def compliance_scan_document(scan_id: str, uid: str = Depends(authenticated_uid)):
+    """Original upload for a saved scan, so old results can show and trace the document."""
+    scan = get_scan(uid, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Compliance scan not found.")
+    manuscript_id = scan.get("manuscript_id") or ""
+    version_id = scan.get("manuscript_version_id") or ""
+    version = get_version(uid, manuscript_id, version_id) if manuscript_id and version_id else None
+    url = get_version_document_url(uid, manuscript_id, version_id) if version else None
+    return {
+        "scan_id": scan_id,
+        "manuscript_id": manuscript_id,
+        "manuscript_version_id": version_id,
+        "cloudinary_url": url or "",
+        "source_filename": (version or {}).get("source_filename") or "",
+    }
+
+
 @app.get("/scans/{scan_id}")
 def compliance_scan_detail(scan_id: str, uid: str = Depends(authenticated_uid)):
     if not get_scan(uid, scan_id):
@@ -741,7 +772,7 @@ def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authentica
     base = (settings.app_public_url or "https://paperpilotph.vercel.app").rstrip("/")
     success_url = f"{base}/?billing=success"
     cancel_url = f"{base}/?billing=canceled"
-    reference = f"pp-{uid[:8]}-{int(time.time())}"
+    reference = f"pp-{uid[:8]}-{uuid.uuid4().hex[:12]}"
 
     customer_email = None
     customer_name = None
@@ -819,9 +850,17 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
     if pending and str(pending.get("owner_uid") or "") not in ("", uid):
         raise HTTPException(status_code=403, detail="Checkout session does not belong to this account.")
 
-    # Already activated (webhook may have won the race)
-    if pending and pending.get("status") == "paid":
-        return {**subscription_snapshot(uid), "confirmed": True, "checkout_session_id": session_id}
+    # This exact checkout was already applied. A newer paid session still activates below
+    # so a second Premium purchase is not treated as "already subscribed".
+    current = subscription_snapshot(uid)
+    already_applied = str(current.get("last_checkout_session_id") or "") == session_id
+    if already_applied:
+        return {
+            **current,
+            "confirmed": str(current.get("tier") or "").lower() == "premium",
+            "already_applied": True,
+            "checkout_session_id": session_id,
+        }
 
     try:
         payload = retrieve_checkout_session(session_id)

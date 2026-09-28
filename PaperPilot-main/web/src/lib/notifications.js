@@ -37,6 +37,10 @@ export function markOneRead(items, id) {
   return (items || []).map((n) => (n.id === id ? { ...n, read: true } : n));
 }
 
+export function removeNotification(items, id) {
+  return (items || []).filter((n) => n.id !== id);
+}
+
 /**
  * Prepend a notification (dedupe by id when provided).
  */

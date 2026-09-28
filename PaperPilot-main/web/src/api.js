@@ -329,6 +329,17 @@ export function listManuscripts() {
   return authorizedFetch("/manuscripts");
 }
 
+export function deleteManuscript({ manuscriptId, title } = {}) {
+  const params = new URLSearchParams();
+  if (title) params.set("title", title);
+  const id = manuscriptId || "-";
+  const query = params.toString();
+  return authorizedFetch(
+    `/manuscripts/${encodeURIComponent(id)}${query ? `?${query}` : ""}`,
+    { method: "DELETE" }
+  );
+}
+
 export async function previewManuscript(file) {
   const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
   return authorizedFetch("/manuscripts/preview", {
@@ -342,7 +353,7 @@ export async function previewManuscript(file) {
 
 export async function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
   const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
-  return authorizedFetch("/manuscripts/versions", {
+  const created = await authorizedFetch("/manuscripts/versions", {
     method: "POST",
     body: JSON.stringify({
       cloudinary_url: uploaded.url,
@@ -352,6 +363,14 @@ export async function uploadManuscriptVersion({ file, mechanicsId, title, manusc
       manuscript_id: manuscriptId || undefined,
     }),
   });
+  if (created?.version && !created.version.cloudinary_url) {
+    created.version.cloudinary_url = uploaded.url;
+  }
+  return created;
+}
+
+export function getScanDocument(scanId) {
+  return authorizedFetch(`/scans/${encodeURIComponent(scanId)}/document`);
 }
 
 export function listManuscriptVersions(manuscriptId, includeHistory = true) {

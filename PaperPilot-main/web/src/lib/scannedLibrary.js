@@ -92,14 +92,12 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
   const documentId =
     (idx >= 0 ? list[idx].id : null) || scanResult.documentId || `doc-${Date.now()}`;
 
-  let nextVersion = Math.max(1, Number(versionNumber) || 1);
-  if (idx >= 0) {
-    const maxVer = Math.max(
-      0,
-      ...(list[idx].versions || []).map((v) => Number(v.versionNumber) || 0)
-    );
-    nextVersion = Math.max(nextVersion, maxVer + 1);
-  }
+  const maxVer =
+    idx >= 0
+      ? Math.max(0, ...(list[idx].versions || []).map((v) => Number(v.versionNumber) || 0))
+      : 0;
+  const nextVersion = maxVer + 1;
+  void versionNumber;
 
   const score = Number(scanResult.overallScore ?? 0);
   const status = score >= 80 ? "compliant" : score >= 50 ? "needs_revision" : "critical";
@@ -160,7 +158,24 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
       versions: [version],
     });
   }
-  return list;
+  return dedupeManuscriptsByTitle(list);
+}
+
+/**
+ * Drop one stored version and renumber the rest with the same chronological
+ * rules as dedupeManuscriptsByTitle. An empty manuscript is removed.
+ */
+export function removeManuscriptVersion(items, manuscriptId, versionId) {
+  const stripped = (items || [])
+    .map((m) => {
+      if (m.id !== manuscriptId) return m;
+      return {
+        ...m,
+        versions: (m.versions || []).filter((v) => v.id !== versionId),
+      };
+    })
+    .filter((m) => Array.isArray(m.versions) && m.versions.length > 0);
+  return dedupeManuscriptsByTitle(stripped);
 }
 
 /**

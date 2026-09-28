@@ -113,16 +113,28 @@ def run_analyze_job(
     tier: str,
 ) -> None:
     try:
-        job_store.set_stage(job_id, JobStage.parsing, 10, "Downloading and parsing document")
+        job_store.set_stage(job_id, JobStage.parsing, 4, "Downloading document")
         raw = _load_document_bytes(document_url, document_base64)
+        job_store.set_stage(job_id, JobStage.parsing, 12, "Checking the file")
         file_type = validate_document(filename, raw, settings.max_document_bytes)
-        parsed = parse_document(raw, file_type)
 
-        job_store.set_stage(job_id, JobStage.checking, 45, "Running format compliance checks")
+        def on_page(done: int, total: int) -> None:
+            span = 28
+            percent = 16 + int(span * done / max(total, 1))
+            noun = "page" if total == 1 else "pages"
+            job_store.set_stage(job_id, JobStage.parsing, percent, f"Parsing {done} of {total} {noun}")
+
+        parsed = parse_document(raw, file_type, on_progress=on_page)
+
         rules = normalize_mechanics_rules(mechanics_rules)
-        scan = run_compliance_scan(parsed, rules, tier=tier)
 
-        job_store.set_stage(job_id, JobStage.scoring, 85, "Computing scores and summaries")
+        def on_check(done: int, total: int, label: str) -> None:
+            percent = 48 + int(36 * done / max(total, 1))
+            job_store.set_stage(job_id, JobStage.checking, min(percent, 84), label)
+
+        scan = run_compliance_scan(parsed, rules, tier=tier, on_progress=on_check)
+
+        job_store.set_stage(job_id, JobStage.scoring, 92, "Computing scores and summaries")
         scan["document_format"] = file_type
         job_store.complete(job_id, scan)
     except DocumentError as exc:

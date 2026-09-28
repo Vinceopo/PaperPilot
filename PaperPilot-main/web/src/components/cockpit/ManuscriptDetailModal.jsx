@@ -3,8 +3,10 @@ import {
   Clock,
   Download,
   Lock,
+  Trash2,
   X,
 } from "lucide-react";
+import ConfirmDialog from "../ConfirmDialog.jsx";
 import { scoreBand } from "../../lib/scoreBand.js";
 import { downloadReport } from "../../lib/mockAnalysis.js";
 import { versionToScanResult } from "../../lib/scannedLibrary.js";
@@ -42,7 +44,14 @@ function formatLocationChip(loc) {
  * Premium: all versions.
  * PDF download uses the same generator + version label as Scan Results.
  */
-export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpgrade, onClose }) {
+export default function ManuscriptDetailModal({
+  manuscript,
+  tier = "free",
+  onUpgrade,
+  onDeleteVersion,
+  onOpenResult,
+  onClose,
+}) {
   const isPremium = String(tier || "free").toLowerCase() === "premium";
 
   const versionsDesc = useMemo(() => {
@@ -56,6 +65,7 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
   const [selectedId, setSelectedId] = useState(latestId);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState(null);
 
   useEffect(() => {
     setSelectedId(latestId);
@@ -87,6 +97,7 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
       return;
     }
     setSelectedId(ver.id);
+    onOpenResult?.(ver);
   }
 
   async function onDownload() {
@@ -158,11 +169,11 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
                 const isLatest = ver.id === latestId;
                 const locked = !isPremium && !isLatest;
                 return (
-                  <li key={ver.id}>
+                  <li key={ver.id} className="flex items-stretch gap-1">
                     <button
                       type="button"
                       onClick={() => selectVersion(ver)}
-                      className={`w-full rounded-xl px-3 py-2.5 text-left transition ${
+                      className={`min-w-0 flex-1 rounded-xl px-3 py-2.5 text-left transition ${
                         active
                           ? "bg-[#0F1729] text-white shadow-sm"
                           : locked
@@ -171,7 +182,9 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <p className="text-xs font-bold">v{ver.versionNumber}.0</p>
+                        <p className={`text-xs font-medium ${active ? "text-slate-300" : "text-slate-400"}`}>
+                          v{ver.versionNumber}.0
+                        </p>
                         {locked ? <Lock className="h-3.5 w-3.5 shrink-0 text-slate-400" /> : null}
                         {isLatest ? (
                           <span
@@ -190,6 +203,17 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
                         {locked ? "Premium only" : `Score ${ver.score}`}
                       </p>
                     </button>
+                    {onDeleteVersion ? (
+                      <button
+                        type="button"
+                        onClick={() => setPendingDeleteId(ver.id)}
+                        className="grid w-7 shrink-0 place-items-center self-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                        aria-label={`Delete version ${ver.versionNumber}`}
+                        title="Delete version"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
                   </li>
                 );
               })}
@@ -209,7 +233,7 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold text-slate-500">Selected version</p>
-                    <p className="text-base font-bold text-[#0F1729]">
+                    <p className="text-sm font-medium text-slate-400">
                       {versionLabel} · {formatDate(selected.scannedDate)}
                     </p>
                   </div>
@@ -345,6 +369,19 @@ export default function ManuscriptDetailModal({ manuscript, tier = "free", onUpg
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={Boolean(pendingDeleteId)}
+        title="Delete this version?"
+        message="The version label will update to match the versions that are still saved."
+        confirmLabel="Delete version"
+        tone="danger"
+        onCancel={() => setPendingDeleteId(null)}
+        onConfirm={() => {
+          const id = pendingDeleteId;
+          setPendingDeleteId(null);
+          if (id) onDeleteVersion?.(manuscript.id, id);
+        }}
+      />
     </div>
   );
 }

@@ -22,11 +22,14 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
   let manuscriptId = isServerId(opts.manuscriptId) ? opts.manuscriptId : "";
   let versionId = isServerId(opts.versionId) ? opts.versionId : "";
   const title = String(opts.title || titleFromFile(file) || "").trim();
+  let uploadedUrl = "";
+  const report = (percent, stage, message) => opts.onProgress?.({ percent, stage, message });
 
   if (!manuscriptId || !versionId) {
     if (!file) {
       throw new Error("Upload a manuscript before analysing.");
     }
+    report(2, "uploading", "Uploading your document…");
     const created = await uploadManuscriptVersion({
       file,
       mechanicsId,
@@ -41,15 +44,21 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
       created.created_manuscript?.id ||
       manuscriptId;
     versionId = version.id || created.version_id || versionId;
+    uploadedUrl = version.cloudinary_url || "";
   }
 
   if (!isServerId(manuscriptId) || !isServerId(versionId)) {
     throw new Error("The manuscript is not saved on the server yet. Upload it again, then analyse.");
   }
 
+  report(10, "starting", "Sending your document to the analyzer…");
   const scan = await fetchScanWithProgress(
     () => runComplianceScan({ manuscriptId, versionId, mechanicsId }),
-    opts.onProgress
+    (payload) => {
+      const serverPct = Math.min(100, Math.max(0, Number(payload?.percent) || 0));
+      const done = payload?.stage === "done";
+      report(done ? 100 : 15 + serverPct * 0.85, payload?.stage, payload?.message);
+    }
   );
 
   return mapComplianceScanToResult(scan, {
@@ -58,8 +67,10 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
     citationStyle: opts.citationStyle || "APA",
     pageCount: opts.pageCount,
     mechanicsId,
-    cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || "",
+    cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || uploadedUrl || "",
     preview: opts.preview || scan?.preview,
+    versionId,
+    documentName: opts.documentName || file?.name || "",
   });
 }
 

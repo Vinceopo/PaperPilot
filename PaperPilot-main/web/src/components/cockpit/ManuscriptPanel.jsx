@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { normalizeTitle } from "../../lib/scannedLibrary.js";
+import { MAX_FILE_BYTES } from "../../lib/mockAnalysis.js";
+import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
@@ -9,7 +11,7 @@ function validateFile(file) {
   if (!file) return "Choose a manuscript.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
   if (![".pdf", ".docx"].includes(ext)) return "Manuscript must be a PDF or DOCX file.";
-  if (file.size > 100_000_000) return "File must be 100 MB or smaller.";
+  if (file.size > MAX_FILE_BYTES) return "oversize";
   return "";
 }
 
@@ -19,7 +21,6 @@ function validateFile(file) {
 export default function ManuscriptPanel({
   mechanicsSelected = true,
   manuscripts = [],
-  selectedManuscriptId = "",
   onSelectManuscript,
   onUpload,
   onFilePick,
@@ -29,28 +30,26 @@ export default function ManuscriptPanel({
   busy,
 }) {
   const inputRef = useRef(null);
+  const dropRef = useRef(null);
+  const pulseTimer = useRef(0);
   const previewRequest = useRef(0);
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState("");
-  const [manuscriptId, setManuscriptId] = useState(selectedManuscriptId || "");
+  const [manuscriptId, setManuscriptId] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [preview, setPreview] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [titleOpen, setTitleOpen] = useState(false);
+  const [titleMode, setTitleMode] = useState("new");
+  const [existingId, setExistingId] = useState("");
+  const [titleError, setTitleError] = useState("");
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [pendingUpload, setPendingUpload] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-
-  useEffect(() => {
-    if (selectedManuscriptId && manuscripts.some((m) => m.id === selectedManuscriptId)) {
-      setManuscriptId(selectedManuscriptId);
-      return;
-    }
-    if (manuscriptId && !manuscripts.some((m) => m.id === manuscriptId)) {
-      setManuscriptId("");
-    }
-  }, [selectedManuscriptId, manuscripts, manuscriptId]);
+  const [oversizeBytes, setOversizeBytes] = useState(null);
+  const [dropPulse, setDropPulse] = useState(false);
 
   useEffect(() => {
     if (!uploadCancelKey) return;
@@ -63,12 +62,6 @@ export default function ManuscriptPanel({
     setPendingUpload(null);
     if (inputRef.current) inputRef.current.value = "";
   }, [uploadCancelKey]);
-
-  function chooseManuscript(id) {
-    setManuscriptId(id);
-    if (id) setTitle("");
-    onSelectManuscript?.(id);
-  }
 
   async function loadPreview(nextFile) {
     const requestId = ++previewRequest.current;
@@ -94,36 +87,70 @@ export default function ManuscriptPanel({
   function requestUpload(e) {
     e.preventDefault();
     const issue = validateFile(file);
-    if (!manuscriptId && !title.trim()) {
-      setError("Enter a title for a new manuscript.");
+    if (issue === "oversize" && file) {
+      rejectOversize(file);
       return;
     }
     setError(issue);
     setSuccess("");
     if (issue) return;
+    setManuscriptId("");
+    setTitle("");
+    setTitleError("");
+    setTitleMode(manuscripts.length ? "existing" : "new");
+    setExistingId(manuscripts[0]?.id || "");
+    setTitleOpen(true);
+  }
 
-    const selectedMs = manuscriptId
-      ? manuscripts.find((m) => m.id === manuscriptId)
-      : null;
-    const resolvedTitle = (
-      selectedMs?.title ||
-      title ||
-      file.name.replace(/\.(pdf|docx)$/i, "")
-    ).trim();
-    if (!manuscriptId) {
-      const taken = manuscripts.some(
-        (m) => normalizeTitle(m.title) === normalizeTitle(resolvedTitle)
-      );
-      if (taken) {
-        setError("A manuscript with this title already exists. Choose a unique title.");
-        return;
-      }
+  function useExistingManuscript(id) {
+    const selected = manuscripts.find((item) => item.id === id);
+    if (!selected) {
+      setTitleError("Choose a manuscript to add this version to.");
+      return;
     }
+    setManuscriptId(selected.id);
+    onSelectManuscript?.(selected.id);
+    setTitle("");
+    setTitleError("");
+    setError("");
+    setTitleOpen(false);
+    setPendingUpload({
+      file,
+      title: selected.title,
+      manuscriptId: selected.id,
+    });
+    setConfirmOpen(true);
+  }
 
+  function submitTitle(event) {
+    event.preventDefault();
+    if (titleMode === "existing") {
+      useExistingManuscript(existingId);
+      return;
+    }
+    const resolvedTitle = title.trim();
+    if (!resolvedTitle) {
+      setTitleError("Enter a title for a new manuscript.");
+      return;
+    }
+    const match = manuscripts.find(
+      (item) => normalizeTitle(item.title) === normalizeTitle(resolvedTitle)
+    );
+    if (match) {
+      setExistingId(match.id);
+      setTitleMode("existing");
+      setTitleError(
+        "That title is already in your library. Continue to save this file as a new version, or enter a different name."
+      );
+      return;
+    }
+    setTitleError("");
+    setError("");
+    setTitleOpen(false);
     setPendingUpload({
       file,
       title: resolvedTitle,
-      manuscriptId,
+      manuscriptId: "",
     });
     setConfirmOpen(true);
   }
@@ -155,14 +182,35 @@ export default function ManuscriptPanel({
   const previewPreparing = Boolean(previewBusy && file && !previewUploading);
   const canPickFile = Boolean(mechanicsSelected && !panelBusy);
 
+  function rejectOversize(next) {
+    setFile(null);
+    setPreview(null);
+    setError("");
+    setSuccess("");
+    onFilePick?.(null);
+    if (inputRef.current) inputRef.current.value = "";
+    setOversizeBytes(next.size);
+    setDropPulse(true);
+    window.clearTimeout(pulseTimer.current);
+    pulseTimer.current = window.setTimeout(() => setDropPulse(false), 1600);
+    dropRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    dropRef.current?.focus();
+  }
+
   function applyFile(next) {
     if (!canPickFile && next) return;
+    if (inputRef.current) inputRef.current.value = "";
+    if (next && next.size > MAX_FILE_BYTES) {
+      rejectOversize(next);
+      return;
+    }
+    const issue = next ? validateFile(next) : "";
     setFile(next);
-    setError(next ? validateFile(next) : "");
+    setError(issue === "oversize" ? "" : issue);
     setSuccess("");
     onFilePick?.(next);
-    void loadPreview(next);
-    if (inputRef.current) inputRef.current.value = "";
+    if (!issue && next) void loadPreview(next);
+    else setPreview(null);
   }
 
   function onDropZoneDragOver(e) {
@@ -204,52 +252,18 @@ export default function ManuscriptPanel({
       </p>
 
       <form onSubmit={requestUpload} className="mt-5 space-y-3">
-        {manuscripts.length ? (
-          <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-            Upload to
-            <select
-              disabled={!mechanicsSelected || panelBusy}
-              value={manuscriptId}
-              onChange={(e) => chooseManuscript(e.target.value)}
-              className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-xs font-medium normal-case tracking-normal text-slate-700 outline-none focus:border-[#16bfa8] disabled:cursor-not-allowed"
-            >
-              <option value="">Create a new manuscript</option>
-              {manuscripts.map((item) => {
-                const versionCount = Number(
-                  item.version_count ?? item.current_version_number ?? item.versions?.length ?? 0
-                );
-                return (
-                  <option key={item.id} value={item.id}>
-                    {item.title} · upload version {versionCount + 1}
-                  </option>
-                );
-              })}
-            </select>
-          </label>
-        ) : (
-          <p className="text-xs text-slate-400">
-            No manuscripts in My Manuscripts yet — create a new one below, then scan it.
-          </p>
-        )}
-
-        {!manuscriptId && (
-          <input
-            disabled={!mechanicsSelected || panelBusy}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Manuscript title (must be unique)"
-            className="h-10 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-xs text-slate-700 outline-none placeholder:text-slate-400 focus:border-[#16bfa8] disabled:cursor-not-allowed"
-          />
-        )}
-
-        <div className={`grid gap-4 ${showPreview ? "lg:grid-cols-2" : ""}`}>
+        <div className="flex flex-col gap-4">
           <label
+            ref={dropRef}
+            tabIndex={-1}
             onDragEnter={onDropZoneDragOver}
             onDragOver={onDropZoneDragOver}
             onDragLeave={onDropZoneDragLeave}
             onDrop={onDropZoneDrop}
-            className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 text-center transition ${
-              dragOver && canPickFile
+            className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 text-center transition outline-none ${
+              dropPulse
+                ? "border-rose-400 bg-rose-50 ring-2 ring-rose-300"
+                : dragOver && canPickFile
                 ? "cursor-copy border-[#0d9488] bg-[#e7faf6] ring-2 ring-[#16bfa8]/35"
                 : canPickFile
                   ? "cursor-pointer border-[#18bda9] bg-[#f7fcfc] hover:bg-[#f0fbf9]"
@@ -272,11 +286,11 @@ export default function ManuscriptPanel({
               <p className="mt-1 text-[11px] text-slate-400">
                 {file
                   ? previewPreparing
-                    ? "Preparing document preview on the right…"
+                    ? `${formatFileSize(file.size)} · Preparing document preview on the right…`
                     : previewUploading
-                      ? "Uploading — see progress beside this panel"
-                      : "Preview appears beside this panel — confirm Upload when ready"
-                  : "Drag & drop or browse · .pdf and .docx · Max 100 MB"}
+                      ? `${formatFileSize(file.size)} · Uploading — see progress beside this panel`
+                      : `${formatFileSize(file.size)} · Preview appears beside this panel — confirm Upload when ready`
+                  : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_BYTES)}`}
               </p>
               <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                 Browse files
@@ -384,13 +398,111 @@ export default function ManuscriptPanel({
             <>
               <Spinner /> Preparing preview…
             </>
-          ) : manuscriptId ? (
-            "Upload new version"
           ) : (
             "Upload manuscript"
           )}
         </button>
       </form>
+
+      {titleOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-5" role="dialog" aria-modal="true" aria-labelledby="manuscript-title-heading">
+          <form onSubmit={submitTitle} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h3 id="manuscript-title-heading" className="text-lg font-bold text-[#172033]">
+              Manuscript title
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-slate-500">
+              {manuscripts.length
+                ? "Save this file as a new version of a title you already have, or give it a new title."
+                : "This name must be unique. You can still change the file before you confirm the upload."}
+            </p>
+            {manuscripts.length > 0 && (
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMode("existing");
+                    setTitleError("");
+                    if (!existingId) setExistingId(manuscripts[0]?.id || "");
+                  }}
+                  className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                    titleMode === "existing"
+                      ? "bg-[#e7f8f5] text-[#0f766e] ring-1 ring-[#16bfa8]"
+                      : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  Use an existing title
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMode("new");
+                    setTitleError("");
+                  }}
+                  className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                    titleMode === "new"
+                      ? "bg-[#e7f8f5] text-[#0f766e] ring-1 ring-[#16bfa8]"
+                      : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  New title
+                </button>
+              </div>
+            )}
+            {titleMode === "existing" && manuscripts.length > 0 ? (
+              <label className="mt-4 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Existing title
+                <select
+                  autoFocus
+                  value={existingId}
+                  onChange={(e) => {
+                    setExistingId(e.target.value);
+                    setTitleError("");
+                  }}
+                  className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm font-medium normal-case tracking-normal text-slate-700 outline-none focus:border-[#16bfa8]"
+                >
+                  {manuscripts.map((item) => {
+                    const versionCount = Number(
+                      item.version_count ?? item.current_version_number ?? item.versions?.length ?? 0
+                    );
+                    return (
+                      <option key={item.id} value={item.id}>
+                        {item.title} · version {versionCount + 1}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+            ) : (
+              <input
+                autoFocus
+                value={title}
+                onChange={(e) => {
+                  setTitle(e.target.value);
+                  setTitleError("");
+                }}
+                placeholder="Enter a title"
+                className="mt-4 h-11 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm text-slate-700 outline-none focus:border-[#16bfa8]"
+              />
+            )}
+            {titleError && <p className="mt-3 text-xs text-rose-500">{titleError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setTitleOpen(false)}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="rounded-lg bg-[#16bfa8] px-4 py-2 text-xs font-bold text-[#092823] hover:bg-[#12ae99]"
+              >
+                Continue
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmOpen}
@@ -408,6 +520,15 @@ export default function ManuscriptPanel({
           setPendingUpload(null);
         }}
         onConfirm={() => void confirmUpload()}
+      />
+      <ConfirmDialog
+        open={oversizeBytes != null}
+        title="File Too Large"
+        message={oversizeFileMessage(oversizeBytes, MAX_FILE_BYTES)}
+        confirmLabel="OK"
+        cancelLabel=""
+        onCancel={() => setOversizeBytes(null)}
+        onConfirm={() => setOversizeBytes(null)}
       />
     </section>
   );

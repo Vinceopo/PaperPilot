@@ -2,7 +2,7 @@
  * Manuscript preview with issue list — click an issue to scroll and highlight in the document.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { normalizeDetectedIssues } from "./IssuesDetectedPanel.jsx";
 import { normalizeIssueLocation } from "../../lib/scanMapper.js";
@@ -23,6 +23,7 @@ export default function ReferenceTracingView({
   const [activeIssueId, setActiveIssueId] = useState(null);
   const [scrollTarget, setScrollTarget] = useState(null);
   const [highlight, setHighlight] = useState(null);
+  const openedOnRef = useRef("");
 
   const { entries } = useMemo(
     () => normalizeDetectedIssues(result?.formatChecks || [], result?.pageCount || 0),
@@ -31,6 +32,10 @@ export default function ReferenceTracingView({
 
   const resolveLocation = useCallback(
     (entry) => {
+      if (entry.location) {
+        const own = normalizeIssueLocation(entry.location);
+        if (own.page != null || own.line != null) return own;
+      }
       for (const check of result?.formatChecks || []) {
         for (const loc of check.locations || []) {
           // Locations are already normalized by scanMapper.
@@ -52,11 +57,24 @@ export default function ReferenceTracingView({
     (entry) => {
       const loc = resolveLocation(entry);
       setActiveIssueId(entry.id);
-      setHighlight({ id: entry.id, ...loc });
-      setScrollTarget({ ...loc, token: Date.now() });
+      const marked = {
+        ...loc,
+        severity: entry.severity,
+        finding: entry.finding,
+        section: entry.section || loc.section,
+      };
+      setHighlight({ id: entry.id, ...marked });
+      setScrollTarget({ ...marked, token: Date.now() });
     },
     [resolveLocation]
   );
+
+  useEffect(() => {
+    const first = entries[0];
+    if (!first || openedOnRef.current === first.id) return;
+    openedOnRef.current = first.id;
+    onSelectIssue(first);
+  }, [entries, onSelectIssue]);
 
   return (
     <div className="space-y-4">
@@ -65,11 +83,21 @@ export default function ReferenceTracingView({
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex items-center text-xs font-semibold text-slate-500 transition hover:text-[#172033]"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#16bfa8] bg-white px-3.5 py-2 text-sm font-semibold text-[#109b89] shadow-sm transition hover:bg-[#eefbf8]"
           >
-            ← Back to summary
+            <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3.5 w-3.5">
+              <path
+                d="M10.5 3.5 6 8l4.5 4.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Back to summary
           </button>
-          <h2 className="mt-1 text-lg font-bold text-[#172033]">Reference tracing</h2>
+          <h2 className="mt-3 text-lg font-bold text-[#172033]">Reference tracing</h2>
           <p className="text-xs text-slate-500">
             Click an issue to jump to the matching page and line in your document.
           </p>
@@ -88,10 +116,12 @@ export default function ReferenceTracingView({
           <DocumentPagePreview
             file={file}
             documentUrl={result?.cloudinaryUrl || ""}
+            documentName={result?.documentName || ""}
             preview={result?.documentPreview}
             scrollTarget={scrollTarget}
             highlight={highlight}
             emptyLabel="Document preview will appear when Cloudinary URL or upload is available."
+            paged
           />
         </div>
 
@@ -100,18 +130,24 @@ export default function ReferenceTracingView({
             <p className="text-sm font-bold text-slate-800">
               {entries.length} issue{entries.length === 1 ? "" : "s"}
             </p>
-            <p className="text-[11px] text-slate-500">Soft red highlight + underline on the matched span.</p>
+            <p className="text-[11px] text-slate-500">Select an issue to jump to that page.</p>
           </div>
           <ul className="pp-scroll min-h-0 flex-1 divide-y divide-slate-100 overflow-y-auto">
             {entries.map((entry) => {
               const active = entry.id === activeIssueId;
+              const activeTone =
+                entry.severity === "critical"
+                  ? "bg-rose-50/90 ring-1 ring-inset ring-rose-300"
+                  : entry.severity === "moderate"
+                    ? "bg-orange-50/90 ring-1 ring-inset ring-orange-300"
+                    : "bg-amber-50/90 ring-1 ring-inset ring-amber-300";
               return (
                 <li key={entry.id}>
                   <button
                     type="button"
                     onClick={() => onSelectIssue(entry)}
                     className={`w-full px-4 py-3 text-left transition ${
-                      active ? "bg-rose-50/90 ring-1 ring-inset ring-rose-200" : "hover:bg-slate-50"
+                      active ? activeTone : "hover:bg-slate-50"
                     }`}
                   >
                     <p className="text-[11px] font-bold uppercase tracking-wide text-[#16bfa8]">

@@ -40,6 +40,7 @@ export default function ConfirmDialog({
           </p>
         ) : null}
         <div className="mt-6 flex flex-wrap justify-end gap-3">
+          {cancelLabel ? (
           <button
             type="button"
             disabled={busy}
@@ -48,6 +49,7 @@ export default function ConfirmDialog({
           >
             {cancelLabel}
           </button>
+          ) : null}
           <button
             type="button"
             disabled={busy}
