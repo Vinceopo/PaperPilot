@@ -10,6 +10,7 @@ from docx import Document
 from docx.document import Document as DocxDocument
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
+from docx.shared import Inches, Pt, RGBColor
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
 from docx.table import Table
@@ -1089,4 +1090,124 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["pagination_requirements"] = list(pagination_out.values())
 
     return rules
+
+
+_SAMPLE_FONT_NAME = "Times New Roman"
+_SAMPLE_FONT_SIZE = Pt(12)
+_SAMPLE_FONT_COLOR = RGBColor(0, 0, 0)
+
+
+def _apply_sample_run_font(run, *, bold: bool = False) -> None:
+    """Body text only: black, 12 pt. No heading styles or theme colors."""
+    run.bold = bold
+    run.italic = False
+    run.font.name = _SAMPLE_FONT_NAME
+    run.font.size = _SAMPLE_FONT_SIZE
+    run.font.color.rgb = _SAMPLE_FONT_COLOR
+    r_pr = run._element.get_or_add_rPr()
+    r_fonts = r_pr.get_or_add_rFonts()
+    for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+        r_fonts.set(qn(attr), _SAMPLE_FONT_NAME)
+
+
+_SAMPLE_VALUE_TAB = Inches(2.5)
+
+# Each section heading must be a word the extractor stops on (Paper, Margins, Font,
+# Pagination, Page, Table, Figure, Citation) so it never leaks into the value above it.
+# Free-text sections use their heading as the label and put the value on the next line.
+_SAMPLE_SECTIONS = (
+    (
+        "Paper",
+        (
+            ("Size", "8.5 x 11"),
+            ("Orientation", "Portrait"),
+            ("Substance", "20"),
+            ("Spacing", "1.5"),
+            ("Indention", "0.5 inch"),
+            ("Alignment", "Justified"),
+        ),
+    ),
+    (
+        "Margins (in inches)",
+        (
+            ("Top", "1"),
+            ("Left", "1"),
+            ("Bottom", "1"),
+            ("Right", "1"),
+            ("Gutter", "0"),
+            ("Header", "0.5"),
+            ("Footer", "0.5"),
+        ),
+    ),
+    (
+        "Font",
+        (
+            ("Heading 1 size", "16 pt"),
+            ("Heading 2 size", "14 pt"),
+            ("Heading 3 and content size", "12 pt"),
+            ("Font type", "Times New Roman"),
+            ("Font color", "Black"),
+        ),
+    ),
+    (
+        "Pagination",
+        (
+            ("Page number position", "Top right"),
+            ("First page of each chapter", "No number shown"),
+        ),
+    ),
+    ("Page Breaks", "Only when starting a new chapter"),
+    ("Table Layout", "Name above a quoted title caption"),
+    ("Figure Layout", "Number and title in bold or underlined placed below the image"),
+    ("Citation Format", (("Citation style", "APA"),)),
+)
+
+
+def _add_sample_paragraph(doc, *, space_before: float = 0, space_after: float = 0, align=None):
+    paragraph = doc.add_paragraph()
+    paragraph.style = doc.styles["Normal"]
+    fmt = paragraph.paragraph_format
+    fmt.space_before = Pt(space_before)
+    fmt.space_after = Pt(space_after)
+    fmt.line_spacing = 1.15
+    fmt.first_line_indent = Inches(0)
+    fmt.left_indent = Inches(0)
+    if align is not None:
+        paragraph.alignment = align
+    return paragraph
+
+
+def build_sample_mechanics_docx() -> bytes:
+    """Downloadable guide whose text fills every Format Field, in black 12 pt type."""
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = _SAMPLE_FONT_NAME
+    normal.font.size = _SAMPLE_FONT_SIZE
+    normal.font.color.rgb = _SAMPLE_FONT_COLOR
+    normal.font.bold = False
+
+    title = _add_sample_paragraph(doc, space_after=4, align=WD_ALIGN_PARAGRAPH.CENTER)
+    _apply_sample_run_font(title.add_run("Sample Format Mechanics"), bold=True)
+    intro = _add_sample_paragraph(doc, space_after=6, align=WD_ALIGN_PARAGRAPH.CENTER)
+    _apply_sample_run_font(
+        intro.add_run(
+            "Upload this guide, then review each extracted field and edit any value to match your school."
+        )
+    )
+
+    for heading, body in _SAMPLE_SECTIONS:
+        head = _add_sample_paragraph(doc, space_before=12, space_after=4)
+        head.paragraph_format.keep_with_next = True
+        _apply_sample_run_font(head.add_run(heading), bold=True)
+        if isinstance(body, str):
+            _apply_sample_run_font(_add_sample_paragraph(doc, space_after=2).add_run(body))
+            continue
+        for label, value in body:
+            row = _add_sample_paragraph(doc, space_after=2)
+            row.paragraph_format.tab_stops.add_tab_stop(_SAMPLE_VALUE_TAB)
+            _apply_sample_run_font(row.add_run(f"{label}:\t{value}"))
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
 

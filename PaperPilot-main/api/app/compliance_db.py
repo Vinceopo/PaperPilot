@@ -434,6 +434,67 @@ def list_versions(owner_uid: str, manuscript_id: str, history: bool) -> tuple[li
     return [_version_row(r, include_content=False) for r in rows if isinstance(r, dict)], current_id
 
 
+_SCAN_SUMMARY_FIELDS = ("status", "manuscript_id", "manuscript_version_id", "overall_score", "created_at")
+
+
+def _scan_summary(owner_uid: str, scan_id: str) -> dict | None:
+    """Read only the small fields of a scan; the full row can hold thousands of issue locations."""
+    base = f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}"
+    fields = {key: _reference(f"{base}/{key}").get() for key in _SCAN_SUMMARY_FIELDS}
+    if fields.get("status") != "done" or not fields.get("manuscript_id"):
+        return None
+    manuscript_id = str(fields["manuscript_id"])
+    version_id = str(fields.get("manuscript_version_id") or "")
+    version_base = f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}"
+    version_number = _reference(f"{version_base}/version_number").get() if version_id else None
+    source_filename = _reference(f"{version_base}/source_filename").get() if version_id else None
+    return {
+        "id": scan_id,
+        "manuscript_id": manuscript_id,
+        "manuscript_version_id": version_id,
+        "version_number": int(version_number or 0),
+        "source_filename": source_filename or "",
+        "overall_score": round(float(fields.get("overall_score") or 0), 2),
+        "created_at": fields.get("created_at") or "",
+    }
+
+
+def list_scan_summaries(owner_uid: str) -> list[dict]:
+    """Finished scans with manuscript titles, cached in scan_index so each scan is read once."""
+    scan_ids = _reference(f"{ROOT}/compliance_scans/{owner_uid}").get(shallow=True) or {}
+    if not isinstance(scan_ids, dict):
+        scan_ids = {}
+    index_ref = _reference(f"{ROOT}/scan_index/{owner_uid}")
+    index = index_ref.get() or {}
+    if not isinstance(index, dict):
+        index = {}
+
+    for stale_id in [key for key in index if key not in scan_ids]:
+        index_ref.child(stale_id).delete()
+        index.pop(stale_id, None)
+    for scan_id in scan_ids:
+        if scan_id in index:
+            continue
+        summary = _scan_summary(owner_uid, scan_id)
+        if summary:
+            index_ref.child(scan_id).set(summary)
+            index[scan_id] = summary
+
+    manuscripts = _reference(f"{ROOT}/manuscripts/{owner_uid}").get() or {}
+    if not isinstance(manuscripts, dict):
+        manuscripts = {}
+    items = []
+    for summary in index.values():
+        if not isinstance(summary, dict):
+            continue
+        manuscript = manuscripts.get(summary.get("manuscript_id"))
+        if not isinstance(manuscript, dict):
+            continue
+        items.append({**summary, "title": manuscript.get("title") or ""})
+    items.sort(key=lambda item: item.get("created_at") or "")
+    return items
+
+
 def is_current_version(owner_uid: str, manuscript_id: str, version_id: str) -> bool | None:
     manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
     if not isinstance(manuscript, dict):

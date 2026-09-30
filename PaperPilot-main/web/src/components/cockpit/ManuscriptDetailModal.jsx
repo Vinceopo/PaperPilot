@@ -50,6 +50,7 @@ export default function ManuscriptDetailModal({
   onUpgrade,
   onDeleteVersion,
   onOpenResult,
+  resolveResult,
   onClose,
 }) {
   const isPremium = String(tier || "free").toLowerCase() === "premium";
@@ -105,7 +106,9 @@ export default function ManuscriptDetailModal({
     setDownloadBusy(true);
     setDownloadError("");
     try {
-      const payload = versionToScanResult(manuscript, selected);
+      const payload = resolveResult
+        ? await resolveResult(manuscript, selected)
+        : versionToScanResult(manuscript, selected);
       await downloadReport(payload, { versionNumber: selected.versionNumber });
     } catch (err) {
       setDownloadError(err?.message || "Download failed.");
