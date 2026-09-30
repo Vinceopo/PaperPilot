@@ -391,6 +391,10 @@ export function runComplianceScan({ manuscriptId, versionId, mechanicsId }) {
   );
 }
 
+export function listScans() {
+  return authorizedFetch("/scans");
+}
+
 export function getComplianceScan(scanId) {
   return authorizedFetch(`/scans/${encodeURIComponent(scanId)}`);
 }

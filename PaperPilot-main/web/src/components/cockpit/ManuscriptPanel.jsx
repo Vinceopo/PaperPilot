@@ -4,6 +4,7 @@ import { MAX_FILE_BYTES } from "../../lib/mockAnalysis.js";
 import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
+import DocumentLoader from "../DocumentLoader.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
@@ -26,6 +27,7 @@ export default function ManuscriptPanel({
   onFilePick,
   onPreview,
   uploadCancelKey = 0,
+  onCancel,
   onShowSteps,
   busy,
 }) {
@@ -50,6 +52,7 @@ export default function ManuscriptPanel({
   const [dragOver, setDragOver] = useState(false);
   const [oversizeBytes, setOversizeBytes] = useState(null);
   const [dropPulse, setDropPulse] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   useEffect(() => {
     if (!uploadCancelKey) return;
@@ -355,7 +358,7 @@ export default function ManuscriptPanel({
                     role="status"
                     aria-live="polite"
                   >
-                    <Spinner className="h-12 w-12 border-[3px] text-[#16bfa8]" />
+                    <DocumentLoader className="h-28 w-28" />
                     <p className="text-sm font-bold text-slate-800">
                       {previewUploading ? "Uploading manuscript…" : "Opening manuscript preview…"}
                     </p>
@@ -385,23 +388,36 @@ export default function ManuscriptPanel({
           </p>
         )}
 
-        <button
-          type="submit"
-          disabled={!mechanicsSelected || !file || panelBusy}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-2.5 text-xs font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {previewUploading ? (
-            <>
-              <Spinner /> Uploading…
-            </>
-          ) : previewPreparing ? (
-            <>
-              <Spinner /> Preparing preview…
-            </>
-          ) : (
-            "Upload manuscript"
-          )}
-        </button>
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              if (file) setCancelOpen(true);
+              else onCancel?.();
+            }}
+            disabled={previewUploading}
+            className="rounded-lg border border-slate-200 bg-white px-7 py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!mechanicsSelected || !file || panelBusy}
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-2.5 text-xs font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {previewUploading ? (
+              <>
+                <Spinner /> Uploading…
+              </>
+            ) : previewPreparing ? (
+              <>
+                <Spinner /> Preparing preview…
+              </>
+            ) : (
+              "Upload manuscript"
+            )}
+          </button>
+        </div>
       </form>
 
       {titleOpen && (
@@ -520,6 +536,20 @@ export default function ManuscriptPanel({
           setPendingUpload(null);
         }}
         onConfirm={() => void confirmUpload()}
+      />
+      <ConfirmDialog
+        open={cancelOpen}
+        title="Go back to the previous step?"
+        message="Your selected manuscript will be discarded and you will return to Step 1. Your chosen format stays selected."
+        confirmLabel="Cancel and go back"
+        cancelLabel="Stay here"
+        tone="danger"
+        onCancel={() => setCancelOpen(false)}
+        onConfirm={() => {
+          setCancelOpen(false);
+          previewRequest.current += 1;
+          onCancel?.();
+        }}
       />
       <ConfirmDialog
         open={oversizeBytes != null}

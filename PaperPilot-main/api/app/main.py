@@ -36,6 +36,7 @@ from app.compliance_db import (
     latest_pending_checkout_id,
     list_manuscripts,
     list_mechanics,
+    list_scan_summaries,
     list_versions,
     persist_scan,
     require_premium,
@@ -56,6 +57,7 @@ from app.paymongo import (
 from app.paymongo_events import fulfill_checkout_paid, handle_paymongo_event
 from app.documents import (
     DocumentError,
+    build_sample_mechanics_docx,
     derive_mechanics_rules,
     normalize_mechanics_rules,
     parse_document,
@@ -353,47 +355,9 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
 @app.get("/mechanics/sample")
 def mechanics_sample():
     """Downloadable sample format-mechanics guide (DOCX) for users who need a starting point."""
-    from docx import Document
     from fastapi.responses import StreamingResponse
 
-    doc = Document()
-    doc.add_heading("Sample Format Mechanics Guide", level=0)
-    doc.add_paragraph(
-        "Use this guide as a starting point. Upload it in PaperPilot, review the "
-        "extracted Format Fields, then edit any value to match your school or style."
-    )
-    doc.add_heading("Paper", level=1)
-    doc.add_paragraph("Paper size: 8.5 x 11 (Letter)")
-    doc.add_paragraph("Orientation: Portrait")
-    doc.add_paragraph("Paper substance / weight: 20")
-    doc.add_paragraph("Line spacing: 1.5")
-    doc.add_paragraph("First-line indentation: 0.5 inch")
-    doc.add_heading("Margins (inches)", level=1)
-    doc.add_paragraph("Top: 1 · Bottom: 1 · Left: 1 · Right: 1")
-    doc.add_paragraph("Gutter: 0 · Header: 0.5 · Footer: 0.5")
-    doc.add_heading("Font", level=1)
-    doc.add_paragraph("Font type: Times New Roman")
-    doc.add_paragraph("Font color: Black/Automatic")
-    doc.add_paragraph("Heading 1 size: 16 pt")
-    doc.add_paragraph("Heading 2 size: 14 pt")
-    doc.add_paragraph("Heading 3 and body content size: 12 pt")
-    doc.add_heading("Pagination", level=1)
-    doc.add_paragraph("Page number position: Top right")
-    doc.add_paragraph("First page of each chapter: No page number shown")
-    doc.add_heading("Page breaks", level=1)
-    doc.add_paragraph("Insert a page break only when starting a new chapter.")
-    doc.add_heading("Tables", level=1)
-    doc.add_paragraph('Table naming: Table <name> above a "TABLE TITLE" caption.')
-    doc.add_heading("Figures", level=1)
-    doc.add_paragraph(
-        "Figure naming: Figure <number>: Figure Title in bold/underlined below the figure."
-    )
-    doc.add_heading("Citation format", level=1)
-    doc.add_paragraph("Citation style: APA 7th Edition")
-
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
+    buffer = io.BytesIO(build_sample_mechanics_docx())
     headers = {
         "Content-Disposition": 'attachment; filename="Sample_Format_Mechanics.docx"'
     }
@@ -701,6 +665,12 @@ def compliance_scan_create(
     scan["page_count"] = result.get("page_count") or 0
     scan["pagination"] = result.get("pagination") or {}
     return scan
+
+
+@app.get("/scans")
+def compliance_scans_list(uid: str = Depends(authenticated_uid)):
+    """Finished scans (summary only) so My Manuscripts can be rebuilt on any device."""
+    return {"items": list_scan_summaries(uid)}
 
 
 @app.get("/scans/{scan_id}/progress")

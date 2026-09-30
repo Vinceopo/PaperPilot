@@ -8,7 +8,9 @@ import {
   listManuscripts,
   listMechanics,
   deleteManuscript as deleteManuscriptRequest,
+  getComplianceScan,
   getScanDocument,
+  listScans,
   previewManuscript,
   renameMechanics as renameMechanicsRequest,
   saveMechanicsProfile,
@@ -35,15 +37,21 @@ import UploadJourneyModal, {
   markUploadJourneySeen,
   uploadJourneySeen,
 } from "./components/cockpit/UploadJourneyModal.jsx";
-import Spinner from "./components/Spinner.jsx";
+import PaperRollAnimation from "./components/PaperRollAnimation.jsx";
+import PaperPlaneLoader from "./components/PaperPlaneLoader.jsx";
 import FileTypeIcon from "./components/FileTypeIcon.jsx";
 import { useScanFlow } from "./hooks/useScanFlow.js";
-import { isScanReady, isServerId, scanTargetIds } from "./lib/scanMapper.js";
+import { isScanReady, isServerId, mapComplianceScanToResult, scanTargetIds } from "./lib/scanMapper.js";
 import {
+  attachScanResult,
+  dismissScanIds,
+  loadDismissedScanIds,
   loadScannedManuscripts,
+  mergeServerScans,
   normalizeTitle,
   saveScannedManuscripts,
   upsertFromScanResult,
+  versionScanId,
   versionToScanResult,
 } from "./lib/scannedLibrary.js";
 import { latestVersion } from "./lib/scoreBand.js";
@@ -405,9 +413,43 @@ export default function App() {
   const scanFlowRef = useRef(null);
   scanFlowRef.current = scanFlow;
 
+  // Stored versions can be trimmed (browser quota) or server-only; fetch the full scan when opened.
+  async function resolveSavedResult(manuscript, version) {
+    if (!version) return null;
+    const scanId = versionScanId(version);
+    if ((version.scanResult && !version.trimmed) || !isServerId(scanId)) {
+      return versionToScanResult(manuscript, version);
+    }
+    try {
+      const scan = await getComplianceScan(scanId);
+      const full = mapComplianceScanToResult(scan, {
+        documentId: manuscript?.id,
+        documentTitle: manuscript?.title,
+        citationStyle: manuscript?.citationStyle,
+        versionId: version.versionId || version.scanResult?.versionId,
+        documentName: version.scanResult?.documentName,
+        cloudinaryUrl: version.scanResult?.cloudinaryUrl,
+      });
+      const next = attachScanResult(scannedLibraryRef.current, manuscript.id, version.id, full);
+      scannedLibraryRef.current = next;
+      setScannedLibrary(next);
+      saveScannedManuscripts(next, user?.uid);
+      const updated = next.find((m) => m.id === manuscript.id);
+      const updatedVersion = updated?.versions?.find((v) => v.id === version.id);
+      return versionToScanResult(updated || manuscript, updatedVersion || version);
+    } catch {
+      return versionToScanResult(manuscript, version);
+    }
+  }
+
   const updateScannedLibrary = useCallback(
     (next) => {
       const previous = scannedLibraryRef.current;
+      const kept = new Set(next.flatMap((m) => (m.versions || []).map(versionScanId)));
+      dismissScanIds(
+        previous.flatMap((m) => (m.versions || []).map(versionScanId)).filter((id) => id && !kept.has(id)),
+        user?.uid
+      );
       setScannedLibrary(next);
       saveScannedManuscripts(next, user?.uid);
       const current = currentManuscriptRef.current;
@@ -509,11 +551,25 @@ export default function App() {
       // Load each resource independently — a 503 on manuscripts/subscription
       // must not wipe a successful mechanics list (that caused "already exists"
       // saves while Use a Saved Format looked empty).
-      const [mechanicsResult, manuscriptsResult, subscriptionResult] = await Promise.allSettled([
+      const [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] = await Promise.allSettled([
         listMechanics(),
         listManuscripts(),
         getSubscription(),
+        listScans(),
       ]);
+      if (scansResult.status === "fulfilled") {
+        const uid = auth.currentUser?.uid;
+        const { items, added } = mergeServerScans(
+          scannedLibraryRef.current,
+          itemsFrom(scansResult.value, "items"),
+          loadDismissedScanIds(uid)
+        );
+        if (added) {
+          scannedLibraryRef.current = items;
+          setScannedLibrary(items);
+          saveScannedManuscripts(items, uid);
+        }
+      }
 
       const failures = [];
       if (mechanicsResult.status === "fulfilled") {
@@ -902,17 +958,10 @@ export default function App() {
 
   function openUploadMechanics() {
     setActivePage("upload");
-    handleBackToDashboard();
-  }
-
-  function openUploadManuscript() {
-    setActivePage("upload");
-    setManuscriptReady(false);
-    setFileDetailsNotice("");
-    setCurrentVersion(null);
-    scanFlow.backToDashboard();
-    setUploadWizardStep(2);
-    setWizardMaxStep((max) => Math.max(max, 2));
+    // Return to the in-progress wizard step; only leave results/analysis screens.
+    if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
+      handleBackToDashboard();
+    }
   }
 
   const showingUploadFace =
@@ -953,22 +1002,12 @@ export default function App() {
           <button
             onClick={openUploadMechanics}
             className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm font-semibold transition ${
-              showingUploadFace && uploadWizardStep === 1
+              activePage === "upload"
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            <span className="text-[#22c9b4]">↑</span> Upload Mechanics
-          </button>
-          <button
-            onClick={openUploadManuscript}
-            className={`mt-1 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm font-semibold transition ${
-              showingUploadFace && uploadWizardStep === 2
-                ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
-                : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <span className="text-[#22c9b4]">↑</span> Upload Manuscript
+            <span className="text-[#22c9b4]">↑</span> Upload &amp; Analyze
           </button>
           <button
             onClick={() => setActivePage("manuscripts")}
@@ -1164,8 +1203,9 @@ export default function App() {
               resetUploadWizard(1);
               setActivePage("upload");
             }}
-            onOpenSavedResult={(manuscript, version) => {
-              const saved = versionToScanResult(manuscript, version);
+            resolveSavedResult={resolveSavedResult}
+            onOpenSavedResult={async (manuscript, version) => {
+              const saved = await resolveSavedResult(manuscript, version);
               if (!saved) return;
               setActivePage("upload");
               scanFlow.showSavedResult(saved, version?.versionNumber);
@@ -1224,11 +1264,12 @@ export default function App() {
         {/* ══════════════════════════════════════════════════════════════════
             SCAN FLOW — takes over the main area; sidebar + header stay visible
         ═══════════════════════════════════════════════════════════════════ */}
-        {activePage === "upload" && (<>
+        {/* Kept mounted while on other pages so an in-progress upload (step, picked file, title) survives. */}
+        <div hidden={activePage !== "upload"}>
 
         {/* ── Results screen ─────────────────────────────────────────────── */}
         <ScanSummaryModal
-          open={scanFlow.step === "summary"}
+          open={activePage === "upload" && scanFlow.step === "summary"}
           result={scanFlow.result}
           onViewDocument={scanFlow.openReferenceTracing}
           onViewFullResult={scanFlow.openFullResults}
@@ -1272,6 +1313,7 @@ export default function App() {
         {scanFlow.step === "analyzing" && (
           <div className="grid min-h-[60vh] place-items-center rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
             <div className="flex w-full max-w-md flex-col items-center gap-5 text-center">
+              <PaperRollAnimation className="h-44 w-44" />
               <p className="text-base font-bold text-slate-800">Analysing your document…</p>
               <div className="w-full">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
@@ -1315,7 +1357,7 @@ export default function App() {
             {loading ? (
               <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
                 <div className="flex flex-col items-center gap-3">
-                  <Spinner className="h-8 w-8 border-[3px] text-[#16bfa8]" />
+                  <PaperPlaneLoader className="h-20 w-56" />
                   Loading your compliance workspace…
                 </div>
               </div>
@@ -1348,6 +1390,10 @@ export default function App() {
                     onUpload={onManuscriptUpload}
                     onPreview={previewManuscript}
                     uploadCancelKey={uploadCancelKey}
+                    onCancel={() => {
+                      cancelManuscriptUpload();
+                      setUploadWizardStep(1);
+                    }}
                     onFilePick={() => {
                       // Picking a file alone must not open File details.
                       setManuscriptReady(false);
@@ -1517,8 +1563,7 @@ export default function App() {
             )}
           </>
         )}
-        {/* close activePage === "upload" wrapper */}
-        </>)}
+        </div>{/* close upload wrapper */}
       </main>
 
       <ConfirmDialog

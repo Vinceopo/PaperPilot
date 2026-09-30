@@ -56,6 +56,7 @@ export default function MyManuscriptsScreen({
   onUploadNew,
   onPermanentDelete,
   onOpenSavedResult,
+  resolveSavedResult,
 }) {
   const items = Array.isArray(itemsProp) ? itemsProp : [];
   const [query, setQuery] = useState("");
@@ -356,6 +357,7 @@ export default function MyManuscriptsScreen({
           onUpgrade={onUpgrade}
           onDeleteVersion={deleteVersion}
           onOpenResult={(version) => onOpenSavedResult?.(viewing, version)}
+          resolveResult={resolveSavedResult}
           onClose={() => setViewId(null)}
         />
       )}

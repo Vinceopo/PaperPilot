@@ -289,17 +289,17 @@ export default function SubscriptionScreen({
               : "Secure checkout powered by PayMongo (Card, GCash, Maya, and more)."}
           </p>
         </div>
-        {isPremium && (
+        {isPremium && checkoutOpen && (
           <button
             type="button"
             onClick={() => {
-              setCheckoutOpen((open) => !open);
+              setCheckoutOpen(false);
               setError("");
               setSuccess("");
             }}
             className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
           >
-            {checkoutOpen ? "View current plan" : "Change plan"}
+            View current plan
           </button>
         )}
       </div>
