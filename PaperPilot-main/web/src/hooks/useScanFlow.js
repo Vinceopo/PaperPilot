@@ -11,8 +11,9 @@
  *   "error"        – analysis failed; user can retry
  */
 
-import { useCallback, useState } from "react";
-import { analyzeDocument, downloadReport as downloadReportFn, ACCEPTED_EXTENSIONS, MAX_FILE_BYTES } from "../lib/mockAnalysis";
+import { useCallback, useRef, useState } from "react";
+import { analyzeDocument, downloadReport as downloadReportFn } from "../lib/mockAnalysis";
+import { ACCEPTED_EXTENSIONS, MAX_FILE_SIZE_BYTES } from "../lib/uploadLimits.js";
 import { formatFileSize } from "../lib/formatFileSize.js";
 import { isServerId } from "../lib/scanMapper";
 
@@ -21,8 +22,8 @@ function validateFile(file) {
   const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
   if (!ACCEPTED_EXTENSIONS.includes(ext))
     return `Only ${ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
-  if (file.size > MAX_FILE_BYTES)
-    return `File must be ${formatFileSize(MAX_FILE_BYTES)} or smaller.`;
+  if (file.size > MAX_FILE_SIZE_BYTES)
+    return `File must be ${formatFileSize(MAX_FILE_SIZE_BYTES)} or smaller.`;
   return "";
 }
 
@@ -64,12 +65,13 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [persistScan, setPersistScan] = useState(false);
+  const resultRef = useRef(null);
 
   const selectFile = useCallback((f) => {
-    const tooBig = Boolean(f && f.size > MAX_FILE_BYTES);
+    const tooBig = Boolean(f && f.size > MAX_FILE_SIZE_BYTES);
     const err = f && !tooBig ? validateFile(f) : "";
     setFileInner(tooBig ? null : (f ?? null));
-    setFileError(tooBig ? `File must be ${formatFileSize(MAX_FILE_BYTES)} or smaller.` : err);
+    setFileError(tooBig ? `File must be ${formatFileSize(MAX_FILE_SIZE_BYTES)} or smaller.` : err);
     setError("");
     setStep(!tooBig && f && !err ? "fileSelected" : "idle");
   }, []);
@@ -77,6 +79,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const analyze = useCallback(async () => {
     if ((!file && !getScanTarget) || fileError || step === "analyzing") return;
     setStep("analyzing");
+    resultRef.current = null;
     setResult(null);
     setError("");
     setScanProgress(INITIAL_PROGRESS);
@@ -124,14 +127,19 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
       setDocumentId(scanResult.documentId);
       setVersionNumber(nextVersion);
       setPersistScan(true);
+      resultRef.current = scanResult;
       setResult(scanResult);
       setScanProgress({ percent: 100, stage: "done", message: "Analysis complete" });
-      setStep("summary");
     } catch (err) {
       setError(err?.message ?? "Analysis failed. Please try again.");
       setStep("error");
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
+
+  const revealSummary = useCallback(() => {
+    if (!resultRef.current) return;
+    setStep((current) => (current === "analyzing" ? "summary" : current));
+  }, []);
 
   const openReferenceTracing = useCallback(() => {
     if (result) setStep("tracing");
@@ -167,6 +175,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setFileInner(null);
     setFileError("");
     setError("");
+    resultRef.current = null;
     setResult(null);
     setPersistScan(false);
     setScanProgress(INITIAL_PROGRESS);
@@ -177,7 +186,9 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setPersistScan(false);
     setFileInner(null);
     setFileError("");
-    setResult(saved && typeof saved === "object" ? saved : null);
+    const nextResult = saved && typeof saved === "object" ? saved : null;
+    resultRef.current = nextResult;
+    setResult(nextResult);
     setVersionNumber(Number(version) || 1);
     setError("");
     setDownloadError("");
@@ -186,7 +197,11 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   }, []);
 
   const patchResult = useCallback((patch) => {
-    setResult((current) => (current ? { ...current, ...patch } : current));
+    setResult((current) => {
+      const next = current ? { ...current, ...patch } : current;
+      resultRef.current = next;
+      return next;
+    });
   }, []);
 
   const syncVersionNumber = useCallback((version) => {
@@ -197,6 +212,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const backToDashboard = useCallback(() => {
     setFileInner(null);
     setFileError("");
+    resultRef.current = null;
     setResult(null);
     setError("");
     setDownloadError("");
@@ -226,6 +242,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     showSavedResult,
     patchResult,
     syncVersionNumber,
+    revealSummary,
     openReferenceTracing,
     openFullResults,
     backToSummary,

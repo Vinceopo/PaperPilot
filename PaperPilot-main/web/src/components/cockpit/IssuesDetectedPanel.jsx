@@ -13,7 +13,6 @@ const SEVERITY = {
     pill: "bg-amber-100 text-amber-800 border-amber-200",
     pillActive: "bg-amber-200 text-amber-900 border-amber-400 ring-2 ring-amber-300/70",
     badge: "bg-amber-400 text-white",
-    border: "border-l-amber-400",
     rowBg: "bg-amber-50/40",
     tag: "bg-amber-100 text-amber-700 border-amber-200",
   },
@@ -22,7 +21,6 @@ const SEVERITY = {
     pill: "bg-orange-100 text-orange-800 border-orange-200",
     pillActive: "bg-orange-200 text-orange-900 border-orange-400 ring-2 ring-orange-300/70",
     badge: "bg-orange-500 text-white",
-    border: "border-l-orange-400",
     rowBg: "bg-orange-50/40",
     tag: "bg-orange-100 text-orange-700 border-orange-200",
   },
@@ -31,7 +29,6 @@ const SEVERITY = {
     pill: "bg-rose-100 text-rose-800 border-rose-200",
     pillActive: "bg-rose-200 text-rose-900 border-rose-400 ring-2 ring-rose-300/70",
     badge: "bg-rose-500 text-white",
-    border: "border-l-rose-500",
     rowBg: "bg-rose-50/40",
     tag: "bg-rose-100 text-rose-700 border-rose-200",
   },
@@ -397,7 +394,7 @@ export default function IssuesDetectedPanel({
                 return (
                   <div
                     key={block.key}
-                    className={`overflow-hidden rounded-xl border border-slate-200 border-l-4 ${s.border} ${s.rowBg}`}
+                    className={`overflow-hidden rounded-xl border border-slate-200 ${s.rowBg}`}
                   >
                     <div className="border-b border-slate-200/70 px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">

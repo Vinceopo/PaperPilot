@@ -3,16 +3,16 @@
  * Used by Customize, Upload (extracted), and Saved (loaded) Format Fields.
  */
 
-/** Real editable starter values (not empty placeholders). */
-export function sampleMechanicsForm(name = "Sample Capstone Format") {
+/** APA 7th edition starter values, matching the downloadable sample guide. */
+export function sampleMechanicsForm(name = "APA 7th Edition Format") {
   return {
-    name: name || "Sample Capstone Format",
+    name: name || "APA 7th Edition Format",
     paperSize: "8.5 x 11",
     paperOrientation: "Portrait",
     paperSubstance: "20",
-    spacing: "1.5",
+    spacing: "Double",
     indention: "0.5 inch",
-    alignment: "Justified",
+    alignment: "Left",
     marginTop: "1",
     marginLeft: "1",
     marginBottom: "1",
@@ -20,16 +20,18 @@ export function sampleMechanicsForm(name = "Sample Capstone Format") {
     marginGutter: "0",
     marginHeader: "0.5",
     marginFooter: "0.5",
-    fontHeading1Size: "16",
-    fontHeading2Size: "14",
+    fontHeading1Size: "12",
+    fontHeading2Size: "12",
     fontHeading3Size: "12",
     fontType: "Times New Roman",
     fontColor: "Black/Automatic",
     paginationPosition: "Top right",
-    paginationFirstPageRule: "No page number shown",
-    pageBreaks: "Only when starting a new chapter",
-    tableLayout: 'Table <name> above a "TABLE TITLE" caption',
-    figureLayout: "Figure <number>: Figure Title in bold/underlined below the figure",
+    paginationFirstPageRule: "Counted but not numbered",
+    pageBreaks: "Only to start each new chapter and the reference list",
+    tableLayout:
+      "Table number in bold, with the title in italic title case on the next line, both placed above it",
+    figureLayout:
+      "Figure number in bold, with the title in italic title case on the next line, both placed above the image",
     citationFormat: "APA",
   };
 }

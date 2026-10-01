@@ -1,18 +1,19 @@
 /**
- * Human-readable file size. Decimal units (1000) so a 100_000_000 byte limit reads "100 MB".
- * At most one decimal place.
+ * Human-readable file size. Binary units (1024), matching Cloudinary's limits and
+ * Windows Explorer, so a 10,485,760 byte limit reads "10 MB".
+ * At most one decimal place. `roundUp` never rounds a size down to a smaller value.
  */
-export function formatFileSize(bytes) {
+export function formatFileSize(bytes, { roundUp = false } = {}) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
   let value = n;
   let unit = 0;
-  while (value >= 1000 && unit < units.length - 1) {
-    value /= 1000;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
     unit += 1;
   }
-  const rounded = Math.round(value * 10) / 10;
+  const rounded = (roundUp ? Math.ceil(value * 10) : Math.round(value * 10)) / 10;
   const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
   return `${text} ${units[unit]}`;
 }

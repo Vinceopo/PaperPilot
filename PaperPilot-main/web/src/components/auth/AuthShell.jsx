@@ -30,7 +30,6 @@ export default function AuthShell({
   subtitle,
   children,
   footer,
-  onContinueAsGuest,
 }) {
   const copy = COPY[variant] || COPY.login;
 
@@ -93,18 +92,6 @@ export default function AuthShell({
               {children}
 
               {footer}
-
-              {onContinueAsGuest && (
-                <p className="mt-3 text-center">
-                  <button
-                    type="button"
-                    className="text-sm text-slate-400 underline-offset-2 hover:text-slate-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-sm"
-                    onClick={onContinueAsGuest}
-                  >
-                    Continue without signing in
-                  </button>
-                </p>
-              )}
             </div>
           </div>
         </div>

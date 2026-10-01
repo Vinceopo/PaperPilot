@@ -6,6 +6,7 @@
  */
 
 import { formatFileSize } from "./formatFileSize.js";
+import { MAX_FILE_SIZE_BYTES } from "./uploadLimits.js";
 
 const CLOUD = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || "";
 const PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "uploaded_docs";
@@ -14,8 +15,6 @@ const PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "uploaded_docs";
 export const CHUNK_SIZE_BYTES = 20_000_000;
 /** At or below this size, one request is enough. */
 export const SIMPLE_UPLOAD_MAX_BYTES = 5_000_000;
-/** Matches Cloudinary raw upload and the API document limit. */
-export const MAX_FILE_BYTES = 100_000_000;
 
 function uploadEndpoint(resourceType = "raw") {
   if (!CLOUD) {
@@ -119,8 +118,8 @@ async function uploadLarge(file, resourceType) {
  */
 export async function uploadToCloudinary(file, options = {}) {
   if (!file) throw new Error("No file to upload.");
-  if (file.size > MAX_FILE_BYTES) {
-    throw new Error(`File must be ${formatFileSize(MAX_FILE_BYTES)} or smaller.`);
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    throw new Error(`File must be ${formatFileSize(MAX_FILE_SIZE_BYTES)} or smaller.`);
   }
   const resourceType = options.resourceType || "raw";
   if (file.size <= SIMPLE_UPLOAD_MAX_BYTES) {
