@@ -3,6 +3,33 @@
  * Values shown are the actual rules (from extraction, saved profile, or sample starter).
  */
 
+import { useEffect, useId, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
+import {
+  BODY_NUMBERING_OPTIONS,
+  CHAPTER_FIRST_PAGE_OPTIONS,
+  CHAPTER_MARKER_OPTIONS,
+  HEADING_LEVELS,
+  HEADING_STYLE_FIELDS,
+  LANDSCAPE_OPTIONS,
+  PAGE_POSITIONS,
+  PRELIMINARY_STYLE_OPTIONS,
+  TITLE_PAGE_OPTIONS,
+  WORD_SPACING_OPTIONS,
+  emptyHeadingStyles,
+} from "../../lib/mechanicsOptions";
+
+const LINE_SPACING_OPTIONS = [
+  { value: "1", label: "1 (Single)" },
+  { value: "1.15" },
+  { value: "1.5", label: "1.5 (One and a half)" },
+  { value: "2", label: "2 (Double)" },
+];
+const FONT_FAMILY_OPTIONS = ["Times New Roman", "Arial", "Calibri", "Cambria", "Georgia", "Garamond"].map(
+  (value) => ({ value })
+);
+const FONT_COLOR_OPTIONS = ["Black/Automatic", "Black", "Automatic"].map((value) => ({ value }));
+
 const inputClass =
   "mt-1.5 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
 const areaClass =
@@ -18,6 +45,132 @@ function Field({ label, children, hint }) {
   );
 }
 
+/** Free-text input with a dropdown that always lists every preset, whatever is typed. */
+function ComboInput({ value, onChange, options, disabled }) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const rootRef = useRef(null);
+  const inputRef = useRef(null);
+  const listId = useId();
+  const current = String(value ?? "").trim().toLowerCase();
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function onPointerDown(e) {
+      if (!rootRef.current?.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  function openList() {
+    setActive(options.findIndex((o) => o.value.toLowerCase() === current));
+    setOpen(true);
+  }
+
+  function choose(option) {
+    onChange(option.value);
+    setOpen(false);
+    inputRef.current?.focus();
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) return openList();
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActive((i) => (i + step + options.length) % options.length);
+    } else if (e.key === "Enter" && open && active >= 0) {
+      e.preventDefault();
+      choose(options[active]);
+    } else if (e.key === "Escape" && open) {
+      e.preventDefault();
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div ref={rootRef} className="relative">
+      <input
+        ref={inputRef}
+        disabled={disabled}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="none"
+        className={`${inputClass} pr-8`}
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        disabled={disabled}
+        aria-label="Show choices"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          e.preventDefault();
+          if (open) setOpen(false);
+          else openList();
+          inputRef.current?.focus();
+        }}
+        className="absolute bottom-0 right-0 top-1.5 flex w-8 items-center justify-center text-slate-500 hover:text-slate-700 disabled:opacity-40"
+      >
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
+      </button>
+      {open ? (
+        <ul
+          id={listId}
+          role="listbox"
+          className="absolute left-0 right-0 z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          {options.map((option, index) => {
+            const selected = option.value.toLowerCase() === current;
+            return (
+              <li
+                key={option.value}
+                role="option"
+                aria-selected={selected}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  choose(option);
+                }}
+                onMouseEnter={() => setActive(index)}
+                className={`cursor-pointer px-3 py-1.5 text-xs font-normal ${
+                  index === active ? "bg-[#e6f9f4]" : ""
+                } ${selected ? "font-semibold text-[#109b89]" : "text-slate-700"}`}
+              >
+                {option.label || option.value}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+/** Select with a "Not checked" choice; a saved value outside the list stays selectable. */
+function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "Not checked" }) {
+  const items = options.map((option) => (typeof option === "string" ? { value: option } : option));
+  const current = String(value ?? "");
+  if (current && !items.some((item) => item.value === current)) {
+    items.push({ value: current, label: `${current} (custom)` });
+  }
+  return (
+    <select disabled={disabled} value={current} onChange={(e) => onChange(e.target.value)} className={inputClass}>
+      <option value="">{emptyLabel}</option>
+      {items.map((item) => (
+        <option key={item.value} value={item.value}>
+          {item.label || item.value}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function Section({ title, children }) {
   return (
     <div className="space-y-3 border-t border-slate-200/80 pt-3 first:border-t-0 first:pt-0">
@@ -30,6 +183,24 @@ function Section({ title, children }) {
 export default function FormatMechanicsFields({ form, onChange, disabled, title = "Format Fields" }) {
   function set(key) {
     return (e) => onChange?.({ ...form, [key]: e.target.value });
+  }
+  function setValue(key) {
+    return (value) => onChange?.({ ...form, [key]: value });
+  }
+  const headingStyles = form.headingStyles || emptyHeadingStyles();
+  function setHeadingStyle(level, key) {
+    return (value) =>
+      onChange?.({
+        ...form,
+        headingStyles: { ...headingStyles, [level]: { ...headingStyles[level], [key]: value } },
+      });
+  }
+  const chapterMarkers = Array.isArray(form.paginationChapterMarkers) ? form.paginationChapterMarkers : [];
+  function toggleChapterMarker(key) {
+    const next = chapterMarkers.includes(key)
+      ? chapterMarkers.filter((item) => item !== key)
+      : [...chapterMarkers, key];
+    onChange?.({ ...form, paginationChapterMarkers: next });
   }
 
   return (
@@ -78,19 +249,21 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               className={inputClass}
             />
           </Field>
-          <Field label="Spacing" hint="Line spacing, e.g. 1.5 or Double">
-            <input
+          <Field label="Spacing" hint="Pick a choice or type your own, e.g. 1.5 or Double">
+            <ComboInput
               disabled={disabled}
               value={form.spacing}
-              onChange={set("spacing")}
-              list="pp-line-spacing"
-              className={inputClass}
+              onChange={setValue("spacing")}
+              options={LINE_SPACING_OPTIONS}
             />
-            <datalist id="pp-line-spacing">
-              <option value="1" />
-              <option value="1.5" />
-              <option value="2" />
-            </datalist>
+          </Field>
+          <Field label="Word spacing" hint="Spaces between words and after periods">
+            <ChoiceSelect
+              disabled={disabled}
+              value={form.wordSpacing}
+              onChange={setValue("wordSpacing")}
+              options={WORD_SPACING_OPTIONS}
+            />
           </Field>
           <Field label="Indention" hint="e.g. 0.5 inch, 1/2 inch, 1.27 cm">
             <input
@@ -113,6 +286,14 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               <option value="Center">Center</option>
               <option value="Right">Right</option>
             </select>
+          </Field>
+          <Field label="Landscape pages" hint="When pages may be turned sideways">
+            <ChoiceSelect
+              disabled={disabled}
+              value={form.paperLandscapePages}
+              onChange={setValue("paperLandscapePages")}
+              options={LANDSCAPE_OPTIONS}
+            />
           </Field>
         </div>
       </Section>
@@ -183,55 +364,107 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
             />
           </Field>
           <Field label="Type" hint="Font family">
-            <input
+            <ComboInput
               disabled={disabled}
               value={form.fontType}
-              onChange={set("fontType")}
-              list="pp-font-families"
-              className={inputClass}
+              onChange={setValue("fontType")}
+              options={FONT_FAMILY_OPTIONS}
             />
-            <datalist id="pp-font-families">
-              {["Times New Roman", "Arial", "Calibri", "Cambria", "Georgia", "Garamond"].map((f) => (
-                <option key={f} value={f} />
-              ))}
-            </datalist>
           </Field>
           <Field label="Color">
-            <input
+            <ComboInput
               disabled={disabled}
               value={form.fontColor}
-              onChange={set("fontColor")}
-              list="pp-font-colors"
-              className={inputClass}
+              onChange={setValue("fontColor")}
+              options={FONT_COLOR_OPTIONS}
             />
-            <datalist id="pp-font-colors">
-              <option value="Black/Automatic" />
-              <option value="Black" />
-              <option value="Automatic" />
-            </datalist>
           </Field>
         </div>
       </Section>
 
+      <Section title="Heading styles">
+        {HEADING_LEVELS.map(({ key: level, label }) => (
+          <div key={level}>
+            <p className="text-[11px] font-semibold text-slate-600">{label}</p>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4">
+              {HEADING_STYLE_FIELDS.map((field) => (
+                <Field key={field.key} label={<span className="font-normal text-slate-500">{field.label}</span>}>
+                  <ChoiceSelect
+                    disabled={disabled}
+                    value={headingStyles[level]?.[field.key]}
+                    onChange={setHeadingStyle(level, field.key)}
+                    options={field.options}
+                  />
+                </Field>
+              ))}
+            </div>
+          </div>
+        ))}
+      </Section>
+
       <Section title="Pagination">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Position">
-            <input
+          <Field label="Position" hint="Where page numbers sit on normal pages">
+            <ChoiceSelect
               disabled={disabled}
               value={form.paginationPosition}
-              onChange={set("paginationPosition")}
-              className={inputClass}
+              onChange={setValue("paginationPosition")}
+              options={PAGE_POSITIONS}
+            />
+          </Field>
+          <Field label="Title page" hint="Document page 1">
+            <ChoiceSelect
+              disabled={disabled}
+              value={form.paginationTitlePage}
+              onChange={setValue("paginationTitlePage")}
+              options={TITLE_PAGE_OPTIONS}
             />
           </Field>
           <Field label="First page of each chapter">
-            <input
+            <ChoiceSelect
               disabled={disabled}
               value={form.paginationFirstPageRule}
-              onChange={set("paginationFirstPageRule")}
-              className={inputClass}
+              onChange={setValue("paginationFirstPageRule")}
+              options={CHAPTER_FIRST_PAGE_OPTIONS}
+            />
+          </Field>
+          <Field label="Preliminary pages" hint="Pages before Chapter 1">
+            <ChoiceSelect
+              disabled={disabled}
+              value={form.paginationPreliminaryStyle}
+              onChange={setValue("paginationPreliminaryStyle")}
+              options={PRELIMINARY_STYLE_OPTIONS}
+            />
+          </Field>
+          <Field label="Body numbering" hint="From Chapter 1 onward">
+            <ChoiceSelect
+              disabled={disabled}
+              value={form.paginationBodyNumbering}
+              onChange={setValue("paginationBodyNumbering")}
+              options={BODY_NUMBERING_OPTIONS}
             />
           </Field>
         </div>
+        <fieldset className="block">
+          <legend className="text-[11px] font-semibold text-slate-600">Chapter starts</legend>
+          <span className="mt-0.5 block text-[10px] text-slate-400">
+            Headings that begin a new chapter page. None selected uses CHAPTER I and Chapter 1 styles.
+          </span>
+          <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+            {CHAPTER_MARKER_OPTIONS.map((option) => (
+              <label key={option.value} className="flex items-start gap-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  disabled={disabled}
+                  checked={chapterMarkers.includes(option.value)}
+                  onChange={() => toggleChapterMarker(option.value)}
+                  className="mt-0.5 h-3.5 w-3.5 accent-[#16bfa8]"
+                />
+                {option.label}
+              </label>
+            ))}
+          </div>
+        </fieldset>
       </Section>
 
       <Section title="Page breaks">

@@ -17,6 +17,13 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
+from app.mechanics_options import (
+    canonical_landscape_pages,
+    canonical_word_spacing,
+    normalize_heading_styles,
+    normalize_pagination_rules,
+)
+
 
 class DocumentError(ValueError):
     pass
@@ -76,7 +83,10 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
             raw = page.get_text("dict", sort=True)
             lines: list[dict] = []
             line_index = 0
+            image_count = 0
             for block in raw.get("blocks", []):
+                if block.get("type") == 1:
+                    image_count += 1
                 if block.get("type") != 0:
                     continue
                 for source_line in block.get("lines", []):
@@ -85,7 +95,10 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                             "text": span.get("text", ""),
                             "font": span.get("font"),
                             "size": round(float(span.get("size", 0)), 2),
-                            "bold": bool(int(span.get("flags", 0)) & 16),
+                            "bold": bool(int(span.get("flags", 0)) & 16)
+                            or bool(re.search(r"bold|black|heavy", str(span.get("font") or ""), re.I)),
+                            "italic": bool(int(span.get("flags", 0)) & 2)
+                            or bool(re.search(r"italic|oblique", str(span.get("font") or ""), re.I)),
                             "color": span.get("color"),
                             "bbox": [round(float(value), 2) for value in span.get("bbox", [])],
                         }
@@ -116,6 +129,7 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                     "width_points": round(float(page.rect.width), 2),
                     "height_points": round(float(page.rect.height), 2),
                     "rotation": page.rotation,
+                    "image_count": image_count,
                     "lines": lines,
                 }
             )
@@ -198,9 +212,12 @@ def _page_field_elements(element):
             yield fld
 
 
-def _page_number_setup(section) -> dict | None:
-    """Where Word prints the page number for this section (header/footer PAGE field)."""
-    for where, part in (("header", section.header), ("footer", section.footer)):
+PAGE_NUMBER_FORMATS = {"decimal": "arabic", "lowerRoman": "roman_lower", "upperRoman": "roman_upper"}
+
+
+def _page_field_placement(header, footer, section) -> dict | None:
+    """{'where': 'header'|'footer', 'align': 'left'|'center'|'right'} for the first PAGE field found."""
+    for where, part in (("header", header), ("footer", footer)):
         try:
             element = part._element
         except Exception:
@@ -209,16 +226,50 @@ def _page_number_setup(section) -> dict | None:
             paragraph_el = next((node for node in field_el.iterancestors() if node.tag == qn("w:p")), None)
             if paragraph_el is None:
                 continue
-            hidden_first = False
-            try:
-                if section.different_first_page_header_footer:
-                    first = section.first_page_header if where == "header" else section.first_page_footer
-                    hidden_first = not _has_page_field(first._element)
-            except Exception:
-                hidden_first = False
             align = _anchor_alignment(field_el, section) or _page_field_alignment(paragraph_el)
-            return {"where": where, "align": align, "first_page_hidden": hidden_first}
+            return {"where": where, "align": align}
     return None
+
+
+def _page_number_setup(section) -> dict | None:
+    """Where and how Word prints the page number for this section (header/footer PAGE field)."""
+    placement = _page_field_placement(section.header, section.footer, section)
+    try:
+        different_first = bool(section.different_first_page_header_footer)
+    except Exception:
+        different_first = False
+    first_page = placement
+    if different_first:
+        try:
+            first_page = _page_field_placement(section.first_page_header, section.first_page_footer, section)
+        except Exception:
+            first_page = None
+    number_type = section._sectPr.find(qn("w:pgNumType"))
+    if placement is None and first_page is None and number_type is None:
+        return None
+    fmt = number_type.get(qn("w:fmt")) if number_type is not None else None
+    start = number_type.get(qn("w:start")) if number_type is not None else None
+    setup = dict(placement or {"where": None, "align": None})
+    setup.update(
+        {
+            "shown": placement is not None,
+            "first_page_hidden": different_first and first_page is None,
+            "different_first_page": different_first,
+            "first_page": first_page,
+            "format": PAGE_NUMBER_FORMATS.get(fmt or "decimal", "other"),
+            "start": int(start) if start and start.lstrip("-").isdigit() else None,
+        }
+    )
+    return setup
+
+
+def _section_start_type(section) -> str:
+    """'new_page' (also odd/even page) or 'continuous' / 'new_column'."""
+    try:
+        name = section.start_type.name.lower()
+    except Exception:
+        return "new_page"
+    return name if name in {"continuous", "new_column"} else "new_page"
 
 
 def _xml_paragraph_height(paragraph_el) -> float:
@@ -581,6 +632,43 @@ def _docx_run_font_size(run, paragraph) -> float | None:
     return None
 
 
+def _docx_run_flag(run, paragraph, attr: str) -> bool | None:
+    """bold / italic / all_caps as Word shows it: the run, then its character style, then the paragraph style."""
+    try:
+        value = getattr(run.font, attr)
+    except Exception:
+        value = None
+    if value is not None:
+        return value
+    styles = []
+    try:
+        if run._element.rPr is not None and run._element.rPr.find(qn("w:rStyle")) is not None:
+            styles.append(run.style)
+    except Exception:
+        pass
+    try:
+        styles.append(paragraph.style)
+    except Exception:
+        pass
+    for style in styles:
+        depth = 0
+        while style is not None and depth < 12:
+            try:
+                value = getattr(style.font, attr)
+            except Exception:
+                value = None
+            if value is not None:
+                return value
+            style = getattr(style, "base_style", None)
+            depth += 1
+    return None
+
+
+def _docx_has_drawing(paragraph) -> bool:
+    element = paragraph._element
+    return any(True for _ in element.iter(qn("w:drawing"))) or any(True for _ in element.iter(qn("w:pict")))
+
+
 def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, source: str):
     runs: list[dict] = []
     page_break_total = 0
@@ -607,8 +695,9 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
                 "text": run.text,
                 "font": _docx_run_font_name(run, paragraph),
                 "size": _docx_run_font_size(run, paragraph),
-                "bold": run.bold,
-                "italic": run.italic,
+                "bold": _docx_run_flag(run, paragraph, "bold"),
+                "italic": _docx_run_flag(run, paragraph, "italic"),
+                "caps": _docx_run_flag(run, paragraph, "all_caps"),
                 "color": rgb,
                 "style": run.style.name if run.style else None,
                 "page_breaks": page_break_count,
@@ -635,6 +724,7 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
         "text": paragraph.text,
         "lines": lines,
         "runs": runs,
+        "has_drawing": _docx_has_drawing(paragraph),
         "formatting": {
             "line_spacing": _docx_line_spacing(paragraph, formats, run_sizes[0] if run_sizes else None),
             "alignment": _docx_alignment(paragraph, formats),
@@ -673,9 +763,10 @@ def _parse_docx(data: bytes) -> dict:
     paragraph_index = 0
     seen_cells: set = set()
     seen_paragraphs: set = set()
+    section_index = 0
 
     def consume_paragraph(paragraph, source: str) -> None:
-        nonlocal line_index, paragraph_index
+        nonlocal line_index, paragraph_index, section_index
         element = paragraph._element
         if element in seen_paragraphs:
             return
@@ -684,6 +775,12 @@ def _parse_docx(data: bytes) -> dict:
             paragraphs, all_lines, explicit_page_breaks, paragraph, paragraph_index, line_index, source
         )
         paragraph_index += 1
+        if source in {"body", "table"}:
+            paragraphs[-1]["section_index"] = section_index
+            ppr = element.find(qn("w:pPr"))
+            # A paragraph carrying w:sectPr is the last one of its section.
+            if ppr is not None and ppr.find(qn("w:sectPr")) is not None:
+                section_index += 1
 
     def consume_table(table, source: str) -> None:
         for row in table.rows:
@@ -749,6 +846,7 @@ def _parse_docx(data: bytes) -> dict:
             "body_top_inches": body_edges[index][0],
             "body_bottom_inches": body_edges[index][1],
             "page_number": _page_number_setup(section),
+            "start_type": _section_start_type(section),
         }
         for index, section in enumerate(document.sections)
     ]
@@ -886,6 +984,9 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     color = str(font.get("color") or raw.get("font_color") or "").strip()
     if color:
         font_out["color"] = color[:80]
+    heading_styles = normalize_heading_styles(font.get("heading_styles") or raw.get("heading_styles"))
+    if heading_styles:
+        font_out["heading_styles"] = heading_styles
     for key in ("heading1_size", "heading2_size", "heading3_content_size"):
         value = font.get(key, raw.get(key))
         try:
@@ -924,6 +1025,9 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         value = str(paper_in.get(key) or raw.get(f"paper_{key}") or "").strip()
         if value:
             paper_out[key] = value[:120]
+    landscape = canonical_landscape_pages(paper_in.get("landscape_pages") or raw.get("landscape_pages"))
+    if landscape:
+        paper_out["landscape_pages"] = landscape
     if paper_out:
         rules["paper"] = paper_out
 
@@ -992,17 +1096,13 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["citation_style"] = citation
 
     pagination_in = raw.get("pagination") if isinstance(raw.get("pagination"), dict) else {}
-    pagination_out: dict = {}
-    position = str(pagination_in.get("position") or raw.get("pagination_position") or "").strip()
-    first_page = str(
-        pagination_in.get("first_page_of_chapter") or raw.get("pagination_first_page_rule") or ""
-    ).strip()
-    if position:
-        pagination_out["position"] = position[:200]
-    if first_page:
-        pagination_out["first_page_of_chapter"] = first_page[:200]
+    pagination_out = normalize_pagination_rules(pagination_in, raw)
     if pagination_out:
         rules["pagination"] = pagination_out
+
+    word_spacing = canonical_word_spacing(raw.get("word_spacing"))
+    if word_spacing:
+        rules["word_spacing"] = word_spacing
 
     def _lines(value) -> list[str]:
         if isinstance(value, list):
@@ -1023,6 +1123,6 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
             rules[key] = lines
 
     if pagination_out and "pagination_requirements" not in rules:
-        rules["pagination_requirements"] = list(pagination_out.values())
+        rules["pagination_requirements"] = [value for value in pagination_out.values() if isinstance(value, str)]
 
     return rules

@@ -20,7 +20,7 @@ export function isScanReady(version, manuscript) {
   return scanTargetIds(version, manuscript).ready;
 }
 
-const BREAKDOWN_ORDER = ["Fonts", "Margins", "Indentation", "Spacing", "Alignment"];
+const BREAKDOWN_ORDER = ["Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination"];
 
 /** Convert PDF-point bbox [x0,y0,x1,y1] or {x,y,w,h} into normalized fractions. */
 export function normalizeBbox(raw, pageWidth = 612, pageHeight = 792) {

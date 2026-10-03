@@ -32,7 +32,7 @@ export default function ScanSummaryModal({
 
   const rightPct = Number(result.rightPct ?? result.overallScore ?? 0);
   const wrongPct = Number(result.wrongPct ?? Math.max(0, 100 - rightPct));
-  const categories = (result.categoryWrongPct || []).slice(0, 5);
+  const categories = (result.categoryWrongPct || []).slice(0, 6);
   const severity = result.severityPct || {};
 
   return (

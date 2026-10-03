@@ -7,9 +7,6 @@ import { runComplianceScan, uploadManuscriptVersion } from "../api.js";
 import { isServerId, mapComplianceScanToResult } from "./scanMapper.js";
 import { fetchScanWithProgress } from "./scanPoll.js";
 
-export const ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
-export const MAX_FILE_BYTES = 100_000_000;
-
 function titleFromFile(file) {
   return file?.name?.replace(/\.(pdf|docx)$/i, "") || "Manuscript";
 }

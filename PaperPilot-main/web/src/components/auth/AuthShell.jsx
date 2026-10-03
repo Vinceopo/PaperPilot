@@ -1,3 +1,5 @@
+import PaperPilotLogo from "../PaperPilotLogo.jsx";
+
 const COPY = {
   login: {
     headlineBefore: "Format Compliance ",
@@ -16,19 +18,6 @@ const COPY = {
   },
 };
 
-function LogoMark() {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="grid h-10 w-10 place-items-center rounded-xl bg-accent text-navy shadow-[0_8px_24px_rgba(27,201,160,0.28)]">
-        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" aria-hidden="true">
-          <path d="M4 12.5 20 4l-6.2 16-2.4-6.4L4 12.5Z" fill="currentColor" />
-        </svg>
-      </span>
-      <span className="text-lg font-semibold tracking-tight text-white">PaperPilot</span>
-    </div>
-  );
-}
-
 /**
  * Split-screen frame shared by the login, register, and password-reset screens.
  * `panelKey` re-triggers the slide animation whenever the visible step changes.
@@ -41,7 +30,6 @@ export default function AuthShell({
   subtitle,
   children,
   footer,
-  onContinueAsGuest,
 }) {
   const copy = COPY[variant] || COPY.login;
 
@@ -57,7 +45,7 @@ export default function AuthShell({
         </div>
 
         <div className="relative z-10">
-          <LogoMark />
+          <PaperPilotLogo tone="dark" align="start" />
         </div>
 
         <div className="relative z-10 mt-16 max-w-md">
@@ -92,13 +80,8 @@ export default function AuthShell({
 
       <section className="flex w-full flex-1 items-center justify-center bg-[#EEF1F5] px-5 py-10 sm:px-10 lg:w-[55%]">
         <div className="w-full max-w-[440px] sm:px-9 sm:py-10">
-          <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-accent text-navy">
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden="true">
-                <path d="M4 12.5 20 4l-6.2 16-2.4-6.4L4 12.5Z" fill="currentColor" />
-              </svg>
-            </span>
-            <span className="font-semibold text-navy">PaperPilot</span>
+          <div className="mb-8 flex justify-center lg:hidden">
+            <PaperPilotLogo markClassName="h-10 w-10" />
           </div>
 
           <div className="relative min-h-[34rem] overflow-hidden">
@@ -109,18 +92,6 @@ export default function AuthShell({
               {children}
 
               {footer}
-
-              {onContinueAsGuest && (
-                <p className="mt-3 text-center">
-                  <button
-                    type="button"
-                    className="text-sm text-slate-400 underline-offset-2 hover:text-slate-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-sm"
-                    onClick={onContinueAsGuest}
-                  >
-                    Continue without signing in
-                  </button>
-                </p>
-              )}
             </div>
           </div>
         </div>

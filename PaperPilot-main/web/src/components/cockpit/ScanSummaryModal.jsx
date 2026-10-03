@@ -33,7 +33,7 @@ export default function ScanSummaryModal({
   const categories = (result.categoryWrongPct || [])
     .map((row) => ({ ...row, pct: categoryPct(row) }))
     .filter((row) => row.pct > 0)
-    .slice(0, 5);
+    .slice(0, 6);
   const severity = result.severityPct || { critical: 0, moderate: 0, minor: 0 };
   const issueCount = (result.formatChecks || []).filter(
     (c) => c.result === "FAIL" || c.result === "REVIEW"

@@ -5,6 +5,19 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors } from "../../theme";
+import {
+  BODY_NUMBERING_OPTIONS,
+  CHAPTER_FIRST_PAGE_OPTIONS,
+  CHAPTER_MARKER_OPTIONS,
+  HEADING_LEVELS,
+  HEADING_STYLE_FIELDS,
+  LANDSCAPE_OPTIONS,
+  PAGE_POSITIONS,
+  PRELIMINARY_STYLE_OPTIONS,
+  TITLE_PAGE_OPTIONS,
+  WORD_SPACING_OPTIONS,
+  emptyHeadingStyles,
+} from "../../lib/mechanicsOptions";
 
 const ORIENTATIONS = ["Portrait", "Landscape"];
 const CITATIONS = ["APA", "MLA", "IEEE", "CHICAGO"];
@@ -41,23 +54,41 @@ function Section({ title, children, collapsible = false, defaultOpen = true }) {
   );
 }
 
-function ChipRow({ options, value, onSelect, disabled }) {
+function ChipRow({ options, value, onSelect, disabled, isActive }) {
   return (
     <View style={styles.chipRow}>
-      {options.map((opt) => {
-        const active = value === opt;
+      {options.map((option) => {
+        const opt = typeof option === "string" ? { value: option } : option;
+        const active = isActive ? isActive(opt.value) : value === opt.value;
         return (
           <Pressable
-            key={opt}
+            key={opt.value}
             disabled={disabled}
             style={[styles.chip, active && styles.chipActive]}
-            onPress={() => onSelect(opt)}
+            onPress={() => onSelect(opt.value)}
           >
-            <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt}</Text>
+            <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt.label || opt.value}</Text>
           </Pressable>
         );
       })}
     </View>
+  );
+}
+
+/** Single choice; tapping the selected chip clears it ("Not checked"). Shows a saved custom value too. */
+function ChoiceChips({ options, value, onChange, disabled }) {
+  const current = String(value ?? "");
+  const items = options.map((option) => (typeof option === "string" ? { value: option } : option));
+  if (current && !items.some((item) => item.value === current)) {
+    items.push({ value: current, label: `${current} (custom)` });
+  }
+  return (
+    <ChipRow
+      options={items}
+      value={current}
+      onSelect={(v) => onChange(current === v ? "" : v)}
+      disabled={disabled}
+    />
   );
 }
 
@@ -69,6 +100,17 @@ export default function FormatMechanicsFields({
 }) {
   function set(key, value) {
     onChange?.({ ...form, [key]: value });
+  }
+  const headingStyles = form.headingStyles || emptyHeadingStyles();
+  function setHeadingStyle(level, key, value) {
+    set("headingStyles", { ...headingStyles, [level]: { ...headingStyles[level], [key]: value } });
+  }
+  const chapterMarkers = Array.isArray(form.paginationChapterMarkers) ? form.paginationChapterMarkers : [];
+  function toggleChapterMarker(key) {
+    set(
+      "paginationChapterMarkers",
+      chapterMarkers.includes(key) ? chapterMarkers.filter((item) => item !== key) : [...chapterMarkers, key]
+    );
   }
 
   return (
@@ -135,6 +177,14 @@ export default function FormatMechanicsFields({
             disabled={disabled}
           />
         </Field>
+        <Field label="Word spacing" hint="Tap again to stop checking">
+          <ChoiceChips
+            options={WORD_SPACING_OPTIONS}
+            value={form.wordSpacing}
+            onChange={(v) => set("wordSpacing", v)}
+            disabled={disabled}
+          />
+        </Field>
         <Field label="Indention" hint="e.g. 1 tab or 0.5 inch">
           <TextInput
             editable={!disabled}
@@ -150,6 +200,14 @@ export default function FormatMechanicsFields({
             options={ALIGNMENTS}
             value={form.alignment}
             onSelect={(v) => set("alignment", form.alignment === v ? "" : v)}
+            disabled={disabled}
+          />
+        </Field>
+        <Field label="Landscape pages" hint="When pages may be turned sideways">
+          <ChoiceChips
+            options={LANDSCAPE_OPTIONS}
+            value={form.paperLandscapePages}
+            onChange={(v) => set("paperLandscapePages", v)}
             disabled={disabled}
           />
         </Field>
@@ -237,6 +295,78 @@ export default function FormatMechanicsFields({
             onChangeText={(v) => set("fontColor", v)}
             placeholder="Black/Automatic"
             placeholderTextColor={colors.muted}
+          />
+        </Field>
+      </Section>
+
+      <Section title="Heading styles" collapsible defaultOpen={false}>
+        {HEADING_LEVELS.map(({ key: level, label }) => (
+          <View key={level} style={styles.field}>
+            <Text style={styles.label}>{label}</Text>
+            {HEADING_STYLE_FIELDS.map((field) => (
+              <ChoiceChips
+                key={field.key}
+                options={field.options}
+                value={headingStyles[level]?.[field.key]}
+                onChange={(v) => setHeadingStyle(level, field.key, v)}
+                disabled={disabled}
+              />
+            ))}
+          </View>
+        ))}
+        <Text style={styles.hint}>Tap a selected choice again to stop checking it.</Text>
+      </Section>
+
+      <Section title="Pagination" collapsible defaultOpen={false}>
+        <Field label="Position" hint="Where page numbers sit on normal pages">
+          <ChoiceChips
+            options={PAGE_POSITIONS}
+            value={form.paginationPosition}
+            onChange={(v) => set("paginationPosition", v)}
+            disabled={disabled}
+          />
+        </Field>
+        <Field label="Title page" hint="Document page 1">
+          <ChoiceChips
+            options={TITLE_PAGE_OPTIONS}
+            value={form.paginationTitlePage}
+            onChange={(v) => set("paginationTitlePage", v)}
+            disabled={disabled}
+          />
+        </Field>
+        <Field label="First page of each chapter">
+          <ChoiceChips
+            options={CHAPTER_FIRST_PAGE_OPTIONS}
+            value={form.paginationFirstPageRule}
+            onChange={(v) => set("paginationFirstPageRule", v)}
+            disabled={disabled}
+          />
+        </Field>
+        <Field label="Preliminary pages" hint="Pages before Chapter 1">
+          <ChoiceChips
+            options={PRELIMINARY_STYLE_OPTIONS}
+            value={form.paginationPreliminaryStyle}
+            onChange={(v) => set("paginationPreliminaryStyle", v)}
+            disabled={disabled}
+          />
+        </Field>
+        <Field label="Body numbering" hint="From Chapter 1 onward">
+          <ChoiceChips
+            options={BODY_NUMBERING_OPTIONS}
+            value={form.paginationBodyNumbering}
+            onChange={(v) => set("paginationBodyNumbering", v)}
+            disabled={disabled}
+          />
+        </Field>
+        <Field
+          label="Chapter starts"
+          hint="Headings that begin a new chapter page. None selected uses CHAPTER I and Chapter 1 styles."
+        >
+          <ChipRow
+            options={CHAPTER_MARKER_OPTIONS}
+            isActive={(key) => chapterMarkers.includes(key)}
+            onSelect={toggleChapterMarker}
+            disabled={disabled}
           />
         </Field>
       </Section>
