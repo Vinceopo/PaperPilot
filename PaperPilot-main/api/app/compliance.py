@@ -1,12 +1,31 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from app.gemini_client import enrich_compliance_issues
+from app.mechanics_options import (
+    BODY_CONTINUOUS,
+    BODY_RESTART,
+    DEFAULT_CHAPTER_MARKERS,
+    LANDSCAPE_ANY,
+    LANDSCAPE_TABLES_FIGURES,
+    PRELIM_ARABIC,
+    PRELIM_ROMAN,
+    WORD_SPACING_SINGLE,
+    WORD_SPACING_TWO,
+    canonical_body_numbering,
+    canonical_chapter_markers,
+    canonical_landscape_pages,
+    canonical_preliminary_style,
+    canonical_word_spacing,
+    chapter_first_page_rule,
+    page_position_parts,
+    title_page_rule,
+)
+from app.scoring import BREAKDOWN_ORDER, build_scoring_payload
 
 SEVERITY_ORDER = {"critical": 0, "moderate": 1, "minor": 2}
-BREAKDOWN_ORDER = ("Fonts", "Margins", "Indentation", "Spacing", "Alignment")
 NAMED_PAPER = {"A4": (8.27, 11.69), "LETTER": (8.5, 11.0), "LEGAL": (8.5, 14.0)}
 MAX_LOCATIONS = 20000
 PT_PER_INCH = 72.0
@@ -167,24 +186,33 @@ def _unit_location(unit: dict, category: str) -> dict:
     excerpt = " ".join(str(unit.get("text") or "").split())[:100]
     if excerpt:
         loc["excerpt"] = excerpt
+    bbox = unit.get("bbox")
+    if bbox and len(bbox) >= 4:
+        loc["bbox"] = list(bbox[:4])
+        loc["page_index"] = unit.get("page_index")
+        loc["line_index"] = unit.get("line_index")
+    if unit.get("page_width"):
+        loc["page_width"] = unit.get("page_width")
+    page_height = unit.get("page_height") or unit.get("page_height_points")
+    if page_height:
+        loc["page_height"] = page_height
     return loc
 
 
 def _paper_inches(parsed: dict, rules: dict) -> tuple[float, float]:
-    rule = rules.get("paper_size") or {}
-    if rule.get("width_inches") and rule.get("height_inches"):
-        return float(rule["width_inches"]), float(rule["height_inches"])
-    if rule.get("name") in NAMED_PAPER:
-        return NAMED_PAPER[rule["name"]]
+    """The document's own page size (layout estimates must not depend on the rules)."""
     if parsed.get("metadata", {}).get("format") == "pdf":
         pages = parsed.get("pages") or []
         if pages:
             return pages[0]["width_points"] / PT_PER_INCH, pages[0]["height_points"] / PT_PER_INCH
     sections = parsed.get("sections") or []
-    if sections:
-        width = sections[0].get("page_width_inches") or 8.5
-        height = sections[0].get("page_height_inches") or 11.0
-        return float(width), float(height)
+    if sections and sections[0].get("page_width_inches") and sections[0].get("page_height_inches"):
+        return float(sections[0]["page_width_inches"]), float(sections[0]["page_height_inches"])
+    rule = rules.get("paper_size") or {}
+    if rule.get("width_inches") and rule.get("height_inches"):
+        return float(rule["width_inches"]), float(rule["height_inches"])
+    if rule.get("name") in NAMED_PAPER:
+        return NAMED_PAPER[rule["name"]]
     return 8.5, 11.0
 
 
@@ -194,13 +222,12 @@ def _lines_per_page(parsed: dict, rules: dict) -> int:
     margins = rules.get("margins_inches") or {}
     sections = parsed.get("sections") or [{}]
     section = sections[0] if sections else {}
-    top = float(section.get("top_margin_inches") or margins.get("top") or 1.0)
-    bottom = float(section.get("bottom_margin_inches") or margins.get("bottom") or 1.0)
-    font = rules.get("font") or {}
-    sizes = font.get("sizes_points") or []
-    body = font.get("heading3_content_size")
-    font_pt = float(body or (min(sizes) if sizes else 11.0))
-    spacing = float(rules.get("line_spacing") or 1.5)
+    top = float(section.get("body_top_inches") or section.get("top_margin_inches") or margins.get("top") or 1.0)
+    bottom = float(
+        section.get("body_bottom_inches") or section.get("bottom_margin_inches") or margins.get("bottom") or 1.0
+    )
+    font_pt = _docx_body_pt(parsed, rules)
+    spacing = _docx_body_spacing(parsed) or float(rules.get("line_spacing") or 1.5)
     usable = max(1.0, height - top - bottom)
     line_height = max(0.12, (font_pt * spacing) / PT_PER_INCH)
     return max(20, int(usable / line_height))
@@ -224,14 +251,31 @@ def _docx_body_pt(parsed: dict, rules: dict) -> float:
     return float(font.get("heading3_content_size") or (min(sizes) if sizes else 12.0))
 
 
+def _docx_body_spacing(parsed: dict) -> float | None:
+    """The document's own dominant line spacing, weighted by text length."""
+    weights: dict[float, int] = defaultdict(int)
+    for paragraph in parsed.get("paragraphs") or []:
+        if (paragraph.get("source") or "body") in CHROME_SOURCES:
+            continue
+        spacing = (paragraph.get("formatting") or {}).get("line_spacing")
+        text = str(paragraph.get("text") or "").strip()
+        if spacing and text:
+            weights[round(float(spacing) * 4) / 4] += len(text)
+    if not weights:
+        return None
+    return max(weights.items(), key=lambda item: item[1])[0]
+
+
 def _docx_page_capacity(parsed: dict, rules: dict) -> tuple[int, int]:
     """(estimated lines per page, most lines a real page can physically hold)."""
     _width, height = _paper_inches(parsed, rules)
     margins = rules.get("margins_inches") or {}
     sections = parsed.get("sections") or [{}]
     section = sections[0] if sections else {}
-    top = float(section.get("top_margin_inches") or margins.get("top") or 1.0)
-    bottom = float(section.get("bottom_margin_inches") or margins.get("bottom") or 1.0)
+    top = float(section.get("body_top_inches") or section.get("top_margin_inches") or margins.get("top") or 1.0)
+    bottom = float(
+        section.get("body_bottom_inches") or section.get("bottom_margin_inches") or margins.get("bottom") or 1.0
+    )
     usable_pt = max(72.0, (height - top - bottom) * PT_PER_INCH)
     ceiling = max(20, int(usable_pt / (max(8.0, _docx_body_pt(parsed, rules)) * 1.15)))
     return min(_lines_per_page(parsed, rules), ceiling), ceiling
@@ -260,7 +304,43 @@ def _rebalance_docx_pages(units: list[dict], estimate: int, ceiling: int) -> Non
         shift += (len(group) - 1) // size
 
 
-def _visual_chars_per_line(parsed: dict, rules: dict, source: str = "body") -> int:
+CHAR_WIDTH_EM = (
+    ("times", 0.41),
+    ("garamond", 0.40),
+    ("georgia", 0.47),
+    ("cambria", 0.45),
+    ("calibri", 0.44),
+    ("arial", 0.47),
+    ("helvetica", 0.47),
+    ("verdana", 0.54),
+)
+
+
+def _docx_char_em(parsed: dict) -> float:
+    """Average character width (as a fraction of the font size) for the body font."""
+    weights: Counter = Counter()
+    for paragraph in parsed.get("paragraphs") or []:
+        if (paragraph.get("source") or "body") in CHROME_SOURCES:
+            continue
+        for run in paragraph.get("runs") or []:
+            text = str(run.get("text") or "").strip()
+            if run.get("font") and text:
+                weights[str(run["font"]).lower()] += len(text)
+    family = weights.most_common(1)[0][0] if weights else ""
+    for key, em in CHAR_WIDTH_EM:
+        if key in family:
+            return em
+    return 0.46
+
+
+def _visual_chars_per_line(
+    parsed: dict,
+    rules: dict,
+    source: str = "body",
+    formatting: dict | None = None,
+    font_pt: float | None = None,
+    char_em: float = 0.5,
+) -> int:
     """How many characters fit on one typeable line for this page width."""
     width, _height = _paper_inches(parsed, rules)
     margins = rules.get("margins_inches") or {}
@@ -268,12 +348,18 @@ def _visual_chars_per_line(parsed: dict, rules: dict, source: str = "body") -> i
     section = sections[0] if sections else {}
     left = float(section.get("left_margin_inches") or margins.get("left") or 1.0)
     right = float(section.get("right_margin_inches") or margins.get("right") or 1.0)
-    usable = max(1.0, width - left - right)
-    font = rules.get("font") or {}
-    sizes = font.get("sizes_points") or []
-    body = font.get("heading3_content_size")
-    font_pt = float(body or (min(sizes) if sizes else 11.0))
-    avg_char_inches = max(0.04, (font_pt * 0.5) / PT_PER_INCH)
+    indents = 0.0
+    if formatting:
+        indents = max(0.0, float(formatting.get("left_indent_inches") or 0.0)) + max(
+            0.0, float(formatting.get("right_indent_inches") or 0.0)
+        )
+    usable = max(1.0, width - left - right - indents)
+    if font_pt is None:
+        font = rules.get("font") or {}
+        sizes = font.get("sizes_points") or []
+        body = font.get("heading3_content_size")
+        font_pt = float(body or (min(sizes) if sizes else 11.0))
+    avg_char_inches = max(0.03, (float(font_pt) * char_em) / PT_PER_INCH)
     chars = max(20, int(usable / avg_char_inches))
     if source in {"table", "textbox", "footnote", "endnote"}:
         return max(12, chars // 2)
@@ -435,7 +521,9 @@ def _docx_text_chunks(paragraph: dict) -> list[tuple[int, str, list[dict]]]:
 def _document_units(parsed: dict, rules: dict) -> list[dict]:
     if (parsed.get("metadata") or {}).get("format") == "pdf":
         units = []
+        columns = _pdf_text_columns(parsed, rules)
         for page in parsed.get("pages") or []:
+            column = columns.get(page.get("page_index", 0))
             page_lines = list(page.get("lines") or [])
             page_lines.sort(
                 key=lambda line: (
@@ -456,8 +544,9 @@ def _document_units(parsed: dict, rules: dict) -> list[dict]:
                         "page_height": page.get("height_points"),
                         "formatting": {},
                         "style": None,
-                        "source": "body",
-                        "alignment": _pdf_alignment(line.get("bbox"), page, rules),
+                        "source": "table" if line.get("table_row") else "body",
+                        "alignment": _pdf_alignment(line.get("bbox"), column),
+                        "column": column,
                     }
                 )
         return units
@@ -471,16 +560,13 @@ def _document_units(parsed: dict, rules: dict) -> list[dict]:
     use_rendered = rendered_breaks > 0
     estimate, ceiling = _docx_page_capacity(parsed, rules)
     per_page = 10_000 if use_rendered else estimate
+    char_em = _docx_char_em(parsed)
     page_index = 0
     line_on_page = 0
     units: list[dict] = []
     chrome: list[dict] = []
-    font = rules.get("font") or {}
-    body_pt = float(
-        font.get("heading3_content_size")
-        or (min(font.get("sizes_points") or [11]) if font.get("sizes_points") else 11.0)
-    )
-    line_spacing = float(rules.get("line_spacing") or 1.5)
+    body_pt = _docx_body_pt(parsed, rules)
+    body_spacing = _docx_body_spacing(parsed) or float(rules.get("line_spacing") or 1.5)
 
     def append_unit(paragraph: dict, page: int, line: int, text: str, line_runs: list[dict]) -> None:
         nonlocal line_on_page
@@ -501,6 +587,8 @@ def _document_units(parsed: dict, rules: dict) -> list[dict]:
                 "source": paragraph.get("source") or "body",
                 "alignment": formatting.get("alignment"),
                 "paragraph_index": paragraph.get("paragraph_index"),
+                "section_index": paragraph.get("section_index"),
+                "has_drawing": bool(paragraph.get("has_drawing")),
             }
         )
 
@@ -513,21 +601,34 @@ def _document_units(parsed: dict, rules: dict) -> list[dict]:
             append_unit(paragraph, page_index, line_on_page, "", [])
             line_on_page += 1
 
+    sections = parsed.get("sections") or []
+    previous_section = None
     for paragraph in paragraphs:
         source = paragraph.get("source") or "body"
         if source in CHROME_SOURCES:
             chrome.append(paragraph)
             continue
         formatting = paragraph.get("formatting") or {}
-        if formatting.get("page_break_before") and (line_on_page or units):
+        section_index = paragraph.get("section_index")
+        new_section = previous_section is not None and section_index is not None and section_index != previous_section
+        if section_index is not None:
+            previous_section = section_index
+        chunks = _docx_text_chunks(paragraph)
+        starts_new_page = new_section and section_index < len(sections) and (
+            sections[section_index].get("start_type") or "new_page"
+        ) == "new_page"
+        # Word may already have saved a rendered break at the top of the new section; don't count it twice.
+        if (formatting.get("page_break_before") or (starts_new_page and not chunks[0][0])) and (line_on_page or units):
             page_index += 1
             line_on_page = 0
-        chars = _visual_chars_per_line(parsed, rules, source)
         run_sizes = [float(run["size"]) for run in (paragraph.get("runs") or []) if run.get("size")]
         para_pt = run_sizes[0] if run_sizes else body_pt
-        before_blanks, after_blanks = _spacing_blank_lines(formatting, para_pt, line_spacing)
+        chars = _visual_chars_per_line(parsed, rules, source, formatting, para_pt, char_em)
+        before_blanks, after_blanks = _spacing_blank_lines(
+            formatting, para_pt, formatting.get("line_spacing") or body_spacing
+        )
         emit_blank(paragraph, before_blanks)
-        for advance, chunk_text, chunk_runs in _docx_text_chunks(paragraph):
+        for advance, chunk_text, chunk_runs in chunks:
             if advance and (units or line_on_page):
                 page_index += advance
                 line_on_page = 0
@@ -593,22 +694,64 @@ def _pagination_meta(parsed: dict, rules: dict) -> dict:
     }
 
 
-def _pdf_alignment(bbox, page: dict, rules: dict) -> str | None:
-    if not bbox or len(bbox) < 4 or not page.get("width_points"):
+def _wide_text_boxes(lines: list[dict], width: float) -> list[list[float]]:
+    return [
+        line["bbox"]
+        for line in lines
+        if len(line.get("bbox") or []) >= 4
+        and not line.get("table_row")
+        and len((line.get("text") or "").strip()) >= 8
+        and (line["bbox"][2] - line["bbox"][0]) >= 0.5 * width
+    ]
+
+
+def _column_from_boxes(boxes: list[list[float]]) -> tuple[float, float] | None:
+    if len(boxes) < 3:
         return None
-    width = float(page["width_points"])
+    left = Counter(round(box[0]) for box in boxes).most_common(1)[0][0]
+    rights = sorted(box[2] for box in boxes)
+    return float(left), float(rights[int(0.9 * (len(rights) - 1))])
+
+
+def _pdf_text_columns(parsed: dict, rules: dict) -> dict[int, tuple[float, float]]:
+    """Where body text actually starts and ends on each page (points), not where the rules say."""
+    pages = parsed.get("pages") or []
+    all_boxes: list[list[float]] = []
+    per_page: dict[int, list[list[float]]] = {}
+    for page in pages:
+        width = float(page.get("width_points") or 0)
+        boxes = _wide_text_boxes(page.get("lines") or [], width) if width else []
+        per_page[page.get("page_index", 0)] = boxes
+        all_boxes.extend(boxes)
+    fallback = _column_from_boxes(all_boxes)
+    columns: dict[int, tuple[float, float]] = {}
     margins = rules.get("margins_inches") or {}
-    left_pts = float(margins.get("left") or 1.0) * PT_PER_INCH
-    right_pts = float(margins.get("right") or 1.0) * PT_PER_INCH
-    x0, _y0, x1, _y1 = bbox
-    left_gap = x0 - left_pts
-    right_gap = width - right_pts - x1
+    for page in pages:
+        index = page.get("page_index", 0)
+        column = _column_from_boxes(per_page.get(index) or []) or fallback
+        if column is None:
+            width = float(page.get("width_points") or 612)
+            column = (
+                float(margins.get("left") or 1.0) * PT_PER_INCH,
+                width - float(margins.get("right") or 1.0) * PT_PER_INCH,
+            )
+        columns[index] = column
+    return columns
+
+
+def _pdf_alignment(bbox, column: tuple[float, float] | None) -> str | None:
+    if not bbox or len(bbox) < 4 or not column:
+        return None
+    left, right = column
+    span = max(1.0, right - left)
+    left_gap = bbox[0] - left
+    right_gap = right - bbox[2]
+    if right_gap <= 6 and left_gap <= 0.25 * span:
+        return "justify"
     if abs(left_gap - right_gap) <= 14 and min(left_gap, right_gap) > 20:
         return "center"
-    if right_gap <= 14 and left_gap > 20:
+    if right_gap <= 6:
         return "right"
-    if left_gap <= 14 and right_gap <= 14:
-        return "justify"
     return "left"
 
 
@@ -622,6 +765,8 @@ PAGE_NUMBER_RE = re.compile(r"^(?:page\s+)?\d{1,4}(?:\s*[/\-]\s*\d{1,4})?$", re.
 CHAPTER_RE = re.compile(r"^(?:chapter|ch\.?)\s+(?:\d+|[ivxlcdm]+)\b", re.I)
 TABLE_CAPTION_RE = re.compile(r"^\s*table\s+\d+\b", re.I)
 FIGURE_CAPTION_RE = re.compile(r"^\s*figure\s+\d+\b", re.I)
+# "Figure 1 illustrates ..." is a sentence about the figure, not its caption.
+PROSE_REFERENCE_RE = re.compile(r"^\s*(?:[Tt]able|[Ff]igure|TABLE|FIGURE)\s+\d+(?:\.\d+)*\s+[a-z]")
 IN_TEXT_NUMERIC_RE = re.compile(r"\[(?:\d+)(?:\s*[-,]\s*\d+)*\]")
 IN_TEXT_APA_RE = re.compile(
     r"\([A-Z][A-Za-z'’-]+(?:\s+(?:et al\.|&\s+[A-Z][A-Za-z'’-]+))?,?\s+\d{4}[a-z]?(?:,\s*p+\.\s*\d+)?\)"
@@ -644,12 +789,38 @@ def _dominant_size(unit: dict) -> float | None:
 
 
 def _is_bold(unit: dict) -> bool:
-    runs = unit.get("line_runs")
-    if runs is None:
-        runs = unit.get("runs") or []
-    return any(span.get("bold") for span in unit.get("spans") or []) or any(
-        run.get("bold") for run in runs
-    )
+    """Mostly bold text; a bold run-in label at the start of a paragraph line does not count."""
+    pieces = unit.get("spans") or unit.get("line_runs")
+    if pieces is None:
+        pieces = unit.get("runs") or []
+    total = bold = 0
+    for piece in pieces:
+        length = len(re.sub(r"\s", "", str(piece.get("text") or "")))
+        total += length
+        if piece.get("bold"):
+            bold += length
+    return bool(total) and bold >= 0.6 * total
+
+
+TOC_LINE_RE = re.compile(r"^\S.{2,}?(?:\s|\.{2,}|…)\s*(?:\d{1,3}|[ivxlc]{1,6})$", re.I)
+
+
+def _mark_toc_lines(units: list[dict]) -> None:
+    """Table of contents / list of figures entries are navigation, not body paragraphs."""
+    by_page: dict[int, list[dict]] = defaultdict(list)
+    for unit in units:
+        if (unit.get("text") or "").strip() and unit.get("role") not in {"pagination", "empty"}:
+            by_page[unit["page_index"]].append(unit)
+    for page_units in by_page.values():
+        matches = [
+            unit
+            for unit in page_units
+            if re.search(r"\btoc\b|table of (contents|figures)", str(unit.get("style") or ""), re.I)
+            or (TOC_LINE_RE.match(unit["text"].strip()) and not unit["text"].strip().endswith("."))
+        ]
+        if len(matches) >= 4 and len(matches) >= 0.4 * len(page_units):
+            for unit in matches:
+                unit["role"] = "toc"
 
 
 def _is_running_edge(unit: dict, rules: dict) -> bool:
@@ -685,6 +856,9 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
         if PAGE_NUMBER_RE.match(text) or _is_running_edge(unit, rules):
             unit["role"] = "pagination"
             continue
+        if unit.get("source") == "table":
+            unit["role"] = "table"
+            continue
         if re.search(r"heading\s*1|^title$", style):
             unit["role"] = "heading1"
             continue
@@ -692,9 +866,9 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             unit["role"] = "heading2"
             continue
         if re.search(r"heading\s*3", style):
-            unit["role"] = "body"
+            unit["role"] = "heading3"
             continue
-        if TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text):
+        if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not PROSE_REFERENCE_RE.match(text):
             unit["role"] = "caption"
             continue
         if size is not None and (h1 or h2 or body):
@@ -720,6 +894,7 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             unit["role"] = "heading1" if CHAPTER_RE.match(text) or text.isupper() else "heading2"
             continue
         unit["role"] = "body"
+    _mark_toc_lines(units)
 
 
 def _expected_size_for_role(role: str, font: dict) -> float | None:
@@ -727,9 +902,38 @@ def _expected_size_for_role(role: str, font: dict) -> float | None:
         return font.get("heading1_size")
     if role == "heading2":
         return font.get("heading2_size")
-    if role in {"body", "caption"}:
+    if role in {"body", "caption", "heading3"}:
         return font.get("heading3_content_size")
     return None
+
+
+def _color_channels(color) -> tuple[int, int, int] | None:
+    """PDF span colors are packed sRGB integers; Word run colors are hex strings (None = Automatic)."""
+    if color is None or color == "":
+        return None
+    if isinstance(color, int):
+        return (color >> 16) & 255, (color >> 8) & 255, color & 255
+    text = str(color).strip().lstrip("#")
+    if re.fullmatch(r"[0-9a-fA-F]{6}", text):
+        return int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+    return None
+
+
+def _mostly_black(unit: dict) -> bool | None:
+    """False when most of the line's visible text is clearly colored; None when color is unknown."""
+    pieces = unit.get("spans") or unit.get("line_runs") or unit.get("runs") or []
+    total = colored = 0
+    for piece in pieces:
+        length = len(re.sub(r"\s", "", str(piece.get("text") or "")))
+        if not length:
+            continue
+        total += length
+        channels = _color_channels(piece.get("color"))
+        if channels and max(channels) > 0x50:
+            colored += length
+    if not total:
+        return None
+    return colored <= 0.5 * total
 
 
 def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
@@ -737,7 +941,8 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
     allowed_fonts = {_font_key(font) for font in font_rule.get("families", [])}
     listed_sizes = {round(float(size), 2) for size in font_rule.get("sizes_points", [])}
     role_sizes = any(font_rule.get(key) for key in ("heading1_size", "heading2_size", "heading3_content_size"))
-    if not allowed_fonts and not listed_sizes and not role_sizes:
+    want_black = bool(re.search(r"black|automatic", str(font_rule.get("color") or ""), re.I))
+    if not allowed_fonts and not listed_sizes and not role_sizes and not want_black:
         return
     for unit in units:
         role = unit.get("role") or "body"
@@ -768,8 +973,21 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         # Family unknown (inherited) with a measured size: still score size only.
         if shown_font is None:
             family_ok = True
-        stats.observe(family_ok and size_ok)
+        color_ok = True
+        if want_black and role in {"body", "heading1", "heading2", "heading3", "caption"}:
+            color_ok = _mostly_black(unit) is not False
+        stats.observe(family_ok and size_ok and color_ok)
         loc = _unit_location(unit, "Fonts")
+        if not color_ok:
+            collector.add(
+                "font_color",
+                "minor",
+                "Font color differs",
+                "Text is not in the font color required by the uploaded format mechanics.",
+                f"This line is printed in a color other than black; the format requires {font_rule.get('color')}.",
+                "Set the font color of this text to Automatic/Black.",
+                loc,
+            )
         if not family_ok:
             collector.add(
                 "font_family",
@@ -781,9 +999,14 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 loc,
             )
         if not size_ok and shown_size is not None:
-            role_label = {"heading1": "Heading 1", "heading2": "Heading 2", "caption": "caption", "body": "body text"}.get(
-                role, "text"
-            )
+            role_label = {
+                "heading1": "Heading 1",
+                "heading2": "Heading 2",
+                "heading3": "Heading 3",
+                "caption": "caption",
+                "body": "body text",
+                "title_page": "title page text",
+            }.get(role, "text")
             expected_label = expected_size if expected_size is not None else sorted(listed_sizes)
             collector.add(
                 "font_size",
@@ -830,6 +1053,48 @@ def _page_sources(parsed: dict) -> list[tuple[int | None, float | None, float | 
     ]
 
 
+def _docx_page_sections(parsed: dict, units: list[dict]) -> dict[int, int]:
+    """Section index for every page: the section of the first body paragraph that page shows."""
+    sections = parsed.get("sections") or [{}]
+    page_count = max((unit["page_index"] for unit in units), default=0) + 1
+    first_on_page: dict[int, int] = {}
+    for unit in units:
+        if unit.get("section_index") is not None:
+            first_on_page.setdefault(unit["page_index"], int(unit["section_index"]))
+    mapping: dict[int, int] = {}
+    current = 0
+    for page in range(page_count):
+        if first_on_page:
+            current = first_on_page.get(page, current)
+        else:
+            # Files parsed before section tracking existed: spread sections evenly.
+            current = page * len(sections) // page_count
+        mapping[page] = min(len(sections) - 1, max(0, current))
+    return mapping
+
+
+def _docx_page_sources(parsed: dict, units: list[dict]) -> list[tuple[int, float | None, float | None, dict]]:
+    """One margin check per page (like a PDF), using the section that page belongs to."""
+    sections = parsed.get("sections") or [{}]
+    sources = []
+    for page, index in sorted(_docx_page_sections(parsed, units).items()):
+        section = sections[index]
+        sources.append((page, section.get("page_width_inches"), section.get("page_height_inches"), section))
+    return sources
+
+
+def _table_or_figure_pages(parsed: dict, units: list[dict]) -> set[int]:
+    pages = {
+        unit["page_index"]
+        for unit in units
+        if unit.get("source") == "table" or unit.get("has_drawing") or unit.get("role") in {"table", "caption"}
+    }
+    for page in parsed.get("pages") or []:
+        if page.get("image_count") or any(line.get("table_row") for line in page.get("lines") or []):
+            pages.add(page.get("page_index", 0))
+    return pages
+
+
 def _pdf_body_lines(page: dict, rules: dict) -> list[dict]:
     """Body text only — ignore page numbers and header/footer bands for margin measure."""
     width = page.get("width_points")
@@ -873,6 +1138,28 @@ def _pdf_page_margins(page: dict, rules: dict | None = None) -> dict[str, float]
     }
 
 
+def _pdf_page_setup_margins(parsed: dict, rules: dict) -> dict[str, float]:
+    """Top/bottom margins come from page setup, so read them from pages full of text.
+
+    A page that starts with a picture or ends early would otherwise look like it has a bigger margin.
+    """
+    tops: list[float] = []
+    bottoms: list[float] = []
+    for page in parsed.get("pages") or []:
+        if len(_pdf_body_lines(page, rules)) < 8:
+            continue
+        measured = _pdf_page_margins(page, rules)
+        if measured:
+            tops.append(measured["top"])
+            bottoms.append(measured["bottom"])
+    setup: dict[str, float] = {}
+    if len(tops) >= 3:
+        # The margin is the closest text ever gets to the edge; skip one odd page as an outlier.
+        setup["top"] = sorted(tops)[1]
+        setup["bottom"] = sorted(bottoms)[1]
+    return setup
+
+
 def _margin_delta(actual: float, expected: float, pdf_clearance: bool) -> float:
     """Positive = how far the margin fails the rule; 0 = within tolerance."""
     if pdf_clearance:
@@ -897,6 +1184,10 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
         for side, value in (rules.get("margins_inches") or {}).items()
         if side in {"top", "bottom", "left", "right"} and value is not None
     }
+    gutter = float((rules.get("margins_inches") or {}).get("gutter") or 0.0)
+    if gutter > 0 and "left" in expected_margins:
+        # A binding gutter is added to the inside (left) margin.
+        expected_margins["left"] = round(expected_margins["left"] + gutter, 3)
     if not expected and not expected_margins:
         return
 
@@ -905,13 +1196,25 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
         page_first_line.setdefault(unit["page_index"], unit["line_index"])
 
     is_pdf = (parsed.get("metadata") or {}).get("format") == "pdf"
+    sources = _page_sources(parsed) if is_pdf else _docx_page_sources(parsed, units)
+    page_setup = _pdf_page_setup_margins(parsed, rules) if is_pdf else {}
+    body_left = 0.0 if is_pdf else _docx_body_left_indent(units)
+    body_right = 0.0 if is_pdf else _docx_body_indent(units, "right_indent_inches")
+    landscape_rule = canonical_landscape_pages((rules.get("paper") or {}).get("landscape_pages"))
+    figure_pages = _table_or_figure_pages(parsed, units) if landscape_rule == LANDSCAPE_TABLES_FIGURES else set()
 
-    for page, width, height, source in _page_sources(parsed):
+    for page, width, height, source in sources:
         loc = _location(page if page is not None else 0, page_first_line.get(page or 0, 0), "Margins")
 
         # Paper size is reported under Margins but MUST NOT zero the margin score.
         if expected and width is not None and height is not None:
             orientation = str((rules.get("paper") or {}).get("orientation") or "").strip().lower()
+            landscape_ok = orientation == "portrait" and width > height + 0.05 and (
+                landscape_rule == LANDSCAPE_ANY
+                or (landscape_rule == LANDSCAPE_TABLES_FIGURES and (page or 0) in figure_pages)
+            )
+            if landscape_ok:
+                orientation = ""
             direct = abs(width - expected[0]) <= 0.15 and abs(height - expected[1]) <= 0.15
             rotated = abs(width - expected[1]) <= 0.15 and abs(height - expected[0]) <= 0.15
             if not (direct or rotated):
@@ -936,18 +1239,33 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
                     "moderate",
                     "Paper orientation differs",
                     "The page orientation does not match the uploaded format mechanics.",
-                    f"Measured {width:.2f} × {height:.2f} inches; the format requires {orientation}.",
+                    f"Measured {width:.2f} × {height:.2f} inches; the format requires {orientation}"
+                    + (
+                        " (landscape pages are only allowed for tables and figures)."
+                        if landscape_rule == LANDSCAPE_TABLES_FIGURES
+                        else "."
+                    ),
                     f"Set the document orientation to {orientation} in Page Setup.",
                     loc,
                 )
 
         if is_pdf:
             actual_margins = _pdf_page_margins(source, rules)
+            if actual_margins:
+                actual_margins.update(page_setup)
         else:
+            # Body text sits at the page margin plus the paragraph indent, which is what a PDF shows.
             actual_margins = {
-                side: source.get(f"{side}_margin_inches")
-                for side in ("top", "bottom", "left", "right")
+                side: source.get(f"body_{side}_inches") or source.get(f"{side}_margin_inches")
+                for side in ("top", "bottom")
             }
+            actual_margins.update(
+                {side: source.get(f"{side}_margin_inches") for side in ("left", "right")}
+            )
+            if actual_margins["left"] is not None:
+                actual_margins["left"] = round(float(actual_margins["left"]) + body_left, 3)
+            if actual_margins["right"] is not None:
+                actual_margins["right"] = round(float(actual_margins["right"]) + body_right, 3)
 
         if not expected_margins or not actual_margins:
             continue
@@ -958,7 +1276,7 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
             if actual is None:
                 continue
             actual = float(actual)
-            delta = _margin_delta(actual, expected_value, pdf_clearance=is_pdf)
+            delta = _margin_delta(actual, expected_value, pdf_clearance=True)
             side_ok = delta <= 0
             stats.observe(side_ok)
             if side_ok:
@@ -976,9 +1294,9 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
                 )
             else:
                 detail = (
-                    f"This section’s {side} margin is set to {actual:g}\" in the document; "
-                    f"the uploaded format requires {expected_value:g}\" "
-                    f"(difference {abs(actual - expected_value):.2f}\" beyond {MARGIN_TOLERANCE}\" tolerance)."
+                    f"Body text on this page sits {actual:g}\" from the {side} edge "
+                    f"(page margin plus paragraph indent); the uploaded format requires at least "
+                    f"{expected_value:g}\". Shortfall after tolerance: {delta:.2f}\"."
                 )
                 advice = (
                     f"In Page Setup → Margins, set {side} to exactly {expected_value:g} inches "
@@ -995,30 +1313,85 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
             )
 
 
-def _pdf_line_spacing(units: list[dict]) -> dict[tuple[int, int], float]:
-    measured: dict[tuple[int, int], float] = {}
-    by_page: dict[int, list[dict]] = defaultdict(list)
-    for unit in units:
-        if unit.get("bbox") and len(unit["bbox"]) >= 4:
-            by_page[unit["page_index"]].append(unit)
-    for page_units in by_page.values():
-        page_units.sort(key=lambda item: item["bbox"][1])
-        for current, nxt in zip(page_units, page_units[1:]):
-            font_size = 11.0
-            for span in current.get("spans") or []:
-                if span.get("size"):
-                    font_size = float(span["size"])
-                    break
-            gap = float(nxt["bbox"][1]) - float(current["bbox"][1])
-            if font_size > 0 and gap > 0:
-                ratio = round(gap / font_size, 2)
-                if 0.8 <= ratio <= 2.6:
-                    measured[(current["page_index"], current["line_index"])] = ratio
-    return measured
+LINE_HEIGHT_FACTOR = 1.15  # single-spaced line height as a multiple of the font size
 
 
 def _is_prose_body(unit: dict) -> bool:
     return (unit.get("source") or "body") not in NON_PROSE_SOURCES and (unit.get("role") or "body") == "body"
+
+
+def _has_box(unit: dict) -> bool:
+    return len(unit.get("bbox") or []) >= 4
+
+
+def _column_gaps(unit: dict) -> tuple[float, float, float]:
+    """(space before the text, space after it, column width) in points for a PDF line."""
+    left, right = unit.get("column") or (0.0, float(unit.get("page_width") or 612))
+    return unit["bbox"][0] - left, right - unit["bbox"][2], max(1.0, right - left)
+
+
+def _unit_font_pt(unit: dict) -> float:
+    size = unit.get("dominant_size")
+    if size:
+        return float(size)
+    for span in unit.get("spans") or []:
+        if span.get("size"):
+            return float(span["size"])
+    return 11.0
+
+
+def _pdf_typical_gaps(units: list[dict]) -> dict[int, float]:
+    by_page: dict[int, list[float]] = defaultdict(list)
+    previous = None
+    for unit in units:
+        if not (_has_box(unit) and _is_prose_body(unit)):
+            continue
+        if previous is not None and previous["page_index"] == unit["page_index"]:
+            gap = unit["bbox"][1] - previous["bbox"][1]
+            if gap > 0:
+                by_page[unit["page_index"]].append(gap)
+        previous = unit
+    return {page: sorted(gaps)[len(gaps) // 2] for page, gaps in by_page.items() if gaps}
+
+
+def _starts_paragraph(unit: dict, previous: dict, typical_gaps: dict[int, float]) -> bool:
+    if unit.get("paragraph_index") is not None and previous.get("paragraph_index") is not None:
+        return unit["paragraph_index"] != previous["paragraph_index"]
+    if not (_has_box(unit) and _has_box(previous)):
+        return len((previous.get("text") or "").strip()) < 40
+    left_gap, _right_gap, span = _column_gaps(unit)
+    _prev_left, prev_right_gap, _prev_span = _column_gaps(previous)
+    indented = left_gap > 9
+    if unit["page_index"] != previous["page_index"]:
+        return indented or prev_right_gap > 0.12 * span
+    if prev_right_gap > 0.12 * span or indented:
+        return True
+    typical = typical_gaps.get(unit["page_index"])
+    gap = unit["bbox"][1] - previous["bbox"][1]
+    return bool(typical and gap > 1.3 * typical)
+
+
+def _prose_paragraphs(units: list[dict]) -> list[list[dict]]:
+    """Body-text paragraphs, built the same way for Word files and PDFs."""
+    typical_gaps = _pdf_typical_gaps(units)
+    paragraphs: list[list[dict]] = []
+    current: list[dict] = []
+    for unit in units:
+        text = (unit.get("text") or "").strip()
+        if unit.get("role") == "pagination" or (unit.get("source") or "body") in {"header", "footer"}:
+            continue
+        if not text or not _is_prose_body(unit):
+            if current:
+                paragraphs.append(current)
+                current = []
+            continue
+        if current and _starts_paragraph(unit, current[-1], typical_gaps):
+            paragraphs.append(current)
+            current = []
+        current.append(unit)
+    if current:
+        paragraphs.append(current)
+    return paragraphs
 
 
 def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
@@ -1026,63 +1399,62 @@ def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collect
     if expected is None:
         return
     expected = float(expected)
-    pdf_spacing = _pdf_line_spacing(units)
-    seen_paragraphs: set[int] = set()
+    for paragraph in _prose_paragraphs(units):
+        # A paragraph's last line has no line below it to measure against in a PDF, so skip it in both formats.
+        for unit, below in zip(paragraph, paragraph[1:]):
+            actual = (unit.get("formatting") or {}).get("line_spacing")
+            if actual is None and _has_box(unit) and _has_box(below) and below["page_index"] == unit["page_index"]:
+                gap = below["bbox"][1] - unit["bbox"][1]
+                ratio = gap / (_unit_font_pt(unit) * LINE_HEIGHT_FACTOR)
+                actual = round(ratio, 2) if 0.6 <= ratio <= 3.2 else None
+            if actual is None:
+                continue
+            _observe_spacing(unit, float(actual), expected, stats, collector)
+
+
+def _observe_spacing(unit: dict, actual: float, expected: float, stats: CategoryStats, collector: IssueCollector) -> None:
+    ok = abs(actual - expected) <= 0.12
+    stats.observe(ok)
+    if not ok:
+        collector.add(
+            "line_spacing",
+            "moderate",
+            "Line spacing differs",
+            "Line spacing does not match the mechanics.",
+            f"This line uses {actual:g} line spacing; the mechanics specifies {expected:g}.",
+            "Set the paragraph line spacing to the mechanics-specified value.",
+            _unit_location(unit, "Spacing"),
+        )
+
+
+def _docx_body_indent(units: list[dict], field: str) -> float:
+    """The indent most body paragraphs use (Word files only; PDFs return 0)."""
+    counts: Counter = Counter()
+    seen: set = set()
     for unit in units:
-        if not _is_prose_body(unit):
+        key = unit.get("paragraph_index")
+        if key is None or key in seen or not _is_prose_body(unit) or not (unit.get("text") or "").strip():
             continue
-        actual = (unit.get("formatting") or {}).get("line_spacing")
-        if actual is None:
-            actual = pdf_spacing.get((unit["page_index"], unit["line_index"]))
-        if actual is None:
-            continue
-        marker = id(unit.get("formatting")) if unit.get("formatting") else (unit["page_index"], unit["line_index"])
-        if marker in seen_paragraphs and unit.get("formatting"):
-            continue
-        seen_paragraphs.add(marker)
-        ok = abs(float(actual) - expected) <= 0.12
-        stats.observe(ok)
-        if not ok:
-            collector.add(
-                "line_spacing",
-                "moderate",
-                "Line spacing differs",
-                "Line spacing does not match the mechanics.",
-                f"This line uses {float(actual):g} line spacing; the mechanics specifies {expected:g}.",
-                "Set the paragraph line spacing to the mechanics-specified value.",
-                _unit_location(unit, "Spacing"),
-            )
+        seen.add(key)
+        counts[round(float((unit.get("formatting") or {}).get(field) or 0.0), 2)] += 1
+    return counts.most_common(1)[0][0] if counts else 0.0
 
 
-def _paragraph_starts(units: list[dict]) -> set[tuple[int, int]]:
-    starts: set[tuple[int, int]] = set()
-    previous = None
-    for unit in units:
-        text = (unit.get("text") or "").strip()
-        key = (unit["page_index"], unit["line_index"])
-        if not text:
-            previous = unit
-            continue
-        if previous is None or previous["page_index"] != unit["page_index"]:
-            starts.add(key)
-        elif not (previous.get("text") or "").strip():
-            starts.add(key)
-        elif len((previous.get("text") or "").strip()) < 40:
-            starts.add(key)
-        previous = unit
-    return starts
+def _docx_body_left_indent(units: list[dict]) -> float:
+    """First-line indents are measured from the left indent most body paragraphs use."""
+    return _docx_body_indent(units, "left_indent_inches")
 
 
-def _measured_indent(unit: dict, rules: dict) -> float | None:
-    indent = (unit.get("formatting") or {}).get("first_line_indent_inches")
-    if indent is not None:
-        return float(indent)
-    bbox = unit.get("bbox")
-    if not bbox or not unit.get("page_width"):
+def _measured_indent(unit: dict, body_left: float) -> float | None:
+    """How far the first line visibly starts to the right of the body text edge, in inches."""
+    formatting = unit.get("formatting") or {}
+    if formatting.get("first_line_indent_inches") is not None:
+        visible = float(formatting.get("left_indent_inches") or 0.0) + float(formatting["first_line_indent_inches"])
+        return round(visible - body_left, 3)
+    if not _has_box(unit):
         return None
-    margins = rules.get("margins_inches") or {}
-    left = float(margins.get("left") or 1.0)
-    return round((float(bbox[0]) / PT_PER_INCH) - left, 3)
+    left_gap, _right_gap, _span = _column_gaps(unit)
+    return round(left_gap / PT_PER_INCH, 3)
 
 
 def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
@@ -1090,13 +1462,13 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
     if expected is None:
         return
     expected = float(expected)
-    starts = _paragraph_starts(units)
-    for unit in units:
-        if not _is_prose_body(unit):
+    body_left = _docx_body_left_indent(units)
+    for paragraph in _prose_paragraphs(units):
+        # One-line items (table cells, list entries, labels) are not indented paragraphs.
+        if len(paragraph) < 2:
             continue
-        if (unit["page_index"], unit["line_index"]) not in starts:
-            continue
-        actual = _measured_indent(unit, rules)
+        unit = paragraph[0]
+        actual = _measured_indent(unit, body_left)
         if actual is None:
             continue
         ok = abs(actual - expected) <= 0.12
@@ -1116,113 +1488,371 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
 def _check_alignment(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     expected = str(rules.get("alignment") or "").strip().lower()
     allowed = {expected} if expected in {"left", "right", "center", "justify"} else {"left", "justify"}
-    for unit in units:
-        if not _is_prose_body(unit):
-            continue
-        actual = unit.get("alignment")
-        if not actual or not _is_body_line(unit):
-            continue
-        if len((unit.get("text") or "").strip()) < 40:
-            continue
-        ok = actual in allowed
-        stats.observe(ok)
-        if not ok:
-            collector.add(
-                "alignment",
-                "moderate",
-                "Alignment differs",
-                "Paragraph alignment does not match the uploaded format mechanics.",
-                f"This line appears {actual}; body text should be {' or '.join(sorted(allowed))}.",
-                "Set body paragraphs to the mechanics-specified alignment.",
-                _unit_location(unit, "Alignment"),
+    for paragraph in _prose_paragraphs(units):
+        # Justified text still ends its last line short, so that line cannot show the alignment.
+        lines = paragraph[:-1] if len(paragraph) > 1 else paragraph
+        for unit in lines:
+            actual = unit.get("alignment")
+            if not actual or not _is_body_line(unit):
+                continue
+            if len((unit.get("text") or "").strip()) < 40:
+                continue
+            ok = actual in allowed or (
+                len(paragraph) == 1 and _has_box(unit) and actual == "left" and "justify" in allowed
             )
+            stats.observe(ok)
+            if not ok:
+                collector.add(
+                    "alignment",
+                    "moderate",
+                    "Alignment differs",
+                    "Paragraph alignment does not match the uploaded format mechanics.",
+                    f"This line appears {actual}; body text should be {' or '.join(sorted(allowed))}.",
+                    "Set body paragraphs to the mechanics-specified alignment.",
+                    _unit_location(unit, "Alignment"),
+                )
 
 
-def _chapter_pages(units: list[dict]) -> set[int]:
-    pages = set()
+CHAPTER_ROMAN_RE = re.compile(r"^chapter\s+[ivxlc]+\b", re.I)
+CHAPTER_ARABIC_RE = re.compile(r"^chapter\s+\d+\b", re.I)
+BACK_MATTER_RE = re.compile(r"^(references|bibliography|works\s+cited|literature\s+cited|appendix|appendices)\b", re.I)
+PRELIM_HEADING_RE = re.compile(
+    r"^(abstract|acknowledge?ments?|dedication|table\s+of\s+contents|contents|"
+    r"list\s+of\s+(?:tables|figures|appendices|abbreviations|acronyms|plates)|approval\s+sheet|"
+    r"certificat(?:e|ion)|executive\s+summary|preface|foreword|declaration)\b",
+    re.I,
+)
+ROMAN_RE = re.compile(r"^(?=[mdclxvi]+$)m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$", re.I)
+PAGE_TOKEN_RE = re.compile(
+    r"^(?:page\s+)?[-–—]?\s*(\d{1,4}|[ivxlcdm]{1,7})\s*[-–—]?(?:\s*(?:of|/)\s*\d{1,4})?$", re.I
+)
+ROMAN_NUMERALS = (
+    (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+    (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"),
+)
+STYLE_LABELS = {"arabic": "Arabic (1, 2, 3)", "roman_lower": "lowercase Roman (i, ii, iii)",
+                "roman_upper": "uppercase Roman (I, II, III)", "other": "letters or another style"}
+
+
+def _roman_to_int(token: str) -> int:
+    values = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
+    total = 0
+    digits = [values[ch] for ch in token.lower()]
+    for index, value in enumerate(digits):
+        total += -value if index + 1 < len(digits) and digits[index + 1] > value else value
+    return total
+
+
+def _format_page_value(value: int, style: str) -> str:
+    if style in {"roman_lower", "roman_upper"} and value > 0:
+        out, rest = "", value
+        for amount, numeral in ROMAN_NUMERALS:
+            while rest >= amount:
+                out += numeral
+                rest -= amount
+        return out if style == "roman_lower" else out.upper()
+    return str(value)
+
+
+def _page_token(text: str) -> tuple[int, str] | None:
+    """A printed page number ('7', 'iv', 'Page 3 of 10', '- 12 -') -> (value, style)."""
+    match = PAGE_TOKEN_RE.match((text or "").strip())
+    if not match:
+        return None
+    token = match.group(1)
+    if token.isdigit():
+        return int(token), "arabic"
+    if not ROMAN_RE.match(token):
+        return None
+    style = "roman_lower" if token.islower() else "roman_upper" if token.isupper() else "other"
+    return _roman_to_int(token), style
+
+
+def _section_starts(units: list[dict]) -> dict[int, str]:
+    """Pages whose first lines open a chapter or chapter-like section, keyed to a CHAPTER_MARKERS key."""
+    heads: dict[int, list[dict]] = defaultdict(list)
     for unit in units:
         text = (unit.get("text") or "").strip()
-        if CHAPTER_RE.match(text) or (
-            unit.get("role") == "heading1" and re.search(r"\bchapter\b", text, re.I)
-        ):
-            pages.add(unit["page_index"])
-    return pages
+        if (unit.get("source") or "body") != "body" or not text:
+            continue
+        if unit.get("role") in {"pagination", "toc", "empty"}:
+            continue
+        if len(heads[unit["page_index"]]) < 6:
+            heads[unit["page_index"]].append(unit)
+    starts: dict[int, str] = {}
+    for page, page_units in heads.items():
+        for unit in page_units:
+            text = unit["text"].strip()
+            heading_like = (
+                len(text) <= 60
+                and not text.endswith(".")
+                and not re.search(r"\.{2,}\s*\S+$|…", text)
+                and (
+                    str(unit.get("role") or "").startswith("heading")
+                    or _is_bold(unit)
+                    or text.isupper()
+                    or len(text.split()) <= 6
+                )
+            )
+            if not heading_like:
+                continue
+            kind = (
+                "chapter_roman" if CHAPTER_ROMAN_RE.match(text)
+                else "chapter_arabic" if CHAPTER_ARABIC_RE.match(text)
+                else "back_matter" if BACK_MATTER_RE.match(text)
+                else "preliminary" if PRELIM_HEADING_RE.match(text)
+                else None
+            )
+            if kind:
+                starts[page] = kind
+                break
+    return starts
 
 
-def _check_pagination(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
-    pagination = rules.get("pagination") or {}
-    position = str(pagination.get("position") or "").lower()
-    hide_chapter = bool(pagination.get("first_page_of_chapter") or "")
-    if not position and not hide_chapter:
-        return
-    chapter_pages = _chapter_pages(units) if hide_chapter else set()
-    want_top = "top" in position
-    want_bottom = "bottom" in position
-    want_right = "right" in position
-    want_center = "center" in position or "centre" in position
+def _docx_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
+    """Word prints page numbers from header/footer fields, so compute each page's number from the section setup."""
+    sections = parsed.get("sections") or [{}]
+    page_sections = _docx_page_sections(parsed, units)
+    marks = []
+    counter = 0
+    previous = None
+    for page in range(page_count):
+        index = page_sections.get(page, 0)
+        setup = (sections[index] if index < len(sections) else {}).get("page_number") or {}
+        first_of_section = index != previous
+        previous = index
+        counter = setup["start"] if first_of_section and setup.get("start") is not None else counter + 1
+        if "shown" in setup:
+            placement = {"where": setup.get("where"), "align": setup.get("align")} if setup["shown"] else None
+            if first_of_section and setup.get("different_first_page"):
+                placement = setup.get("first_page")
+        else:
+            # Section data saved by an older parser: only placement and a hidden first page.
+            placement = {"where": setup.get("where"), "align": setup.get("align")} if setup.get("where") else None
+            if first_of_section and setup.get("first_page_hidden"):
+                placement = None
+        mark = {"page": page, "shown": bool(placement and placement.get("where")), "value": counter,
+                "style": setup.get("format") or "arabic", "unit": None}
+        if mark["shown"]:
+            mark["vertical"] = "top" if placement["where"] == "header" else "bottom"
+            mark["horizontal"] = placement.get("align") or "left"
+        marks.append(mark)
+    return marks
+
+
+def _pdf_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
+    """The printed number nearest the top or bottom edge of each PDF page."""
     by_page: dict[int, list[dict]] = defaultdict(list)
     for unit in units:
         by_page[unit["page_index"]].append(unit)
-    for page, page_units in sorted(by_page.items()):
-        numbers = [unit for unit in page_units if PAGE_NUMBER_RE.match((unit.get("text") or "").strip())]
-        loc = _location(page, (numbers[0]["line_index"] if numbers else 0), "Alignment")
-        if hide_chapter and page in chapter_pages:
-            ok = not numbers
-            stats.observe(ok)
-            if not ok:
+    marks = []
+    for page in range(page_count):
+        best = None
+        for unit in by_page.get(page, []):
+            bbox = unit.get("bbox")
+            height = float(unit.get("page_height") or 0)
+            width = float(unit.get("page_width") or 0)
+            token = _page_token(unit.get("text") or "")
+            if not token or not bbox or len(bbox) < 4 or not height or not width:
+                continue
+            if bbox[1] <= height * 0.15:
+                vertical, distance = "top", bbox[1]
+            elif bbox[3] >= height * 0.85:
+                vertical, distance = "bottom", height - bbox[3]
+            else:
+                continue
+            middle = (bbox[0] + bbox[2]) / 2 / width
+            horizontal = "left" if middle < 0.4 else "right" if middle > 0.6 else "center"
+            if best is None or distance < best[0]:
+                best = (distance, unit, token, vertical, horizontal)
+        if best is None:
+            marks.append({"page": page, "shown": False, "value": None, "style": None, "unit": None})
+            continue
+        _distance, unit, (value, style), vertical, horizontal = best
+        marks.append({"page": page, "shown": True, "value": value, "style": style, "unit": unit,
+                      "vertical": vertical, "horizontal": horizontal})
+    return marks
+
+
+def _position_label(vertical: str | None, horizontal: str | None) -> str:
+    return " ".join(part for part in (vertical, horizontal) if part) or "the specified position"
+
+
+def _check_pagination(
+    units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector, parsed: dict | None = None
+) -> None:
+    pagination = rules.get("pagination") or {}
+    vertical, horizontal = page_position_parts(pagination.get("position"))
+    chapter_rule = chapter_first_page_rule(pagination.get("first_page_of_chapter"))
+    title_rule = title_page_rule(pagination.get("title_page"))
+    prelim_style = canonical_preliminary_style(pagination.get("preliminary_style"))
+    body_numbering = canonical_body_numbering(pagination.get("body_numbering"))
+    if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering)):
+        return
+    markers = set(canonical_chapter_markers(pagination.get("chapter_markers"))) or set(DEFAULT_CHAPTER_MARKERS)
+    is_pdf = (parsed or {}).get("metadata", {}).get("format") == "pdf"
+    page_count = max((unit["page_index"] for unit in units), default=-1) + 1
+    if is_pdf:
+        page_count = max(page_count, len((parsed or {}).get("pages") or []))
+    if page_count <= 0:
+        return
+    marks = _pdf_page_marks(parsed or {}, units, page_count) if is_pdf else _docx_page_marks(parsed or {}, units, page_count)
+
+    starts = _section_starts(units)
+    chapter_pages = {page for page, kind in starts.items() if kind in markers and page > 0}
+    body_start = min((page for page, kind in starts.items() if kind.startswith("chapter_")), default=None)
+    has_title = title_rule is not None and page_count >= 2
+    title_counts = title_rule in {"hidden_counted", "shown"}
+    split_blocks = bool(body_start)
+
+    def block_of(page: int) -> str:
+        return "prelim" if split_blocks and page < body_start else "body"
+
+    expected_style = {"prelim": None, "body": None}
+    if prelim_style == PRELIM_ROMAN and split_blocks:
+        expected_style["prelim"] = "roman_lower"
+    elif prelim_style == PRELIM_ARABIC:
+        expected_style["prelim"] = "arabic"
+        expected_style["body"] = "arabic"
+    if (prelim_style or body_numbering) and (split_blocks or prelim_style != PRELIM_ROMAN):
+        expected_style["body"] = "arabic"
+
+    def expected_value(page: int) -> int | None:
+        """The number the first numbered page of a block should carry, when the rules pin it down."""
+        if block_of(page) == "body" and split_blocks:
+            if body_numbering == BODY_RESTART:
+                return page - body_start + 1
+            if body_numbering == BODY_CONTINUOUS and title_rule:
+                return page + (1 if title_counts else 0)
+            return None
+        if title_rule:
+            return page + (1 if title_counts else 0)
+        return None
+
+    last_shown: dict[str, tuple[int, int]] = {}
+    for mark in marks:
+        page = mark["page"]
+        unit = mark.get("unit")
+        loc = _unit_location(unit, "Pagination") if unit else _location(page, 0, "Pagination")
+        shown = mark["shown"]
+        printed = _format_page_value(mark["value"], mark["style"] or "arabic") if shown else ""
+        if page == 0 and has_title:
+            want, rule_kind = ("hidden" if title_rule != "shown" else "main"), "title"
+        elif page in chapter_pages and chapter_rule:
+            want, rule_kind = {"hidden": "hidden", "same": "main", "bottom_center": "bottom_center"}[chapter_rule], "chapter"
+        else:
+            want, rule_kind = ("main" if (vertical or horizontal) else None), "page"
+        checked = want is not None
+        ok = True
+
+        if want == "hidden" and shown:
+            ok = False
+            if rule_kind == "title":
+                collector.add(
+                    "pagination_title_page",
+                    "minor",
+                    "Page number shown on the title page",
+                    "The uploaded format hides the page number on page 1 (the title page).",
+                    f"Page 1 shows the page number “{printed}”.",
+                    "Hide the page number on the title page (Word: Different First Page).",
+                    loc,
+                )
+            else:
                 collector.add(
                     "pagination_chapter_first",
                     "minor",
                     "Page number shown on chapter first page",
                     "The uploaded format hides page numbers on the first page of each chapter.",
-                    f"A page number is present on page {page + 1}, which starts a chapter.",
-                    "Hide the page number on the first page of each chapter.",
+                    f"Page {page + 1} starts a chapter but shows the page number “{printed}”.",
+                    "Hide the page number on the first page of each chapter (Word: Different First Page).",
                     loc,
                 )
-            continue
-        if not position:
-            continue
-        if not numbers:
-            stats.observe(False)
-            collector.add(
-                "pagination_missing",
-                "moderate",
-                "Page number missing",
-                "The uploaded format requires a page number on this page.",
-                f"No page number was found on page {page + 1}.",
-                "Add page numbers in the mechanics-specified position.",
-                loc,
-            )
-            continue
-        marker = numbers[0]
-        bbox = marker.get("bbox")
-        height = marker.get("page_height") or 0
-        width = marker.get("page_width") or 0
-        ok = True
-        if bbox and height and width:
-            topish = bbox[1] <= height * 0.18
-            bottomish = bbox[3] >= height * 0.82
-            rightish = bbox[0] >= width * 0.55
-            centerish = abs((bbox[0] + bbox[2]) / 2 - width / 2) <= width * 0.18
-            if want_top and not topish:
+        elif want in {"main", "bottom_center"}:
+            want_v, want_h = (vertical, horizontal) if want == "main" else ("bottom", "center")
+            if not shown:
                 ok = False
-            if want_bottom and not bottomish:
+                where = "this chapter's first page" if rule_kind == "chapter" else f"page {page + 1}"
+                collector.add(
+                    "pagination_missing",
+                    "moderate",
+                    "Page number missing",
+                    "The uploaded format requires a page number on this page.",
+                    f"No page number was found on {where}.",
+                    f"Add a page number at the {_position_label(want_v, want_h)} of the page.",
+                    loc,
+                )
+            elif (want_v and mark.get("vertical") != want_v) or (want_h and mark.get("horizontal") != want_h):
                 ok = False
-            if want_right and not rightish:
-                ok = False
-            if want_center and not centerish:
-                ok = False
-        stats.observe(ok)
-        if not ok:
-            collector.add(
-                "pagination_position",
-                "moderate",
-                "Page number position differs",
-                "The page number is not in the position required by the uploaded format.",
-                f"The format requires page numbers {position or 'in the specified location'}.",
-                "Move the page number to the mechanics-specified position.",
-                loc,
-            )
+                actual = _position_label(mark.get("vertical"), mark.get("horizontal"))
+                if rule_kind == "chapter" and want == "bottom_center":
+                    collector.add(
+                        "pagination_chapter_first",
+                        "minor",
+                        "Chapter first page number position differs",
+                        "The uploaded format places the page number at the bottom center on each chapter's first page.",
+                        f"Page {page + 1} starts a chapter; its page number is at the {actual}.",
+                        "Put the chapter's first-page number at the bottom center (Word: Different First Page footer).",
+                        loc,
+                    )
+                else:
+                    collector.add(
+                        "pagination_position",
+                        "moderate",
+                        "Page number position differs",
+                        "The page number is not in the position required by the uploaded format.",
+                        f"The page number on page {page + 1} is at the {actual}; the format requires the "
+                        f"{_position_label(want_v, want_h)}.",
+                        f"Move the page number to the {_position_label(want_v, want_h)} of the page.",
+                        loc,
+                    )
+
+        if shown and want != "hidden":
+            block = block_of(page)
+            style_needed = expected_style[block]
+            if style_needed:
+                checked = True
+                if mark["style"] != style_needed:
+                    ok = False
+                    part = "preliminary pages" if block == "prelim" else "the main body"
+                    collector.add(
+                        "pagination_style",
+                        "moderate",
+                        "Page number style differs",
+                        f"The uploaded format numbers {part} in {STYLE_LABELS[style_needed]}.",
+                        f"Page {page + 1} is numbered “{printed}” ({STYLE_LABELS.get(mark['style'], 'unknown style')}).",
+                        f"Use {STYLE_LABELS[style_needed]} page numbers for {part} (Word: Format Page Numbers).",
+                        loc,
+                    )
+            previous = last_shown.get(block)
+            expected = previous[1] + (page - previous[0]) if previous else expected_value(page)
+            if expected is not None:
+                checked = True
+                if mark["value"] != expected:
+                    ok = False
+                    want_text = _format_page_value(expected, mark["style"] or "arabic")
+                    if previous:
+                        detail = (
+                            f"Page {page + 1} is numbered “{printed}”, but after "
+                            f"“{_format_page_value(previous[1], mark['style'] or 'arabic')}” on page {previous[0] + 1} "
+                            f"it should be “{want_text}”."
+                        )
+                    elif block == "body" and split_blocks and body_numbering == BODY_RESTART:
+                        detail = f"Chapter 1 starts on page {page + 1} numbered “{printed}”; it should restart at 1."
+                    else:
+                        detail = f"Page {page + 1} is numbered “{printed}”; counting from page 1 it should be “{want_text}”."
+                    collector.add(
+                        "pagination_sequence",
+                        "moderate",
+                        "Page numbers out of sequence",
+                        "Page numbers skip, repeat, or restart where the uploaded format does not allow it.",
+                        detail,
+                        "Fix the page numbering so it counts up by one (Word: Format Page Numbers → Start at).",
+                        loc,
+                    )
+            last_shown[block] = (page, mark["value"])
+
+        if checked:
+            stats.observe(ok)
 
 
 def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -> None:
@@ -1235,7 +1865,7 @@ def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -
     for index, unit in enumerate(units):
         text = (unit.get("text") or "").strip()
         loc = _unit_location(unit, "Alignment")
-        if table_rules and TABLE_CAPTION_RE.match(text):
+        if table_rules and unit.get("role") == "caption" and TABLE_CAPTION_RE.match(text):
             title = re.sub(r"^\s*table\s+\d+\s*[:.\-–]?\s*", "", text, flags=re.I).strip()
             if want_table_caps and title and title != title.upper():
                 collector.add(
@@ -1343,6 +1973,172 @@ def _check_citations(units: list[dict], text: str, rules: dict, collector: Issue
             )
 
 
+def _mark_title_page(units: list[dict], rules: dict) -> None:
+    """When the format declares a title page, page 1 is not body text (no spacing/indent/alignment rules)."""
+    if not title_page_rule((rules.get("pagination") or {}).get("title_page")):
+        return
+    if max((unit["page_index"] for unit in units), default=0) < 1:
+        return
+    for unit in units:
+        if unit["page_index"] == 0 and (unit.get("source") or "body") not in CHROME_SOURCES:
+            if unit.get("role") not in {"empty", "pagination"}:
+                unit["role"] = "title_page"
+
+
+def _share(pieces: list[dict], key: str) -> float:
+    total = flagged = 0
+    for piece in pieces:
+        length = len(re.sub(r"\s", "", str(piece.get("text") or "")))
+        total += length
+        if piece.get(key):
+            flagged += length
+    return flagged / total if total else 0.0
+
+
+MINOR_TITLE_WORDS = {
+    "a", "an", "the", "and", "but", "or", "nor", "for", "so", "yet", "as", "at", "by", "in", "of",
+    "on", "to", "up", "via", "with", "from", "into", "over", "per", "vs",
+}
+
+
+def _is_title_case(text: str) -> bool:
+    words = re.findall(r"[A-Za-z][A-Za-z'’-]*", text)
+    letters = [ch for ch in text if ch.isalpha()]
+    if not words or (len(letters) > 3 and all(ch.isupper() for ch in letters)):
+        return False
+    return all(word[0].isupper() for index, word in enumerate(words) if index == 0 or word.lower() not in MINOR_TITLE_WORDS)
+
+
+def _heading_groups(units: list[dict]) -> list[tuple[str, list[dict]]]:
+    """(level, lines) per heading: a Word paragraph, or a single PDF line."""
+    groups: list[tuple[str, list[dict]]] = []
+    for unit in units:
+        role = unit.get("role")
+        if role not in {"heading1", "heading2", "heading3"} or not (unit.get("text") or "").strip():
+            continue
+        if (unit.get("source") or "body") != "body":
+            continue
+        key = unit.get("paragraph_index")
+        if groups and key is not None and groups[-1][1][0].get("paragraph_index") == key:
+            groups[-1][1].append(unit)
+        else:
+            groups.append((role, [unit]))
+    return groups
+
+
+def _check_heading_styles(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
+    styles = (rules.get("font") or {}).get("heading_styles") or {}
+    if not styles:
+        return
+    for level, lines in _heading_groups(units):
+        wanted = styles.get(level)
+        if not wanted:
+            continue
+        text = " ".join((unit.get("text") or "").strip() for unit in lines)
+        pieces = [piece for unit in lines for piece in (unit.get("spans") or unit.get("line_runs") or unit.get("runs") or [])]
+        problems: list[str] = []
+        if "bold" in wanted and (_share(pieces, "bold") >= 0.6) != wanted["bold"]:
+            problems.append("bold" if wanted["bold"] else "not bold")
+        if "italic" in wanted and (_share(pieces, "italic") >= 0.6) != wanted["italic"]:
+            problems.append("italic" if wanted["italic"] else "not italic")
+        if wanted.get("case") == "upper":
+            letters = [ch for ch in text if ch.isalpha()]
+            if letters and not all(ch.isupper() for ch in letters) and _share(pieces, "caps") < 0.6:
+                problems.append("in ALL CAPS")
+        elif wanted.get("case") == "title" and not _is_title_case(text):
+            problems.append("in Title Case")
+        alignment = lines[0].get("alignment")
+        if wanted.get("alignment") == "center" and alignment and alignment != "center":
+            problems.append("centered")
+        elif wanted.get("alignment") == "left" and alignment and alignment not in {"left", "justify"}:
+            problems.append("aligned left")
+        stats.observe(not problems)
+        if not problems:
+            continue
+        label = {"heading1": "Heading 1", "heading2": "Heading 2", "heading3": "Heading 3"}[level]
+        required = ", ".join(problems)
+        collector.add(
+            f"{level}_style",
+            "minor",
+            f"{label} style differs",
+            f"This {label} does not follow the heading style required by the uploaded format.",
+            f"“{text[:80]}” should be {required}.",
+            f"Format this {label} so it is {required}.",
+            _unit_location(lines[0], "Fonts"),
+        )
+
+
+DOUBLE_SPACE_RE = re.compile(r"(?<=\S)[ \u00a0]{2,}(?=\S)")
+SENTENCE_GAP_RE = re.compile(r"[.!?][\"'’”)\]]?([ \u00a0]+)(?=[\"'“(]?[A-Z])")
+ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "st", "vs", "al", "pp", "p", "no", "vol", "jr", "sr", "e.g", "i.e", "etc", "fig", "eq"}
+
+
+def _word_spacing_problem(text: str, rule: str) -> tuple[int, str] | None:
+    """(character offset, problem) for the first spacing mistake in a paragraph."""
+    if rule == WORD_SPACING_SINGLE:
+        match = DOUBLE_SPACE_RE.search(text)
+        return (match.start(), "two or more spaces in a row") if match else None
+    for match in DOUBLE_SPACE_RE.finditer(text):
+        if text[match.start() - 1] not in ".!?\"'’”)]":
+            return match.start(), "two or more spaces between words"
+    for match in SENTENCE_GAP_RE.finditer(text):
+        if len(match.group(1)) != 1:
+            continue
+        word = re.search(r"(\S+)$", text[: match.start() + 1])
+        token = (word.group(1) if word else "").strip("\"'’”)(").rstrip(".!?").lower()
+        if len(token) <= 1 or token in ABBREVIATIONS:
+            continue
+        return match.start(1), "one space after the end of a sentence"
+    return None
+
+
+def _check_word_spacing(
+    units: list[dict], parsed: dict, rules: dict, stats: CategoryStats, collector: IssueCollector
+) -> None:
+    rule = canonical_word_spacing(rules.get("word_spacing"))
+    if rule not in {WORD_SPACING_SINGLE, WORD_SPACING_TWO}:
+        return
+    paragraph_text = {
+        paragraph.get("paragraph_index"): str(paragraph.get("text") or "")
+        for paragraph in parsed.get("paragraphs") or []
+    }
+    seen: set = set()
+    for unit in units:
+        if unit.get("role") not in {"body", "heading1", "heading2", "heading3", "caption"}:
+            continue
+        if (unit.get("source") or "body") != "body":
+            continue
+        key = unit.get("paragraph_index")
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+            text = paragraph_text.get(key, unit.get("text") or "")
+        else:
+            text = unit.get("text") or ""
+        if len(text.strip()) < 2 or "\t" in text.strip() or re.search(r"\.{3,}|…", text):
+            continue
+        problem = _word_spacing_problem(text, rule)
+        stats.observe(problem is None)
+        if problem is None:
+            continue
+        offset, what = problem
+        loc = _unit_location(unit, "Spacing")
+        loc["excerpt"] = " ".join(text[max(0, offset - 40): offset + 40].split())
+        expected = "one space between words" if rule == WORD_SPACING_SINGLE else "two spaces after each sentence"
+        collector.add(
+            "word_spacing",
+            "minor",
+            "Word spacing differs",
+            "Spacing between words or sentences does not match the uploaded format.",
+            f"This paragraph has {what}; the format requires {expected}.",
+            "Use Find and Replace to replace two spaces with one."
+            if rule == WORD_SPACING_SINGLE
+            else "Put two spaces after each sentence and one space between words.",
+            loc,
+        )
+
+
 def _build_breakdown(stats: dict[str, CategoryStats], issues: list[dict]) -> list[dict]:
     issues_by_category: dict[str, list[str]] = defaultdict(list)
     counts: dict[str, int] = defaultdict(int)
@@ -1369,20 +2165,30 @@ def _build_breakdown(stats: dict[str, CategoryStats], issues: list[dict]) -> lis
 
 
 def run_compliance_scan(
-    parsed: dict, mechanics_rules: dict, tier: str = "free"
+    parsed: dict, mechanics_rules: dict, tier: str = "free", on_progress=None
 ) -> dict:
     units = _document_units(parsed, mechanics_rules)
     _annotate_roles(units, mechanics_rules)
+    _mark_title_page(units, mechanics_rules)
     stats = {name: CategoryStats() for name in BREAKDOWN_ORDER}
     collector = IssueCollector()
-    _check_fonts(units, mechanics_rules, stats["Fonts"], collector)
-    _check_margins(parsed, units, mechanics_rules, stats["Margins"], collector)
-    _check_indentation(units, mechanics_rules, stats["Indentation"], collector)
-    _check_spacing(units, mechanics_rules, stats["Spacing"], collector)
-    _check_alignment(units, mechanics_rules, stats["Alignment"], collector)
-    _check_pagination(units, mechanics_rules, stats["Alignment"], collector)
-    _check_captions(units, mechanics_rules, collector)
-    _check_citations(units, parsed.get("text", ""), mechanics_rules, collector)
+    checks = (
+        ("Checking fonts", lambda: _check_fonts(units, mechanics_rules, stats["Fonts"], collector)),
+        ("Checking heading styles", lambda: _check_heading_styles(units, mechanics_rules, stats["Fonts"], collector)),
+        ("Checking margins", lambda: _check_margins(parsed, units, mechanics_rules, stats["Margins"], collector)),
+        ("Checking indentation", lambda: _check_indentation(units, mechanics_rules, stats["Indentation"], collector)),
+        ("Checking spacing", lambda: _check_spacing(units, mechanics_rules, stats["Spacing"], collector)),
+        ("Checking word spacing", lambda: _check_word_spacing(units, parsed, mechanics_rules, stats["Spacing"], collector)),
+        ("Checking alignment", lambda: _check_alignment(units, mechanics_rules, stats["Alignment"], collector)),
+        ("Checking page numbers", lambda: _check_pagination(units, mechanics_rules, stats["Pagination"], collector, parsed)),
+        ("Checking captions", lambda: _check_captions(units, mechanics_rules, collector)),
+        ("Checking citations", lambda: _check_citations(units, parsed.get("text", ""), mechanics_rules, collector)),
+    )
+    total_checks = len(checks)
+    for index, (label, run_check) in enumerate(checks, start=1):
+        if on_progress:
+            on_progress(index, total_checks, label)
+        run_check()
     issues = enrich_compliance_issues(collector.result(), mechanics_rules, tier)
     issues.sort(key=lambda issue: (SEVERITY_ORDER.get(issue["severity"], 2), issue["issue_type"]))
     breakdown = _build_breakdown(stats, issues)
@@ -1392,8 +2198,15 @@ def run_compliance_scan(
     if (parsed.get("metadata") or {}).get("format") == "pdf":
         page_count = max(page_count, len(parsed.get("pages") or []))
     pagination = _pagination_meta(parsed, mechanics_rules)
+    scoring = build_scoring_payload(stats, issues)
     return {
         "overall_score": overall,
+        "right_pct": scoring["right_pct"],
+        "wrong_pct": scoring["wrong_pct"],
+        "category_wrong_pct": scoring["category_wrong_pct"],
+        "severity_pct": scoring["severity_pct"],
+        "units_checked": scoring["units_checked"],
+        "units_failed": scoring["units_failed"],
         "issues": issues,
         "sections": breakdown,
         "page_count": page_count,

@@ -126,6 +126,7 @@ export function mapComplianceScanToResult(scan, meta = {}) {
         { section: "Indentation" },
         { section: "Spacing" },
         { section: "Alignment" },
+        { section: "Pagination" },
       ]
   ).map((section) => ({
     metric: section.section || section.section_name || "General",

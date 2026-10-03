@@ -118,14 +118,36 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(result["issues"][0]["severity"], "critical")
         self.assertEqual(
             result["issues"][0]["locations"],
-            [{"page": 2, "line": 1, "section": "Fonts", "excerpt": "Example line"}],
+            [{"page": 2, "line": 1, "section": "Fonts", "excerpt": "Example line",
+              "page_width": 612, "page_height": 792}],
         )
         self.assertEqual([item["section"] for item in result["sections"]], [
-            "Fonts", "Margins", "Indentation", "Spacing", "Alignment",
+            "Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination",
         ])
         fonts = next(item for item in result["sections"] if item["section"] == "Fonts")
         self.assertEqual(fonts["formatting_score"], 0)
         self.assertEqual(result["overall_score"], fonts["formatting_score"])
+
+    def test_sample_guide_fills_every_mechanics_field(self):
+        from app.documents import build_sample_mechanics_docx, normalize_mechanics_rules
+
+        text = parse_document(build_sample_mechanics_docx(), "docx")["text"]
+        rules = normalize_mechanics_rules(derive_mechanics_rules(text))
+        self.assertEqual(rules["pagination"], {
+            "position": "Top right",
+            "first_page_of_chapter": "No page number shown",
+            "title_page": "Hidden but counted",
+            "preliminary_style": "Lowercase Roman (i, ii, iii)",
+            "body_numbering": "Arabic, restart at 1 on Chapter 1",
+            "chapter_markers": ["chapter_roman", "back_matter"],
+        })
+        self.assertEqual(rules["font"]["heading_styles"]["heading1"], {"bold": True, "case": "upper", "alignment": "center"})
+        self.assertEqual(rules["word_spacing"], "One space between words and after periods")
+        self.assertEqual(rules["paper"]["landscape_pages"], "Allowed for tables and figures")
+        self.assertEqual(rules["alignment"], "justify")
+        self.assertEqual(rules["line_spacing"], 1.5)
+        self.assertEqual(rules["table_layout_requirements"], ["Name above a quoted title caption"])
+        self.assertEqual(rules["page_break_requirements"], ["Only when starting a new chapter"])
 
     def test_overall_score_averages_checked_breakdown_metrics(self):
         parsed = {
@@ -466,7 +488,7 @@ class MechanicsExtractionTests(unittest.TestCase):
                 "page_height_inches": 11.0,
                 "top_margin_inches": 1.0,
                 "bottom_margin_inches": 1.0,
-                "left_margin_inches": 1.5,
+                "left_margin_inches": 0.5,
                 "right_margin_inches": 1.0,
             }],
         }
@@ -480,7 +502,7 @@ class MechanicsExtractionTests(unittest.TestCase):
         left = [i for i in result["issues"] if i["issue_type"] == "left_margin"]
         self.assertEqual(len(left), 1)
         self.assertEqual(left[0]["severity"], "moderate")
-        self.assertIn("1.5", left[0]["explanation"])
+        self.assertIn("0.5", left[0]["explanation"])
 
     def test_paper_size_mismatch_does_not_zero_correct_margins(self):
         parsed = {
