@@ -9,7 +9,9 @@ import {
   listMechanics,
   deleteManuscript as deleteManuscriptRequest,
   getComplianceScan,
+  getProfile,
   getScanDocument,
+  downloadScanDocumentFile,
   listScans,
   previewManuscript,
   renameMechanics as renameMechanicsRequest,
@@ -25,6 +27,8 @@ import MechanicsPanel from "./components/cockpit/MechanicsPanel.jsx";
 import ManuscriptPanel from "./components/cockpit/ManuscriptPanel.jsx";
 import ScanResultsScreen from "./components/cockpit/ScanResultsScreen.jsx";
 import ScanSummaryModal from "./components/cockpit/ScanSummaryModal.jsx";
+import AnalysisProgress from "./components/cockpit/AnalysisProgress.jsx";
+import PaperCarryAway, { PAPER_CARRY_HOLD_MS } from "./components/cockpit/PaperCarryAway.jsx";
 import ReferenceTracingView from "./components/cockpit/ReferenceTracingView.jsx";
 import AccountSettingsScreen from "./components/cockpit/AccountSettingsScreen.jsx";
 import MyManuscriptsScreen from "./components/cockpit/MyManuscriptsScreen.jsx";
@@ -114,7 +118,6 @@ function pendingRegistration(user) {
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [guest, setGuest] = useState(false);
   const [authReady, setAuthReady] = useState(!firebaseReady);
   const [mechanics, setMechanics] = useState([]);
   const [selectedMechanicsId, setSelectedMechanicsId] = useState("");
@@ -149,7 +152,7 @@ export default function App() {
   const [fileDetailsConfirm, setFileDetailsConfirm] = useState(null); // "cancel" | "analyse" | null
   const [fileDetailsConfirmBusy, setFileDetailsConfirmBusy] = useState(false);
   const uploadSessionRef = useRef(0);
-  const signedIn = Boolean(user) && !guest;
+  const signedIn = Boolean(user);
 
   function handleBackToDashboard() {
     setManuscriptReady(false);
@@ -271,6 +274,10 @@ export default function App() {
   }, []);
 
   const [analysisShown, setAnalysisShown] = useState(0);
+  const [departPhase, setDepartPhase] = useState("progress");
+  const revealSummaryRef = useRef(null);
+  const resultReadyRef = useRef(false);
+  const flightFinishedRef = useRef(false);
 
   const scanFlow = useScanFlow({
     mechanicsId: selectedMechanicsId,
@@ -278,6 +285,9 @@ export default function App() {
     getActiveManuscript,
     getScanTarget,
   });
+
+  revealSummaryRef.current = scanFlow.revealSummary;
+  resultReadyRef.current = Boolean(scanFlow.result);
 
   useEffect(() => {
     if (!notificationsOpen) return undefined;
@@ -317,6 +327,25 @@ export default function App() {
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
   }, [scanFlow.step, scanFlow.scanProgress.percent]);
+
+  useEffect(() => {
+    if (scanFlow.step !== "analyzing") {
+      setDepartPhase("progress");
+      flightFinishedRef.current = false;
+      return undefined;
+    }
+    const stage = String(scanFlow.scanProgress.stage || "").toLowerCase();
+    if (stage !== "done" || analysisShown < 99.5 || departPhase !== "progress") return undefined;
+    const timer = window.setTimeout(() => setDepartPhase("fly"), PAPER_CARRY_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [scanFlow.step, scanFlow.scanProgress.stage, analysisShown, departPhase]);
+
+  useEffect(() => {
+    if (scanFlow.step !== "analyzing" || !flightFinishedRef.current || !scanFlow.result) return undefined;
+    flightFinishedRef.current = false;
+    revealSummaryRef.current?.();
+    return undefined;
+  }, [scanFlow.step, scanFlow.result]);
 
   useEffect(() => {
     if (!user || (scanFlow.step !== "summary" && scanFlow.step !== "results")) return undefined;
@@ -413,6 +442,41 @@ export default function App() {
   const scanFlowRef = useRef(null);
   scanFlowRef.current = scanFlow;
 
+  const [savedDocument, setSavedDocument] = useState(null);
+  const savedDocumentRef = useRef(null);
+  savedDocumentRef.current = savedDocument;
+  const savedResultScanId = scanFlow.file ? "" : String(scanFlow.result?.scanId || "");
+
+  useEffect(() => {
+    if (!isServerId(savedResultScanId)) return undefined;
+    const known = savedDocumentRef.current;
+    if (known?.scanId === savedResultScanId && known.file) return undefined;
+    let cancelled = false;
+    setSavedDocument((current) =>
+      current?.scanId === savedResultScanId ? current : { scanId: savedResultScanId, file: null, loading: true }
+    );
+    const settle = (file) => {
+      if (cancelled) return;
+      setSavedDocument((current) =>
+        current?.scanId === savedResultScanId && current.loading
+          ? { scanId: savedResultScanId, file, loading: false }
+          : current
+      );
+    };
+    getScanDocument(savedResultScanId)
+      .then(downloadScanDocumentFile)
+      .then(settle)
+      .catch(() => settle(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [savedResultScanId]);
+
+  const savedDocumentForResult =
+    !scanFlow.file && savedDocument && savedDocument.scanId === scanFlow.result?.scanId ? savedDocument : null;
+  const resultFile = scanFlow.file || savedDocumentForResult?.file || null;
+  const resultDocumentLoading = Boolean(savedDocumentForResult?.loading);
+
   // Stored versions can be trimmed (browser quota) or server-only; fetch the full scan when opened.
   async function resolveSavedResult(manuscript, version) {
     if (!version) return null;
@@ -506,7 +570,6 @@ export default function App() {
     const unsub = onAuthStateChanged(auth, (next) => {
       setUser(next);
       if (next) {
-        setGuest(false);
         setRegistrationSuccess(pendingRegistration(next));
         const cached = readCachedSubscription(next.uid);
         if (cached) setSubscription(cached);
@@ -538,6 +601,13 @@ export default function App() {
       window.removeEventListener("focus", dropRevokedSession);
     };
   }, []);
+
+  // Accounts created with Google never pass through /auth/register, so the API
+  // creates their database profile the first time it is requested.
+  useEffect(() => {
+    if (!user?.uid) return;
+    getProfile().catch(() => {});
+  }, [user?.uid]);
 
   const loadDashboard = useCallback(async () => {
     if (!auth?.currentUser) return;
@@ -871,25 +941,8 @@ export default function App() {
     return <div className="grid min-h-screen place-items-center bg-navy text-sm text-slate-400">Loading…</div>;
   }
 
-  if (!signedIn && !guest) {
-    return <AuthScreen onContinueAsGuest={() => setGuest(true)} />;
-  }
-
-  if (guest) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-slate-950 p-6 text-slate-100">
-        <div className="max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-7 text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">PaperPilot</p>
-          <h1 className="mt-3 text-2xl font-semibold">Sign in to scan manuscripts</h1>
-          <p className="mt-2 text-sm leading-relaxed text-slate-400">
-            Mechanics, versions, scan allowances, and saved results are tied to your account.
-          </p>
-          <button onClick={() => setGuest(false)} className="mt-6 w-full rounded-xl bg-emerald-400 py-3 font-semibold text-slate-950">
-            Go to sign in
-          </button>
-        </div>
-      </div>
-    );
+  if (!signedIn) {
+    return <AuthScreen />;
   }
 
   if (registrationSuccess) {
@@ -975,19 +1028,19 @@ export default function App() {
           sidebarOpen ? "flex translate-x-0" : "hidden -translate-x-full md:hidden"
         }`}
       >
-        <div className="relative flex items-center gap-2.5 px-2">
+        <div className="relative px-2">
           <button
             type="button"
             onClick={openUploadMechanics}
-            className="flex min-w-0 flex-1 items-center rounded-xl px-1 py-1 text-left transition hover:bg-white/5"
+            className="flex w-full justify-center rounded-xl px-1 pb-2 pt-1 transition hover:bg-white/5"
             aria-label="PaperPilot, go to upload mechanics"
           >
-            <PaperPilotLogo tone="dark" markClassName="h-11 w-11" wordClassName="text-[15px]" />
+            <PaperPilotLogo tone="dark" />
           </button>
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-slate-600/60 bg-[#1a2943] text-slate-300 transition hover:bg-[#243552] hover:text-white"
+            className="absolute right-0 top-0 grid h-8 w-8 place-items-center rounded-lg border border-slate-600/60 bg-[#1a2943] text-slate-300 transition hover:bg-[#243552] hover:text-white"
             aria-label="Hide sidebar"
             title="Hide sidebar"
           >
@@ -1068,10 +1121,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleBackToDashboard}
-                    className="mt-1 inline-flex items-center text-xs font-semibold text-slate-500 transition hover:text-[#172033]"
+                    className="group mt-2 inline-flex items-center gap-1.5 rounded-full border border-[#bfeee5] bg-[#f0fbf9] py-1.5 pl-2.5 pr-3.5 text-xs font-bold text-[#109b89] shadow-sm transition hover:border-[#16bfa8] hover:bg-[#dcf7f2] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8]/40"
                   >
-                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
                     </svg>
                     Back to Dashboard
                   </button>
@@ -1278,7 +1331,8 @@ export default function App() {
         {scanFlow.step === "tracing" && scanFlow.result && (
           <ReferenceTracingView
             result={scanFlow.result}
-            file={scanFlow.file}
+            file={resultFile}
+            documentLoading={resultDocumentLoading}
             onBack={scanFlow.backToSummary}
             onViewFullResult={scanFlow.openFullResults}
           />
@@ -1288,7 +1342,8 @@ export default function App() {
           <ScanResultsScreen
             result={scanFlow.result}
             versionNumber={scanFlow.versionNumber}
-            file={scanFlow.file}
+            file={resultFile}
+            documentLoading={resultDocumentLoading}
             downloadBusy={scanFlow.downloadBusy}
             downloadError={scanFlow.downloadError}
             onDownload={scanFlow.downloadReport}
@@ -1311,28 +1366,29 @@ export default function App() {
 
         {/* ── Analysing state ────────────────────────────────────────────── */}
         {scanFlow.step === "analyzing" && (
-          <div className="grid min-h-[60vh] place-items-center rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
-            <div className="flex w-full max-w-md flex-col items-center gap-5 text-center">
+          <div className="relative flex min-h-[60vh] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
+            <div
+              aria-hidden={departPhase === "fly"}
+              className={`flex w-full max-w-md flex-col items-center gap-5 text-center transition-opacity duration-200 ${
+                departPhase === "fly" ? "pointer-events-none opacity-0" : "opacity-100"
+              }`}
+            >
               <PaperRollAnimation className="h-44 w-44" />
-              <p className="text-base font-bold text-slate-800">Analysing your document…</p>
-              <div className="w-full">
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
-                  <span className="capitalize">
-                    {String(scanFlow.scanProgress.stage || "queued").replace(/_/g, " ")}
-                  </span>
-                  <span>{Math.round(analysisShown)}%</span>
-                </div>
-                <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-100">
-                  <div
-                    className="h-full rounded-full bg-[#16bfa8]"
-                    style={{ width: `${Math.min(100, Math.max(0, analysisShown))}%` }}
-                  />
-                </div>
-                {scanFlow.scanProgress.message ? (
-                  <p className="mt-2 text-xs text-slate-400">{scanFlow.scanProgress.message}</p>
-                ) : null}
-              </div>
+              <p className="text-base font-bold text-slate-800">
+                {String(scanFlow.scanProgress.stage || "").toLowerCase() === "done"
+                  ? "Analysis complete"
+                  : "Analysing your document…"}
+              </p>
+              <AnalysisProgress progress={scanFlow.scanProgress} percent={analysisShown} />
             </div>
+            {departPhase === "fly" ? (
+              <PaperCarryAway
+                onDone={() => {
+                  flightFinishedRef.current = true;
+                  if (resultReadyRef.current) revealSummaryRef.current?.();
+                }}
+              />
+            ) : null}
           </div>
         )}
 
@@ -1357,7 +1413,7 @@ export default function App() {
             {loading ? (
               <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
                 <div className="flex flex-col items-center gap-3">
-                  <PaperPlaneLoader className="h-20 w-56" />
+                  <PaperPlaneLoader className="h-32 w-56" />
                   Loading your compliance workspace…
                 </div>
               </div>

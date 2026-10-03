@@ -12,7 +12,7 @@ import {
   sampleMechanicsForm,
 } from "../../lib/formatMechanicsForm.js";
 import { downloadSampleMechanics } from "../../api.js";
-import { MAX_FILE_BYTES } from "../../lib/mockAnalysis.js";
+import { MAX_FILE_SIZE_BYTES } from "../../lib/uploadLimits.js";
 import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
 import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
@@ -27,7 +27,7 @@ function validateFile(file) {
   if (!file) return "Choose a mechanics document.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
   if (!ACCEPTED.includes(ext)) return "Mechanics must be a PDF or DOCX file.";
-  if (file.size > MAX_FILE_BYTES) return "oversize";
+  if (file.size > MAX_FILE_SIZE_BYTES) return "oversize";
   return "";
 }
 
@@ -657,7 +657,7 @@ export default function MechanicsPanel({
                   <span className="mt-1 text-[11px] text-slate-400">
                     {file
                       ? `${formatFileSize(file.size)} · Confirm extraction to fill Format Fields beside this panel`
-                      : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_BYTES)}`}
+                      : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
                   </span>
                   <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                     Browse files
@@ -804,7 +804,7 @@ export default function MechanicsPanel({
       <ConfirmDialog
         open={oversizeBytes != null}
         title="File Too Large"
-        message={oversizeFileMessage(oversizeBytes, MAX_FILE_BYTES)}
+        message={oversizeFileMessage(oversizeBytes, MAX_FILE_SIZE_BYTES)}
         confirmLabel="OK"
         cancelLabel=""
         onCancel={() => setOversizeBytes(null)}

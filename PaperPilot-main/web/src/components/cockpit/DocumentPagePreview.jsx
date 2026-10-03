@@ -914,8 +914,18 @@ export default function DocumentPagePreview({
   highlight = null,
   emptyLabel = "No preview available yet.",
   paged = false,
+  loading = false,
 }) {
   const kind = fileKind(file) || fileKind({ name: documentName }) || urlKind(documentUrl);
+
+  if (loading && !file) {
+    return (
+      <div className="flex h-48 items-center justify-center gap-2 text-xs text-slate-500">
+        <Spinner className="h-4 w-4 text-[#16bfa8]" />
+        Opening saved document…
+      </div>
+    );
+  }
 
   if (kind === "pdf" && file) {
     return (

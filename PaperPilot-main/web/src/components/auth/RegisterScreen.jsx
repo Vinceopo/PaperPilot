@@ -28,7 +28,7 @@ function rememberRegistrationSuccess(profile) {
   );
 }
 
-export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGuest }) {
+export default function RegisterScreen({ slideDir, onGoToLogin }) {
   const [step, setStep] = useState("form");
   const [values, setValues] = useState(EMPTY);
   const [errors, setErrors] = useState({});
@@ -212,7 +212,6 @@ export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGues
       panelKey="register-form"
       title="Create your account"
       subtitle="Join PaperPilot to save scores and reports."
-      onContinueAsGuest={onContinueAsGuest}
       footer={loginFooter}
     >
       <form className="mt-7 space-y-4" onSubmit={onSubmit} noValidate>

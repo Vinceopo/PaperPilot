@@ -218,6 +218,25 @@ input[type="checkbox"] {
   animation: otp-check-draw 400ms ease forwards;
 }
 
+/* Centered on the wing. The jump animation clips away the lower half as it lands. */
+.pp-carry-paper {
+  position: absolute;
+  left: 42%;
+  top: 32px;
+  z-index: 2;
+  width: 48px;
+  margin-left: -24px;
+  transform: translate3d(0, 130px, 0) rotate(-18deg);
+}
+
+.pp-wind-tail {
+  fill: none;
+  stroke: #1bc9a0;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  opacity: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .auth-slide-left,
   .auth-slide-right,

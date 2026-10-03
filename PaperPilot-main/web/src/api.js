@@ -373,6 +373,25 @@ export function getScanDocument(scanId) {
   return authorizedFetch(`/scans/${encodeURIComponent(scanId)}/document`);
 }
 
+/**
+ * Downloads the original upload behind a saved scan through its signed link,
+ * since Cloudinary refuses public delivery of PDFs on this account.
+ * @param {{ download_url?: string, source_filename?: string }} doc from getScanDocument
+ * @returns {Promise<File|null>}
+ */
+export async function downloadScanDocumentFile(doc) {
+  const url = String(doc?.download_url || "").trim();
+  if (!url) return null;
+  const res = await fetch(url);
+  if (!res.ok) throw new ApiError("Could not download the saved document.", res.status);
+  const blob = await res.blob();
+  const name = String(doc?.source_filename || "").trim() || "document.pdf";
+  const type = name.toLowerCase().endsWith(".docx")
+    ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    : "application/pdf";
+  return new File([blob], name, { type });
+}
+
 export function listManuscriptVersions(manuscriptId, includeHistory = true) {
   const query = new URLSearchParams({ include_history: String(includeHistory) });
   return authorizedFetch(`/manuscripts/${encodeURIComponent(manuscriptId)}/versions?${query}`);

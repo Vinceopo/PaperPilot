@@ -7,7 +7,12 @@ import AuthShell from "./AuthShell.jsx";
 import GoogleButton from "./GoogleButton.jsx";
 import { FIREBASE_MISSING, authMessage } from "./messages.js";
 
-/** True when the value looks like a username (no @, 3–20 valid chars). */
+const USERNAME_NOT_FOUND = "No account uses that username. Check the spelling or sign in with your email.";
+const USERNAME_SIGN_IN_UNAVAILABLE =
+  "Signing in with a username isn't available right now. Use your email address instead.";
+const WRONG_PASSWORD = "Incorrect password. Try again or use Forgot password to reset it.";
+
+/** True when the value looks like a username (no @). */
 function looksLikeUsername(val) {
   return val.length >= 1 && !val.includes("@");
 }
@@ -23,7 +28,6 @@ export default function LoginScreen({
   notice,
   onGoToRegister,
   onGoToForgotPassword,
-  onContinueAsGuest,
 }) {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -61,16 +65,40 @@ export default function LoginScreen({
       return;
     }
     setBusy(true);
+    let loginEmail = identifier.trim();
+    const byUsername = looksLikeUsername(loginEmail);
     try {
-      let loginEmail = identifier.trim();
-      if (looksLikeUsername(loginEmail)) {
-        // Resolve username → email via the API before handing off to Firebase.
-        const res = await resolveEmail(loginEmail);
-        loginEmail = res.email;
+      if (byUsername) {
+        try {
+          const res = await resolveEmail(loginEmail);
+          loginEmail = res.email;
+        } catch (err) {
+          if (err?.code === "username_not_found") {
+            setErrors((prev) => ({ ...prev, identifier: USERNAME_NOT_FOUND }));
+          } else if (err?.status === 404) {
+            setFormError(USERNAME_SIGN_IN_UNAVAILABLE);
+          } else {
+            setFormError(authMessage(err));
+          }
+          return;
+        }
       }
       await signInWithEmail(auth, loginEmail, password, remember);
     } catch (err) {
-      setFormError(authMessage(err));
+      const code = err?.code;
+      // The username lookup already proved the account exists, so a credential error means the password.
+      if (
+        code === "auth/wrong-password" ||
+        (byUsername && (code === "auth/invalid-credential" || code === "auth/invalid-login-credentials"))
+      ) {
+        setErrors((prev) => ({ ...prev, password: WRONG_PASSWORD }));
+      } else if (code === "auth/user-not-found") {
+        setErrors((prev) => ({ ...prev, identifier: "No account uses that email address." }));
+      } else if (code === "auth/invalid-email") {
+        setErrors((prev) => ({ ...prev, identifier: authMessage(err) }));
+      } else {
+        setFormError(authMessage(err));
+      }
     } finally {
       setBusy(false);
     }
@@ -99,7 +127,6 @@ export default function LoginScreen({
       panelKey="login"
       title="Welcome back"
       subtitle="Sign in to continue reviewing manuscripts."
-      onContinueAsGuest={onContinueAsGuest}
       footer={
         <p className="mt-6 text-center text-sm text-slate-500">
           Don&apos;t have an account?{" "}
@@ -138,7 +165,7 @@ export default function LoginScreen({
           value={password}
           onChange={(e) => {
             setPassword(e.target.value);
-            revalidate("password", email, e.target.value);
+            revalidate("password", identifier, e.target.value);
           }}
           onBlur={() => onBlurField("password")}
           error={errors.password}

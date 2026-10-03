@@ -1,37 +1,54 @@
-function PaperPilotMark({ className = "h-12 w-12" }) {
+const INK = "#1e5756";
+const TEAL = "#3f9a8c";
+const MINT = "#b1e7cb";
+
+export function PaperPilotMark({ className = "h-12 w-12", tile = true }) {
   return (
-    <svg viewBox="0 0 64 64" className={`${className} drop-shadow-[0_6px_12px_rgba(20,184,166,0.28)]`} aria-hidden="true">
-      <rect width="64" height="64" rx="16" fill="#BDF2D8" />
-      <path d="M15 33.5 51 13l-13 38-5.4-15.2L15 33.5Z" fill="#1ec4ae" />
-      <path d="M15 33.5 51 13 32.6 28.8 15 33.5Z" fill="#101a30" />
-      <circle cx="17.5" cy="45.5" r="2.15" fill="#f2b431" />
-      <circle cx="23" cy="50" r="1.7" fill="#f2b431" />
-      <circle cx="27.6" cy="53.6" r="1.25" fill="#f2b431" />
+    <svg viewBox="4 1 64 69" className={className} aria-hidden="true">
+      {tile && <rect x="4" y="1" width="64" height="69" rx="15" fill={MINT} />}
+      <g stroke={INK} strokeWidth="3.2" strokeLinejoin="round">
+        <rect x="13.5" y="14.5" width="25" height="48.5" fill={TEAL} />
+        <path d="M21.5 7.5H45.5L58.5 20.5V47.5H38.5V55H21.5Z" fill={MINT} />
+        <path d="M45.5 7.5V20.5H58.5Z" fill={TEAL} />
+        <path d="M31 32L36.5 39.5L50.5 21.5" fill="none" strokeWidth="4" strokeLinecap="round" />
+      </g>
     </svg>
   );
 }
 
+/**
+ * Brand lockup: mark with the PAPERPILOT wordmark and tagline stacked beneath.
+ * Text has no backdrop so it sits directly on whatever surface hosts it.
+ */
 export default function PaperPilotLogo({
   className = "",
   markClassName = "h-12 w-12",
   subtitle = true,
-  wordClassName = "text-[17px]",
   tone = "light",
+  align = "center",
 }) {
   const onDark = tone === "dark";
+  const alignment = align === "start" ? "items-start text-left" : "items-center text-center";
   return (
-    <span className={`flex min-w-0 items-center gap-3 ${className}`}>
+    <span className={`flex min-w-0 flex-col ${alignment} ${className}`}>
       <PaperPilotMark className={`shrink-0 ${markClassName}`} />
-      <span className="min-w-0 text-left">
-        <span className={`block font-bold leading-none tracking-tight ${onDark ? "text-white" : "text-[#172033]"} ${wordClassName}`}>
-          Paper<span className="text-[#14b8a6]">Pilot</span>
-        </span>
-        {subtitle ? (
-          <span className={`mt-1 block text-[11px] leading-tight ${onDark ? "text-slate-400" : "text-slate-500"}`}>
-            Academic document compliance
-          </span>
-        ) : null}
+      <span
+        className={`mt-2 block font-['Quicksand',sans-serif] text-[23px] font-bold leading-none tracking-[0.06em] ${
+          onDark ? "text-[#e6faf5]" : "text-[#225b5f]"
+        }`}
+      >
+        PAPERPILOT
       </span>
+      {subtitle ? (
+        <span
+          className={`mt-1.5 block font-['Quicksand',sans-serif] text-[8px] font-semibold uppercase leading-[1.55] tracking-[0.14em] ${
+            onDark ? "text-[#5fd3c1]" : "text-[#1f9e97]"
+          }`}
+        >
+          <span className="block whitespace-nowrap">An AI-powered academic document</span>
+          <span className="block whitespace-nowrap">analysis and compliance checking system</span>
+        </span>
+      ) : null}
     </span>
   );
 }

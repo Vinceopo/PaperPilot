@@ -142,6 +142,7 @@ export default function ScanResultsScreen({
   result,
   versionNumber = 1,
   file = null,
+  documentLoading = false,
   downloadBusy = false,
   downloadError = "",
   onDownload,
@@ -189,7 +190,7 @@ export default function ScanResultsScreen({
     : "—";
 
   const versionLabel = `v${versionNumber}.0`;
-  const hasPreview = Boolean(file || cloudinaryUrl || documentPreview);
+  const hasPreview = Boolean(file || documentLoading || cloudinaryUrl || documentPreview);
 
   return (
     <div className="space-y-6">
@@ -383,6 +384,7 @@ export default function ScanResultsScreen({
             <div className="bg-[#e8ecf1] p-3">
               <DocumentPagePreview
                 file={file}
+                loading={documentLoading}
                 documentUrl={cloudinaryUrl}
                 documentName={documentName}
                 preview={documentPreview}
