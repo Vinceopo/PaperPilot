@@ -29,7 +29,7 @@ export default function OtpStep({
   const [round, setRound] = useState(0);
   const [devCode, setDevCode] = useState(initialDevCode || "");
   const [expiresAt, setExpiresAt] = useState(() => Date.now() + (expiresIn || 300) * 1000);
-  const [resendAt, setResendAt] = useState(() => Date.now() + (resendIn || 60) * 1000);
+  const [resendAt, setResendAt] = useState(() => Date.now() + (resendIn || 30) * 1000);
   const [now, setNow] = useState(() => Date.now());
   const attemptedRef = useRef("");
 
@@ -86,7 +86,7 @@ export default function OtpStep({
     try {
       const res = await sendOtp({ email, purpose });
       setExpiresAt(Date.now() + (res.expires_in || 300) * 1000);
-      setResendAt(Date.now() + (res.resend_in || 60) * 1000);
+      setResendAt(Date.now() + (res.resend_in || 30) * 1000);
       setDevCode(res.dev_code || "");
       setCode("");
       attemptedRef.current = "";

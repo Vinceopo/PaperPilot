@@ -20,8 +20,6 @@ export function isScanReady(version, manuscript) {
   return scanTargetIds(version, manuscript).ready;
 }
 
-const BREAKDOWN_ORDER = ["Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination"];
-
 /** Convert PDF-point bbox [x0,y0,x1,y1] or {x,y,w,h} into normalized fractions. */
 export function normalizeBbox(raw, pageWidth = 612, pageHeight = 792) {
   if (!raw) return null;
@@ -99,146 +97,89 @@ export function normalizeIssueLocation(loc = {}) {
   };
 }
 
-function deriveCategoryWrongPct(scan, formatChecks) {
-  const fromApi = Array.isArray(scan?.category_wrong_pct) ? scan.category_wrong_pct : [];
-  if (fromApi.length) {
-    return fromApi
-      .map((row) => ({
-        section: row.section || row.category || "General",
-        pct: Number(row.pct_of_wrong ?? row.wrong_pct ?? row.pct ?? 0),
-        failedUnits: Number(row.failed_units ?? 0),
-      }))
-      .filter((row) => Number.isFinite(row.pct));
+/*
+ * Every number below is read from the backend scoring payload (`scan.scoring`, built by
+ * scoring.py). The frontend never estimates, re-weights or re-derives a percentage; a
+ * value the backend did not send is shown as unavailable.
+ */
+
+function numberOrNull(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function categoryRows(scan) {
+  const fromScoring = Array.isArray(scan?.scoring?.categories) ? scan.scoring.categories : null;
+  if (fromScoring) {
+    return fromScoring.map((cat) => ({
+      metric: cat.category,
+      score: numberOrNull(cat.score?.value),
+      status: cat.status || null,
+      unitsChecked: numberOrNull(cat.units_checked) ?? 0,
+      unitsPassed: numberOrNull(cat.units_passed) ?? 0,
+      unitsFailed: numberOrNull(cat.units_failed) ?? 0,
+      issueCount: numberOrNull(cat.issue_occurrences) ?? 0,
+      failedShare: numberOrNull(cat.failed_share?.value),
+      measured: (numberOrNull(cat.units_checked) ?? 0) > 0,
+    }));
   }
-
-  const counts = new Map();
-  formatChecks.forEach((check) => {
-    if (check.result === "PASS") return;
-    const locs =
-      Array.isArray(check.locations) && check.locations.length
-        ? check.locations
-        : [{ section: check.section || "General" }];
-    locs.forEach((loc) => {
-      const key = loc.section || "General";
-      counts.set(key, (counts.get(key) || 0) + 1);
+  // Scans saved before the scoring payload existed: show the stored rows as they are.
+  const sections = Array.isArray(scan?.sections) ? scan.sections : [];
+  return sections
+    .filter((section) => section && (section.section || section.section_name))
+    .map((section) => {
+      const unitsChecked = numberOrNull(section.units_checked);
+      return {
+        metric: section.section || section.section_name,
+        score: numberOrNull(section.formatting_score),
+        status: section.status || null,
+        unitsChecked,
+        unitsPassed: numberOrNull(section.units_passed),
+        unitsFailed: numberOrNull(section.units_failed),
+        issueCount: numberOrNull(section.issue_count) ?? 0,
+        failedShare: null,
+        measured: unitsChecked == null ? section.formatting_score != null : unitsChecked > 0,
+      };
     });
-  });
-  const total = [...counts.values()].reduce((sum, n) => sum + n, 0);
-  if (!total) return [];
-  return [...counts.entries()]
-    .map(([section, count]) => ({
-      section,
-      pct: Math.round((count / total) * 1000) / 10,
-      failedUnits: count,
+}
+
+function failedUnitDistribution(scan, breakdown) {
+  if (scan?.scoring) {
+    return breakdown
+      .filter((row) => row.unitsFailed > 0 && row.failedShare != null)
+      .map((row) => ({ section: row.metric, pct: row.failedShare, failedUnits: row.unitsFailed }));
+  }
+  const fromApi = Array.isArray(scan?.category_wrong_pct) ? scan.category_wrong_pct : [];
+  return fromApi
+    .map((row) => ({
+      section: row.section || row.category || "General",
+      pct: numberOrNull(row.pct_of_wrong ?? row.wrong_pct ?? row.pct),
+      failedUnits: numberOrNull(row.failed_units) ?? 0,
     }))
-    .sort((a, b) => b.pct - a.pct);
+    .filter((row) => row.pct != null && row.failedUnits > 0);
 }
 
-function severityWeight(severity) {
-  const v = String(severity || "").toLowerCase();
-  if (v === "critical" || v === "major") return 3;
-  if (v === "moderate" || v === "warning") return 2;
-  return 1;
-}
-
-function severityPctLooksEmpty(raw) {
-  if (!raw || typeof raw !== "object") return true;
-  const c = Number(raw.critical ?? 0);
-  const m = Number(raw.moderate ?? 0);
-  const n = Number(raw.minor ?? 0);
-  return !Number.isFinite(c + m + n) || c + m + n <= 0;
-}
-
-function deriveSeverityPct(scan, formatChecks) {
-  const fromApi = scan?.severity_pct;
-  if (fromApi && typeof fromApi === "object" && !severityPctLooksEmpty(fromApi)) {
+function severityBreakdown(scan) {
+  const bySeverity = scan?.scoring?.issues?.by_severity;
+  if (bySeverity) {
+    const pick = (key) => numberOrNull(bySeverity[key]?.share?.value);
+    const total = numberOrNull(scan.scoring.issues.total_occurrences) ?? 0;
     return {
-      critical: Number(fromApi.critical ?? 0),
-      moderate: Number(fromApi.moderate ?? 0),
-      minor: Number(fromApi.minor ?? 0),
+      severityPct: total ? { critical: pick("critical"), moderate: pick("moderate"), minor: pick("minor") } : null,
+      severityCounts: {
+        critical: numberOrNull(bySeverity.critical?.occurrences) ?? 0,
+        moderate: numberOrNull(bySeverity.moderate?.occurrences) ?? 0,
+        minor: numberOrNull(bySeverity.minor?.occurrences) ?? 0,
+      },
     };
   }
-
-  const weights = { critical: 0, moderate: 0, minor: 0 };
-  formatChecks.forEach((check) => {
-    if (check.result === "PASS") return;
-    const sev = String(check.severity || "moderate").toLowerCase();
-    const bucket =
-      sev === "critical" || sev === "major"
-        ? "critical"
-        : sev === "moderate" || sev === "warning"
-          ? "moderate"
-          : "minor";
-    const n = Math.max(1, Number(check.count) || check.locations?.length || 1);
-    weights[bucket] += n * severityWeight(sev);
-  });
-  const total = weights.critical + weights.moderate + weights.minor;
-  if (!total) {
-    return { critical: 0, moderate: 0, minor: 0 };
-  }
-  return {
-    critical: Math.round((weights.critical / total) * 1000) / 10,
-    moderate: Math.round((weights.moderate / total) * 1000) / 10,
-    minor: Math.round((weights.minor / total) * 1000) / 10,
-  };
-}
-
-function deriveScoreBreakdown(scan, formatChecks) {
-  const sections = Array.isArray(scan?.sections) ? scan.sections : [];
-  const usable = sections.filter(
-    (section) =>
-      section &&
-      (section.section || section.section_name) &&
-      section.formatting_score != null &&
-      Number.isFinite(Number(section.formatting_score))
-  );
-
-  if (usable.length) {
-    return usable.map((section) => ({
-      metric: section.section || section.section_name || "General",
-      score: Math.round(Number(section.formatting_score) * 100) / 100,
-      issueCount: Number(section.issue_count ?? 0),
-      measured: true,
-    }));
-  }
-
-  // Fallback: estimate category pass rates from issue locations when ML sections are missing.
-  const failByCategory = new Map(BREAKDOWN_ORDER.map((name) => [name, 0]));
-  let totalLocations = 0;
-  formatChecks.forEach((check) => {
-    if (check.result === "PASS") return;
-    const locs =
-      Array.isArray(check.locations) && check.locations.length
-        ? check.locations
-        : [{ section: check.section || "Fonts" }];
-    locs.forEach((loc) => {
-      const key = BREAKDOWN_ORDER.includes(loc.section) ? loc.section : "Fonts";
-      failByCategory.set(key, (failByCategory.get(key) || 0) + 1);
-      totalLocations += 1;
-    });
-  });
-
-  const overall = Number(scan?.overall_score ?? 0);
-  if (!totalLocations) {
-    return BREAKDOWN_ORDER.map((metric) => ({
-      metric,
-      score: overall > 0 ? overall : 100,
-      issueCount: 0,
-      measured: false,
-    }));
-  }
-
-  // Distribute overall score: categories with more failures get lower scores.
-  const maxFail = Math.max(...failByCategory.values(), 1);
-  return BREAKDOWN_ORDER.map((metric) => {
-    const fails = failByCategory.get(metric) || 0;
-    if (fails === 0) {
-      return { metric, score: 100, issueCount: 0, measured: true };
-    }
-    const severityShare = fails / maxFail;
-    const score = Math.max(0, Math.round((overall * (1 - 0.55 * severityShare) + (100 - overall) * (1 - severityShare)) * 10) / 10);
-    return { metric, score, issueCount: fails, measured: true };
-  });
+  const raw = scan?.severity_pct;
+  const values = raw && typeof raw === "object"
+    ? { critical: numberOrNull(raw.critical), moderate: numberOrNull(raw.moderate), minor: numberOrNull(raw.minor) }
+    : null;
+  const hasAny = values && Object.values(values).some((v) => v != null && v > 0);
+  return { severityPct: hasAny ? values : null, severityCounts: null };
 }
 
 export function mapComplianceScanToResult(scan, meta = {}) {
@@ -258,7 +199,7 @@ export function mapComplianceScanToResult(scan, meta = {}) {
       recommendation: issue.recommendation || "",
       locations,
       issue_type: issue.issue_type,
-      count: issue.count ?? locations.length,
+      count: issue.count == null ? null : Number(issue.count),
       section: locations[0]?.section || issue.section || "",
     };
   });
@@ -268,30 +209,23 @@ export function mapComplianceScanToResult(scan, meta = {}) {
     return Math.max(max, ...pages, 0);
   }, 0);
 
-  const scoreBreakdown = deriveScoreBreakdown(scan, formatChecks);
-  const measuredScores = scoreBreakdown.filter((row) => row.measured).map((row) => row.score);
-  const overallScore =
-    scan?.overall_score != null
-      ? Number(scan.overall_score)
-      : measuredScores.length
-        ? Math.round((measuredScores.reduce((a, b) => a + b, 0) / measuredScores.length) * 100) / 100
-        : 0;
-
-  const rightPct =
-    scan?.right_pct != null
-      ? Number(scan.right_pct)
-      : overallScore > 0
-        ? overallScore
-        : null;
-  const wrongPct =
-    scan?.wrong_pct != null
-      ? Number(scan.wrong_pct)
-      : rightPct != null
-        ? Math.max(0, Math.round((100 - rightPct) * 10) / 10)
-        : null;
-
-  const categoryWrongPct = deriveCategoryWrongPct(scan, formatChecks);
-  const severityPct = deriveSeverityPct(scan, formatChecks);
+  const scoring = scan?.scoring || null;
+  const scoreBreakdown = categoryRows(scan);
+  const overallScore = numberOrNull(scoring ? scoring.overall?.value : scan?.overall_score);
+  const rightPct = numberOrNull(scoring ? scoring.passed_pct?.value : scan?.right_pct);
+  const wrongPct = numberOrNull(scoring ? scoring.failed_pct?.value : scan?.wrong_pct);
+  const unitsChecked = numberOrNull(scoring ? scoring.units?.checked : scan?.units_checked);
+  const unitsFailed = numberOrNull(scoring ? scoring.units?.failed : scan?.units_failed);
+  const unitsPassed = numberOrNull(scoring ? scoring.units?.passed : scan?.units_passed);
+  const categoryWrongPct = failedUnitDistribution(scan, scoreBreakdown);
+  const { severityPct, severityCounts } = severityBreakdown(scan);
+  const issueTotals = scoring?.issues
+    ? {
+        occurrences: numberOrNull(scoring.issues.total_occurrences) ?? 0,
+        types: numberOrNull(scoring.issues.issue_types) ?? 0,
+        withoutUnits: numberOrNull(scoring.issues.occurrences_without_units) ?? 0,
+      }
+    : null;
 
   return {
     documentId: meta.documentId || scan?.manuscript_id || scan?.id || "manuscript",
@@ -301,11 +235,18 @@ export function mapComplianceScanToResult(scan, meta = {}) {
     scannedAt: scan?.created_at || new Date().toISOString(),
     citationStyle: meta.citationStyle || "APA",
     overallScore,
-    rightPct: rightPct ?? overallScore,
-    wrongPct: wrongPct ?? Math.max(0, 100 - overallScore),
+    overallCategories: Array.isArray(scoring?.overall?.categories) ? scoring.overall.categories : null,
+    rightPct,
+    wrongPct,
     categoryWrongPct,
     severityPct,
+    severityCounts,
+    issueTotals,
     scoreBreakdown,
+    scoringVersion: scoring?.version || null,
+    scoringConsistency: scoring?.consistency
+      ? { ok: scoring.consistency.ok !== false, errors: scoring.consistency.errors || [] }
+      : null,
     formatChecks,
     pageCount: Number(scan?.page_count || meta.pageCount || maxIssuePage || 0),
     pagination: scan?.pagination || meta.pagination || null,
@@ -315,7 +256,8 @@ export function mapComplianceScanToResult(scan, meta = {}) {
     mechanicsId: scan?.mechanics_id || meta.mechanicsId,
     cloudinaryUrl: scan?.cloudinary_url || meta.cloudinaryUrl || "",
     documentPreview: scan?.preview || meta.preview || null,
-    unitsChecked: scan?.units_checked != null ? Number(scan.units_checked) : null,
-    unitsFailed: scan?.units_failed != null ? Number(scan.units_failed) : null,
+    unitsChecked,
+    unitsPassed,
+    unitsFailed,
   };
 }

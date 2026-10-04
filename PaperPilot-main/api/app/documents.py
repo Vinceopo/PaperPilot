@@ -1600,23 +1600,14 @@ def _apply_sample_run_font(run, *, bold: bool = False) -> None:
 
 _SAMPLE_VALUE_TAB = Inches(2.5)
 
+# APA 7th edition student-paper rules, with every Format Field filled.
 # Each section heading must be a word the extractor stops on (Paper, Margins, Font,
 # Pagination, Page, Table, Figure, Citation) so it never leaks into the value above it.
 # Free-text sections use their heading as the label and put the value on the next line.
+# Values must avoid stop words (Left, Right, Top, Page, Table, Figure, ...) except as
+# their first word, and Margins must come before "Alignment: Left" so the first "Left"
+# in the text is the left margin.
 _SAMPLE_SECTIONS = (
-    (
-        "Paper",
-        (
-            ("Size", "8.5 x 11"),
-            ("Orientation", "Portrait"),
-            ("Substance", "20"),
-            ("Spacing", "1.5"),
-            ("Word spacing", "One space between words and after periods"),
-            ("Indention", "0.5 inch"),
-            ("Alignment", "Justified"),
-            ("Landscape pages", "Allowed for tables and figures"),
-        ),
-    ),
     (
         "Margins (in inches)",
         (
@@ -1630,10 +1621,23 @@ _SAMPLE_SECTIONS = (
         ),
     ),
     (
+        "Paper",
+        (
+            ("Size", "8.5 x 11"),
+            ("Orientation", "Portrait"),
+            ("Substance", "20"),
+            ("Spacing", "Double"),
+            ("Word spacing", "One space between words and after periods"),
+            ("Indention", "0.5 inch"),
+            ("Alignment", "Left"),
+            ("Landscape pages", "Allowed for tables and figures"),
+        ),
+    ),
+    (
         "Font",
         (
-            ("Heading 1 size", "16 pt"),
-            ("Heading 2 size", "14 pt"),
+            ("Heading 1 size", "12 pt"),
+            ("Heading 2 size", "12 pt"),
             ("Heading 3 and content size", "12 pt"),
             ("Font type", "Times New Roman"),
             ("Font color", "Black"),
@@ -1642,7 +1646,7 @@ _SAMPLE_SECTIONS = (
     (
         "Heading Styles",
         (
-            ("Heading 1 style", "Bold, ALL CAPS, centered"),
+            ("Heading 1 style", "Bold, Title Case, centered"),
             ("Heading 2 style", "Bold, Title Case, flush left"),
             ("Heading 3 style", "Bold italic, Title Case, flush left"),
         ),
@@ -1651,17 +1655,22 @@ _SAMPLE_SECTIONS = (
         "Pagination",
         (
             ("Page number position", "Top right"),
-            ("Title page", "Hidden but counted"),
-            ("First page of each chapter", "No page number shown"),
-            ("Preliminary pages", "Lowercase Roman (i, ii, iii)"),
-            ("Body numbering", "Arabic, restart at 1 on Chapter 1"),
-            ("Chapter starts", "CHAPTER I, CHAPTER II…; References, Bibliography, Appendices"),
+            ("Title page", "Number shown"),
+            ("First page of each chapter", "Same position as other pages"),
+            ("Body numbering", "Arabic, continuous"),
+            ("Chapter starts", "CHAPTER I, CHAPTER II…; Chapter 1, Chapter 2…"),
         ),
     ),
-    ("Page Breaks", "Only when starting a new chapter"),
-    ("Table Layout", "Name above a quoted title caption"),
-    ("Figure Layout", "Number and title in bold or underlined placed below the image"),
-    ("Citation Format", (("Citation style", "APA"),)),
+    ("Page Breaks", "Only to start each new chapter and the reference list"),
+    (
+        "Table Layout",
+        "Table number in bold, with the title in italic title case on the next line, both placed above it",
+    ),
+    (
+        "Figure Layout",
+        "Figure number in bold, with the title in italic title case on the next line, both placed above the image",
+    ),
+    ("Citation Format", (("Citation style", "APA 7th edition"),)),
 )
 
 

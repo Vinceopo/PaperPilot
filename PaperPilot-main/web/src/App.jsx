@@ -278,6 +278,14 @@ export default function App() {
   const revealSummaryRef = useRef(null);
   const resultReadyRef = useRef(false);
   const flightFinishedRef = useRef(false);
+  const [pageHidden, setPageHidden] = useState(() => document.visibilityState === "hidden");
+  const titleBeforeDoneRef = useRef(null);
+
+  useEffect(() => {
+    const onVisibility = () => setPageHidden(document.visibilityState === "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   const scanFlow = useScanFlow({
     mechanicsId: selectedMechanicsId,
@@ -346,6 +354,30 @@ export default function App() {
     revealSummaryRef.current?.();
     return undefined;
   }, [scanFlow.step, scanFlow.result]);
+
+  // Browsers pause requestAnimationFrame in background tabs, so the animated bar (and the
+  // plane after it) would hold a finished scan back until the tab is shown again.
+  useEffect(() => {
+    if (!pageHidden || scanFlow.step !== "analyzing" || !scanFlow.result) return;
+    if (String(scanFlow.scanProgress.stage || "").toLowerCase() !== "done") return;
+    if (titleBeforeDoneRef.current == null) {
+      titleBeforeDoneRef.current = document.title;
+      document.title = `✓ Analysis complete · ${document.title}`;
+    }
+    revealSummaryRef.current?.();
+  }, [pageHidden, scanFlow.step, scanFlow.result, scanFlow.scanProgress.stage]);
+
+  useEffect(() => {
+    if (pageHidden) return;
+    if (titleBeforeDoneRef.current != null) {
+      document.title = titleBeforeDoneRef.current;
+      titleBeforeDoneRef.current = null;
+    }
+    if (scanFlow.step === "analyzing") {
+      const target = Math.min(100, Math.max(0, Number(scanFlow.scanProgress.percent) || 0));
+      setAnalysisShown((current) => Math.max(current, target));
+    }
+  }, [pageHidden]);
 
   useEffect(() => {
     if (!user || (scanFlow.step !== "summary" && scanFlow.step !== "results")) return undefined;
@@ -536,6 +568,8 @@ export default function App() {
           setCurrentVersion(null);
           setManuscriptReady(false);
           setFileDetailsNotice("");
+          setUploadWizardStep(1);
+          setWizardMaxStep(1);
           if (viewingThis && onVersionScreen) flow.backToDashboard();
         } else {
           setCurrentVersion((ver) => (ver ? { ...ver, version_number: latest.versionNumber } : ver));
@@ -551,6 +585,8 @@ export default function App() {
           setCurrentVersion(null);
           setManuscriptReady(false);
           setFileDetailsNotice("");
+          setUploadWizardStep(1);
+          setWizardMaxStep(1);
           return null;
         }
         return open;
@@ -565,7 +601,7 @@ export default function App() {
       return undefined;
     }
 
-    // Restore the cached Firebase session (localPersistence when "Remember me"
+    // Restore the cached Firebase session (IndexedDB when "Remember me"
     // was checked). Only sign out when the user chooses to, or when tokens are revoked.
     const unsub = onAuthStateChanged(auth, (next) => {
       setUser(next);
@@ -1011,9 +1047,13 @@ export default function App() {
 
   function openUploadMechanics() {
     setActivePage("upload");
-    // Return to the in-progress wizard step; only leave results/analysis screens.
+    // Leave results and analysis, and don't resume File details after the manuscript is gone.
     if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
       handleBackToDashboard();
+      return;
+    }
+    if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file))) {
+      resetUploadWizard(1);
     }
   }
 

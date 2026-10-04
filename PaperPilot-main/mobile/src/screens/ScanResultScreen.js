@@ -2,6 +2,16 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-nati
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
 import { scoreBand } from "../lib/scoreBand";
+import {
+  CATEGORY_STATUS_LABEL,
+  formatCount,
+  formatPct,
+  formatScore,
+  hasValue,
+  plural,
+  roundSharesToTotal,
+} from "../lib/scoreFormat";
+import { APP_TIME_ZONE } from "../lib/timeZone";
 import IssuesDetectedPanel from "../components/cockpit/IssuesDetectedPanel";
 import PrimaryButton from "../components/ui/PrimaryButton";
 
@@ -11,17 +21,40 @@ function barColor(score) {
   return colors.rose;
 }
 
-function ScoreBar({ metric, score }) {
-  const n = Number(score) || 0;
+function ScoreBar({ metric, score, status, unitsChecked, unitsPassed, unitsFailed, issueCount }) {
+  const evaluated = hasValue(score);
+  const n = evaluated ? Number(score) : 0;
+  const color = evaluated ? barColor(n) : colors.slate;
   return (
     <View style={styles.barBlock}>
       <View style={styles.barHead}>
-        <Text style={styles.barLabel}>{metric}</Text>
-        <Text style={[styles.barScore, { color: barColor(n) }]}>{n}%</Text>
+        <Text style={styles.barLabel}>
+          {metric}
+          {!evaluated
+            ? ` · ${CATEGORY_STATUS_LABEL[status] || "Not evaluated"}`
+            : hasValue(unitsChecked)
+              ? ` · ${formatCount(unitsFailed)} of ${formatCount(unitsChecked)} failed`
+              : ""}
+        </Text>
+        <Text style={[styles.barScore, { color }]}>
+          {evaluated ? formatPct(n) : "N/A"}
+        </Text>
       </View>
       <View style={styles.barTrack}>
-        <View style={[styles.barFill, { width: `${Math.min(100, n)}%`, backgroundColor: barColor(n) }]} />
+        <View style={[styles.barFill, { width: `${Math.min(100, n)}%`, backgroundColor: evaluated ? barColor(n) : colors.slate }]} />
       </View>
+      {hasValue(unitsChecked) && evaluated ? (
+        <Text style={styles.scoreHint}>
+          Checked {formatCount(unitsChecked)}
+          {hasValue(unitsPassed) ? ` · passed ${formatCount(unitsPassed)}` : ""}
+          {hasValue(unitsFailed) ? ` · failed ${formatCount(unitsFailed)}` : ""}
+        </Text>
+      ) : null}
+      {hasValue(issueCount) && Number(issueCount) > 0 ? (
+        <Text style={styles.scoreHint}>
+          {formatCount(issueCount)} {plural(issueCount, "issue")} found in this category
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -52,51 +85,67 @@ export default function ScanResultScreen({ navigation }) {
     college,
     scannedAt,
     citationStyle = "APA",
-    overallScore = 0,
+    overallScore = null,
     rightPct,
     wrongPct,
     categoryWrongPct = [],
     scoreBreakdown = [],
     formatChecks = [],
     pageCount = 0,
+    unitsChecked = null,
+    unitsPassed = null,
+    unitsFailed = null,
+    issueTotals = null,
+    scoringVersion = null,
+    scoringConsistency = null,
   } = result;
 
-  const displayRight = Number(rightPct ?? overallScore ?? 0);
-  const displayWrong = Number(wrongPct ?? Math.max(0, 100 - displayRight));
-
+  const [shownRight, shownWrong] = roundSharesToTotal([rightPct, wrongPct]);
+  const clusterRows = [...categoryWrongPct].sort((a, b) => b.pctOfWrong - a.pctOfWrong).slice(0, 5);
+  const clusterShown = roundSharesToTotal(clusterRows.map((row) => row.pctOfWrong));
+  const overallEvaluated = hasValue(overallScore);
   const band = scoreBand(overallScore);
   const totalErrors = formatChecks.filter((c) => c.result === "FAIL").length;
   const warnings = formatChecks.filter((c) => c.result === "REVIEW").length;
-  const checksRun = formatChecks.length;
+  const issueTypes = formatChecks.length;
   const issuesFound = totalErrors + warnings;
-  const passCount = checksRun - totalErrors - warnings;
 
   const scannedDate = scannedAt
     ? new Date(scannedAt).toLocaleDateString("en-US", {
         year: "numeric",
         month: "long",
         day: "numeric",
+        timeZone: APP_TIME_ZONE,
       })
     : "—";
 
   const versionLabel = `v${scanFlow.versionNumber || 1}.0`;
 
-  const ringColor =
-    band.key === "compliant" ? colors.accent : band.key === "needs_revision" ? colors.amber : colors.rose;
-  const pillBg =
-    band.key === "compliant"
+  const unevaluated = !overallEvaluated || band.key === "not_evaluated";
+  const ringColor = unevaluated
+    ? colors.slate
+    : band.key === "compliant"
+      ? colors.accent
+      : band.key === "needs_revision"
+        ? colors.amber
+        : colors.rose;
+  const pillBg = unevaluated
+    ? "#f1f5f9"
+    : band.key === "compliant"
       ? colors.emeraldBg
       : band.key === "needs_revision"
         ? colors.amberBg
         : colors.roseBg;
-  const pillBorder =
-    band.key === "compliant"
+  const pillBorder = unevaluated
+    ? "#e2e8f0"
+    : band.key === "compliant"
       ? "#a7f3d0"
       : band.key === "needs_revision"
         ? "#fde68a"
         : colors.roseBorder;
-  const pillText =
-    band.key === "compliant"
+  const pillText = unevaluated
+    ? colors.slate
+    : band.key === "compliant"
       ? colors.emerald
       : band.key === "needs_revision"
         ? colors.amber
@@ -139,30 +188,57 @@ export default function ScanResultScreen({ navigation }) {
         <View style={styles.dualScoreRow}>
           <View style={[styles.dualScore, styles.dualRight]}>
             <Text style={styles.dualLabel}>Right</Text>
-            <Text style={styles.dualValue}>{Math.round(displayRight)}%</Text>
+            <Text style={styles.dualValue}>{formatPct(shownRight)}</Text>
           </View>
           <View style={[styles.dualScore, styles.dualWrong]}>
             <Text style={styles.dualLabel}>Wrong</Text>
-            <Text style={styles.dualValue}>{Math.round(displayWrong)}%</Text>
+            <Text style={styles.dualValue}>{formatPct(shownWrong)}</Text>
           </View>
         </View>
+        {hasValue(unitsChecked) ? (
+          <Text style={styles.scoreHint}>
+            {Number(unitsChecked) === 0
+              ? "No formatting unit could be measured in this document."
+              : `Checked ${formatCount(unitsChecked)} ${plural(unitsChecked, "unit")}`}
+            {hasValue(unitsPassed) ? ` · ${formatCount(unitsPassed)} passed` : ""}
+            {hasValue(unitsFailed) ? ` · ${formatCount(unitsFailed)} failed` : ""}
+            {issueTotals
+              ? ` · ${formatCount(issueTotals.occurrences)} ${plural(issueTotals.occurrences, "issue")} found`
+              : ""}
+          </Text>
+        ) : null}
+        {scoringConsistency && scoringConsistency.ok === false ? (
+          <Text style={styles.warn}>
+            These results failed an internal consistency check. Re-run the analysis before relying on them.
+          </Text>
+        ) : null}
+        {!scoringVersion ? (
+          <Text style={styles.scoreHint}>
+            This scan was saved without the full scoring breakdown. Re-analyse the manuscript to generate checked, passed, and failed unit counts.
+          </Text>
+        ) : null}
         <View style={styles.scoreRow}>
-          <View style={[styles.scoreRing, { borderColor: ringColor }]}>
-            <Text style={styles.scoreValue}>{Math.round(overallScore)}</Text>
+          <View style={[styles.scoreRing, { borderColor: overallEvaluated ? ringColor : colors.slate }]}>
+            <Text style={styles.scoreValue}>
+              {overallEvaluated ? formatScore(overallScore, 0) : "—"}
+            </Text>
             <Text style={styles.scoreOutOf}>/100</Text>
           </View>
           <View style={{ flex: 1 }}>
             <View style={[styles.bandPill, { backgroundColor: pillBg, borderColor: pillBorder }]}>
-              <Text style={[styles.bandText, { color: pillText }]}>{band.label}</Text>
+              <Text style={[styles.bandText, { color: pillText }]}>
+                {overallEvaluated ? band.label : "NOT EVALUATED"}
+              </Text>
             </View>
-            <Text style={styles.scoreHint}>Legacy overall score · unit right/wrong above</Text>
+            <Text style={styles.scoreHint}>Average of measured categories · unit right/wrong above</Text>
           </View>
         </View>
-        {categoryWrongPct.length ? (
+        {clusterRows.length ? (
           <View style={{ marginTop: 12, gap: 6 }}>
-            {categoryWrongPct.slice(0, 4).map((item) => (
+            <Text style={styles.cardKicker}>Where issues cluster (% of failed units)</Text>
+            {clusterRows.map((item, index) => (
               <Text key={item.section} style={styles.catLine}>
-                {item.section}: {Math.round(item.pctOfWrong)}% of wrong
+                {item.section}: {formatPct(clusterShown[index])} of failed units
               </Text>
             ))}
           </View>
@@ -187,6 +263,11 @@ export default function ScanResultScreen({ navigation }) {
                 key={item.metric || item.section}
                 metric={item.metric || item.section}
                 score={item.score}
+                status={item.status}
+                unitsChecked={item.unitsChecked}
+                unitsPassed={item.unitsPassed}
+                unitsFailed={item.unitsFailed}
+                issueCount={item.issueCount}
               />
             ))}
           </View>
@@ -205,12 +286,12 @@ export default function ScanResultScreen({ navigation }) {
             <Text style={[styles.statLabel, { color: colors.amber }]}>Warnings</Text>
           </View>
           <View style={[styles.stat, { backgroundColor: colors.inputBg }]}>
-            <Text style={[styles.statNum, { color: colors.text }]}>{checksRun}</Text>
-            <Text style={[styles.statLabel, { color: colors.slate }]}>Checks</Text>
+            <Text style={[styles.statNum, { color: colors.text }]}>{issueTypes}</Text>
+            <Text style={[styles.statLabel, { color: colors.slate }]}>Issue types</Text>
           </View>
         </View>
         <View style={styles.tagRow}>
-          <Text style={styles.tag}>{passCount} passed</Text>
+          {hasValue(unitsPassed) ? <Text style={styles.tag}>{unitsPassed} units passed</Text> : null}
           <Text style={styles.tag}>{citationStyle}</Text>
           <Text style={styles.tag}>Format only</Text>
         </View>
@@ -236,7 +317,7 @@ export default function ScanResultScreen({ navigation }) {
           </View>
           {issuesFound > 0 ? (
             <Text style={styles.issuesBadge}>
-              {issuesFound} issue{issuesFound === 1 ? "" : "s"}
+              {issuesFound} issue type{issuesFound === 1 ? "" : "s"}
             </Text>
           ) : null}
         </View>
@@ -360,6 +441,7 @@ const styles = StyleSheet.create({
   },
   bandText: { fontSize: 11, fontWeight: "800", letterSpacing: 0.8 },
   scoreHint: { marginTop: 8, fontSize: 12, color: colors.muted },
+  warn: { marginTop: 8, fontSize: 12, color: "#92400e" },
   barBlock: { gap: 6 },
   barHead: { flexDirection: "row", justifyContent: "space-between" },
   barLabel: { fontSize: 12, color: colors.slate },

@@ -38,6 +38,22 @@ class RegisterCheckRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=40)
 
 
+class ResolveEmailRequest(BaseModel):
+    """Email or username typed on the sign-in form."""
+
+    identifier: str = Field(..., min_length=1, max_length=254)
+
+
+class UpdateProfileRequest(BaseModel):
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str | None = None
+    contact_number: str | None = None
+    username: str | None = None
+    photo_url: str | None = None
+    remove_photo: bool = False
+
+
 class RegisterRequest(BaseModel):
     signup_token: str = Field(..., min_length=1)
     first_name: str = Field(..., min_length=1, max_length=40)

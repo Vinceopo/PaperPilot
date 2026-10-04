@@ -3,6 +3,7 @@ import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
 import { manuscriptSummary } from "../lib/scoreBand";
 import { versionToScanResult } from "../lib/scannedLibrary";
+import { APP_TIME_ZONE } from "../lib/timeZone";
 
 function formatDate(iso) {
   if (!iso) return "—";
@@ -11,6 +12,7 @@ function formatDate(iso) {
       year: "numeric",
       month: "short",
       day: "numeric",
+      timeZone: APP_TIME_ZONE,
     });
   } catch {
     return iso;
@@ -23,6 +25,9 @@ function bandColors(band) {
   }
   if (band?.key === "needs_revision") {
     return { bg: colors.amberBg, border: "#fde68a", text: colors.amber };
+  }
+  if (band?.key === "not_evaluated") {
+    return { bg: "#f1f5f9", border: "#e2e8f0", text: colors.slate };
   }
   return { bg: colors.roseBg, border: colors.roseBorder, text: colors.rose };
 }
@@ -91,7 +96,7 @@ export default function ManuscriptsScreen({ navigation }) {
               </View>
             </View>
             <Text style={styles.meta}>
-              Score {Math.round(summary.latestScore)} · {summary.latestVersionLabel} ·{" "}
+              Score {summary.latestScore == null || !Number.isFinite(Number(summary.latestScore)) ? "—" : Math.round(Number(summary.latestScore))} · {summary.latestVersionLabel} ·{" "}
               {summary.versionCount} version{summary.versionCount === 1 ? "" : "s"}
             </Text>
             <Text style={styles.meta}>Scanned {formatDate(summary.scannedDate)}</Text>

@@ -9,7 +9,9 @@ import {
   Upload,
 } from "lucide-react";
 import { manuscriptSummary } from "../../lib/scoreBand.js";
+import { formatScore } from "../../lib/scoreFormat.js";
 import { removeManuscriptVersion } from "../../lib/scannedLibrary.js";
+import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 import ManuscriptDetailModal from "./ManuscriptDetailModal.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 
@@ -28,6 +30,7 @@ function formatDate(iso) {
       year: "numeric",
       month: "short",
       day: "numeric",
+      timeZone: APP_TIME_ZONE,
     });
   } catch {
     return iso;
@@ -252,7 +255,7 @@ export default function MyManuscriptsScreen({
                     <td className="px-4 py-4 whitespace-nowrap text-xs text-slate-500">{formatDate(row.scannedDate)}</td>
                     <td className="px-4 py-4">
                       <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-bold tabular-nums ${row.band.pillClass}`}>
-                        {row.latestScore}
+                        {formatScore(row.latestScore, 0)}
                       </span>
                     </td>
                     <td className="px-4 py-4">

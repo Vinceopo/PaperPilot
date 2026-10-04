@@ -6,8 +6,25 @@
 import { useEffect, useRef, useState } from "react";
 import IssuesDetectedPanel from "./IssuesDetectedPanel.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
+import {
+  CATEGORY_STATUS_LABEL,
+  formatCount,
+  formatPct,
+  hasValue,
+  plural,
+  roundSharesToTotal,
+} from "../../lib/scoreFormat.js";
+import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
 function scoreBand(score) {
+  if (!hasValue(score))
+    return {
+      label: "NOT EVALUATED",
+      textColor: "text-slate-500",
+      ringColor: "#cbd5e1",
+      badgeBorder: "border-slate-200",
+      badgeBg: "bg-slate-50",
+    };
   if (score >= 80)
     return {
       label: "COMPLIANT",
@@ -39,12 +56,14 @@ function barColorClass(score) {
   return "bg-rose-500";
 }
 
-function CircularScore({ score }) {
+function CircularScore({ score, categoryCount = null }) {
   const RADIUS = 52;
   const circumference = 2 * Math.PI * RADIUS;
   const [progress, setProgress] = useState(0);
   const rafRef = useRef(null);
   const band = scoreBand(score);
+  const evaluated = hasValue(score);
+  const target = evaluated ? Number(score) : 0;
 
   useEffect(() => {
     const DURATION = 1100;
@@ -52,12 +71,12 @@ function CircularScore({ score }) {
     const tick = (now) => {
       const t = Math.min((now - start) / DURATION, 1);
       const eased = 1 - (1 - t) ** 3;
-      setProgress(eased * score);
+      setProgress(eased * target);
       if (t < 1) rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [score]);
+  }, [target]);
 
   const offset = circumference - (progress / 100) * circumference;
 
@@ -79,7 +98,9 @@ function CircularScore({ score }) {
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-3xl font-extrabold text-slate-800">{Math.round(progress)}</span>
+          <span className="text-3xl font-extrabold text-slate-800">
+            {evaluated ? Math.round(progress) : "—"}
+          </span>
           <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">/100</span>
         </div>
       </div>
@@ -90,15 +111,20 @@ function CircularScore({ score }) {
         {band.label}
       </span>
       <p className="text-center text-xs text-slate-400">
-        Average of categories that were actually measured
+        {!evaluated
+          ? "No formatting unit could be measured"
+          : categoryCount != null
+            ? `Average of the ${categoryCount} measured ${plural(categoryCount, "category", "categories")}`
+            : "Average of categories that were actually measured"}
       </p>
     </div>
   );
 }
 
-function ScoreBar({ metric, score, issueCount = 0 }) {
+function ScoreBar({ metric, score, status, unitsChecked, unitsPassed, unitsFailed, issueCount = 0 }) {
   const [width, setWidth] = useState(0);
-  const safe = Math.max(0, Math.min(100, Number(score) || 0));
+  const evaluated = hasValue(score);
+  const safe = evaluated ? Math.max(0, Math.min(100, Number(score))) : 0;
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
@@ -107,25 +133,38 @@ function ScoreBar({ metric, score, issueCount = 0 }) {
     return () => cancelAnimationFrame(raf);
   }, [safe]);
 
+  const unitTitle =
+    hasValue(unitsChecked) && hasValue(unitsPassed) && hasValue(unitsFailed)
+      ? `Checked ${formatCount(unitsChecked)} · Passed ${formatCount(unitsPassed)} · Failed ${formatCount(unitsFailed)}`
+      : undefined;
+
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1.5" title={unitTitle}>
       <div className="flex items-center justify-between text-xs">
         <span className="font-medium text-slate-600">
           {metric}
-          {issueCount > 0 ? (
+          {!evaluated ? (
             <span className="ml-1.5 font-normal text-slate-400">
-              · {issueCount} issue{issueCount === 1 ? "" : "s"}
+              · {CATEGORY_STATUS_LABEL[status] || "Not evaluated"}
             </span>
-          ) : (
-            <span className="ml-1.5 font-normal text-emerald-600">· pass</span>
-          )}
+          ) : hasValue(unitsChecked) ? (
+            <span className={`ml-1.5 font-normal ${unitsFailed ? "text-slate-400" : "text-emerald-600"}`}>
+              · {formatCount(unitsFailed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")} failed
+            </span>
+          ) : null}
         </span>
         <span
           className={`font-bold tabular-nums ${
-            safe >= 80 ? "text-emerald-600" : safe >= 50 ? "text-amber-600" : "text-rose-500"
+            !evaluated
+              ? "text-slate-400"
+              : safe >= 80
+                ? "text-emerald-600"
+                : safe >= 50
+                  ? "text-amber-600"
+                  : "text-rose-500"
           }`}
         >
-          {Math.round(safe * 10) / 10}%
+          {evaluated ? formatPct(safe) : "N/A"}
         </span>
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
@@ -134,6 +173,11 @@ function ScoreBar({ metric, score, issueCount = 0 }) {
           style={{ width: `${width}%` }}
         />
       </div>
+      {issueCount > 0 ? (
+        <p className="text-[10px] text-slate-400">
+          {formatCount(issueCount)} {plural(issueCount, "issue")} found in this category
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -159,7 +203,8 @@ export default function ScanResultsScreen({
     college,
     scannedAt,
     citationStyle = "APA",
-    overallScore = 0,
+    overallScore = null,
+    overallCategories = null,
     rightPct,
     wrongPct,
     scoreBreakdown = [],
@@ -170,22 +215,24 @@ export default function ScanResultsScreen({
     documentName = "",
     documentPreview = null,
     unitsChecked,
+    unitsPassed,
     unitsFailed,
+    issueTotals = null,
+    scoringConsistency = null,
+    scoringVersion = null,
   } = result;
 
-  const totalErrors = formatChecks.filter((c) => c.result === "FAIL").length;
-  const warnings = formatChecks.filter((c) => c.result === "REVIEW").length;
-  const checksRun = formatChecks.length;
-  const issuesFound = totalErrors + warnings;
-  const passCount = Math.max(0, checksRun - totalErrors - warnings);
-  const right = Number(rightPct ?? overallScore ?? 0);
-  const wrong = Number(wrongPct ?? Math.max(0, 100 - right));
+  const [shownRight, shownWrong] = roundSharesToTotal([rightPct, wrongPct]);
+  const criticalTypes = formatChecks.filter((c) => c.result === "FAIL").length;
+  const warningTypes = formatChecks.filter((c) => c.result === "REVIEW").length;
+  const issueTypes = formatChecks.length;
 
   const scannedDate = scannedAt
     ? new Date(scannedAt).toLocaleDateString("en-US", {
         year: "numeric",
         month: "long",
         day: "numeric",
+        timeZone: APP_TIME_ZONE,
       })
     : "—";
 
@@ -257,24 +304,51 @@ export default function ScanResultsScreen({
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-4 text-center">
           <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Right (passed units)</p>
-          <p className="mt-1 text-3xl font-extrabold text-emerald-700">{Math.round(right * 10) / 10}%</p>
+          <p className="mt-1 text-3xl font-extrabold text-emerald-700">{formatPct(shownRight)}</p>
+          {hasValue(unitsPassed) && hasValue(unitsChecked) ? (
+            <p className="mt-0.5 text-[11px] text-emerald-700/80">
+              {formatCount(unitsPassed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")}
+            </p>
+          ) : null}
         </div>
         <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-4 py-4 text-center">
           <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Wrong (failed units)</p>
-          <p className="mt-1 text-3xl font-extrabold text-rose-700">{Math.round(wrong * 10) / 10}%</p>
+          <p className="mt-1 text-3xl font-extrabold text-rose-700">{formatPct(shownWrong)}</p>
+          {hasValue(unitsFailed) && hasValue(unitsChecked) ? (
+            <p className="mt-0.5 text-[11px] text-rose-700/80">
+              {formatCount(unitsFailed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")}
+            </p>
+          ) : null}
         </div>
       </div>
-      {unitsChecked != null ? (
+      {hasValue(unitsChecked) ? (
         <p className="-mt-3 text-center text-[11px] text-slate-500">
-          Based on {unitsChecked} measured formatting unit{unitsChecked === 1 ? "" : "s"}
-          {unitsFailed != null ? ` (${unitsFailed} failed)` : ""}
+          {Number(unitsChecked) === 0
+            ? "No formatting unit could be measured in this document."
+            : `Based on ${formatCount(unitsChecked)} measured formatting ${plural(unitsChecked, "unit")}`}
+          {issueTotals
+            ? ` · ${formatCount(issueTotals.occurrences)} ${plural(issueTotals.occurrences, "issue")} found (one failed unit can break more than one rule)`
+            : ""}
+        </p>
+      ) : null}
+      {scoringConsistency && !scoringConsistency.ok ? (
+        <p className="-mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-800" role="alert">
+          These results failed an internal consistency check. Re-run the analysis before relying on them.
+        </p>
+      ) : null}
+      {!scoringVersion ? (
+        <p className="-mt-2 text-center text-[11px] text-slate-500">
+          This scan was saved without the full scoring breakdown. Re-analyse the manuscript to generate checked, passed, and failed unit counts. Stored scores are shown as saved.
         </p>
       ) : null}
 
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Overall Score</p>
-          <CircularScore score={overallScore} />
+          <CircularScore
+            score={overallScore}
+            categoryCount={Array.isArray(overallCategories) ? overallCategories.length : null}
+          />
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -282,7 +356,7 @@ export default function ScanResultsScreen({
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
               Score Breakdown
             </p>
-            <p className="text-[10px] font-medium text-slate-400">Per category</p>
+            <p className="text-[10px] font-medium text-slate-400">Passed units ÷ checked units</p>
           </div>
           <div className="mt-5 space-y-4">
             {scoreBreakdown.map((item) => (
@@ -290,6 +364,10 @@ export default function ScanResultsScreen({
                 key={item.metric}
                 metric={item.metric}
                 score={item.score}
+                status={item.status}
+                unitsChecked={item.unitsChecked}
+                unitsPassed={item.unitsPassed}
+                unitsFailed={item.unitsFailed}
                 issueCount={item.issueCount}
               />
             ))}
@@ -312,27 +390,32 @@ export default function ScanResultsScreen({
 
           <div className="mt-4 grid grid-cols-3 gap-2">
             <div className="rounded-lg bg-rose-50 p-3 text-center">
-              <p className="text-2xl font-extrabold text-rose-600">{totalErrors}</p>
+              <p className="text-2xl font-extrabold text-rose-600">{criticalTypes}</p>
               <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-500">Errors</p>
             </div>
             <div className="rounded-lg bg-amber-50 p-3 text-center">
-              <p className="text-2xl font-extrabold text-amber-600">{warnings}</p>
+              <p className="text-2xl font-extrabold text-amber-600">{warningTypes}</p>
               <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-500">
                 Warnings
               </p>
             </div>
             <div className="rounded-lg bg-slate-50 p-3 text-center">
-              <p className="text-2xl font-extrabold text-slate-700">{checksRun}</p>
+              <p className="text-2xl font-extrabold text-slate-700">{issueTypes}</p>
               <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Checks
+                Issue types
               </p>
             </div>
           </div>
+          <p className="mt-2 text-[10px] text-slate-400">
+            Errors are critical issue types; warnings are moderate or minor issue types.
+          </p>
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
-              {passCount} passed
-            </span>
+            {hasValue(unitsPassed) ? (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                {formatCount(unitsPassed)} {plural(unitsPassed, "unit")} passed
+              </span>
+            ) : null}
             <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
               {citationStyle}
             </span>
@@ -404,9 +487,9 @@ export default function ScanResultsScreen({
               Grouped by page with explanations and fix suggestions. Each page starts at line 1.
             </p>
           </div>
-          {issuesFound > 0 && (
+          {issueTypes > 0 && (
             <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">
-              {issuesFound} issue type{issuesFound === 1 ? "" : "s"}
+              {issueTypes} issue type{issueTypes === 1 ? "" : "s"}
             </span>
           )}
         </div>

@@ -3,21 +3,22 @@
  * Routes to reference tracing or full ScanResultsScreen.
  */
 
+import {
+  formatCount,
+  formatPct as pctLabel,
+  formatScore,
+  hasValue,
+  plural,
+  roundSharesToTotal,
+} from "../../lib/scoreFormat.js";
+
 const SEVERITY_STYLES = {
   critical: "bg-rose-100 text-rose-800 border-rose-200",
   moderate: "bg-orange-100 text-orange-800 border-orange-200",
   minor: "bg-amber-100 text-amber-800 border-amber-200",
 };
 
-function pctLabel(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
-  return `${Math.round(n * 10) / 10}%`;
-}
-
-function categoryPct(row) {
-  return Number(row?.pct ?? row?.pctOfWrong ?? row?.wrong_pct ?? 0);
-}
+const SEVERITY_KEYS = ["critical", "moderate", "minor"];
 
 export default function ScanSummaryModal({
   open,
@@ -27,14 +28,20 @@ export default function ScanSummaryModal({
 }) {
   if (!open || !result) return null;
 
-  const rightPct = Number(result.rightPct ?? result.overallScore ?? 0);
-  const wrongPct = Number(result.wrongPct ?? Math.max(0, 100 - rightPct));
-  const overall = Number(result.overallScore ?? rightPct ?? 0);
-  const categories = (result.categoryWrongPct || [])
-    .map((row) => ({ ...row, pct: categoryPct(row) }))
-    .filter((row) => row.pct > 0)
-    .slice(0, 6);
-  const severity = result.severityPct || { critical: 0, moderate: 0, minor: 0 };
+  const [rightPct, wrongPct] = roundSharesToTotal([result.rightPct, result.wrongPct]);
+  const overall = result.overallScore;
+  const clusterRows = (result.categoryWrongPct || [])
+    .filter((row) => hasValue(row.pct) && row.failedUnits > 0)
+    .sort((a, b) => b.pct - a.pct);
+  const clusterShown = roundSharesToTotal(clusterRows.map((row) => row.pct));
+  const categories = clusterRows.map((row, i) => ({ ...row, shown: clusterShown[i] }));
+  const severityShown = result.severityPct
+    ? roundSharesToTotal(SEVERITY_KEYS.map((key) => result.severityPct[key]))
+    : null;
+  const severity = severityShown
+    ? Object.fromEntries(SEVERITY_KEYS.map((key, i) => [key, severityShown[i]]))
+    : null;
+  const severityCounts = result.severityCounts;
   const issueCount = (result.formatChecks || []).filter(
     (c) => c.result === "FAIL" || c.result === "REVIEW"
   ).length;
@@ -61,7 +68,9 @@ export default function ScanSummaryModal({
         <div className="mt-5 grid grid-cols-3 gap-2">
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-center">
             <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Overall</p>
-            <p className="mt-1 text-2xl font-extrabold text-[#172033]">{pctLabel(overall)}</p>
+            <p className="mt-1 text-2xl font-extrabold text-[#172033]">
+              {hasValue(overall) ? `${formatScore(overall, 0)}%` : "—"}
+            </p>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-3 py-3 text-center">
             <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Right</p>
@@ -73,17 +82,27 @@ export default function ScanSummaryModal({
           </div>
         </div>
 
-        {unitsChecked != null ? (
+        {hasValue(unitsChecked) ? (
           <p className="mt-2 text-center text-[11px] text-slate-500">
-            Checked {unitsChecked} formatting unit{unitsChecked === 1 ? "" : "s"}
-            {unitsFailed != null ? ` · ${unitsFailed} failed` : ""}
+            Checked {formatCount(unitsChecked)} formatting {plural(unitsChecked, "unit")}
+            {hasValue(unitsFailed) ? ` · ${formatCount(unitsFailed)} failed` : ""}
+          </p>
+        ) : null}
+        {!result.scoringVersion ? (
+          <p className="mt-2 text-center text-[11px] text-slate-500">
+            Full unit counts are not stored for this scan. Re-analyse the manuscript to generate them.
+          </p>
+        ) : null}
+        {result.scoringConsistency && result.scoringConsistency.ok === false ? (
+          <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-800" role="alert">
+            These results failed an internal consistency check. Re-run the analysis before relying on them.
           </p>
         ) : null}
 
         {categories.length ? (
           <div className="mt-5">
             <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
-              Where issues cluster (% of wrong)
+              Where issues cluster (% of failed units)
             </p>
             <ul className="mt-2 space-y-2">
               {categories.map((row) => (
@@ -95,33 +114,45 @@ export default function ScanSummaryModal({
                       style={{ width: `${Math.min(100, Math.max(0, row.pct))}%` }}
                     />
                   </div>
-                  <span className="w-12 shrink-0 text-right text-xs font-bold text-slate-600">
-                    {pctLabel(row.pct)}
+                  <span
+                    className="w-12 shrink-0 text-right text-xs font-bold text-slate-600"
+                    title={`${formatCount(row.failedUnits)} of ${formatCount(unitsFailed)} failed units`}
+                  >
+                    {pctLabel(row.shown)}
                   </span>
                 </li>
               ))}
             </ul>
           </div>
-        ) : (
+        ) : result.scoringVersion || (hasValue(unitsChecked) && Number(unitsChecked) === 0) ? (
           <div className="mt-5 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3 text-sm text-emerald-800">
-            No category-level formatting failures stood out — or the manuscript passed the rule checks.
+            {hasValue(unitsChecked) && Number(unitsChecked) === 0
+              ? "No formatting unit could be measured, so there is no failure breakdown."
+              : "No measured formatting unit failed."}
           </div>
-        )}
+        ) : null}
 
         <div className="mt-5">
-          <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">Severity mix</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {(["critical", "moderate", "minor"]).map((key) => (
-              <span
-                key={key}
-                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold capitalize ${
-                  SEVERITY_STYLES[key]
-                }`}
-              >
-                {key} {pctLabel(severity[key])}
-              </span>
-            ))}
-          </div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
+            Severity mix (% of issues found)
+          </p>
+          {severity ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {SEVERITY_KEYS.map((key) => (
+                <span
+                  key={key}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold capitalize ${
+                    SEVERITY_STYLES[key]
+                  }`}
+                  title={severityCounts ? `${formatCount(severityCounts[key])} ${plural(severityCounts[key], "issue")}` : undefined}
+                >
+                  {key} {pctLabel(severity[key])}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">No issues found.</p>
+          )}
         </div>
 
         <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:items-stretch">

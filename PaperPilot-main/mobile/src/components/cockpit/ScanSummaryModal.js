@@ -1,5 +1,6 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
+import { formatCount, formatPct, formatScore, hasValue, plural, roundSharesToTotal } from "../../lib/scoreFormat";
 
 const SEV_COLORS = {
   critical: { bg: colors.roseBg, border: colors.roseBorder, text: colors.rose },
@@ -14,9 +15,9 @@ function CategoryRow({ section, pctOfWrong }) {
         {section}
       </Text>
       <View style={styles.catTrack}>
-        <View style={[styles.catFill, { width: `${Math.min(100, pctOfWrong)}%` }]} />
+        <View style={[styles.catFill, { width: `${Math.min(100, Number(pctOfWrong) || 0)}%` }]} />
       </View>
-      <Text style={styles.catPct}>{Math.round(pctOfWrong)}%</Text>
+      <Text style={styles.catPct}>{formatPct(pctOfWrong)}</Text>
     </View>
   );
 }
@@ -30,10 +31,19 @@ export default function ScanSummaryModal({
 }) {
   if (!result) return null;
 
-  const rightPct = Number(result.rightPct ?? result.overallScore ?? 0);
-  const wrongPct = Number(result.wrongPct ?? Math.max(0, 100 - rightPct));
-  const categories = (result.categoryWrongPct || []).slice(0, 6);
-  const severity = result.severityPct || {};
+  const [rightPct, wrongPct] = roundSharesToTotal([result.rightPct, result.wrongPct]);
+  const overall = result.overallScore;
+  const clusterRows = [...(result.categoryWrongPct || [])]
+    .filter((row) => hasValue(row.pctOfWrong) && row.failedUnits > 0)
+    .sort((a, b) => b.pctOfWrong - a.pctOfWrong);
+  const clusterShown = roundSharesToTotal(clusterRows.map((row) => row.pctOfWrong));
+  const categories = clusterRows.map((row, index) => ({ ...row, shown: clusterShown[index] }));
+  const severityShown = result.severityPct
+    ? roundSharesToTotal(["critical", "moderate", "minor"].map((key) => result.severityPct[key]))
+    : null;
+  const severity = severityShown
+    ? { critical: severityShown[0], moderate: severityShown[1], minor: severityShown[2] }
+    : null;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onDismiss}>
@@ -46,47 +56,76 @@ export default function ScanSummaryModal({
             </Text>
 
             <View style={styles.scoreRow}>
+              <View style={[styles.scoreBox, styles.scoreOverall]}>
+                <Text style={styles.scoreLabel}>Overall</Text>
+                <Text style={styles.scoreValue}>{hasValue(overall) ? `${formatScore(overall, 0)}%` : "—"}</Text>
+              </View>
               <View style={[styles.scoreBox, styles.scoreRight]}>
                 <Text style={styles.scoreLabel}>Right</Text>
-                <Text style={styles.scoreValue}>{Math.round(rightPct)}%</Text>
+                <Text style={styles.scoreValue}>{formatPct(rightPct)}</Text>
               </View>
               <View style={[styles.scoreBox, styles.scoreWrong]}>
                 <Text style={styles.scoreLabel}>Wrong</Text>
-                <Text style={styles.scoreValue}>{Math.round(wrongPct)}%</Text>
+                <Text style={styles.scoreValue}>{formatPct(wrongPct)}</Text>
               </View>
             </View>
+            {hasValue(result.unitsChecked) ? (
+              <Text style={styles.unitLine}>
+                Checked {formatCount(result.unitsChecked)} {plural(result.unitsChecked, "unit")}
+                {hasValue(result.unitsFailed) ? ` · ${formatCount(result.unitsFailed)} failed` : ""}
+              </Text>
+            ) : null}
+            {!result.scoringVersion ? (
+              <Text style={styles.unitLine}>
+                Full unit counts are not stored for this scan. Re-analyse the manuscript to generate them.
+              </Text>
+            ) : null}
+            {result.scoringConsistency && result.scoringConsistency.ok === false ? (
+              <Text style={styles.warn}>
+                These results failed an internal consistency check. Re-run the analysis before relying on them.
+              </Text>
+            ) : null}
 
             {categories.length ? (
               <View style={styles.block}>
-                <Text style={styles.blockTitle}>Wrong by category</Text>
+                <Text style={styles.blockTitle}>Where issues cluster (% of failed units)</Text>
                 {categories.map((item) => (
                   <CategoryRow
                     key={item.section}
                     section={item.section}
-                    pctOfWrong={item.pctOfWrong}
+                    pctOfWrong={item.shown}
                   />
                 ))}
               </View>
+            ) : result.scoringVersion || (hasValue(result.unitsChecked) && Number(result.unitsChecked) === 0) ? (
+              <Text style={styles.unitLine}>
+                {hasValue(result.unitsChecked) && Number(result.unitsChecked) === 0
+                  ? "No formatting unit could be measured, so there is no failure breakdown."
+                  : "No measured formatting unit failed."}
+              </Text>
             ) : null}
 
             <View style={styles.block}>
-              <Text style={styles.blockTitle}>Severity mix</Text>
-              <View style={styles.sevRow}>
-                {(["critical", "moderate", "minor"]).map((key) => {
-                  const c = SEV_COLORS[key];
-                  const pct = Number(severity[key] ?? 0);
-                  return (
-                    <View
-                      key={key}
-                      style={[styles.sevChip, { backgroundColor: c.bg, borderColor: c.border }]}
-                    >
-                      <Text style={[styles.sevChipText, { color: c.text }]}>
-                        {key} · {Math.round(pct)}%
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
+              <Text style={styles.blockTitle}>Severity mix (% of issues found)</Text>
+              {severity ? (
+                <View style={styles.sevRow}>
+                  {(["critical", "moderate", "minor"]).map((key) => {
+                    const c = SEV_COLORS[key];
+                    return (
+                      <View
+                        key={key}
+                        style={[styles.sevChip, { backgroundColor: c.bg, borderColor: c.border }]}
+                      >
+                        <Text style={[styles.sevChipText, { color: c.text }]}>
+                          {key} · {formatPct(severity[key])}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Text style={styles.blockTitle}>No issues found.</Text>
+              )}
             </View>
 
             <View style={styles.actions}>
@@ -139,8 +178,11 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: "center",
   },
+  scoreOverall: { backgroundColor: "#f8fafc", borderColor: colors.border },
   scoreRight: { backgroundColor: colors.emeraldBg, borderColor: "#a7f3d0" },
   scoreWrong: { backgroundColor: colors.roseBg, borderColor: colors.roseBorder },
+  unitLine: { marginTop: 8, fontSize: 11, color: colors.muted, textAlign: "center" },
+  warn: { marginTop: 8, fontSize: 11, color: "#92400e", textAlign: "center" },
   scoreLabel: {
     fontSize: 10,
     fontWeight: "800",

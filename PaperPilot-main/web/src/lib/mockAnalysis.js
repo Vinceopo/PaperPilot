@@ -6,6 +6,8 @@
 import { runComplianceScan, uploadManuscriptVersion } from "../api.js";
 import { isServerId, mapComplianceScanToResult } from "./scanMapper.js";
 import { fetchScanWithProgress } from "./scanPoll.js";
+import { CATEGORY_STATUS_LABEL, formatCount, formatPct, formatScore, hasValue } from "./scoreFormat.js";
+import { APP_TIME_ZONE } from "./timeZone.js";
 
 function titleFromFile(file) {
   return file?.name?.replace(/\.(pdf|docx)$/i, "") || "Manuscript";
@@ -92,25 +94,25 @@ export async function downloadReport(result, opts = {}) {
     college,
     scannedAt,
     citationStyle = "APA",
-    overallScore = 0,
+    overallScore = null,
     rightPct,
     wrongPct,
     scoreBreakdown = [],
     formatChecks = [],
+    unitsPassed = null,
   } = result;
 
   const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
   const versionLabel = `v${versionNumber}.0`;
-  const right = Number(rightPct ?? overallScore ?? 0);
-  const wrong = Number(wrongPct ?? Math.max(0, 100 - right));
+  const scoreValue = hasValue(overallScore) ? Number(overallScore) : null;
 
   // ── Derived stats ─────────────────────────────────────────────────────────
   const totalErrors = formatChecks.filter((c) => c.result === "FAIL").length;
   const warnings    = formatChecks.filter((c) => c.result === "REVIEW").length;
-  const checksRun   = formatChecks.length;
-  const passCount   = checksRun - totalErrors - warnings;
+  const issueTypes  = formatChecks.length;
 
   function scoreBandLabel(score) {
+    if (score == null) return "NOT EVALUATED";
     if (score >= 80) return "COMPLIANT";
     if (score >= 50) return "NEEDS REVISION";
     return "CRITICAL ISSUES";
@@ -120,10 +122,15 @@ export async function downloadReport(result, opts = {}) {
     ? new Date(scannedAt.length <= 10 ? `${scannedAt}T12:00:00` : scannedAt).toLocaleString("en-US", {
         dateStyle: "long",
         timeStyle: scannedAt.length > 10 ? "short" : undefined,
+        timeZone: APP_TIME_ZONE,
       })
-    : new Date().toLocaleString();
+    : new Date().toLocaleString("en-US", { timeZone: APP_TIME_ZONE });
 
-  const generatedDate = new Date().toLocaleString("en-US", { dateStyle: "long", timeStyle: "short" });
+  const generatedDate = new Date().toLocaleString("en-US", {
+    dateStyle: "long",
+    timeStyle: "short",
+    timeZone: APP_TIME_ZONE,
+  });
 
   // ── Document setup ────────────────────────────────────────────────────────
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
@@ -209,12 +216,13 @@ export async function downloadReport(result, opts = {}) {
   Y += 6;
 
   // Score + band in a coloured box
-  const band = scoreBandLabel(overallScore);
-  const bandColor = overallScore >= 80 ? PASS_C : overallScore >= 50 ? REVIEW_C : FAIL_C;
+  const band = scoreBandLabel(scoreValue);
+  const bandColor =
+    scoreValue == null ? SLATE : scoreValue >= 80 ? PASS_C : scoreValue >= 50 ? REVIEW_C : FAIL_C;
   doc.setFillColor(...bandColor);
   doc.roundedRect(ML, Y, 45, 22, 2, 2, "F");
   doc.setFontSize(22).setTextColor(255, 255, 255).setFont(undefined, "bold");
-  doc.text(String(overallScore), ML + 22.5, Y + 12, { align: "center" });
+  doc.text(formatScore(scoreValue, 0), ML + 22.5, Y + 12, { align: "center" });
   doc.setFontSize(7).setFont(undefined, "normal");
   doc.text("/ 100", ML + 22.5, Y + 18, { align: "center" });
 
@@ -224,16 +232,16 @@ export async function downloadReport(result, opts = {}) {
   doc.setFontSize(8).setFont(undefined, "normal").setTextColor(...SLATE);
   doc.text("Overall compliance score", ML + 49, Y + 15);
   doc.setFontSize(8).setFont(undefined, "bold").setTextColor(...PASS_C);
-  doc.text(`Right ${Math.round(right * 10) / 10}%`, ML + 49, Y + 20);
+  doc.text(`Right ${formatPct(rightPct)}`, ML + 49, Y + 20);
   doc.setTextColor(...FAIL_C);
-  doc.text(`Wrong ${Math.round(wrong * 10) / 10}%`, ML + 78, Y + 20);
+  doc.text(`Wrong ${formatPct(wrongPct)}`, ML + 78, Y + 20);
 
   // Stat boxes
   const stats = [
-    { label: "Errors",   value: totalErrors, color: FAIL_C   },
-    { label: "Warnings", value: warnings,    color: REVIEW_C },
-    { label: "Passed",   value: passCount,   color: PASS_C   },
-    { label: "Checks",   value: checksRun,   color: NAVY     },
+    { label: "Errors",       value: totalErrors,             color: FAIL_C   },
+    { label: "Warnings",     value: warnings,                color: REVIEW_C },
+    { label: "Units passed", value: formatCount(unitsPassed), color: PASS_C   },
+    { label: "Issue types",  value: issueTypes,              color: NAVY     },
   ];
   const boxW = (CW - 48) / 4 - 2;
   stats.forEach((s, i) => {
@@ -261,7 +269,9 @@ export async function downloadReport(result, opts = {}) {
     const barH = 4;
     scoreBreakdown.forEach((item) => {
       checkPageBreak(10);
-      const barColor = item.score >= 80 ? PASS_C : item.score >= 50 ? REVIEW_C : FAIL_C;
+      const evaluated = hasValue(item.score);
+      const score = evaluated ? Number(item.score) : 0;
+      const barColor = !evaluated ? SLATE : score >= 80 ? PASS_C : score >= 50 ? REVIEW_C : FAIL_C;
       // Metric label
       doc.setFontSize(8).setFont(undefined, "normal").setTextColor(50, 65, 85);
       doc.text(item.metric, ML, Y + barH - 0.5);
@@ -270,12 +280,18 @@ export async function downloadReport(result, opts = {}) {
       doc.setFillColor(226, 232, 240);
       doc.roundedRect(trackX, Y, barTrackW, barH, barH / 2, barH / 2, "F");
       // Fill
-      const fillW = Math.max(2, (item.score / 100) * barTrackW);
-      doc.setFillColor(...barColor);
-      doc.roundedRect(trackX, Y, fillW, barH, barH / 2, barH / 2, "F");
+      if (evaluated) {
+        const fillW = Math.max(2, (score / 100) * barTrackW);
+        doc.setFillColor(...barColor);
+        doc.roundedRect(trackX, Y, fillW, barH, barH / 2, barH / 2, "F");
+      }
       // Percentage
       doc.setFontSize(7.5).setFont(undefined, "bold").setTextColor(...barColor);
-      doc.text(`${item.score}%`, trackX + barTrackW + 3, Y + barH - 0.5);
+      doc.text(
+        evaluated ? formatPct(score) : CATEGORY_STATUS_LABEL[item.status] || "Not evaluated",
+        trackX + barTrackW + 3,
+        Y + barH - 0.5
+      );
       Y += 9;
     });
     Y += 4;
@@ -289,7 +305,7 @@ export async function downloadReport(result, opts = {}) {
   doc.text("Format Checks", ML, Y);
   doc.setFontSize(7.5).setFont(undefined, "normal").setTextColor(...SLATE);
   doc.text(
-    `${totalErrors + warnings} issue${totalErrors + warnings === 1 ? "" : "s"} found · ${checksRun} checks run`,
+    `${issueTypes} issue type${issueTypes === 1 ? "" : "s"} found`,
     ML, Y + 5
   );
   Y += 10;

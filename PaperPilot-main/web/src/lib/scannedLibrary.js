@@ -4,6 +4,8 @@
  * Re-scans of the same title become new versions, not new rows.
  */
 
+import { scoreBand } from "./scoreBand.js";
+
 function storageKey(uid) {
   return uid ? `paperpilot.scannedManuscripts.${uid}` : "paperpilot.scannedManuscripts";
 }
@@ -30,7 +32,7 @@ function compactVersion(version, cap) {
   const issues = (version.issues || []).map((issue) => {
     const locations = capLocations(issue.locations, cap);
     if (locations.length !== (issue.locations || []).length) trimmed = true;
-    return { ...issue, locations, count: issue.count ?? (issue.locations || []).length };
+    return { ...issue, locations, count: issue.count == null ? null : issue.count };
   });
   let scanResult = version.scanResult;
   if (scanResult && typeof scanResult === "object") {
@@ -40,7 +42,7 @@ function compactVersion(version, cap) {
       formatChecks: (rest.formatChecks || []).map((check) => {
         const locations = capLocations(check.locations, cap);
         if (locations.length !== (check.locations || []).length) trimmed = true;
-        return { ...check, locations, count: check.count ?? (check.locations || []).length };
+        return { ...check, locations, count: check.count == null ? null : check.count };
       }),
     };
   }
@@ -156,14 +158,14 @@ export function mergeServerScans(items, summaries, dismissed = new Set()) {
     } else if (!list[idx].serverManuscriptId && manuscriptId) {
       list[idx] = { ...list[idx], serverManuscriptId: manuscriptId };
     }
-    const score = Number(scan.overall_score ?? 0);
+    const score = scan.overall_score == null ? null : Number(scan.overall_score);
     list[idx].versions.push({
       id: `ver-${scanId}`,
       manuscriptId: list[idx].id,
       versionNumber: Number(scan.version_number) || 0,
       scannedDate: String(scan.created_at || new Date().toISOString()).slice(0, 10),
       score,
-      status: score >= 80 ? "compliant" : score >= 50 ? "needs_revision" : "critical",
+      status: scoreBand(score).status,
       issues: [],
       breakdown: [],
       scanId,
@@ -218,7 +220,13 @@ function versionPartsFromResult(scanResult) {
       })),
     breakdown: (scanResult.scoreBreakdown || []).map((b) => ({
       section: b.metric || b.section || "Section",
-      score: Number(b.score ?? 0),
+      score: b.score == null ? null : Number(b.score),
+      status: b.status || null,
+      unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
+      unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
+      unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),
+      issueCount: b.issueCount == null ? null : Number(b.issueCount),
+      failedShare: b.failedShare == null ? null : Number(b.failedShare),
     })),
   };
 }
@@ -285,8 +293,8 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
   const nextVersion = maxVer + 1;
   void versionNumber;
 
-  const score = Number(scanResult.overallScore ?? 0);
-  const status = score >= 80 ? "compliant" : score >= 50 ? "needs_revision" : "critical";
+  const score = scanResult.overallScore == null ? null : Number(scanResult.overallScore);
+  const status = scoreBand(score).status;
 
   const version = {
     id: `ver-${documentId}-${nextVersion}-${Date.now()}`,
@@ -374,7 +382,13 @@ export function versionToScanResult(manuscript, version) {
     versionNumber: version.versionNumber,
     scoreBreakdown: (version.breakdown || []).map((b) => ({
       metric: b.section,
-      score: Number(b.score ?? 0),
+      score: b.score == null ? null : Number(b.score),
+      status: b.status || null,
+      unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
+      unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
+      unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),
+      issueCount: b.issueCount == null ? null : Number(b.issueCount),
+      failedShare: b.failedShare == null ? null : Number(b.failedShare),
     })),
     formatChecks: issues.map((issue, idx) => ({
       id: `issue-${idx}`,

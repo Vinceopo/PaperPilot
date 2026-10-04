@@ -49,7 +49,7 @@ class JobProgressResponse(BaseModel):
 
 class CategoryWrongPct(BaseModel):
     category: str
-    wrong_pct: float
+    wrong_pct: float | None = None
     failed_units: int = 0
 
 
@@ -78,11 +78,18 @@ class ScanIssue(BaseModel):
     count: int = 0
     locations: list[IssueLocation] = Field(default_factory=list)
     premium_detail_available: bool | None = None
+    category: str | None = None
+    rule_severity: Literal["critical", "moderate", "minor"] | None = None
+    severity_source: Literal["rule", "gemini"] | None = None
 
 
 class SectionBreakdown(BaseModel):
     section: str
-    formatting_score: float
+    formatting_score: float | None = None
+    status: str | None = None
+    units_checked: int | None = None
+    units_passed: int | None = None
+    units_failed: int | None = None
     issue_count: int = 0
     issues: list[str] = Field(default_factory=list)
 
@@ -94,12 +101,14 @@ class AnalyzeResultResponse(BaseModel):
     right_pct: float | None = None
     wrong_pct: float | None = None
     category_wrong_pct: list[CategoryWrongPct] = Field(default_factory=list)
-    severity_pct: dict[str, float] = Field(default_factory=dict)
+    severity_pct: dict[str, float | None] = Field(default_factory=dict)
     overall_score: float | None = None
     issues: list[ScanIssue] = Field(default_factory=list)
     sections: list[SectionBreakdown] = Field(default_factory=list)
     page_count: int | None = None
     pagination: dict[str, Any] | None = None
     units_checked: int | None = None
+    units_passed: int | None = None
     units_failed: int | None = None
+    scoring: dict[str, Any] | None = None
     error: str | None = None

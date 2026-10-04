@@ -31,8 +31,18 @@ export async function pollScanUntilDone(scanId, onProgress, { intervalMs = 1000 
       return payload;
     }
 
+    // Background tabs throttle timers; check again as soon as the tab is shown.
     await new Promise((resolve) => {
-      window.setTimeout(resolve, intervalMs);
+      const done = () => {
+        window.clearTimeout(timer);
+        document.removeEventListener("visibilitychange", onVisible);
+        resolve();
+      };
+      const onVisible = () => {
+        if (document.visibilityState === "visible") done();
+      };
+      const timer = window.setTimeout(done, intervalMs);
+      document.addEventListener("visibilitychange", onVisible);
     });
   }
 }

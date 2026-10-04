@@ -17,18 +17,18 @@ import {
   headingStylesToRules,
 } from "./mechanicsOptions";
 
-/** Real editable starter values (not empty placeholders), matching the downloadable sample guide. */
-export function sampleMechanicsForm(name = "Sample Capstone Format") {
+/** APA 7th edition starter values, matching the downloadable sample guide. */
+export function sampleMechanicsForm(name = "APA 7th Edition Format") {
   return {
-    name: name || "Sample Capstone Format",
+    name: name || "APA 7th Edition Format",
     paperSize: "8.5 x 11",
     paperOrientation: "Portrait",
     paperSubstance: "20",
     paperLandscapePages: "Allowed for tables and figures",
-    spacing: "1.5",
+    spacing: "Double",
     wordSpacing: "One space between words and after periods",
     indention: "0.5 inch",
-    alignment: "Justified",
+    alignment: "Left",
     marginTop: "1",
     marginLeft: "1",
     marginBottom: "1",
@@ -36,25 +36,27 @@ export function sampleMechanicsForm(name = "Sample Capstone Format") {
     marginGutter: "0",
     marginHeader: "0.5",
     marginFooter: "0.5",
-    fontHeading1Size: "16",
-    fontHeading2Size: "14",
+    fontHeading1Size: "12",
+    fontHeading2Size: "12",
     fontHeading3Size: "12",
     fontType: "Times New Roman",
     fontColor: "Black/Automatic",
     headingStyles: {
-      heading1: { bold: "yes", italic: "", case: "upper", alignment: "center" },
-      heading2: { bold: "yes", italic: "", case: "title", alignment: "left" },
+      heading1: { bold: "yes", italic: "no", case: "title", alignment: "center" },
+      heading2: { bold: "yes", italic: "no", case: "title", alignment: "left" },
       heading3: { bold: "yes", italic: "yes", case: "title", alignment: "left" },
     },
     paginationPosition: "Top right",
-    paginationTitlePage: "Hidden but counted",
-    paginationFirstPageRule: "No page number shown",
-    paginationPreliminaryStyle: "Lowercase Roman (i, ii, iii)",
-    paginationBodyNumbering: "Arabic, restart at 1 on Chapter 1",
-    paginationChapterMarkers: ["chapter_roman", "back_matter"],
-    pageBreaks: "Only when starting a new chapter",
-    tableLayout: 'Table <name> above a "TABLE TITLE" caption',
-    figureLayout: "Figure <number>: Figure Title in bold/underlined below the figure",
+    paginationTitlePage: "Number shown",
+    paginationFirstPageRule: "Same position as other pages",
+    paginationPreliminaryStyle: "",
+    paginationBodyNumbering: "Arabic, continuous",
+    paginationChapterMarkers: ["chapter_roman", "chapter_arabic"],
+    pageBreaks: "Only to start each new chapter and the reference list",
+    tableLayout:
+      "Table number in bold, with the title in italic title case on the next line, both placed above it",
+    figureLayout:
+      "Figure number in bold, with the title in italic title case on the next line, both placed above the image",
     citationFormat: "APA",
   };
 }

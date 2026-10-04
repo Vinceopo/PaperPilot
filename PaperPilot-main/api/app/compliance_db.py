@@ -42,6 +42,28 @@ def _iso(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
+def _add_months(value: datetime, months: int) -> datetime:
+    """Same day next month(s); clamps to the last day when it doesn't exist (Jan 31 -> Feb 28/29)."""
+    total = value.month - 1 + months
+    year = value.year + total // 12
+    month = total % 12 + 1
+    if month == 12:
+        days_in_month = 31
+    else:
+        days_in_month = (datetime(year, month + 1, 1) - datetime(year, month, 1)).days
+    return value.replace(year=year, month=month, day=min(value.day, days_in_month))
+
+
+# Billing dates follow the Philippine calendar day (UTC+8, no DST).
+BILLING_TZ = timezone(timedelta(hours=8))
+
+
+def _billing_period_end(start: datetime, billing_period: str | None) -> datetime:
+    local = start.astimezone(BILLING_TZ)
+    end = _add_months(local, 12 if billing_period == "annual" else 1)
+    return end.astimezone(timezone.utc)
+
+
 def _month_bounds(now: datetime) -> tuple[str, str]:
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     if start.month == 12:
@@ -454,7 +476,7 @@ def _scan_summary(owner_uid: str, scan_id: str) -> dict | None:
         "manuscript_version_id": version_id,
         "version_number": int(version_number or 0),
         "source_filename": source_filename or "",
-        "overall_score": round(float(fields.get("overall_score") or 0), 2),
+        "overall_score": _optional_float(fields.get("overall_score")),
         "created_at": fields.get("created_at") or "",
     }
 
@@ -519,7 +541,9 @@ def _subscription_row(owner_uid: str) -> dict:
         }
         ref.set(row)
         return row
-    if now_text >= str(row.get("period_end") or ""):
+    start, end = _usage_bounds(row, now)
+    stored_end = _parse_iso(row.get("period_end"))
+    if stored_end is None or stored_end <= _parse_iso(start):
         row = {
             **row,
             "scans_used": 0,
@@ -528,7 +552,46 @@ def _subscription_row(owner_uid: str) -> dict:
             "updated_at": now_text,
         }
         ref.set(row)
+    elif (row.get("period_start"), row.get("period_end")) != (start, end):
+        # Same allowance window, just re-aligned (e.g. calendar month -> billing cycle).
+        fix = {"period_start": start, "period_end": end, "updated_at": now_text}
+        ref.update(fix)
+        row = {**row, **fix}
     return row
+
+
+def _cycle_anchor(row: dict) -> datetime | None:
+    """Payment date the Premium scan allowance cycles from; None for Free users."""
+    if str(row.get("tier") or "").lower() != "premium" or row.get("premium_ended"):
+        return None
+    anchor = _parse_iso(row.get("cycle_anchor"))
+    if anchor:
+        return anchor
+    payment = _latest_payment(row)
+    return _parse_iso(payment.get("at")) if payment else None
+
+
+def _billing_cycle_bounds(anchor: datetime, now: datetime) -> tuple[datetime, datetime]:
+    """Monthly window containing `now`, counted from the anchor's day of month."""
+    local_anchor = anchor.astimezone(BILLING_TZ)
+    local_now = now.astimezone(BILLING_TZ)
+    months = max(
+        (local_now.year - local_anchor.year) * 12 + local_now.month - local_anchor.month, 0
+    )
+    if months and _add_months(local_anchor, months) > local_now:
+        months -= 1
+    start = _add_months(local_anchor, months)
+    end = _add_months(local_anchor, months + 1)
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def _usage_bounds(row: dict, now: datetime) -> tuple[str, str]:
+    """Premium scans reset on the billing date; Free scans reset on the 1st of the month."""
+    anchor = _cycle_anchor(row)
+    if anchor:
+        start, end = _billing_cycle_bounds(anchor, now)
+        return _iso(start), _iso(end)
+    return _month_bounds(now)
 
 
 def _history_list(row: dict) -> list[dict]:
@@ -574,6 +637,40 @@ def _paid_window_open(renews_at) -> bool:
     return bool(end and end >= _now())
 
 
+def _latest_payment(row: dict) -> dict | None:
+    """Most recent subscribe/renew, ignoring repeat records of an already-applied payment."""
+    latest = None
+    seen: set[str] = set()
+    payments = [
+        (at, entry)
+        for entry in _history_list(row)
+        if str(entry.get("action") or "") in ("subscribed", "renewed")
+        and (at := _parse_iso(entry.get("at")))
+    ]
+    for _, entry in sorted(payments, key=lambda pair: pair[0]):
+        keys = _payment_keys(entry)
+        if keys & seen:
+            continue
+        seen |= keys
+        latest = entry
+    return latest
+
+
+def _corrected_renews_at(row: dict) -> datetime | None:
+    """Renewal saved with the old flat 30/365-day math, recomputed as a calendar month/year."""
+    stored = _parse_iso(row.get("renews_at"))
+    payment = _latest_payment(row)
+    if not stored or not payment:
+        return None
+    paid_at = _parse_iso(payment.get("at"))
+    period = payment.get("billing_period")
+    legacy = paid_at + timedelta(days=365 if period == "annual" else 30)
+    if abs((stored - legacy).total_seconds()) > 1:
+        return None
+    corrected = _billing_period_end(paid_at, period)
+    return corrected if corrected != stored else None
+
+
 def _coverage_end(row: dict) -> datetime | None:
     """Paid-through date. A blank renews_at falls back to the last payment in history."""
     direct = _parse_iso(row.get("renews_at"))
@@ -586,8 +683,7 @@ def _coverage_end(row: dict) -> datetime | None:
         start = _parse_iso(entry.get("at"))
         if not start:
             continue
-        days = 365 if entry.get("billing_period") == "annual" else 30
-        end = start + timedelta(days=days)
+        end = _billing_period_end(start, entry.get("billing_period"))
         if best is None or end > best:
             best = end
     return best
@@ -615,6 +711,11 @@ def _drop_paid_access(owner_uid: str, *, status: str, end_premium: bool = False)
 
 def subscription_snapshot(owner_uid: str) -> dict:
     row = _subscription_row(owner_uid)
+    corrected = None if row.get("premium_ended") else _corrected_renews_at(row)
+    if corrected:
+        fix = {"renews_at": _iso(corrected), "updated_at": _iso(_now())}
+        _reference(f"{ROOT}/subscriptions/{owner_uid}").update(fix)
+        row = {**row, **fix}
     stored = str(row.get("tier") or "free").lower()
     status = str(row.get("status") or "").lower()
     renews_at = row.get("renews_at")
@@ -663,11 +764,15 @@ def subscription_snapshot(owner_uid: str) -> dict:
         tier = "free" if stored != "premium" else "premium"
     limit = _plan_limit(tier)
     remaining = max(limit - used, 0)
-    history = sorted(
-        _history_list(row),
-        key=lambda h: str(h.get("at") or ""),
-        reverse=True,
-    )
+    history = []
+    seen_payments: set[str] = set()
+    for entry in sorted(_history_list(row), key=lambda h: str(h.get("at") or "")):
+        keys = _payment_keys(entry) if entry.get("action") in ("subscribed", "renewed") else set()
+        if keys & seen_payments:
+            continue
+        seen_payments |= keys
+        history.append(entry)
+    history.reverse()
     return {
         "tier": tier,
         "status": row.get("status") or ("active" if tier == "premium" else "free"),
@@ -738,6 +843,26 @@ def latest_pending_checkout_id(owner_uid: str) -> str | None:
     return sid or None
 
 
+def _claim_fulfillment(owner_uid: str, *keys: str | None) -> bool:
+    """First caller to apply a payment wins; PayMongo webhooks and the return-page confirm all race here."""
+    claim_id = str(uuid.uuid4())
+    for key in keys:
+        if not key:
+            continue
+        safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(key))[:200]
+        stored = _reference(f"{ROOT}/paymongo_fulfillments/{safe}").transaction(
+            lambda current: current
+            or {"claim": claim_id, "owner_uid": owner_uid, "at": _iso(_now())}
+        )
+        if not isinstance(stored, dict) or stored.get("claim") != claim_id:
+            return False
+    return True
+
+
+def _payment_keys(entry: dict) -> set[str]:
+    return {str(entry[k]) for k in ("payment_id", "checkout_session_id") if entry.get(k)}
+
+
 def activate_premium_from_payment(
     owner_uid: str,
     *,
@@ -748,11 +873,16 @@ def activate_premium_from_payment(
     payment_id: str | None = None,
     reference_number: str | None = None,
 ) -> dict:
+    keys = {k for k in (payment_id, checkout_session_id) if k}
+    if keys and any(keys & _payment_keys(h) for h in _history_list(_subscription_row(owner_uid))):
+        return subscription_snapshot(owner_uid)
+    if not _claim_fulfillment(owner_uid, payment_id, checkout_session_id):
+        return subscription_snapshot(owner_uid)
     now = _now()
     now_text = _iso(now)
     period = "annual" if billing_period == "annual" else "monthly"
-    renews = now + (timedelta(days=365) if period == "annual" else timedelta(days=30))
-    start, end = _month_bounds(now)
+    renews = _billing_period_end(now, period)
+    start, end = _billing_cycle_bounds(now, now)
     patch = {
         "tier": "premium",
         "status": "active",
@@ -760,8 +890,9 @@ def activate_premium_from_payment(
         "payment_method": payment_method or "paymongo",
         "provider": "paymongo",
         "renews_at": _iso(renews),
-        "period_start": start,
-        "period_end": end,
+        "cycle_anchor": now_text,
+        "period_start": _iso(start),
+        "period_end": _iso(end),
         "scans_used": 0,
         "premium_ended": False,
         "last_checkout_session_id": checkout_session_id,
@@ -936,8 +1067,8 @@ def renew_premium_period(
     now = _now()
     now_text = _iso(now)
     period = "annual" if billing_period == "annual" else "monthly"
-    renews = now + (timedelta(days=365) if period == "annual" else timedelta(days=30))
-    start, end = _month_bounds(now)
+    renews = _billing_period_end(now, period)
+    start, end = _billing_cycle_bounds(now, now)
     patch = {
         "tier": "premium",
         "status": "active",
@@ -945,8 +1076,9 @@ def renew_premium_period(
         "payment_issue_reason": None,
         "billing_period": period,
         "renews_at": _iso(renews),
-        "period_start": start,
-        "period_end": end,
+        "cycle_anchor": now_text,
+        "period_start": _iso(start),
+        "period_end": _iso(end),
         "scans_used": 0,
         "last_payment_id": payment_id,
         "updated_at": now_text,
@@ -1084,6 +1216,38 @@ def _assert_scan_inputs(
     return sub, manuscript, version, mechanics
 
 
+SCAN_RESULT_FIELDS = (
+    "right_pct",
+    "wrong_pct",
+    "category_wrong_pct",
+    "severity_pct",
+    "units_checked",
+    "units_passed",
+    "units_failed",
+    "scoring",
+)
+_SECTION_COUNT_FIELDS = ("units_checked", "units_passed", "units_failed")
+
+
+def _optional_float(value) -> float | None:
+    return None if value is None else float(value)
+
+
+def _section_row(item: dict) -> dict:
+    row = {
+        "section": item.get("section") or item.get("section_name"),
+        "formatting_score": _optional_float(item.get("formatting_score")),
+        "issue_count": int(item.get("issue_count") or 0),
+        "issues": item.get("issues") or [],
+    }
+    if item.get("status"):
+        row["status"] = item["status"]
+    for key in _SECTION_COUNT_FIELDS:
+        if item.get(key) is not None:
+            row[key] = int(item[key])
+    return row
+
+
 def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) -> None:
     for index, section in enumerate(sections or []):
         if not isinstance(section, dict):
@@ -1091,13 +1255,17 @@ def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) ->
         name = section.get("section") or section.get("section_name")
         if not name:
             continue
+        row = _section_row(section)
         check = {
             "id": str(index + 1),
             "section_name": name,
-            "formatting_score": float(section.get("formatting_score") or 0),
-            "issue_count": int(section.get("issue_count") or 0),
-            "issues": section.get("issues") or [],
+            "formatting_score": row["formatting_score"],
+            "issue_count": row["issue_count"],
+            "issues": row["issues"],
         }
+        for key in ("status", *_SECTION_COUNT_FIELDS):
+            if key in row:
+                check[key] = row[key]
         _reference(
             f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}/{check['id']}"
         ).set(check)
@@ -1176,18 +1344,13 @@ def finalize_scan_from_ml(
     sub, _, _, _ = _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id)
     issues = result.get("issues") or []
     sections = result.get("sections") or []
-    overall_score = float(result.get("overall_score") or 0)
+    overall_score = _optional_float(result.get("overall_score"))
 
+    row.update({key: result.get(key) for key in SCAN_RESULT_FIELDS})
     row.update(
         {
             "status": "done",
             "overall_score": overall_score,
-            "right_pct": result.get("right_pct"),
-            "wrong_pct": result.get("wrong_pct"),
-            "category_wrong_pct": result.get("category_wrong_pct") or [],
-            "severity_pct": result.get("severity_pct") or {},
-            "units_checked": result.get("units_checked"),
-            "units_failed": result.get("units_failed"),
             "issues": issues,
             "sections": sections,
             "page_count": result.get("page_count") or 0,
@@ -1207,7 +1370,7 @@ def persist_scan(
     manuscript_id: str,
     version_id: str,
     mechanics_id: str,
-    overall_score: float,
+    overall_score: float | None,
     issues: list[dict],
     sections: list[dict],
     *,
@@ -1222,7 +1385,7 @@ def persist_scan(
         "manuscript_id": manuscript_id,
         "manuscript_version_id": version_id,
         "mechanics_id": mechanics_id,
-        "overall_score": float(overall_score),
+        "overall_score": _optional_float(overall_score),
         "issues": issues,
         "status": "done",
         "ml_job_id": scan_id,
@@ -1248,14 +1411,7 @@ def get_scan(owner_uid: str, scan_id: str) -> dict | None:
         for item in ordered:
             if not isinstance(item, dict):
                 continue
-            section_items.append(
-                {
-                    "section": item.get("section_name"),
-                    "formatting_score": round(float(item.get("formatting_score") or 0), 2),
-                    "issue_count": int(item.get("issue_count") or 0),
-                    "issues": item.get("issues") or [],
-                }
-            )
+            section_items.append(_section_row(item))
     status = row.get("status") or ("done" if row.get("overall_score") is not None else "running")
     if not section_items:
         embedded = row.get("sections") or []
@@ -1263,14 +1419,7 @@ def get_scan(owner_uid: str, scan_id: str) -> dict | None:
             for item in embedded:
                 if not isinstance(item, dict):
                     continue
-                section_items.append(
-                    {
-                        "section": item.get("section") or item.get("section_name"),
-                        "formatting_score": round(float(item.get("formatting_score") or 0), 2),
-                        "issue_count": int(item.get("issue_count") or 0),
-                        "issues": item.get("issues") or [],
-                    }
-                )
+                section_items.append(_section_row(item))
     payload = {
         "id": row["id"],
         "manuscript_id": row.get("manuscript_id"),
@@ -1278,25 +1427,16 @@ def get_scan(owner_uid: str, scan_id: str) -> dict | None:
         "mechanics_id": row["mechanics_id"],
         "status": status,
         "ml_job_id": row.get("ml_job_id") or row["id"],
-        "overall_score": round(float(row.get("overall_score") or 0), 2),
+        "overall_score": _optional_float(row.get("overall_score")),
         "issues": row.get("issues") or [],
         "sections": section_items,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "error": row.get("error"),
     }
-    if row.get("right_pct") is not None:
-        payload["right_pct"] = round(float(row["right_pct"]), 2)
-    if row.get("wrong_pct") is not None:
-        payload["wrong_pct"] = round(float(row["wrong_pct"]), 2)
-    if row.get("category_wrong_pct") is not None:
-        payload["category_wrong_pct"] = row.get("category_wrong_pct") or []
-    if row.get("severity_pct") is not None:
-        payload["severity_pct"] = row.get("severity_pct") or {}
-    if row.get("units_checked") is not None:
-        payload["units_checked"] = int(row.get("units_checked") or 0)
-    if row.get("units_failed") is not None:
-        payload["units_failed"] = int(row.get("units_failed") or 0)
+    for key in SCAN_RESULT_FIELDS:
+        if row.get(key) is not None:
+            payload[key] = row[key]
     if row.get("page_count") is not None:
         payload["page_count"] = int(row.get("page_count") or 0)
     if row.get("pagination") is not None:

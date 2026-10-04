@@ -23,7 +23,7 @@ from app.mechanics_options import (
     page_position_parts,
     title_page_rule,
 )
-from app.scoring import BREAKDOWN_ORDER, build_scoring_payload
+from app.scoring import BREAKDOWN_ORDER, build_scoring_payload, build_sections
 
 SEVERITY_ORDER = {"critical": 0, "moderate": 1, "minor": 2}
 NAMED_PAPER = {"A4": (8.27, 11.69), "LETTER": (8.5, 11.0), "LEGAL": (8.5, 14.0)}
@@ -104,10 +104,6 @@ def _dominant_font_sample(unit: dict) -> tuple[str | None, float | None]:
     return shown_font, shown_size
 
 
-def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
-    return round(max(low, min(high, value)), 2)
-
-
 class IssueCollector:
     def __init__(self) -> None:
         self.items: dict[str, dict] = {}
@@ -140,6 +136,11 @@ class IssueCollector:
         if key in item["_seen"]:
             return
         item["_seen"].add(key)
+        item.setdefault("category", location.get("section"))
+        # An issue type groups many occurrences; its severity is the worst one observed,
+        # so the result does not depend on which page happened to be checked first.
+        if SEVERITY_ORDER[severity] < SEVERITY_ORDER[item["severity"]]:
+            item["severity"] = severity
         if len(item["locations"]) < MAX_LOCATIONS:
             item["locations"].append(location)
         else:
@@ -151,6 +152,8 @@ class IssueCollector:
             extra = issue.pop("_extra", 0)
             issue.pop("_seen", None)
             issue["count"] = len(issue["locations"]) + extra
+            issue["rule_severity"] = issue["severity"]
+            issue["severity_source"] = "rule"
             issues.append(issue)
         return sorted(issues, key=lambda issue: (SEVERITY_ORDER[issue["severity"]], issue["issue_type"]))
 
@@ -159,16 +162,13 @@ class CategoryStats:
     def __init__(self) -> None:
         self.checked = 0
         self.failed = 0
+        # False until a check finds a rule for this category in the mechanics file.
+        self.applicable = False
 
     def observe(self, ok: bool) -> None:
         self.checked += 1
         if not ok:
             self.failed += 1
-
-    def score(self) -> float:
-        if not self.checked:
-            return 100.0
-        return _clamp(100.0 * (self.checked - self.failed) / self.checked)
 
 
 def _location(page: int | None, line: int | None, category: str) -> dict:
@@ -944,6 +944,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
     want_black = bool(re.search(r"black|automatic", str(font_rule.get("color") or ""), re.I))
     if not allowed_fonts and not listed_sizes and not role_sizes and not want_black:
         return
+    stats.applicable = True
     for unit in units:
         role = unit.get("role") or "body"
         text = (unit.get("text") or "").strip()
@@ -1190,6 +1191,7 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
         expected_margins["left"] = round(expected_margins["left"] + gutter, 3)
     if not expected and not expected_margins:
         return
+    stats.applicable = True
 
     page_first_line = {}
     for unit in units:
@@ -1398,6 +1400,7 @@ def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collect
     expected = rules.get("line_spacing")
     if expected is None:
         return
+    stats.applicable = True
     expected = float(expected)
     for paragraph in _prose_paragraphs(units):
         # A paragraph's last line has no line below it to measure against in a PDF, so skip it in both formats.
@@ -1461,6 +1464,7 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
     expected = rules.get("first_line_indent_inches")
     if expected is None:
         return
+    stats.applicable = True
     expected = float(expected)
     body_left = _docx_body_left_indent(units)
     for paragraph in _prose_paragraphs(units):
@@ -1488,6 +1492,8 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
 def _check_alignment(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     expected = str(rules.get("alignment") or "").strip().lower()
     allowed = {expected} if expected in {"left", "right", "center", "justify"} else {"left", "justify"}
+    # Body alignment always applies: without a rule, left or justified text is expected.
+    stats.applicable = True
     for paragraph in _prose_paragraphs(units):
         # Justified text still ends its last line short, so that line cannot show the alignment.
         lines = paragraph[:-1] if len(paragraph) > 1 else paragraph
@@ -1689,6 +1695,7 @@ def _check_pagination(
     body_numbering = canonical_body_numbering(pagination.get("body_numbering"))
     if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering)):
         return
+    stats.applicable = True
     markers = set(canonical_chapter_markers(pagination.get("chapter_markers"))) or set(DEFAULT_CHAPTER_MARKERS)
     is_pdf = (parsed or {}).get("metadata", {}).get("format") == "pdf"
     page_count = max((unit["page_index"] for unit in units), default=-1) + 1
@@ -1864,7 +1871,7 @@ def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -
     want_figure_prefix = "figure" in figure_rules
     for index, unit in enumerate(units):
         text = (unit.get("text") or "").strip()
-        loc = _unit_location(unit, "Alignment")
+        loc = _unit_location(unit, "Captions")
         if table_rules and unit.get("role") == "caption" and TABLE_CAPTION_RE.match(text):
             title = re.sub(r"^\s*table\s+\d+\s*[:.\-–]?\s*", "", text, flags=re.I).strip()
             if want_table_caps and title and title != title.upper():
@@ -2030,6 +2037,7 @@ def _check_heading_styles(units: list[dict], rules: dict, stats: CategoryStats, 
     styles = (rules.get("font") or {}).get("heading_styles") or {}
     if not styles:
         return
+    stats.applicable = True
     for level, lines in _heading_groups(units):
         wanted = styles.get(level)
         if not wanted:
@@ -2098,6 +2106,7 @@ def _check_word_spacing(
     rule = canonical_word_spacing(rules.get("word_spacing"))
     if rule not in {WORD_SPACING_SINGLE, WORD_SPACING_TWO}:
         return
+    stats.applicable = True
     paragraph_text = {
         paragraph.get("paragraph_index"): str(paragraph.get("text") or "")
         for paragraph in parsed.get("paragraphs") or []
@@ -2139,31 +2148,6 @@ def _check_word_spacing(
         )
 
 
-def _build_breakdown(stats: dict[str, CategoryStats], issues: list[dict]) -> list[dict]:
-    issues_by_category: dict[str, list[str]] = defaultdict(list)
-    counts: dict[str, int] = defaultdict(int)
-    for issue in issues:
-        category = None
-        for location in issue.get("locations") or []:
-            category = location.get("section") or category
-        if category not in BREAKDOWN_ORDER:
-            continue
-        issues_by_category[category].append(issue["issue_type"])
-        counts[category] += issue.get("count") or len(issue.get("locations") or [])
-    breakdown = []
-    for name in BREAKDOWN_ORDER:
-        unique = sorted(set(issues_by_category.get(name) or []))
-        breakdown.append(
-            {
-                "section": name,
-                "formatting_score": stats[name].score(),
-                "issue_count": counts.get(name, 0),
-                "issues": unique,
-            }
-        )
-    return breakdown
-
-
 def run_compliance_scan(
     parsed: dict, mechanics_rules: dict, tier: str = "free", on_progress=None
 ) -> dict:
@@ -2191,24 +2175,17 @@ def run_compliance_scan(
         run_check()
     issues = enrich_compliance_issues(collector.result(), mechanics_rules, tier)
     issues.sort(key=lambda issue: (SEVERITY_ORDER.get(issue["severity"], 2), issue["issue_type"]))
-    breakdown = _build_breakdown(stats, issues)
-    measured = [item["formatting_score"] for item in breakdown if stats[item["section"]].checked]
-    overall = _clamp(sum(measured) / len(measured)) if measured else 100.0
     page_count = max((unit["page_index"] for unit in units), default=-1) + 1
     if (parsed.get("metadata") or {}).get("format") == "pdf":
         page_count = max(page_count, len(parsed.get("pages") or []))
     pagination = _pagination_meta(parsed, mechanics_rules)
-    scoring = build_scoring_payload(stats, issues)
-    return {
-        "overall_score": overall,
-        "right_pct": scoring["right_pct"],
-        "wrong_pct": scoring["wrong_pct"],
-        "category_wrong_pct": scoring["category_wrong_pct"],
-        "severity_pct": scoring["severity_pct"],
-        "units_checked": scoring["units_checked"],
-        "units_failed": scoring["units_failed"],
-        "issues": issues,
-        "sections": breakdown,
-        "page_count": page_count,
-        "pagination": pagination,
-    }
+    result = build_scoring_payload(stats, issues)
+    result.update(
+        {
+            "issues": issues,
+            "sections": build_sections(result["scoring"]),
+            "page_count": page_count,
+            "pagination": pagination,
+        }
+    )
+    return result

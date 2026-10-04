@@ -93,8 +93,11 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
     nextVersion = Math.max(nextVersion, maxVer + 1);
   }
 
-  const score = Number(scanResult.overallScore ?? 0);
-  const status = score >= 80 ? "compliant" : score >= 50 ? "needs_revision" : "critical";
+  const score =
+    scanResult.overallScore == null || !Number.isFinite(Number(scanResult.overallScore))
+      ? null
+      : Number(scanResult.overallScore);
+  const status = score == null ? "not_evaluated" : score >= 80 ? "compliant" : score >= 50 ? "needs_revision" : "critical";
 
   const version = {
     id: `ver-${documentId}-${nextVersion}-${Date.now()}`,
@@ -121,7 +124,13 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
       })),
     breakdown: (scanResult.scoreBreakdown || []).map((b) => ({
       section: b.metric || b.section || "Section",
-      score: Number(b.score ?? 0),
+      score: b.score == null || !Number.isFinite(Number(b.score)) ? null : Number(b.score),
+      status: b.status || null,
+      unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
+      unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
+      unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),
+      issueCount: b.issueCount == null ? null : Number(b.issueCount),
+      failedShare: b.failedShare == null ? null : Number(b.failedShare),
     })),
     scanResult: {
       ...scanResult,
@@ -177,7 +186,13 @@ export function versionToScanResult(manuscript, version) {
     versionNumber: version.versionNumber,
     scoreBreakdown: (version.breakdown || []).map((b) => ({
       metric: b.section,
-      score: Number(b.score ?? 0),
+      score: b.score == null || !Number.isFinite(Number(b.score)) ? null : Number(b.score),
+      status: b.status || null,
+      unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
+      unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
+      unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),
+      issueCount: b.issueCount == null ? null : Number(b.issueCount),
+      failedShare: b.failedShare == null ? null : Number(b.failedShare),
     })),
     formatChecks: issues.map((issue, idx) => ({
       id: `issue-${idx}`,

@@ -519,7 +519,7 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
             title="Check your email"
             subtitle={`Enter the 6-digit code sent to ${email}`}
             expiresIn={otpMeta?.expires_in || 300}
-            resendIn={otpMeta?.resend_in || 60}
+            resendIn={otpMeta?.resend_in || 30}
             devCode={otpMeta?.dev_code || ""}
             onVerified={handleOtpVerified}
             onBack={() => { setView("summary"); setSendOtpError(""); }}

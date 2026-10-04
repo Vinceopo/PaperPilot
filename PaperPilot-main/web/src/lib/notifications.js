@@ -3,6 +3,8 @@
  * Used by the Notifications page and the header bell badge.
  */
 
+import { APP_TIME_ZONE } from "./timeZone.js";
+
 function storageKey(uid) {
   return uid ? `paperpilot.notifications.${uid}` : "paperpilot.notifications";
 }
@@ -62,8 +64,16 @@ export function pushNotification(items, partial) {
 
 export function notificationFromScan(scanResult, versionNumber = 1) {
   const title = scanResult?.documentTitle || "Manuscript";
-  const score = Number(scanResult?.overallScore ?? 0);
-  const band = score >= 80 ? "Compliant" : score >= 50 ? "Needs Revision" : "Critical";
+  const raw = scanResult?.overallScore;
+  const evaluated = raw != null && Number.isFinite(Number(raw));
+  const score = evaluated ? Math.round(Number(raw)) : "—";
+  const band = !evaluated
+    ? "Not evaluated"
+    : Number(raw) >= 80
+      ? "Compliant"
+      : Number(raw) >= 50
+        ? "Needs Revision"
+        : "Critical";
   const fails = (scanResult?.formatChecks || []).filter(
     (c) => c.result === "FAIL" || c.result === "REVIEW"
   );
@@ -157,5 +167,5 @@ export function relativeTime(iso) {
   const days = Math.floor(hours / 24);
   if (days === 1) return "Yesterday";
   if (days < 7) return `${days} days ago`;
-  return d.toLocaleDateString("en-PH", { month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-PH", { month: "short", day: "numeric", timeZone: APP_TIME_ZONE });
 }

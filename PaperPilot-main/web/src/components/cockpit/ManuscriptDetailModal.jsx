@@ -8,8 +8,10 @@ import {
 } from "lucide-react";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import { scoreBand } from "../../lib/scoreBand.js";
+import { CATEGORY_STATUS_LABEL, formatCount, formatScore, hasValue, plural } from "../../lib/scoreFormat.js";
 import { downloadReport } from "../../lib/mockAnalysis.js";
 import { versionToScanResult } from "../../lib/scannedLibrary.js";
+import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
 const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 
@@ -20,6 +22,7 @@ function formatDate(iso) {
       year: "numeric",
       month: "short",
       day: "numeric",
+      timeZone: APP_TIME_ZONE,
     });
   } catch {
     return iso;
@@ -141,7 +144,7 @@ export default function ManuscriptDetailModal({
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${band.pillClass}`}>
-                {selected?.score ?? "—"} · {band.label}
+                {formatScore(selected?.score, 0)} · {band.label}
               </span>
               <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] font-bold text-slate-600">
                 {versionLabel}
@@ -203,7 +206,7 @@ export default function ManuscriptDetailModal({
                         {formatDate(ver.scannedDate)}
                       </p>
                       <p className={`mt-1 text-[10px] font-semibold ${active ? "text-[#16bfa8]" : locked ? "text-slate-400" : vb.textClass}`}>
-                        {locked ? "Premium only" : `Score ${ver.score}`}
+                        {locked ? "Premium only" : `Score ${formatScore(ver.score, 0)}`}
                       </p>
                     </button>
                     {onDeleteVersion ? (
@@ -241,13 +244,19 @@ export default function ManuscriptDetailModal({
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className={`text-3xl font-bold tabular-nums ${band.textClass}`}>{selected.score}</p>
+                    <p className={`text-3xl font-bold tabular-nums ${band.textClass}`}>{formatScore(selected.score, 0)}</p>
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Overall score</p>
                   </div>
                 </div>
 
                 <section className="mt-6">
                   <h3 className="text-sm font-bold text-[#0F1729]">Score breakdown</h3>
+                  {(selected.breakdown || []).length > 0 &&
+                  (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Unit counts were not stored with this scan. Re-analyse the manuscript to generate the full scoring breakdown.
+                    </p>
+                  ) : null}
                   <ul className="mt-3 space-y-3">
                     {(selected.breakdown || []).map((row) => {
                       const rb = scoreBand(row.score);
@@ -255,14 +264,30 @@ export default function ManuscriptDetailModal({
                         <li key={row.section}>
                           <div className="mb-1 flex items-center justify-between text-xs">
                             <span className="font-medium text-slate-600">{row.section}</span>
-                            <span className={`font-bold tabular-nums ${rb.textClass}`}>{row.score}</span>
+                            <span className={`font-bold tabular-nums ${rb.textClass}`}>
+                              {row.score == null
+                                ? CATEGORY_STATUS_LABEL[row.status] || "Not evaluated"
+                                : formatScore(row.score)}
+                            </span>
                           </div>
                           <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                             <div
                               className={`h-full rounded-full transition-all ${rb.barClass}`}
-                              style={{ width: `${Math.min(100, Math.max(0, row.score))}%` }}
+                              style={{ width: `${Math.min(100, Math.max(0, Number(row.score) || 0))}%` }}
                             />
                           </div>
+                          {hasValue(row.unitsChecked) ? (
+                            <p className="mt-1 text-[10px] text-slate-400">
+                              Checked {formatCount(row.unitsChecked)}
+                              {hasValue(row.unitsPassed) ? ` · passed ${formatCount(row.unitsPassed)}` : ""}
+                              {hasValue(row.unitsFailed) ? ` · failed ${formatCount(row.unitsFailed)}` : ""}
+                            </p>
+                          ) : null}
+                          {hasValue(row.issueCount) && Number(row.issueCount) > 0 ? (
+                            <p className="text-[10px] text-slate-400">
+                              {formatCount(row.issueCount)} {plural(row.issueCount, "issue")} found in this category
+                            </p>
+                          ) : null}
                         </li>
                       );
                     })}

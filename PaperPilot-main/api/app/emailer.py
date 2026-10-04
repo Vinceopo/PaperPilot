@@ -11,11 +11,14 @@ log = logging.getLogger("paperpilot.otp")
 
 def _otp_copy(purpose: str, code: str) -> tuple[str, str, str]:
     action = "confirm your email" if purpose == "verify_email" else "reset your password"
+    label = "verification" if purpose == "verify_email" else "password reset"
     minutes = max(1, settings.otp_ttl_seconds // 60)
-    subject = "Your PaperPilot verification code"
+    # A unique subject per code keeps Gmail from threading old codes together.
+    subject = f"{code} is your PaperPilot {label} code"
     text = (
         f"Your PaperPilot code is {code}.\n\n"
         f"Use this 6-digit code to {action}. It expires in {minutes} minute(s).\n"
+        "Only your most recent code works; earlier codes are cancelled.\n"
         "If you did not request this, you can ignore this email."
     )
     html = f"""
@@ -23,7 +26,7 @@ def _otp_copy(purpose: str, code: str) -> tuple[str, str, str]:
       <h2 style="margin:0 0 12px">PaperPilot</h2>
       <p style="margin:0 0 16px">Use this code to {action}:</p>
       <p style="font-size:28px;letter-spacing:8px;font-weight:700;color:#1BC9A0;margin:0 0 16px">{code}</p>
-      <p style="margin:0;color:#64748B;font-size:13px">This code expires in {minutes} minute(s).</p>
+      <p style="margin:0;color:#64748B;font-size:13px">This code expires in {minutes} minute(s). Only your most recent code works; earlier codes are cancelled.</p>
     </div>
     """
     return subject, text, html
@@ -75,12 +78,19 @@ def email_delivery_configured() -> bool:
 
 def send_otp_email(to_email: str, code: str, purpose: str) -> None:
     subject, text, html = _otp_copy(purpose, code)
+    smtp_ready = bool(settings.smtp_host.strip())
 
     if settings.resend_api_key.strip():
-        _send_via_resend(to_email, subject, text, html)
-        return
+        try:
+            _send_via_resend(to_email, subject, text, html)
+            return
+        except Exception as exc:
+            # Resend's test sender only delivers to the account owner until a domain is verified.
+            if not smtp_ready:
+                raise
+            log.warning("Resend failed for %s, falling back to SMTP: %s", to_email, exc)
 
-    if settings.smtp_host.strip():
+    if smtp_ready:
         _send_via_smtp(to_email, subject, text, html)
         return
 

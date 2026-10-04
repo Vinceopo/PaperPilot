@@ -8,6 +8,7 @@ import { cancelSubscription, confirmCheckoutPayment, getSubscription, subscribeT
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 import paymongoLogo from "../../assets/paymongo-logo.png";
+import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
 export const PREMIUM_MONTHLY = 949;
 export const PREMIUM_ANNUAL = 9490;
@@ -27,7 +28,12 @@ function formatDate(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
-  return d.toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: APP_TIME_ZONE,
+  });
 }
 
 function statusLabel(subscription) {

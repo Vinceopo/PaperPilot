@@ -73,13 +73,13 @@ def _parse_delivery_url(url: str) -> tuple[str, str, str, str]:
     return cloud, resource_type, delivery_type, public_id
 
 
-def _signed_admin_download(
+def _private_download_url(
     cloud: str,
     resource_type: str,
     delivery_type: str,
     public_id: str,
-    max_bytes: int,
-) -> bytes:
+    expires_at: int | None = None,
+) -> str:
     api_key = (settings.cloudinary_api_key or "").strip()
     api_secret = (settings.cloudinary_api_secret or "").strip()
     if not api_key or not api_secret:
@@ -91,13 +91,14 @@ def _signed_admin_download(
     if expected_cloud and cloud != expected_cloud:
         raise CloudinaryFetchError("Cloudinary URL cloud name does not match server config.")
 
-    timestamp = str(int(time.time()))
     # Sign only the params Cloudinary includes in the string-to-sign (not resource_type).
     sign_params = {
         "public_id": public_id,
-        "timestamp": timestamp,
+        "timestamp": str(int(time.time())),
         "type": delivery_type,
     }
+    if expires_at is not None:
+        sign_params["expires_at"] = str(int(expires_at))
     to_sign = (
         "&".join(f"{k}={sign_params[k]}" for k in sorted(sign_params)) + api_secret
     )
@@ -110,10 +111,31 @@ def _signed_admin_download(
         }
     )
     # public_id may contain slashes; urlencode handles that. Path uses resource_type only.
-    download_url = (
+    return (
         f"https://api.cloudinary.com/v1_1/{quote(cloud, safe='')}/"
         f"{quote(resource_type, safe='')}/download?{query}"
     )
+
+
+def signed_download_url(url: str, ttl_seconds: int = 3600) -> str:
+    """Short-lived signed link a browser can fetch even when public PDF delivery returns 401."""
+    raw = (url or "").strip()
+    if not raw.startswith("https://") or not _host_allowed(urlparse(raw).hostname):
+        raise CloudinaryFetchError("URL is not an HTTPS Cloudinary URL.")
+    cloud, resource_type, delivery_type, public_id = _parse_delivery_url(raw)
+    return _private_download_url(
+        cloud, resource_type, delivery_type, public_id, expires_at=int(time.time()) + ttl_seconds
+    )
+
+
+def _signed_admin_download(
+    cloud: str,
+    resource_type: str,
+    delivery_type: str,
+    public_id: str,
+    max_bytes: int,
+) -> bytes:
+    download_url = _private_download_url(cloud, resource_type, delivery_type, public_id)
     request = Request(
         download_url,
         method="GET",

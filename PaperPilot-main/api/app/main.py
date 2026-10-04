@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -10,10 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pypdf import PdfReader
 
-from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes
+from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes, signed_download_url
 from app.config import document_byte_limit, settings
 from app.compliance import run_compliance_scan
 from app.compliance_db import (
+    SCAN_RESULT_FIELDS,
     MechanicsInUse,
     MechanicsNameConflict,
     UpgradeRequired,
@@ -63,7 +65,7 @@ from app.documents import (
     parse_document,
     validate_document,
 )
-from app.emailer import send_otp_email
+from app.emailer import email_delivery_configured, send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
 from app.otp import (
@@ -76,7 +78,18 @@ from app.otp import (
     store_otp,
     verify_otp,
 )
-from app.profiles import release_username, reserve_username, save_profile, username_taken
+from app.profiles import (
+    claim_phone,
+    get_email_by_username,
+    get_profile,
+    phone_in_use,
+    release_phone,
+    release_username,
+    reserve_username,
+    save_profile,
+    update_profile,
+    username_taken,
+)
 from app.rules import evaluate_manuscript
 from app.schemas import (
     AnalyzeRequest,
@@ -89,14 +102,18 @@ from app.schemas import (
     RegisterCheckRequest,
     RegisterRequest,
     ResetPasswordRequest,
+    ResolveEmailRequest,
     RuleResult,
+    UpdateProfileRequest,
     ComplianceScanRequest,
     ManuscriptVersionCloudinaryRequest,
     MechanicsSaveRequest,
     MechanicsUpdateRequest,
     SubscribeRequest,
 )
-from app.validators import email_error, name_error, normalize_email, password_error, username_error
+from app.validators import email_error, name_error, normalize_email, password_error, phone_error, username_error
+
+log = logging.getLogger("paperpilot.api")
 
 app = FastAPI(title="PaperPilot API", version="0.1.0")  # reload settings after .env
 init_db()
@@ -644,7 +661,7 @@ def compliance_scan_create(
         "page_count": result.get("page_count") or 0,
         "pagination": result.get("pagination") or {},
     }
-    for key in ("right_pct", "wrong_pct", "category_wrong_pct", "severity_pct", "units_checked", "units_failed"):
+    for key in SCAN_RESULT_FIELDS:
         if key in result:
             extra[key] = result[key]
     try:
@@ -696,11 +713,18 @@ def compliance_scan_document(scan_id: str, uid: str = Depends(authenticated_uid)
     version_id = scan.get("manuscript_version_id") or ""
     version = get_version(uid, manuscript_id, version_id) if manuscript_id and version_id else None
     url = get_version_document_url(uid, manuscript_id, version_id) if version else None
+    download_url = ""
+    if url:
+        try:
+            download_url = signed_download_url(url)
+        except CloudinaryFetchError:
+            download_url = ""
     return {
         "scan_id": scan_id,
         "manuscript_id": manuscript_id,
         "manuscript_version_id": version_id,
         "cloudinary_url": url or "",
+        "download_url": download_url,
         "source_filename": (version or {}).get("source_filename") or "",
     }
 
@@ -959,6 +983,192 @@ def auth_register_check(body: RegisterCheckRequest):
     return {"ok": True}
 
 
+@app.post("/auth/resolve-email")
+def auth_resolve_email(body: ResolveEmailRequest):
+    """Map a sign-in username to its account email so the client can sign in with Firebase."""
+    identifier = body.identifier.strip()
+    if "@" in identifier:
+        email = normalize_email(identifier)
+        _require(email_error(email))
+        return {"email": email}
+    taken = username_taken(identifier)
+    if taken is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "username_lookup_unavailable",
+                "message": "Signing in with a username isn't available right now. Use your email address instead.",
+            },
+        )
+    email = get_email_by_username(identifier) if taken else None
+    if not email:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "username_not_found", "message": "No account uses that username."},
+        )
+    return {"email": email}
+
+
+# ── Profile ──────────────────────────────────────────────────────────────────
+
+@app.get("/profile")
+def get_user_profile(uid: str = Depends(authenticated_uid)):
+    """Return the user's profile, creating the database record from Firebase Auth if it is missing."""
+    data = get_profile(uid)
+    if data is None:
+        fb = admin_auth()
+        if fb:
+            try:
+                u = fb.get_user(uid)
+            except Exception as exc:
+                log.warning("Firebase Auth user lookup failed: %s", exc)
+                u = None
+            if u is not None:
+                parts = (u.display_name or "").split()
+                first = parts[0] if parts else ""
+                last = parts[-1] if len(parts) > 1 else ""
+                middle = " ".join(parts[1:-1]) if len(parts) > 2 else ""
+                save_profile(
+                    uid,
+                    email=u.email or "",
+                    username="",
+                    first_name=first,
+                    middle_name=middle,
+                    last_name=last,
+                )
+                if u.photo_url:
+                    update_profile(uid, photo_url=u.photo_url)
+                data = get_profile(uid) or {
+                    "email": u.email or "",
+                    "username": "",
+                    "firstName": first,
+                    "middleName": middle,
+                    "lastName": last,
+                    "contactNumber": "",
+                    "photoURL": u.photo_url or "",
+                    "emailVerified": u.email_verified,
+                }
+    if data is None:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    return {**data, "uid": uid}
+
+
+@app.patch("/profile")
+def patch_user_profile(body: UpdateProfileRequest, uid: str = Depends(authenticated_uid)):
+    """Update mutable profile fields (name, username, contact, photo)."""
+    if body.first_name is not None:
+        _require(name_error(body.first_name.strip(), "First name"))
+    if body.last_name is not None:
+        _require(name_error(body.last_name.strip(), "Last name"))
+    if body.middle_name is not None:
+        _require(name_error(body.middle_name.strip(), "Middle name", required=False))
+    if body.contact_number is not None:
+        _require(phone_error(body.contact_number.strip(), required=False))
+    if body.username is not None:
+        if not body.username.strip():
+            raise HTTPException(status_code=400, detail="Username cannot be blank.")
+        _require(username_error(body.username.strip()))
+
+    current = get_profile(uid) or {}
+    if not current.get("email"):
+        fb = admin_auth()
+        if fb:
+            try:
+                current["email"] = fb.get_user(uid).email or ""
+            except Exception:
+                pass
+    old_phone = str(current.get("contactNumber") or "").strip()
+    new_phone = None if body.contact_number is None else body.contact_number.strip()
+    old_username = str(current.get("username") or "").strip()
+    new_username = None if body.username is None else body.username.strip()
+
+    if new_username is not None:
+        claimed = reserve_username(new_username, uid)
+        if claimed is False:
+            raise HTTPException(status_code=409, detail="That username is already taken.")
+        if claimed is None:
+            raise HTTPException(status_code=503, detail="Could not verify username. Please try again.")
+
+    if new_phone:
+        taken = phone_in_use(new_phone, uid)
+        if taken is True:
+            raise HTTPException(status_code=409, detail="Number is already in use")
+        claimed = claim_phone(new_phone, uid)
+        if claimed is False:
+            raise HTTPException(status_code=409, detail="Number is already in use")
+        if claimed is None:
+            raise HTTPException(status_code=503, detail="Could not verify mobile number. Please try again.")
+
+    ok = update_profile(
+        uid,
+        first_name=body.first_name,
+        middle_name=body.middle_name,
+        last_name=body.last_name,
+        contact_number=body.contact_number,
+        username=body.username,
+        email=(current.get("email") or None),
+        photo_url=body.photo_url,
+        remove_photo=body.remove_photo,
+    )
+
+    if new_username is not None:
+        old_key = old_username.strip().lower()
+        new_key = new_username.strip().lower()
+        if old_key and old_key != new_key:
+            release_username(old_username)
+
+    if new_phone is not None:
+        old_digits = "".join(ch for ch in old_phone if ch.isdigit())
+        new_digits = "".join(ch for ch in new_phone if ch.isdigit())
+        if old_digits and old_digits != new_digits:
+            release_phone(old_phone, uid)
+
+    fb = admin_auth()
+    if fb:
+        try:
+            profile = get_profile(uid) or current
+            parts = [
+                body.first_name if body.first_name is not None else profile.get("firstName", ""),
+                body.middle_name if body.middle_name is not None else profile.get("middleName", ""),
+                body.last_name if body.last_name is not None else profile.get("lastName", ""),
+            ]
+            display = " ".join(p.strip() for p in parts if p and str(p).strip())
+            kwargs: dict = {}
+            if display:
+                kwargs["display_name"] = display
+            if body.remove_photo:
+                kwargs["photo_url"] = None
+            elif body.photo_url is not None:
+                kwargs["photo_url"] = body.photo_url
+            if kwargs:
+                fb.update_user(uid, **kwargs)
+        except Exception as exc:
+            log.warning("Firebase Auth profile sync failed: %s", exc)
+
+    if not ok:
+        raise HTTPException(status_code=503, detail="Profile update failed. Please try again.")
+    updated = get_profile(uid) or {}
+    return {"ok": True, **updated, "uid": uid}
+
+
+@app.post("/account/deactivate")
+def deactivate_account(uid: str = Depends(authenticated_uid)):
+    """Disable sign-in for this account. Its records stay in the database; only an admin deletes them."""
+    fb = admin_auth()
+    if not fb:
+        raise HTTPException(status_code=503, detail="Account management is temporarily unavailable.")
+    try:
+        fb.update_user(uid, disabled=True)
+    except Exception as exc:
+        log.warning("Account deactivation failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Could not deactivate the account. Please try again.") from exc
+    return {"ok": True}
+
+
+def _otp_bypassed(purpose: str) -> bool:
+    return not settings.otp_enabled and purpose != "reset_password"
+
+
 @app.post("/auth/otp/send")
 def auth_otp_send(body: OtpSendRequest):
     email = normalize_email(body.email)
@@ -973,7 +1183,8 @@ def auth_otp_send(body: OtpSendRequest):
         raise HTTPException(status_code=404, detail="No account found for this email.")
 
     # Local/dev bypass: skip email and return a challenge token immediately.
-    if not settings.otp_enabled:
+    # Password resets always require a real emailed code.
+    if _otp_bypassed(body.purpose):
         token = issue_challenge(email, body.purpose)
         key = "signup_token" if body.purpose == "verify_email" else "reset_token"
         return {
@@ -995,15 +1206,24 @@ def auth_otp_send(body: OtpSendRequest):
     try:
         send_otp_email(email, code, body.purpose)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not send email: {exc}") from exc
+        log.error("OTP email to %s failed: %s", email, exc)
+        raise HTTPException(
+            status_code=502,
+            detail="We couldn't send the verification email right now. Please try again in a few minutes.",
+        ) from exc
+    minutes = max(1, ttl // 60)
     payload = {
         "ok": True,
         "expires_in": ttl,
-        "resend_in": settings.otp_resend_seconds,
+        "resend_in": (
+            settings.otp_reset_resend_seconds
+            if body.purpose == "reset_password"
+            else settings.otp_resend_seconds
+        ),
         "max_attempts": settings.otp_max_attempts,
-        "message": "A 6-digit code was sent to your email. It expires in 10 minutes.",
+        "message": f"A 6-digit code was sent to your email. It expires in {minutes} minute(s).",
     }
-    if settings.otp_echo_in_response or not settings.smtp_host:
+    if settings.otp_echo_in_response or not email_delivery_configured():
         payload["dev_code"] = code
     return payload
 
@@ -1011,7 +1231,10 @@ def auth_otp_send(body: OtpSendRequest):
 @app.post("/auth/otp/verify")
 def auth_otp_verify(body: OtpVerifyRequest):
     email = normalize_email(body.email)
-    if not settings.otp_enabled:
+    if body.purpose not in PURPOSES:
+        raise HTTPException(status_code=400, detail="Invalid OTP purpose.")
+    bypassed = _otp_bypassed(body.purpose)
+    if bypassed:
         token = issue_challenge(email, body.purpose)
     else:
         try:
@@ -1019,7 +1242,7 @@ def auth_otp_verify(body: OtpVerifyRequest):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     key = "signup_token" if body.purpose == "verify_email" else "reset_token"
-    return {"ok": True, "otp_bypassed": not settings.otp_enabled, key: token, "expires_in": settings.otp_ttl_seconds}
+    return {"ok": True, "otp_bypassed": bypassed, key: token, "expires_in": settings.otp_ttl_seconds}
 
 
 @app.post("/auth/register")
@@ -1050,6 +1273,9 @@ def auth_register(body: RegisterRequest):
 
     from firebase_admin.auth import EmailAlreadyExistsError
 
+    if username_taken(username) is True:
+        raise HTTPException(status_code=409, detail="That username is already taken.")
+
     display = " ".join(p for p in [first, middle, last] if p)
     try:
         user = fb.create_user(
@@ -1064,7 +1290,8 @@ def auth_register(body: RegisterRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if reserve_username(username, user.uid) is False:
-        # Lost a race for the username: roll back so the email stays available.
+        # Lost a same-instant race for the username. Nothing has been saved for this
+        # account yet, so roll back the bare login and keep the email available.
         fb.delete_user(user.uid)
         raise HTTPException(status_code=409, detail="That username is already taken.")
 
@@ -1077,7 +1304,7 @@ def auth_register(body: RegisterRequest):
         last_name=last,
     )
     if not profile_saved:
-        release_username(username)
+        log.warning("Profile save failed for new account %s; the client will retry.", user.uid)
     return {"ok": True, "uid": user.uid, "client_signup": False, "profile_saved": profile_saved}
 
 

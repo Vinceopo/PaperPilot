@@ -42,7 +42,7 @@ class ComplianceScoringTests(unittest.TestCase):
                 "margins_inches": {"top": 1, "bottom": 1, "left": 1, "right": 1},
             },
         )
-        self.assertEqual(result["right_pct"] + result["wrong_pct"], 100.0)
+        self.assertAlmostEqual(result["right_pct"] + result["wrong_pct"], 100.0, places=9)
         self.assertGreater(result["wrong_pct"], 0)
         self.assertIn("category_wrong_pct", result)
         self.assertIn("severity_pct", result)
@@ -111,6 +111,13 @@ class ApiTests(unittest.TestCase):
         body = result.json()
         self.assertEqual(body["status"], "done")
         self.assertIsNotNone(body["right_pct"])
+        scoring = body["scoring"]
+        self.assertTrue(scoring["consistency"]["ok"], scoring["consistency"]["errors"])
+        self.assertEqual(body["units_checked"], scoring["units"]["checked"])
+        self.assertEqual(body["units_passed"] + body["units_failed"], body["units_checked"])
+        spacing = next(item for item in body["sections"] if item["section"] == "Spacing")
+        self.assertEqual(spacing["status"], "not_applicable")
+        self.assertIsNone(spacing["formatting_score"])
 
 
 if __name__ == "__main__":

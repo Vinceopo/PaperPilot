@@ -68,7 +68,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
         return;
       }
       setOtpMeta({ expiresIn: res.expires_in, resendIn: res.resend_in, devCode: res.dev_code });
-      setCooldownUntil(Date.now() + (res.resend_in || 60) * 1000);
+      setCooldownUntil(Date.now() + (res.resend_in || 30) * 1000);
       setStep("otp");
     } catch (err2) {
       const wait = Number(err2.retryAfter) || 0;

@@ -74,7 +74,8 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
 export async function downloadReport(result, opts = {}) {
   const versionNumber = Number(opts.versionNumber ?? result?.versionNumber ?? 1) || 1;
   const title = result?.documentTitle || "Untitled";
-  const score = Number(result?.overallScore ?? result?.rightPct ?? 0);
+  const fmt = (value, suffix = "") =>
+    value != null && Number.isFinite(Number(value)) ? `${Math.round(Number(value) * 10) / 10}${suffix}` : "—";
   const checks = Array.isArray(result?.formatChecks) ? result.formatChecks : [];
   const errors = checks.filter((c) => c.result === "FAIL").length;
   const warnings = checks.filter((c) => c.result === "REVIEW").length;
@@ -82,9 +83,9 @@ export async function downloadReport(result, opts = {}) {
     "PaperPilot compliance report",
     `Title: ${title}`,
     `Version: v${versionNumber}.0`,
-    `Score: ${score} / 100`,
-    `Right: ${result?.rightPct ?? score}% · Wrong: ${result?.wrongPct ?? ""}%`,
-    `Errors: ${errors} · Warnings: ${warnings} · Checks: ${checks.length}`,
+    `Score: ${fmt(result?.overallScore)} / 100`,
+    `Right: ${fmt(result?.rightPct, "%")} · Wrong: ${fmt(result?.wrongPct, "%")}`,
+    `Errors: ${errors} · Warnings: ${warnings} · Issue types: ${checks.length}`,
     "",
     "Full PDF download is available on the web app.",
   ].join("\n");

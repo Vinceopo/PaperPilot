@@ -2,9 +2,15 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from app import compliance_db, otp, profiles
+from app import compliance_db, emailer, otp, profiles
 from app.compliance import run_compliance_scan
-from app.documents import DocumentError, derive_mechanics_rules, parse_document, validate_document
+from app.documents import (
+    DocumentError,
+    build_sample_mechanics_docx,
+    derive_mechanics_rules,
+    parse_document,
+    validate_document,
+)
 
 
 class FakeReference:
@@ -93,6 +99,40 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(rules["citation_style"], "APA")
         self.assertNotIn("first_line_indent_inches", rules)
 
+    def test_sample_mechanics_docx_fills_every_format_field(self):
+        parsed = parse_document(build_sample_mechanics_docx(), "docx")
+        rules = derive_mechanics_rules(parsed["text"])
+        self.assertEqual(
+            rules["paper"],
+            {
+                "size": "8.5 x 11",
+                "orientation": "Portrait",
+                "substance": "20",
+                "landscape_pages": "Allowed for tables and figures",
+            },
+        )
+        self.assertEqual(rules["line_spacing"], 2.0)
+        self.assertEqual(rules["first_line_indent_inches"], 0.5)
+        self.assertEqual(rules["alignment"], "left")
+        self.assertEqual(
+            rules["margins_inches"],
+            {"top": 1.0, "bottom": 1.0, "left": 1.0, "right": 1.0, "gutter": 0.0, "header": 0.5, "footer": 0.5},
+        )
+        font = rules["font"]
+        self.assertEqual(font["type"], "Times New Roman")
+        self.assertEqual(font["color"], "Black/Automatic")
+        self.assertEqual(
+            (font["heading1_size"], font["heading2_size"], font["heading3_content_size"]), (12.0, 12.0, 12.0)
+        )
+        self.assertEqual(rules["pagination"]["position"], "Top right")
+        self.assertEqual(rules["pagination"]["first_page_of_chapter"], "Same position as other pages")
+        self.assertEqual(
+            rules["page_break_requirements"], ["Only to start each new chapter and the reference list"]
+        )
+        self.assertTrue(rules["table_layout_requirements"][0].endswith("both placed above it"))
+        self.assertTrue(rules["figure_layout_requirements"][0].endswith("both placed above the image"))
+        self.assertEqual(rules["citation_style"], "APA")
+
     def test_rejects_extension_signature_mismatch(self):
         with self.assertRaises(DocumentError):
             validate_document("paper.pdf", b"not a pdf", 100)
@@ -135,19 +175,14 @@ class MechanicsExtractionTests(unittest.TestCase):
         rules = normalize_mechanics_rules(derive_mechanics_rules(text))
         self.assertEqual(rules["pagination"], {
             "position": "Top right",
-            "first_page_of_chapter": "No page number shown",
-            "title_page": "Hidden but counted",
-            "preliminary_style": "Lowercase Roman (i, ii, iii)",
-            "body_numbering": "Arabic, restart at 1 on Chapter 1",
-            "chapter_markers": ["chapter_roman", "back_matter"],
+            "first_page_of_chapter": "Same position as other pages",
+            "title_page": "Number shown",
+            "body_numbering": "Arabic, continuous",
+            "chapter_markers": ["chapter_roman", "chapter_arabic"],
         })
-        self.assertEqual(rules["font"]["heading_styles"]["heading1"], {"bold": True, "case": "upper", "alignment": "center"})
+        self.assertEqual(rules["font"]["heading_styles"]["heading1"], {"bold": True, "case": "title", "alignment": "center"})
         self.assertEqual(rules["word_spacing"], "One space between words and after periods")
         self.assertEqual(rules["paper"]["landscape_pages"], "Allowed for tables and figures")
-        self.assertEqual(rules["alignment"], "justify")
-        self.assertEqual(rules["line_spacing"], 1.5)
-        self.assertEqual(rules["table_layout_requirements"], ["Name above a quoted title caption"])
-        self.assertEqual(rules["page_break_requirements"], ["Only when starting a new chapter"])
 
     def test_overall_score_averages_checked_breakdown_metrics(self):
         parsed = {
@@ -769,7 +804,7 @@ class OtpTests(FirebaseTestCase):
                 otp.verify_otp("user@example.com", "verify_email", "111111")
             token = otp.verify_otp("user@example.com", "verify_email", "222222")
             otp.consume_challenge(token, "USER@example.com", "verify_email")
-            with self.assertRaisesRegex(ValueError, "Verification expired"):
+            with self.assertRaisesRegex(ValueError, "expired or was already used"):
                 otp.consume_challenge(token, "user@example.com", "verify_email")
 
     def test_attempt_limit_removes_challenge(self):
@@ -782,6 +817,50 @@ class OtpTests(FirebaseTestCase):
                 otp.verify_otp("user@example.com", "reset_password", "000000")
             with self.assertRaisesRegex(ValueError, "No active code"):
                 otp.verify_otp("user@example.com", "reset_password", "123456")
+
+    def test_simultaneous_requests_keep_codes_isolated_per_email(self):
+        with patch.object(otp.time, "time", return_value=3000):
+            otp.store_otp("vince@example.com", "reset_password", "111111")
+            otp.store_otp("jemusu@example.com", "reset_password", "222222")
+            with self.assertRaisesRegex(ValueError, "Incorrect code"):
+                otp.verify_otp("vince@example.com", "reset_password", "222222")
+            with self.assertRaisesRegex(ValueError, "Incorrect code"):
+                otp.verify_otp("jemusu@example.com", "reset_password", "111111")
+            vince_token = otp.verify_otp("vince@example.com", "reset_password", "111111")
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                otp.consume_challenge(vince_token, "jemusu@example.com", "reset_password")
+            jemusu_token = otp.verify_otp("jemusu@example.com", "reset_password", "222222")
+            otp.consume_challenge(jemusu_token, "jemusu@example.com", "reset_password")
+
+
+class OtpEmailTests(unittest.TestCase):
+    def test_each_code_is_delivered_only_to_its_requester(self):
+        sent = []
+
+        def resend(to_email, subject, text, html):
+            if to_email != "owner@example.com":
+                raise RuntimeError("You can only send testing emails to your own email address")
+            sent.append(("resend", to_email, subject))
+
+        def smtp(to_email, subject, text, html):
+            sent.append(("smtp", to_email, subject))
+
+        with (
+            patch.object(emailer.settings, "resend_api_key", "re_test"),
+            patch.object(emailer.settings, "smtp_host", "smtp.example.com"),
+            patch.object(emailer, "_send_via_resend", side_effect=resend),
+            patch.object(emailer, "_send_via_smtp", side_effect=smtp),
+        ):
+            emailer.send_otp_email("owner@example.com", "111111", "reset_password")
+            emailer.send_otp_email("jemusu@example.com", "222222", "reset_password")
+
+        self.assertEqual(
+            sent,
+            [
+                ("resend", "owner@example.com", "111111 is your PaperPilot password reset code"),
+                ("smtp", "jemusu@example.com", "222222 is your PaperPilot password reset code"),
+            ],
+        )
 
 
 if __name__ == "__main__":
