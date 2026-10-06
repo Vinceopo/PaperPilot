@@ -1,51 +1,82 @@
-import { useEffect, useState } from "react";
-import { StyleSheet, Switch, Text, TouchableOpacity, View } from "react-native";
-import * as WebBrowser from "expo-web-browser";
-import { useAuthRequest } from "expo-auth-session/providers/google";
-import Constants from "expo-constants";
+import { useState } from "react";
+import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import Svg, { Path } from "react-native-svg";
+import { resolveEmail } from "../../api";
 import { auth, firebaseReady } from "../../firebase";
-import { FIREBASE_MISSING, GOOGLE_EXPO_GO_HINT, authMessage } from "../../lib/messages";
-import { emailError } from "../../lib/validation";
+import { FIREBASE_MISSING, authMessage } from "../../lib/messages";
 import { signInWithEmail, signInWithGoogle } from "../../services/auth";
+import { promptGoogleSignIn } from "../../services/googleSignIn";
 import { colors } from "../../theme";
+import FloatingLabelInput from "../ui/FloatingLabelInput";
 import PrimaryButton from "../ui/PrimaryButton";
-import TextField from "../ui/TextField";
 import AuthShell from "./AuthShell";
+import GoogleButton from "./GoogleButton";
 
-WebBrowser.maybeCompleteAuthSession();
+const USERNAME_NOT_FOUND = "No account uses that username. Check the spelling or sign in with your email.";
+const USERNAME_SIGN_IN_UNAVAILABLE =
+  "Signing in with a username isn't available right now. Use your email address instead.";
+const WRONG_PASSWORD = "Incorrect password. Try again or use Forgot password to reset it.";
 
-const isExpoGo = Constants.appOwnership === "expo";
+/** True when the value looks like a username (no @). */
+function looksLikeUsername(val) {
+  return val.length >= 1 && !val.includes("@");
+}
+
+function identifierError(val) {
+  if (!val.trim()) return "Email or username is required.";
+  return "";
+}
+
+function Checkbox({ checked, onChange, label }) {
+  return (
+    <Pressable
+      style={styles.remember}
+      onPress={() => onChange(!checked)}
+      hitSlop={6}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+    >
+      <View style={[styles.box, checked ? styles.boxChecked : null]}>
+        {checked ? (
+          <Svg width={12} height={12} viewBox="0 0 24 24">
+            <Path
+              d="M5 12.5l4.5 4.5L19 7.5"
+              stroke={colors.white}
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+            />
+          </Svg>
+        ) : null}
+      </View>
+      <Text style={styles.rememberLabel}>{label}</Text>
+    </Pressable>
+  );
+}
 
 export default function LoginScreen({
   notice,
   onGoToRegister,
   onGoToForgotPassword,
-  onContinueAsGuest,
 }) {
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const googleClientId = Constants.expoConfig?.extra?.googleWebClientId;
-  const googleEnabled = Boolean(googleClientId) && !isExpoGo;
-  const [request, response, promptGoogle] = useAuthRequest({
-    clientId: googleClientId,
-    responseType: "id_token",
-  });
-
-  function fieldError(field, nextEmail = email, nextPassword = password) {
-    if (field === "email") return emailError(nextEmail);
+  function fieldError(field, nextId = identifier, nextPassword = password) {
+    if (field === "identifier") return identifierError(nextId);
     if (field === "password") return nextPassword ? "" : "Password is required.";
     return "";
   }
 
-  function revalidate(field, nextEmail, nextPassword) {
+  function revalidate(field, nextId, nextPassword) {
     if (!touched[field]) return;
-    setErrors((prev) => ({ ...prev, [field]: fieldError(field, nextEmail, nextPassword) }));
+    setErrors((prev) => ({ ...prev, [field]: fieldError(field, nextId, nextPassword) }));
   }
 
   function onBlurField(field) {
@@ -53,32 +84,51 @@ export default function LoginScreen({
     setErrors((prev) => ({ ...prev, [field]: fieldError(field) }));
   }
 
-  useEffect(() => {
-    if (response?.type !== "success" || !auth) return;
-    const idToken = response.authentication?.idToken || response.params?.id_token;
-    const accessToken = response.authentication?.accessToken || response.params?.access_token;
-    setBusy(true);
-    setFormError("");
-    signInWithGoogle(auth, remember, { idToken, accessToken })
-      .catch((err) => setFormError(authMessage(err)))
-      .finally(() => setBusy(false));
-  }, [response, remember]);
-
   async function onSubmit() {
     setFormError("");
-    const next = { email: fieldError("email"), password: fieldError("password") };
+    const next = { identifier: fieldError("identifier"), password: fieldError("password") };
     setErrors(next);
-    setTouched({ email: true, password: true });
-    if (next.email || next.password) return;
+    setTouched({ identifier: true, password: true });
+    if (next.identifier || next.password) return;
     if (!firebaseReady || !auth) {
       setFormError(FIREBASE_MISSING);
       return;
     }
     setBusy(true);
+    let loginEmail = identifier.trim();
+    const byUsername = looksLikeUsername(loginEmail);
     try {
-      await signInWithEmail(auth, email.trim(), password, remember);
+      if (byUsername) {
+        try {
+          const res = await resolveEmail(loginEmail);
+          loginEmail = res.email;
+        } catch (err) {
+          if (err?.code === "username_not_found") {
+            setErrors((prev) => ({ ...prev, identifier: USERNAME_NOT_FOUND }));
+          } else if (err?.status === 404) {
+            setFormError(USERNAME_SIGN_IN_UNAVAILABLE);
+          } else {
+            setFormError(authMessage(err));
+          }
+          return;
+        }
+      }
+      await signInWithEmail(auth, loginEmail, password, remember);
     } catch (err) {
-      setFormError(authMessage(err));
+      const code = err?.code;
+      // The username lookup already proved the account exists, so a credential error means the password.
+      if (
+        code === "auth/wrong-password" ||
+        (byUsername && (code === "auth/invalid-credential" || code === "auth/invalid-login-credentials"))
+      ) {
+        setErrors((prev) => ({ ...prev, password: WRONG_PASSWORD }));
+      } else if (code === "auth/user-not-found") {
+        setErrors((prev) => ({ ...prev, identifier: "No account uses that email address." }));
+      } else if (code === "auth/invalid-email") {
+        setErrors((prev) => ({ ...prev, identifier: authMessage(err) }));
+      } else {
+        setFormError(authMessage(err));
+      }
     } finally {
       setBusy(false);
     }
@@ -86,21 +136,14 @@ export default function LoginScreen({
 
   async function onGoogle() {
     setFormError("");
-    if (isExpoGo) {
-      setFormError(GOOGLE_EXPO_GO_HINT);
-      return;
-    }
     if (!firebaseReady || !auth) {
       setFormError("Add Firebase keys to mobile/app.json to enable Google sign-in.");
       return;
     }
-    if (!request) {
-      setFormError("Google sign-in is not configured.");
-      return;
-    }
     setBusy(true);
     try {
-      await promptGoogle();
+      const tokens = await promptGoogleSignIn();
+      await signInWithGoogle(auth, remember, tokens);
     } catch (err) {
       setFormError(authMessage(err));
     } finally {
@@ -122,49 +165,44 @@ export default function LoginScreen({
       variant="login"
       title="Welcome back"
       subtitle="Sign in to continue reviewing manuscripts."
-      onContinueAsGuest={onContinueAsGuest}
       footer={footer}
     >
       <View style={styles.form}>
-        <TextField
-          label="Email"
-          value={email}
+        <FloatingLabelInput
+          label="Email or Username"
+          icon="mail"
+          value={identifier}
           onChangeText={(v) => {
-            setEmail(v);
-            revalidate("email", v, password);
+            setIdentifier(v);
+            revalidate("identifier", v, password);
           }}
-          onBlur={() => onBlurField("email")}
-          error={errors.email}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          autoComplete="email"
+          onBlur={() => onBlurField("identifier")}
+          error={errors.identifier}
+          autoComplete="username"
+          textContentType="username"
         />
-        <TextField
+        <FloatingLabelInput
           label="Password"
+          icon="lock"
           value={password}
           onChangeText={(v) => {
             setPassword(v);
-            revalidate("password", email, v);
+            revalidate("password", identifier, v);
           }}
           onBlur={() => onBlurField("password")}
           error={errors.password}
           secureTextEntry
           showPasswordToggle
-          autoCapitalize="none"
-          autoComplete="password"
+          autoComplete="current-password"
+          textContentType="password"
         />
 
         <View style={styles.row}>
-          <View style={styles.remember}>
-            <Switch
-              value={remember}
-              onValueChange={setRemember}
-              trackColor={{ false: colors.border, true: colors.accentMuted }}
-              thumbColor={remember ? colors.accent : "#f4f4f5"}
-            />
-            <Text style={styles.rememberLabel}>Remember me</Text>
-          </View>
-          <TouchableOpacity onPress={() => onGoToForgotPassword(email.trim())} accessibilityRole="button">
+          <Checkbox checked={remember} onChange={setRemember} label="Remember me" />
+          <TouchableOpacity
+            onPress={() => onGoToForgotPassword(identifier.includes("@") ? identifier.trim() : "")}
+            accessibilityRole="button"
+          >
             <Text style={styles.forgot}>Forgot password?</Text>
           </TouchableOpacity>
         </View>
@@ -177,44 +215,37 @@ export default function LoginScreen({
           onPress={onSubmit}
           busy={busy}
         />
-
-        <TouchableOpacity
-          style={[styles.google, (!googleEnabled || busy) && styles.googleDisabled]}
-          onPress={onGoogle}
-          disabled={busy || !googleEnabled}
-          accessibilityRole="button"
-        >
-          <Text style={styles.googleText}>Sign in with Google</Text>
-        </TouchableOpacity>
-        {isExpoGo ? <Text style={styles.googleHint}>{GOOGLE_EXPO_GO_HINT}</Text> : null}
       </View>
+
+      <GoogleButton label="Sign in with Google" onPress={onGoogle} disabled={busy} />
     </AuthShell>
   );
 }
 
 const styles = StyleSheet.create({
-  form: { marginTop: 20, gap: 14 },
+  form: { marginTop: 28, gap: 16 },
   row: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingTop: 2,
   },
   remember: { flexDirection: "row", alignItems: "center", gap: 8 },
-  rememberLabel: { fontSize: 14, color: colors.slate },
-  forgot: { fontSize: 14, fontWeight: "600", color: colors.accentText },
-  error: { fontSize: 13, color: colors.rose },
-  notice: { fontSize: 13, color: colors.accentText },
-  google: {
+  box: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: "center",
+    borderColor: "#cbd5e1",
     backgroundColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  googleDisabled: { opacity: 0.55 },
-  googleText: { fontSize: 14, fontWeight: "600", color: colors.text },
-  googleHint: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: -4 },
-  footer: { marginTop: 22, textAlign: "center", fontSize: 14, color: colors.slate },
-  footerLink: { fontWeight: "700", color: colors.accentText },
+  boxChecked: { backgroundColor: colors.accent, borderColor: colors.accent },
+  rememberLabel: { fontSize: 14, color: "#475569" },
+  forgot: { fontSize: 14, fontWeight: "500", color: colors.accent },
+  error: { fontSize: 14, color: colors.rose },
+  notice: { fontSize: 14, color: colors.accentText },
+  footer: { marginTop: 24, textAlign: "center", fontSize: 14, color: colors.slate },
+  footerLink: { fontWeight: "600", color: colors.accent },
 });

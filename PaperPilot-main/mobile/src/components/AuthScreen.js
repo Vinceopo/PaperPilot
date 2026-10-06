@@ -7,10 +7,9 @@ import RegisterScreen from "./auth/RegisterScreen";
  * Chooses between the login, register, and password-reset screens. Each screen
  * owns its own form state, so switching modes starts from a clean slate.
  *
- * @param {() => void} [onContinueAsGuest]
  * @param {(profile: object) => void} [onRegistered]
  */
-export default function AuthScreen({ onContinueAsGuest, onRegistered }) {
+export default function AuthScreen({ onRegistered }) {
   const [mode, setMode] = useState("login");
   const [notice, setNotice] = useState("");
   const [resetEmail, setResetEmail] = useState("");
@@ -21,13 +20,7 @@ export default function AuthScreen({ onContinueAsGuest, onRegistered }) {
   }
 
   if (mode === "register") {
-    return (
-      <RegisterScreen
-        onGoToLogin={() => go("login")}
-        onContinueAsGuest={onContinueAsGuest}
-        onRegistered={onRegistered}
-      />
-    );
+    return <RegisterScreen onGoToLogin={() => go("login")} onRegistered={onRegistered} />;
   }
 
   if (mode === "forgot") {
@@ -51,7 +44,6 @@ export default function AuthScreen({ onContinueAsGuest, onRegistered }) {
         setResetEmail(email);
         go("forgot");
       }}
-      onContinueAsGuest={onContinueAsGuest}
     />
   );
 }

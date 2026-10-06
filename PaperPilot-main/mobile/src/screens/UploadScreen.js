@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -11,28 +10,46 @@ import {
   View,
 } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
+import * as WebBrowser from "expo-web-browser";
 import { useAppData } from "../context/AppDataContext";
+import { decodeFilename, sampleMechanicsUrl } from "../api";
 import { colors } from "../theme";
+import AppShell from "../components/shell/AppShell";
+import UploadJourneyModal, {
+  ShowStepsRow,
+  markUploadJourneySeen,
+  uploadJourneySeen,
+} from "../components/cockpit/UploadJourneyModal";
 import PrimaryButton from "../components/ui/PrimaryButton";
 import UpgradePrompt from "../components/ui/UpgradePrompt";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
+import SelectField from "../components/ui/SelectField";
+import FileTypeIcon from "../components/ui/FileTypeIcon";
 import FormatMechanicsFields from "../components/cockpit/FormatMechanicsFields";
+import DocumentPreview, { PreviewPanel, isPdfFile } from "../components/cockpit/DocumentPreview";
 import {
   emptyMechanicsForm,
   formHasAnyRule,
   formToRules,
   rulesToForm,
+  sampleMechanicsForm,
 } from "../lib/formatMechanicsForm";
-import { ACCEPTED_EXTENSIONS, MAX_FILE_BYTES } from "../lib/mockAnalysis";
+import { formatFileSize, oversizeFileMessage } from "../lib/formatFileSize";
+import {
+  ACCEPTED_EXTENSIONS,
+  ACCEPTED_MIME_TYPES,
+  MAX_FILE_SIZE_BYTES,
+  fileExtension,
+  getFileRejection,
+} from "../lib/uploadLimits";
 import { isScanReady } from "../lib/scanMapper";
 import { normalizeTitle } from "../lib/scannedLibrary";
 import AnalyzeProgressBar from "../components/cockpit/AnalyzeProgressBar";
 import ScanSummaryModal from "../components/cockpit/ScanSummaryModal";
 import { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
-
-const MIME = [
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-];
+import DocumentLoader from "../components/ui/DocumentLoader";
+import PaperPlaneLoader from "../components/ui/PaperPlaneLoader";
+import { TriangleAlertIcon } from "../components/shell/icons";
 
 const MODES = [
   { id: "saved", label: "Use a Saved Format" },
@@ -40,39 +57,52 @@ const MODES = [
   { id: "customize", label: "Customize a New Format" },
 ];
 
-const WIZARD_STEPS = [
-  { step: 1, label: "Format" },
-  { step: 2, label: "Manuscript" },
-  { step: 3, label: "Details" },
-];
-
-function validateFile(file) {
-  if (!file) return "Choose a file.";
-  const ext = `.${(file.name || "").split(".").pop()?.toLowerCase()}`;
-  if (!ACCEPTED_EXTENSIONS.includes(ext)) return "File must be a PDF or DOCX.";
-  if (file.size > MAX_FILE_BYTES) return `File must be ${MAX_FILE_BYTES / 1_000_000} MB or smaller.`;
+function validateMechanicsFile(file) {
+  if (!file) return "Choose a mechanics document.";
+  if (!ACCEPTED_EXTENSIONS.includes(fileExtension(file))) return "Mechanics must be a PDF or DOCX file.";
+  if (file.size > MAX_FILE_SIZE_BYTES) return "oversize";
   return "";
+}
+
+function validateManuscriptFile(file) {
+  if (!file) return "Choose a manuscript.";
+  if (!ACCEPTED_EXTENSIONS.includes(fileExtension(file))) return "type";
+  if (file.size > MAX_FILE_SIZE_BYTES) return "size";
+  return "";
+}
+
+function rejectionMessage(rejection) {
+  if (!rejection) return "";
+  if (rejection.kind === "type") {
+    return `'${rejection.name}' isn't a supported file type. Please upload a PDF or Word document (${ACCEPTED_EXTENSIONS.join(", ")}).`;
+  }
+  const max = formatFileSize(MAX_FILE_SIZE_BYTES);
+  let actual = formatFileSize(rejection.size);
+  if (actual === max) actual = formatFileSize(rejection.size, { roundUp: true });
+  return `Your file '${rejection.name}' is ${actual}, but we can only accept files up to ${max}. Please choose a smaller file and try again.`;
+}
+
+function formFromSaved(item) {
+  if (!item) return emptyMechanicsForm();
+  const mapped = rulesToForm(item.rules || {}, item.name || item.source_filename || "");
+  // Profiles with almost no stored rules get editable sample values instead of a blank form.
+  if (!formHasAnyRule(mapped)) return sampleMechanicsForm(item.name || "Saved Format");
+  return mapped;
 }
 
 async function pickDocument() {
   const res = await DocumentPicker.getDocumentAsync({
-    type: MIME,
+    type: ACCEPTED_MIME_TYPES,
     copyToCacheDirectory: true,
   });
   if (res.canceled || !res.assets?.length) return null;
   const asset = res.assets[0];
   return {
     uri: asset.uri,
-    name: asset.name || "document",
+    name: decodeFilename(asset.name || "document"),
     mimeType: asset.mimeType || "application/octet-stream",
     size: asset.size || 0,
   };
-}
-
-function titleForStep(step) {
-  if (step === 1) return "Upload Format Mechanics";
-  if (step === 2) return "Upload Manuscript";
-  return "File Details";
 }
 
 export default function UploadScreen({ navigation }) {
@@ -92,9 +122,7 @@ export default function UploadScreen({ navigation }) {
     tier,
     remaining,
     limit,
-    used,
     uploadWizardStep,
-    wizardMaxStep,
     advanceUploadWizard,
     goToUploadWizardStep,
     manuscriptReady,
@@ -105,6 +133,7 @@ export default function UploadScreen({ navigation }) {
     cancelManuscriptUpload,
     onExtractMechanics,
     onSaveMechanicsProfile,
+    onMechanicsUpdateProfile,
     onPreviewManuscript,
     onMechanicsRename,
     onMechanicsDelete,
@@ -112,42 +141,88 @@ export default function UploadScreen({ navigation }) {
     uploadTargets,
     selectUploadTarget,
     scanFlow,
-    notificationUnread,
   } = useAppData();
 
   const [mode, setMode] = useState(mechanics.length ? "saved" : "upload");
-  const [mechFile, setMechFile] = useState(null);
   const [mechError, setMechError] = useState("");
   const [mechSuccess, setMechSuccess] = useState("");
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
-  const [form, setForm] = useState(() => emptyMechanicsForm());
+  const [mechFile, setMechFile] = useState(null);
+  const [uploadForm, setUploadForm] = useState(() => emptyMechanicsForm());
+  const [customizeForm, setCustomizeForm] = useState(() => sampleMechanicsForm("My Custom Format"));
+  const [savedForm, setSavedForm] = useState(() =>
+    formFromSaved(mechanics.find((item) => item.id === selectedMechanicsId) || mechanics[0])
+  );
+  const [oversizeBytes, setOversizeBytes] = useState(null);
+  const [rejection, setRejection] = useState(null);
   const [extractMeta, setExtractMeta] = useState(null);
   const [extracting, setExtracting] = useState(false);
-  const [saveBusy, setSaveBusy] = useState(false);
+  const [sampleBusy, setSampleBusy] = useState(false);
+  const [journeyOpen, setJourneyOpen] = useState(false);
+  const [nameError, setNameError] = useState("");
+  const [confirm, setConfirm] = useState(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const scrollRef = useRef(null);
+  const nameInputRef = useRef(null);
 
   const [msFile, setMsFile] = useState(null);
   const [msTitle, setMsTitle] = useState("");
   const [manuscriptId, setManuscriptId] = useState("");
   const [msError, setMsError] = useState("");
+  const [msSuccess, setMsSuccess] = useState("");
   const [preview, setPreview] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [titleOpen, setTitleOpen] = useState(false);
   const [titleMode, setTitleMode] = useState("new");
   const [existingId, setExistingId] = useState("");
   const [titleError, setTitleError] = useState("");
+  const previewRequest = useRef(0);
+  const pickRequest = useRef(0);
 
   const selectedMechanics = mechanics.find((item) => item.id === selectedMechanicsId);
   const scanReady = isScanReady(currentVersion, currentManuscript);
+  const form = mode === "upload" ? uploadForm : mode === "customize" ? customizeForm : savedForm;
+  const setForm =
+    mode === "upload" ? setUploadForm : mode === "customize" ? setCustomizeForm : setSavedForm;
+  const selectedRulesKey = JSON.stringify(selectedMechanics?.rules || {});
+  const mechBusy = extracting || mechanicsBusy || confirmBusy;
+
+  const mechanicsSelected = Boolean(selectedMechanicsId);
+  const msUploading = Boolean(manuscriptBusy || (confirmBusy && uploadWizardStep === 2));
+  const msPreparing = Boolean(previewBusy && msFile && !msUploading);
+  const msPanelBusy = manuscriptBusy || previewBusy || confirmBusy;
+  const canPickManuscript = mechanicsSelected && !msPanelBusy;
+  const showMsPreview = Boolean(msFile) && !validateManuscriptFile(msFile);
+  const mechanicsOptions = mechanics.map((item) => ({
+    value: item.id,
+    label: item.name || item.source_filename,
+  }));
+  const titleOptions = uploadTargets.map((item) => {
+    const versionCount = Number(
+      item.version_count ?? item.current_version_number ?? item.versions?.length ?? 0
+    );
+    return { value: item.id, label: `${item.title} · version ${versionCount + 1}` };
+  });
 
   useEffect(() => {
+    previewRequest.current += 1;
     setMsFile(null);
     setPreview(null);
+    setPreviewBusy(false);
     setMsError("");
+    setMsSuccess("");
     setMsTitle("");
     setTitleOpen(false);
     setTitleError("");
   }, [uploadCancelKey]);
+
+  // Keep Format Fields in sync with the selected saved mechanics.
+  useEffect(() => {
+    if (mode !== "saved") return;
+    setSavedForm(selectedMechanics ? formFromSaved(selectedMechanics) : emptyMechanicsForm());
+    setEditing(false);
+  }, [mode, selectedMechanicsId, selectedRulesKey]);
 
   useEffect(() => {
     if (scanFlow.step === "results" && scanFlow.result) {
@@ -158,29 +233,85 @@ export default function UploadScreen({ navigation }) {
     }
   }, [scanFlow.step, scanFlow.result, navigation]);
 
-  function switchMode(next) {
-    setMode(next);
-    setMechError("");
-    setMechSuccess("");
-    setEditing(false);
-    if (next === "customize") {
-      setForm(emptyMechanicsForm());
-      setExtractMeta(null);
-      setMechFile(null);
-    }
-    if (next === "upload") {
-      setForm(emptyMechanicsForm());
-      setExtractMeta(null);
+  const showingUploadFace = scanFlow.step === "idle" || scanFlow.step === "fileSelected";
+
+  useEffect(() => {
+    if (!showingUploadFace || uploadJourneySeen()) return;
+    setJourneyOpen(true);
+  }, [showingUploadFace]);
+
+  function dismissJourney() {
+    markUploadJourneySeen();
+    setJourneyOpen(false);
+  }
+
+  async function runConfirm() {
+    const action = confirm?.onConfirm;
+    if (!action) return;
+    setConfirmBusy(true);
+    try {
+      await action();
+    } finally {
+      setConfirmBusy(false);
+      setConfirm(null);
     }
   }
 
-  async function runExtract(file) {
-    const issue = validateFile(file);
-    setMechError(issue);
+  async function onDownloadSample() {
+    setSampleBusy(true);
+    setMechError("");
+    try {
+      await WebBrowser.openBrowserAsync(sampleMechanicsUrl());
+    } catch (err) {
+      setMechError(err?.message || "Could not download the sample format guide.");
+    } finally {
+      setSampleBusy(false);
+    }
+  }
+
+  function updateForm(next) {
+    setForm(next);
+    if (nameError && next.name?.trim()) {
+      setNameError("");
+      setMechError("");
+    }
+  }
+
+  function revealNameField() {
+    const scroll = scrollRef.current;
+    const input = nameInputRef.current;
+    if (!scroll || !input) return;
+    const target = scroll.getInnerViewRef?.() ?? scroll;
+    input.measureLayout(
+      target,
+      (_x, y) => scroll.scrollTo({ y: Math.max(0, y - 60), animated: true }),
+      () => scroll.scrollTo({ y: 0, animated: true })
+    );
+    setTimeout(() => input.focus(), 350);
+  }
+
+  function switchMode(next) {
+    if (next === mode) return;
+    setMode(next);
+    setMechError("");
     setMechSuccess("");
+    setNameError("");
+    setEditing(false);
+  }
+
+  function clearUploadDraft() {
+    setMechFile(null);
+    setExtractMeta(null);
+    setUploadForm(emptyMechanicsForm());
+    setNameError("");
+  }
+
+  async function runExtract(file) {
+    setMechError("");
+    setMechSuccess("");
+    setNameError("");
     setMechFile(file);
     setExtractMeta(null);
-    if (issue || !file) return;
     setExtracting(true);
     try {
       const data = await onExtractMechanics(file);
@@ -193,11 +324,13 @@ export default function UploadScreen({ navigation }) {
         file_type: data.file_type,
         extracted_text: data.extracted_text || "",
         text_preview: data.text_preview || "",
+        page_count: data.page_count || (data.pages || []).length || 0,
+        pages: Array.isArray(data.pages) ? data.pages : [],
       });
-      setForm(
+      setUploadForm(
         rulesToForm(data.rules || {}, data.name || file.name.replace(/\.(pdf|docx)$/i, ""))
       );
-      setMechSuccess("Format fields extracted — review and edit below, then save.");
+      setMechSuccess("Format fields extracted from your guide — review and edit below, then save.");
     } catch (err) {
       setMechError(err.message || "Extraction failed.");
     } finally {
@@ -205,128 +338,278 @@ export default function UploadScreen({ navigation }) {
     }
   }
 
+  function requestExtract(file) {
+    if (!file) return;
+    const issue = validateMechanicsFile(file);
+    if (issue === "oversize") {
+      setMechFile(null);
+      setMechError("");
+      setMechSuccess("");
+      setOversizeBytes(file.size);
+      return;
+    }
+    if (issue) {
+      setMechError(issue);
+      setMechSuccess("");
+      setMechFile(file);
+      return;
+    }
+    setConfirm({
+      title: "Extract format fields?",
+      message: `PaperPilot will analyze “${file.name}” and fill Format Fields from the rules in that guide. You can edit any value before saving.`,
+      confirmLabel: "Extract fields",
+      onConfirm: () => {
+        void runExtract(file);
+      },
+    });
+  }
+
   async function pickMechanics() {
     const file = await pickDocument();
-    if (!file) return;
-    await runExtract(file);
+    if (file) requestExtract(file);
   }
 
-  async function saveAndContinue() {
-    if (!form.name?.trim()) {
-      setMechError("Enter a profile name.");
-      return;
+  function buildCreatePayload() {
+    const name = String(form.name || "").trim();
+    if (!name) {
+      const message = "Enter a profile name before saving.";
+      setNameError(message);
+      setMechError(message);
+      revealNameField();
+      return null;
+    }
+    if (mechanics.some((item) => String(item.name || "").toLowerCase() === name.toLowerCase())) {
+      setMechError("A mechanics document with this name already exists.");
+      return null;
     }
     if (!formHasAnyRule(form)) {
-      setMechError("Fill in at least one formatting rule before saving.");
-      return;
+      setMechError("Add at least one format rule before saving.");
+      return null;
     }
-    setSaveBusy(true);
-    setMechError("");
-    try {
-      await onSaveMechanicsProfile({
-        name: form.name.trim(),
-        rules: formToRules(form),
-        source_filename: extractMeta?.source_filename || mechFile?.name,
-        file_type: extractMeta?.file_type,
-        extracted_text: extractMeta?.extracted_text,
-      });
-      setMechSuccess("Format profile saved.");
-      advanceUploadWizard(2);
-    } catch (err) {
-      setMechError(err.message || "Could not save format profile.");
-    } finally {
-      setSaveBusy(false);
-    }
+    const fromUpload = mode === "upload";
+    return {
+      name,
+      rules: formToRules(form),
+      source_filename:
+        fromUpload && extractMeta?.source_filename ? extractMeta.source_filename : `${name}.docx`,
+      file_type: fromUpload && extractMeta?.file_type ? extractMeta.file_type : "docx",
+      extracted_text: fromUpload ? extractMeta?.extracted_text || "" : "",
+    };
   }
 
-  function continueSaved() {
-    if (!selectedMechanicsId) {
-      Alert.alert("Select a format", "Choose a saved format mechanics profile to continue.");
-      return;
+  function requestSaveProfile() {
+    setMechError("");
+    setMechSuccess("");
+    const payload = buildCreatePayload();
+    if (!payload) return;
+    const savingMode = mode;
+    setConfirm({
+      title: "Save format mechanics?",
+      message: `Save “${payload.name}” to Saved Mechanics and continue to Upload Manuscript?`,
+      confirmLabel: "Save and Continue",
+      onConfirm: async () => {
+        try {
+          await onSaveMechanicsProfile(payload);
+          if (savingMode === "upload") clearUploadDraft();
+          else setCustomizeForm(sampleMechanicsForm("My Custom Format"));
+          advanceUploadWizard(2);
+        } catch (err) {
+          setMechError(err.message || "Could not save format mechanics. Please try again.");
+        }
+      },
+    });
+  }
+
+  function buildUpdatePayload() {
+    if (!selectedMechanicsId || !selectedMechanics) {
+      setMechError("Select a saved format first.");
+      return null;
     }
-    advanceUploadWizard(2);
+    const name = String(savedForm.name || "").trim();
+    if (!name) {
+      setMechError("Enter a profile name before saving.");
+      return null;
+    }
+    if (
+      mechanics.some(
+        (item) =>
+          item.id !== selectedMechanicsId &&
+          String(item.name || "").toLowerCase() === name.toLowerCase()
+      )
+    ) {
+      setMechError("A mechanics document with this name already exists.");
+      return null;
+    }
+    if (!formHasAnyRule(savedForm)) {
+      setMechError("Add at least one format rule before saving.");
+      return null;
+    }
+    return { name, rules: formToRules(savedForm) };
+  }
+
+  function requestUpdateSaved() {
+    setMechError("");
+    setMechSuccess("");
+    const payload = buildUpdatePayload();
+    if (!payload) return;
+    const mechanicsId = selectedMechanicsId;
+    setConfirm({
+      title: "Use this format?",
+      message: `Select “${payload.name}” and continue to Upload Manuscript? Any edits to the Format Fields will be saved to this format.`,
+      confirmLabel: "Select and Continue",
+      onConfirm: async () => {
+        try {
+          await onMechanicsUpdateProfile(mechanicsId, payload);
+          setMechSuccess("Format mechanics updated.");
+          advanceUploadWizard(2);
+        } catch (err) {
+          setMechError(err.message || "Could not update format mechanics. Please try again.");
+        }
+      },
+    });
   }
 
   function submitRename() {
-    if (!editName.trim()) {
+    const nextName = editName.trim();
+    if (!nextName) {
       setMechError("Enter a mechanics name.");
       return;
     }
-    Alert.alert("Rename format", `Rename to “${editName.trim()}”?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Rename",
-        onPress: async () => {
-          const ok = await onMechanicsRename(selectedMechanicsId, editName.trim());
-          if (ok) {
-            setEditing(false);
-            setEditName("");
-            setMechError("");
-          }
-        },
+    if (
+      mechanics.some(
+        (item) =>
+          item.id !== selectedMechanicsId &&
+          String(item.name || "").toLowerCase() === nextName.toLowerCase()
+      )
+    ) {
+      setMechError("A mechanics document with this name already exists.");
+      return;
+    }
+    setMechError("");
+    setConfirm({
+      title: "Rename format mechanics?",
+      message: `Rename “${selectedMechanics?.name}” to “${nextName}”?`,
+      confirmLabel: "Save name",
+      onConfirm: async () => {
+        const ok = await onMechanicsRename(selectedMechanicsId, nextName);
+        if (ok) {
+          setEditing(false);
+          setEditName("");
+        }
       },
-    ]);
+    });
   }
 
   function removeSelected() {
     if (!selectedMechanics) return;
-    Alert.alert("Delete mechanics", `Delete “${selectedMechanics.name}”? This cannot be undone.`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => onMechanicsDelete(selectedMechanics.id),
+    setConfirm({
+      title: "Delete format mechanics?",
+      message: `“${selectedMechanics.name}” will be removed permanently. Manuscripts that used it will keep their files, but this format profile will be gone.`,
+      confirmLabel: "Delete",
+      tone: "danger",
+      onConfirm: async () => {
+        const ok = await onMechanicsDelete(selectedMechanics.id);
+        if (ok !== false) {
+          setMechSuccess("Format mechanics deleted.");
+          setSavedForm(emptyMechanicsForm());
+        } else {
+          setMechError("Could not delete this format. It may still be linked to a manuscript — try again.");
+        }
       },
-    ]);
+    });
   }
 
-  async function pickManuscript() {
-    setManuscriptReady(false);
-    setFileDetailsNotice("");
-    scanFlow.selectFile(null);
-    const file = await pickDocument();
-    if (!file) return;
-    const issue = validateFile(file);
-    setMsFile(file);
-    setMsError(issue);
+  async function loadPreview(file) {
+    const requestId = ++previewRequest.current;
     setPreview(null);
-    if (issue) return;
     setPreviewBusy(true);
     try {
       const data = await onPreviewManuscript(file);
+      if (previewRequest.current !== requestId) return;
       setPreview(data);
-    } catch (err) {
-      setMsError(err.message || "Preview failed.");
+    } catch {
+      if (previewRequest.current !== requestId) return;
+      setPreview({ filename: file.name, text_preview: "", page_count: 0 });
     } finally {
-      setPreviewBusy(false);
+      if (previewRequest.current === requestId) setPreviewBusy(false);
     }
   }
 
+  function rejectManuscript(file, kind) {
+    previewRequest.current += 1;
+    setMsFile(null);
+    setPreview(null);
+    setPreviewBusy(false);
+    setMsError("");
+    setMsSuccess("");
+    setRejection({ kind, name: file.name, size: file.size });
+  }
+
+  async function pickManuscript() {
+    if (!canPickManuscript) return;
+    const file = await pickDocument();
+    if (!file) return;
+    const pickId = ++pickRequest.current;
+    const issue = await getFileRejection(file);
+    if (pickRequest.current !== pickId) return;
+    setManuscriptReady(false);
+    setFileDetailsNotice("");
+    scanFlow.selectFile(null);
+    if (issue) {
+      rejectManuscript(file, issue);
+      return;
+    }
+    setMsFile(file);
+    setMsError("");
+    setMsSuccess("");
+    void loadPreview(file);
+  }
+
+  function chooseAnotherFile() {
+    setRejection(null);
+    // iOS cannot present the document picker until the dialog has finished closing.
+    setTimeout(() => void pickManuscript(), 450);
+  }
+
+  function onCancelManuscript() {
+    if (!msFile) {
+      goToUploadWizardStep(1);
+      return;
+    }
+    setConfirm({
+      title: "Go back to the previous step?",
+      message:
+        "Your selected manuscript will be discarded and you will return to Step 1. Your chosen format stays selected.",
+      confirmLabel: "Cancel and go back",
+      cancelLabel: "Stay here",
+      tone: "danger",
+      onConfirm: () => {
+        previewRequest.current += 1;
+        cancelManuscriptUpload();
+        goToUploadWizardStep(1);
+      },
+    });
+  }
+
   function queueUpload(pending) {
-    Alert.alert(
-      pending.manuscriptId ? "Upload new version?" : "Upload manuscript?",
-      `Save “${pending.file?.name}” as “${pending.title}” on the server? File Details opens only after the upload finishes.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: pending.manuscriptId ? "Upload version" : "Upload & continue",
-          onPress: () => {
-            void (async () => {
-              const ok = await onManuscriptUpload({
-                file: pending.file,
-                title: pending.title,
-                manuscriptId: pending.manuscriptId || undefined,
-              });
-              if (ok) {
-                setMsFile(null);
-                setPreview(null);
-                setMsTitle("");
-              }
-            })();
-          },
-        },
-      ]
-    );
+    setConfirm({
+      title: pending.manuscriptId ? "Upload new version?" : "Upload manuscript?",
+      message: `Save “${pending.file?.name}” as “${pending.title}” on the server? File Details opens only after the upload finishes.`,
+      confirmLabel: pending.manuscriptId ? "Upload version" : "Upload & continue",
+      onConfirm: async () => {
+        const ok = await onManuscriptUpload({
+          file: pending.file,
+          title: pending.title,
+          manuscriptId: pending.manuscriptId || undefined,
+        });
+        if (ok) {
+          setMsFile(null);
+          setPreview(null);
+          setMsTitle("");
+          setMsSuccess("Manuscript uploaded completely.");
+        }
+      },
+    });
   }
 
   function useExistingManuscript(id) {
@@ -341,11 +624,7 @@ export default function UploadScreen({ navigation }) {
     setTitleError("");
     setMsError("");
     setTitleOpen(false);
-    queueUpload({
-      file: msFile,
-      title: selected.title,
-      manuscriptId: selected.id,
-    });
+    queueUpload({ file: msFile, title: selected.title, manuscriptId: selected.id });
   }
 
   function submitTitle() {
@@ -374,145 +653,93 @@ export default function UploadScreen({ navigation }) {
     setTitleOpen(false);
     setManuscriptId("");
     selectUploadTarget("");
-    queueUpload({
-      file: msFile,
-      title: resolvedTitle,
-      manuscriptId: "",
-    });
+    queueUpload({ file: msFile, title: resolvedTitle, manuscriptId: "" });
   }
 
   function requestManuscriptUpload() {
-    const issue = validateFile(msFile);
-    setMsError(issue);
-    if (issue) return;
-    if (!manuscriptId) {
-      setTitleError("");
-      setTitleMode(uploadTargets.length ? "existing" : "new");
-      setExistingId(uploadTargets[0]?.id || "");
-      setTitleOpen(true);
+    const issue = validateManuscriptFile(msFile);
+    if ((issue === "type" || issue === "size") && msFile) {
+      rejectManuscript(msFile, issue);
       return;
     }
-    const selected = uploadTargets.find((item) => item.id === manuscriptId);
-    const resolvedTitle = (
-      selected?.title ||
-      msTitle ||
-      msFile.name.replace(/\.(pdf|docx)$/i, "")
-    ).trim();
-    queueUpload({
-      file: msFile,
-      title: resolvedTitle,
-      manuscriptId,
-    });
+    setMsError(issue);
+    setMsSuccess("");
+    if (issue) return;
+    setManuscriptId("");
+    setMsTitle("");
+    setTitleError("");
+    setTitleMode(uploadTargets.length ? "existing" : "new");
+    setExistingId(uploadTargets[0]?.id || "");
+    setTitleOpen(true);
   }
 
   function onAnalyse() {
-    if (!scanReady) return;
+    if (!scanReady || !selectedMechanicsId) return;
     if (remaining <= 0) {
       setUpgradeMessage(
         `You have used all ${limit} scans included in your ${tier} plan this month.`
       );
       return;
     }
-    Alert.alert("Analyse document", "Run a formatting compliance scan on this manuscript?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Analyse",
-        onPress: async () => {
-          await scanFlow.analyze();
-        },
+    setConfirm({
+      title: "Analyse this document?",
+      message: `Check “${currentManuscript?.title || "this manuscript"}” against the selected format mechanics? This uses 1 scan from your plan.`,
+      confirmLabel: "Start analysis",
+      onConfirm: () => {
+        void scanFlow.analyze();
       },
-    ]);
+    });
   }
 
   function onCancelUpload() {
-    Alert.alert("Cancel upload", "Discard this staged manuscript and return to Step 2?", [
-      { text: "Keep", style: "cancel" },
-      {
-        text: "Cancel upload",
-        style: "destructive",
-        onPress: cancelManuscriptUpload,
-      },
-    ]);
+    setConfirm({
+      title: "Cancel this upload?",
+      message:
+        "The staged manuscript will be discarded and you will return to Upload Manuscript. This cannot be undone.",
+      confirmLabel: "Cancel upload",
+      tone: "danger",
+      onConfirm: () => cancelManuscriptUpload(),
+    });
   }
 
+  const activeNav = showingUploadFace ? "upload" : null;
+
   if (scanFlow.step === "analyzing") {
-    return <AnalyzeProgressBar progress={scanFlow.analyzeProgress} />;
+    return (
+      <AppShell active={activeNav}>
+        <AnalyzeProgressBar
+          progress={scanFlow.analyzeProgress}
+          resultReady={Boolean(scanFlow.result)}
+          onReveal={scanFlow.revealSummary}
+        />
+      </AppShell>
+    );
   }
 
   if (scanFlow.step === "error") {
     return (
-      <View style={styles.fullCenter}>
-        <Text style={styles.errorTitle}>Analysis failed</Text>
-        <Text style={styles.errorBody}>{scanFlow.error || "Something went wrong."}</Text>
-        <PrimaryButton title="Retry" onPress={scanFlow.retry} style={{ marginTop: 16, minWidth: 140 }} />
-      </View>
+      <AppShell active={activeNav} breadcrumb="Dashboard" title="Analysis Failed">
+        <View style={styles.fullCenter}>
+          <Text style={styles.errorTitle}>Analysis failed</Text>
+          <Text style={styles.errorBody}>{scanFlow.error || "Something went wrong."}</Text>
+          <PrimaryButton title="Retry" onPress={scanFlow.retry} style={{ marginTop: 16, minWidth: 140 }} />
+        </View>
+      </AppShell>
     );
   }
 
   if (scanFlow.step === "results" || scanFlow.step === "documentTrace") {
-    return null;
+    return <AppShell active={activeNav} />;
   }
 
-  const scansUsedLabel = `${used} of ${limit} scans`;
-
   return (
-    <View style={styles.root}>
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.kicker}>Dashboard</Text>
-          <Text style={styles.h1}>{titleForStep(uploadWizardStep)}</Text>
-        </View>
-        <View style={styles.headerRight}>
-          <View>
-            <Text style={styles.plan}>{tier} plan</Text>
-            <Text style={styles.remaining}>{scansUsedLabel}</Text>
-          </View>
-          <Pressable
-            style={styles.iconBtn}
-            onPress={() => navigation.navigate("Subscription")}
-            accessibilityLabel="Subscription settings"
-          >
-            <Text style={styles.iconBtnText}>⚙</Text>
-          </Pressable>
-          <Pressable
-            style={styles.iconBtn}
-            onPress={() => navigation.navigate("Notifications")}
-            accessibilityLabel={
-              notificationUnread
-                ? `Open notifications, ${notificationUnread} unread`
-                : "Open notifications"
-            }
-          >
-            <Text style={styles.iconBtnText}>🔔</Text>
-            {notificationUnread > 0 ? (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{notificationUnread > 9 ? "9+" : notificationUnread}</Text>
-              </View>
-            ) : null}
-          </Pressable>
-        </View>
-      </View>
-
-      <View style={styles.stepChips}>
-        {WIZARD_STEPS.filter((item) => item.step <= wizardMaxStep).map((item) => {
-          const current = item.step === uploadWizardStep;
-          const canJump = !current && item.step <= wizardMaxStep;
-          return (
-            <Pressable
-              key={item.step}
-              disabled={!canJump}
-              onPress={() => goToUploadWizardStep(item.step)}
-              style={[styles.stepChip, current && styles.stepChipActive]}
-            >
-              <Text style={[styles.stepChipText, current && styles.stepChipTextActive]}>
-                {item.step}. {item.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+    <AppShell active={activeNav}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
+      >
         {error ? (
           <View style={styles.errorBanner}>
             <Text style={styles.errorText}>{error}</Text>
@@ -524,18 +751,47 @@ export default function UploadScreen({ navigation }) {
 
         {loading ? (
           <View style={styles.loadingBox}>
-            <ActivityIndicator color={colors.accent} />
+            <PaperPlaneLoader />
             <Text style={styles.muted}>Loading your compliance workspace…</Text>
           </View>
         ) : (
           <>
             {uploadWizardStep === 1 && (
               <View style={styles.card}>
-                <Text style={styles.step}>Step 1 of 3</Text>
+                <ShowStepsRow step={1} onShowSteps={() => setJourneyOpen(true)} />
                 <Text style={styles.cardTitle}>Upload Format Mechanics</Text>
                 <Text style={styles.cardHint}>
-                  Choose a saved profile, upload a guide, or customize rules manually.
+                  Choose a saved format, upload a guide for extraction, or customize fields manually.
+                  Format Fields always reflect the rules inside the mechanics you select or upload.
                 </Text>
+
+                <View style={styles.sampleBanner}>
+                  <View>
+                    <Text style={styles.sampleTitle}>Don’t have a format guide yet?</Text>
+                    <Text style={styles.sampleBody}>
+                      Download a sample DOCX, then upload it here or use Customize to edit the
+                      starter rules.
+                    </Text>
+                  </View>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.sampleBtn,
+                      pressed && styles.sampleBtnPressed,
+                      (sampleBusy || mechBusy) && styles.disabled,
+                    ]}
+                    disabled={sampleBusy || mechBusy}
+                    onPress={onDownloadSample}
+                  >
+                    {sampleBusy ? (
+                      <>
+                        <ActivityIndicator size="small" color={colors.accentText} />
+                        <Text style={styles.sampleBtnText}>Downloading…</Text>
+                      </>
+                    ) : (
+                      <Text style={styles.sampleBtnText}>⬇ Download sample format</Text>
+                    )}
+                  </Pressable>
+                </View>
 
                 <View style={styles.segment}>
                   {MODES.map((item) => {
@@ -545,6 +801,7 @@ export default function UploadScreen({ navigation }) {
                         key={item.id}
                         style={[styles.segmentBtn, active && styles.segmentBtnActive]}
                         onPress={() => switchMode(item.id)}
+                        disabled={mechBusy}
                       >
                         <Text
                           style={[styles.segmentText, active && styles.segmentTextActive]}
@@ -558,37 +815,38 @@ export default function UploadScreen({ navigation }) {
                 </View>
 
                 {mode === "saved" && (
-                  <View style={{ marginTop: 14 }}>
+                  <View style={{ marginTop: 16 }}>
                     {mechanics.length ? (
                       <>
-                        {mechanics.map((item) => {
-                          const active = item.id === selectedMechanicsId;
-                          return (
-                            <Pressable
-                              key={item.id}
-                              style={[styles.listRow, active && styles.listRowActive]}
-                              onPress={() => {
-                                setSelectedMechanicsId(item.id);
-                                setEditing(false);
-                                setMechError("");
-                              }}
-                            >
-                              <Text style={styles.listRowText} numberOfLines={1}>
-                                {item.name || item.source_filename}
-                              </Text>
-                              {active ? <Text style={styles.check}>✓</Text> : null}
-                            </Pressable>
-                          );
-                        })}
+                        <Text style={styles.label}>Saved mechanics</Text>
+                        <SelectField
+                          title="Saved mechanics"
+                          value={selectedMechanicsId}
+                          options={mechanicsOptions}
+                          placeholder="Select a mechanics document"
+                          disabled={mechBusy}
+                          onChange={(value) => {
+                            setSelectedMechanicsId(value);
+                            setEditing(false);
+                            setMechError("");
+                            setMechSuccess("");
+                          }}
+                        />
 
                         {selectedMechanics && !editing ? (
                           <View style={styles.selectedBar}>
+                            <FileTypeIcon
+                              fileType={selectedMechanics.file_type}
+                              filename={selectedMechanics.source_filename || selectedMechanics.name}
+                              width={20}
+                              height={24}
+                            />
                             <Text style={styles.selectedFile} numberOfLines={1}>
                               {selectedMechanics.source_filename || selectedMechanics.name}
                             </Text>
                             <View style={styles.rowActions}>
                               <Pressable
-                                disabled={mechanicsBusy}
+                                disabled={mechBusy}
                                 onPress={() => {
                                   setEditName(selectedMechanics.name || "");
                                   setEditing(true);
@@ -596,7 +854,7 @@ export default function UploadScreen({ navigation }) {
                               >
                                 <Text style={styles.rename}>Rename</Text>
                               </Pressable>
-                              <Pressable disabled={mechanicsBusy} onPress={removeSelected}>
+                              <Pressable disabled={mechBusy} onPress={removeSelected}>
                                 <Text style={styles.delete}>Delete</Text>
                               </Pressable>
                             </View>
@@ -616,7 +874,7 @@ export default function UploadScreen({ navigation }) {
                             />
                             <Pressable
                               style={styles.saveBtn}
-                              disabled={mechanicsBusy || !editName.trim()}
+                              disabled={mechBusy || !editName.trim()}
                               onPress={submitRename}
                             >
                               <Text style={styles.saveBtnText}>Save</Text>
@@ -627,143 +885,176 @@ export default function UploadScreen({ navigation }) {
                           </View>
                         ) : null}
 
+                        {selectedMechanics ? (
+                          <>
+                            <Text style={styles.savedHint}>
+                              Format Fields below show the rules stored in{" "}
+                              <Text style={styles.savedHintName}>
+                                {selectedMechanics.name || selectedMechanics.source_filename}
+                              </Text>
+                              . Edit them, then save changes or continue.
+                            </Text>
+                            <View style={{ marginTop: 14 }}>
+                              <FormatMechanicsFields
+                                form={savedForm}
+                                onChange={setSavedForm}
+                                disabled={mechBusy}
+                                title="Format Fields (from saved mechanics)"
+                              />
+                            </View>
+                          </>
+                        ) : null}
+
                         <PrimaryButton
-                          title="Continue to Upload Manuscript"
-                          onPress={continueSaved}
-                          disabled={!selectedMechanicsId}
+                          title={mechanicsBusy ? "Saving…" : "Select and Continue"}
+                          onPress={requestUpdateSaved}
+                          busy={mechanicsBusy}
+                          disabled={!selectedMechanicsId || mechBusy}
                           style={{ marginTop: 14 }}
                         />
                       </>
                     ) : (
                       <Text style={styles.muted}>
-                        No saved formats yet. Upload or customize a new format.
+                        No saved formats yet. Download the sample, upload a guide, or customize a new format.
                       </Text>
                     )}
                   </View>
                 )}
 
                 {mode === "upload" && (
-                  <View style={{ marginTop: 14 }}>
-                    <Pressable style={styles.dropzone} onPress={pickMechanics} disabled={extracting}>
-                      <View style={styles.dropIcon}>
-                        <Text style={styles.dropIconText}>↑</Text>
-                      </View>
-                      <Text style={styles.dropTitle}>
-                        {mechFile?.name || "Drop your format guide here"}
-                      </Text>
-                      <Text style={styles.dropSub}>Supports .pdf and .docx · Max 25 MB</Text>
-                      <View style={styles.browsePill}>
-                        <Text style={styles.browseText}>
-                          {extracting ? "Extracting…" : "Browse files"}
-                        </Text>
-                      </View>
+                  <View style={{ marginTop: 16 }}>
+                    <Pressable
+                      style={[styles.dropzone, { marginTop: 0 }]}
+                      onPress={pickMechanics}
+                      disabled={mechBusy}
+                    >
+                      {extracting ? (
+                        <View style={styles.dropBusy}>
+                          <DocumentLoader size={96} />
+                          <Text style={styles.dropTitle}>Extracting format fields…</Text>
+                        </View>
+                      ) : (
+                        <>
+                          <View style={styles.dropIcon}>
+                            <Text style={styles.dropIconText}>↑</Text>
+                          </View>
+                          <Text style={styles.dropTitle}>
+                            {mechFile?.name || "Drop your format guide here"}
+                          </Text>
+                          <Text style={styles.dropSub}>
+                            {mechFile
+                              ? `${formatFileSize(mechFile.size)} · Confirm extraction to fill Format Fields below`
+                              : `Tap to browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
+                          </Text>
+                          <View style={styles.browsePill}>
+                            <Text style={styles.browseText}>Browse files</Text>
+                          </View>
+                        </>
+                      )}
                     </Pressable>
 
-                    {extracting ? (
-                      <View style={styles.inlineBusy}>
-                        <ActivityIndicator color={colors.accent} />
-                        <Text style={styles.muted}>Reading format guide…</Text>
-                      </View>
+                    {extractMeta && !extracting ? (
+                      <PreviewPanel
+                        label="Mechanics preview"
+                        status={
+                          isPdfFile(mechFile) && extractMeta.page_count
+                            ? `${extractMeta.page_count} page${extractMeta.page_count === 1 ? "" : "s"} · scroll to read`
+                            : "Original document · scroll to read"
+                        }
+                      >
+                        <DocumentPreview
+                          file={mechFile}
+                          preview={extractMeta}
+                          emptyLabel="No mechanics preview available yet."
+                        />
+                      </PreviewPanel>
                     ) : null}
 
-                    {extractMeta?.text_preview ? (
-                      <View style={styles.previewBox}>
-                        <Text style={styles.label}>Guide preview</Text>
-                        <Text style={styles.previewText} numberOfLines={8}>
-                          {extractMeta.text_preview}
-                        </Text>
-                      </View>
-                    ) : null}
-
-                    {(extractMeta || formHasAnyRule(form)) && (
-                      <View style={{ marginTop: 12 }}>
+                    {extractMeta ? (
+                      <View style={{ marginTop: 16 }}>
                         <FormatMechanicsFields
-                          form={form}
-                          onChange={setForm}
-                          disabled={extracting || saveBusy || mechanicsBusy}
+                          form={uploadForm}
+                          onChange={updateForm}
+                          disabled={mechBusy}
+                          title="Format Fields (from uploaded guide)"
+                          nameError={nameError}
+                          nameInputRef={nameInputRef}
                         />
-                        <PrimaryButton
-                          title={saveBusy ? "Saving…" : "Save & Continue"}
-                          onPress={saveAndContinue}
-                          busy={saveBusy || mechanicsBusy}
-                          style={{ marginTop: 12 }}
-                        />
+                        <View style={styles.editorActions}>
+                          <PrimaryButton
+                            title={mechanicsBusy ? "Saving…" : "Save and Continue"}
+                            onPress={requestSaveProfile}
+                            busy={mechanicsBusy}
+                            disabled={mechBusy}
+                            style={{ flex: 1 }}
+                          />
+                          <Pressable
+                            style={[styles.clearBtn, mechBusy && styles.disabled]}
+                            disabled={mechBusy}
+                            onPress={() => {
+                              clearUploadDraft();
+                              setMechError("");
+                              setMechSuccess("");
+                            }}
+                          >
+                            <Text style={styles.clearBtnText}>Clear draft</Text>
+                          </Pressable>
+                        </View>
                       </View>
-                    )}
+                    ) : null}
                   </View>
                 )}
 
                 {mode === "customize" && (
-                  <View style={{ marginTop: 14 }}>
+                  <View style={{ marginTop: 16 }}>
+                    <Text style={[styles.cardHint, { marginTop: 0, marginBottom: 14 }]}>
+                      Starter format rules are loaded below — edit any field to match your
+                      requirements, then save the profile for reuse.
+                    </Text>
                     <FormatMechanicsFields
-                      form={form}
-                      onChange={setForm}
-                      disabled={saveBusy || mechanicsBusy}
+                      form={customizeForm}
+                      onChange={updateForm}
+                      disabled={mechBusy}
+                      title="Format Fields"
+                      nameError={nameError}
+                      nameInputRef={nameInputRef}
                     />
                     <PrimaryButton
-                      title={saveBusy ? "Saving…" : "Save & Continue"}
-                      onPress={saveAndContinue}
-                      busy={saveBusy || mechanicsBusy}
+                      title={mechanicsBusy ? "Saving…" : "Save customized format & continue"}
+                      onPress={requestSaveProfile}
+                      busy={mechanicsBusy}
+                      disabled={mechBusy}
                       style={{ marginTop: 12 }}
                     />
                   </View>
                 )}
 
                 {mechError ? <Text style={styles.fieldError}>{mechError}</Text> : null}
-                {mechSuccess ? <Text style={styles.fieldSuccess}>{mechSuccess}</Text> : null}
+                {mechSuccess && !mechError ? (
+                  <Text style={styles.fieldSuccess}>{mechSuccess}</Text>
+                ) : null}
+
+                {mechanicsBusy && !confirmBusy ? (
+                  <View style={styles.processingOverlay}>
+                    <DocumentLoader size={112} />
+                    <Text style={styles.processingText}>Processing…</Text>
+                  </View>
+                ) : null}
               </View>
             )}
 
             {uploadWizardStep === 2 && (
-              <View style={styles.card}>
-                <Text style={styles.step}>Step 2 of 3</Text>
+              <View style={[styles.card, !mechanicsSelected && styles.cardDisabled]}>
+                <ShowStepsRow step={2} onShowSteps={() => setJourneyOpen(true)} />
                 <Text style={styles.cardTitle}>Upload Manuscript</Text>
                 <Text style={styles.cardHint}>
                   Upload the manuscript you want to check against the confirmed format guide.
                 </Text>
 
-                {uploadTargets.length ? (
-                  <>
-                    <Text style={[styles.label, { marginTop: 14 }]}>Upload to</Text>
-                    <Pressable
-                      style={[styles.listRow, !manuscriptId && styles.listRowActive]}
-                      onPress={() => {
-                        setManuscriptId("");
-                        selectUploadTarget("");
-                      }}
-                    >
-                      <Text style={styles.listRowText}>Create a new manuscript</Text>
-                    </Pressable>
-                    {uploadTargets.map((item) => {
-                      const active = manuscriptId === item.id;
-                      const next = Number(item.current_version_number || item.version_count || 0) + 1;
-                      return (
-                        <Pressable
-                          key={item.id}
-                          style={[styles.listRow, active && styles.listRowActive]}
-                          onPress={() => {
-                            setManuscriptId(item.id);
-                            setMsTitle("");
-                            selectUploadTarget(item.id);
-                          }}
-                        >
-                          <Text style={styles.listRowText} numberOfLines={1}>
-                            {item.title} · upload version {next}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </>
-                ) : (
-                  <Text style={styles.cardHint}>
-                    No manuscripts in My Manuscripts yet — create a new one below, then scan it.
-                  </Text>
-                )}
-
                 <Pressable
-                  style={styles.dropzone}
+                  style={[styles.dropzone, !mechanicsSelected && styles.dropzoneDisabled]}
                   onPress={pickManuscript}
-                  disabled={manuscriptBusy || previewBusy}
+                  disabled={!canPickManuscript}
                 >
                   <View style={styles.dropIcon}>
                     <Text style={styles.dropIconText}>↑</Text>
@@ -771,67 +1062,123 @@ export default function UploadScreen({ navigation }) {
                   <Text style={styles.dropTitle}>
                     {msFile?.name || "Drop your manuscript here"}
                   </Text>
-                  <Text style={styles.dropSub}>Supports .pdf and .docx · Max 25 MB</Text>
+                  <Text style={styles.dropSub}>
+                    {msFile
+                      ? msPreparing
+                        ? `${formatFileSize(msFile.size)} · Preparing document preview below…`
+                        : msUploading
+                          ? `${formatFileSize(msFile.size)} · Uploading — see progress below`
+                          : `${formatFileSize(msFile.size)} · Preview appears below — confirm Upload when ready`
+                      : `Tap to browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
+                  </Text>
                   <View style={styles.browsePill}>
-                    <Text style={styles.browseText}>
-                      {previewBusy ? "Previewing…" : "Browse files"}
-                    </Text>
+                    <Text style={styles.browseText}>Browse files</Text>
                   </View>
                 </Pressable>
 
-                {preview ? (
-                  <View style={styles.previewBox}>
-                    <Text style={styles.label}>Manuscript preview</Text>
-                    <Text style={styles.previewText} numberOfLines={10}>
-                      {preview.text_preview ||
-                        preview.preview ||
-                        preview.excerpt ||
-                        `${preview.page_count || "?"} page(s) · ${msFile?.name || "document"}`}
-                    </Text>
-                  </View>
+                {showMsPreview ? (
+                  <PreviewPanel
+                    label="Manuscript preview"
+                    status={
+                      msUploading
+                        ? "Uploading…"
+                        : msPreparing
+                          ? "Preparing…"
+                          : preview?.page_count && isPdfFile(msFile)
+                            ? `${preview.page_count} page${preview.page_count === 1 ? "" : "s"} · scroll to read`
+                            : "Original document · scroll to read"
+                    }
+                    statusTone={msUploading || msPreparing ? "accent" : "muted"}
+                    overlayTitle={
+                      msUploading
+                        ? "Uploading manuscript…"
+                        : msPreparing
+                          ? "Opening manuscript preview…"
+                          : ""
+                    }
+                    overlayBody={
+                      msUploading
+                        ? "Please wait while your academic document is saved. The upload button unlocks when this finishes."
+                        : "Please wait while your academic document is prepared for display."
+                    }
+                    footer={
+                      msUploading
+                        ? "Uploading in progress — stay on this page until it completes."
+                        : msPreparing
+                          ? "Preparing live preview of your academic document…"
+                          : "Live preview of your uploaded manuscript — scroll to see pages below."
+                    }
+                  >
+                    <DocumentPreview
+                      file={msFile}
+                      preview={preview}
+                      emptyLabel="No manuscript preview available yet."
+                    />
+                  </PreviewPanel>
                 ) : null}
 
                 {msError ? <Text style={styles.fieldError}>{msError}</Text> : null}
+                {msSuccess && !msError ? (
+                  <Text style={styles.fieldSuccess}>{msSuccess}</Text>
+                ) : null}
 
-                <PrimaryButton
-                  title={
-                    manuscriptBusy
-                      ? "Uploading…"
-                      : previewBusy
-                        ? "Preparing preview…"
-                        : manuscriptId
-                          ? "Upload new version"
+                <View style={styles.msActions}>
+                  <Pressable
+                    style={[styles.msCancelBtn, msUploading && styles.disabled]}
+                    onPress={onCancelManuscript}
+                    disabled={msUploading}
+                  >
+                    <Text style={styles.secondaryBtnText}>Cancel</Text>
+                  </Pressable>
+                  <PrimaryButton
+                    title={
+                      msUploading
+                        ? "Uploading…"
+                        : msPreparing
+                          ? "Preparing preview…"
                           : "Upload manuscript"
-                  }
-                  onPress={requestManuscriptUpload}
-                  busy={manuscriptBusy}
-                  disabled={!msFile || previewBusy}
-                  style={{ marginTop: 12 }}
-                />
+                    }
+                    onPress={requestManuscriptUpload}
+                    busy={msUploading || msPreparing}
+                    disabled={!mechanicsSelected || !msFile || msPanelBusy}
+                    style={{ flex: 1 }}
+                  />
+                </View>
               </View>
             )}
 
             {uploadWizardStep === 3 && manuscriptReady && (currentVersion || scanFlow.file) && (
               <View style={[styles.card, fileDetailsNotice ? styles.cardAccent : null]}>
-                <Text style={styles.step}>Step 3 of 3</Text>
-                <Text style={styles.cardTitle}>File details</Text>
-                <Text style={styles.cardHint}>
-                  Review attached files then run compliance analysis
-                </Text>
+                <ShowStepsRow step={3} onShowSteps={() => setJourneyOpen(true)} />
+                <View style={styles.detailsHead}>
+                  <Text style={[styles.cardTitle, { marginTop: 0 }]}>File details</Text>
+                  <Text style={styles.cardHint}>
+                    Review attached files then run compliance analysis
+                  </Text>
+                </View>
 
                 {fileDetailsNotice ? (
                   <View style={styles.readyBanner}>
                     <Text style={styles.readyBannerTitle}>{fileDetailsNotice}</Text>
                     <Text style={styles.readyBannerBody}>
-                      Review the files below, then Analyse — or Cancel upload to discard.
+                      Review the files below, then click Upload & Analyse to scan — or Cancel upload
+                      to discard.
                     </Text>
                   </View>
                 ) : null}
 
-                <Text style={[styles.label, { marginTop: 14 }]}>Files attached</Text>
+                <Text style={[styles.label, { marginTop: 16 }]}>Files attached</Text>
 
+                <Text style={styles.fileGroupLabel}>Format Mechanics</Text>
                 <View style={styles.fileRow}>
-                  <View style={styles.fileIcon} />
+                  <FileTypeIcon
+                    fileType={selectedMechanics?.file_type}
+                    filename={
+                      selectedMechanics?.source_filename ||
+                      selectedMechanics?.filename ||
+                      selectedMechanics?.name
+                    }
+                  />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fileName} numberOfLines={1}>
                       {selectedMechanics?.source_filename ||
@@ -839,7 +1186,7 @@ export default function UploadScreen({ navigation }) {
                         selectedMechanics?.name ||
                         "No format guide selected"}
                     </Text>
-                    <Text style={styles.dropSub}>
+                    <Text style={styles.fileMeta} numberOfLines={1}>
                       {selectedMechanics?.name || "Format guide"}
                     </Text>
                   </View>
@@ -848,16 +1195,25 @@ export default function UploadScreen({ navigation }) {
                   </Text>
                 </View>
 
+                <Text style={styles.fileGroupLabel}>Academic Document</Text>
                 <View style={styles.fileRow}>
-                  <View style={styles.fileIcon} />
+                  <FileTypeIcon
+                    fileType={currentVersion?.file_type}
+                    filename={
+                      scanFlow.file?.name ||
+                      currentVersion?.source_filename ||
+                      currentVersion?.filename
+                    }
+                  />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fileName} numberOfLines={1}>
                       {scanFlow.file?.name ||
                         currentVersion?.source_filename ||
                         currentVersion?.filename ||
-                        "No manuscript"}
+                        "No manuscript uploaded"}
                     </Text>
-                    <Text style={styles.dropSub}>
+                    <Text style={styles.fileMeta} numberOfLines={1}>
+                      {scanFlow.file?.size ? `${formatFileSize(scanFlow.file.size)} · ` : ""}
                       {currentManuscript?.title || "Manuscript"}
                     </Text>
                   </View>
@@ -867,14 +1223,14 @@ export default function UploadScreen({ navigation }) {
                 </View>
 
                 {currentVersion ? (
-                  <>
-                    <Text style={[styles.label, { marginTop: 8 }]}>Version label</Text>
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={styles.fileGroupLabel}>Version label</Text>
                     <View style={styles.versionBox}>
-                      <Text style={styles.fileName}>
+                      <Text style={styles.versionText}>
                         v{currentVersion.version_number || scanFlow.versionNumber || "1.0"}
                       </Text>
                     </View>
-                  </>
+                  </View>
                 ) : null}
 
                 {scanFlow.fileError ? (
@@ -893,9 +1249,7 @@ export default function UploadScreen({ navigation }) {
                     onPress={onAnalyse}
                     disabled={!scanReady || !selectedMechanicsId}
                   >
-                    <Text style={styles.primaryBtnText}>
-                      {remaining <= 0 ? "Upgrade to scan" : "Analyse document"}
-                    </Text>
+                    <Text style={styles.primaryBtnText}>Analyse document</Text>
                   </Pressable>
                 </View>
               </View>
@@ -967,34 +1321,22 @@ export default function UploadScreen({ navigation }) {
               </View>
             ) : null}
             {titleMode === "existing" && uploadTargets.length > 0 ? (
-              <View style={{ marginTop: 14 }}>
-                <Text style={styles.label}>Existing title</Text>
-                <ScrollView style={styles.titleList} nestedScrollEnabled>
-                  {uploadTargets.map((item) => {
-                    const versionCount = Number(
-                      item.version_count ?? item.current_version_number ?? item.versions?.length ?? 0
-                    );
-                    const active = existingId === item.id;
-                    return (
-                      <Pressable
-                        key={item.id}
-                        style={[styles.listRow, active && styles.listRowActive]}
-                        onPress={() => {
-                          setExistingId(item.id);
-                          setTitleError("");
-                        }}
-                      >
-                        <Text style={styles.listRowText} numberOfLines={2}>
-                          {item.title} · version {versionCount + 1}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
+              <View style={{ marginTop: 16 }}>
+                <Text style={styles.modalLabel}>Existing title</Text>
+                <SelectField
+                  title="Existing title"
+                  value={existingId}
+                  options={titleOptions}
+                  onChange={(value) => {
+                    setExistingId(value);
+                    setTitleError("");
+                  }}
+                  style={{ marginTop: 8 }}
+                />
               </View>
             ) : (
               <TextInput
-                style={[styles.input, { marginTop: 14 }]}
+                style={[styles.input, { marginTop: 16 }]}
                 value={msTitle}
                 onChangeText={(value) => {
                   setMsTitle(value);
@@ -1003,20 +1345,61 @@ export default function UploadScreen({ navigation }) {
                 placeholder="Enter a title"
                 placeholderTextColor={colors.muted}
                 autoFocus
+                returnKeyType="done"
+                onSubmitEditing={submitTitle}
               />
             )}
             {titleError ? <Text style={styles.fieldError}>{titleError}</Text> : null}
             <View style={styles.modalActions}>
-              <Pressable style={styles.secondaryBtn} onPress={() => setTitleOpen(false)}>
-                <Text style={styles.secondaryBtnText}>Cancel</Text>
+              <Pressable style={styles.modalCancel} onPress={() => setTitleOpen(false)}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
-              <Pressable style={styles.primaryBtn} onPress={submitTitle}>
-                <Text style={styles.primaryBtnText}>Continue</Text>
+              <Pressable style={styles.modalContinue} onPress={submitTitle}>
+                <Text style={styles.modalContinueText}>Continue</Text>
               </Pressable>
             </View>
           </View>
         </View>
       </Modal>
+
+      <ConfirmDialog
+        open={Boolean(confirm)}
+        title={confirm?.title}
+        message={confirm?.message}
+        confirmLabel={confirm?.confirmLabel}
+        cancelLabel={confirm?.cancelLabel ?? "Cancel"}
+        tone={confirm?.tone || "primary"}
+        busy={confirmBusy}
+        onConfirm={runConfirm}
+        onCancel={() => {
+          if (!confirmBusy) setConfirm(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={oversizeBytes != null}
+        title="File Too Large"
+        message={oversizeFileMessage(oversizeBytes, MAX_FILE_SIZE_BYTES)}
+        confirmLabel="OK"
+        cancelLabel=""
+        onCancel={() => setOversizeBytes(null)}
+        onConfirm={() => setOversizeBytes(null)}
+      />
+
+      <ConfirmDialog
+        open={rejection != null}
+        icon={
+          <View style={styles.alertIcon}>
+            <TriangleAlertIcon size={24} />
+          </View>
+        }
+        title={rejection?.kind === "type" ? "Unsupported File Type" : "File Too Large"}
+        message={rejectionMessage(rejection)}
+        confirmLabel="Choose Another File"
+        cancelLabel=""
+        onCancel={() => setRejection(null)}
+        onConfirm={chooseAnotherFile}
+      />
 
       <ScanSummaryModal
         visible={scanFlow.step === "summary" && Boolean(scanFlow.result)}
@@ -1033,12 +1416,13 @@ export default function UploadScreen({ navigation }) {
         onViewFullResult={() => scanFlow.openFullResult()}
         onDismiss={() => scanFlow.dismissSummary()}
       />
-    </View>
+
+      <UploadJourneyModal open={journeyOpen} current={uploadWizardStep} onClose={dismissJourney} />
+    </AppShell>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.pageBg },
   fullCenter: {
     flex: 1,
     backgroundColor: colors.pageBg,
@@ -1050,81 +1434,6 @@ const styles = StyleSheet.create({
   analyseSub: { marginTop: 6, fontSize: 13, color: colors.muted, textAlign: "center" },
   errorTitle: { fontSize: 18, fontWeight: "700", color: colors.rose },
   errorBody: { marginTop: 8, fontSize: 14, color: colors.slate, textAlign: "center" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: colors.card,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  kicker: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-    color: colors.muted,
-  },
-  h1: { fontSize: 20, fontWeight: "700", color: colors.text },
-  headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
-  plan: {
-    fontSize: 12,
-    fontWeight: "600",
-    textTransform: "capitalize",
-    color: "#334155",
-    textAlign: "right",
-  },
-  remaining: { fontSize: 10, color: colors.muted, textAlign: "right" },
-  iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.inputBg,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  iconBtnText: { fontSize: 16 },
-  badge: {
-    position: "absolute",
-    top: -2,
-    right: -2,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    paddingHorizontal: 3,
-    backgroundColor: "#f43f5e",
-    borderWidth: 2,
-    borderColor: colors.white,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  badgeText: { fontSize: 9, fontWeight: "700", color: colors.white },
-  stepChips: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: colors.card,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  stepChip: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.inputBg,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  stepChipActive: {
-    borderColor: colors.accent,
-    backgroundColor: colors.accentMuted,
-  },
-  stepChipText: { fontSize: 11, fontWeight: "700", color: colors.slate },
-  stepChipTextActive: { color: colors.accentText },
   scroll: { padding: 16, paddingBottom: 40, gap: 16 },
   errorBanner: {
     flexDirection: "row",
@@ -1159,37 +1468,64 @@ const styles = StyleSheet.create({
   cardAccent: {
     borderColor: colors.accent,
   },
-  step: {
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-    color: colors.accent,
-  },
-  cardTitle: { marginTop: 4, fontSize: 17, fontWeight: "700", color: colors.text },
+  cardTitle: { marginTop: 4, fontSize: 18, fontWeight: "700", color: colors.text },
   cardHint: { marginTop: 4, fontSize: 12, lineHeight: 18, color: colors.muted },
-  segment: {
-    marginTop: 14,
-    flexDirection: "row",
-    gap: 6,
+  sampleBanner: {
+    marginTop: 16,
+    gap: 10,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "rgba(24, 189, 169, 0.6)",
+    backgroundColor: colors.accentSoft,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-  segmentBtn: {
-    flex: 1,
-    minHeight: 52,
+  sampleTitle: { fontSize: 12, fontWeight: "600", color: "#334155" },
+  sampleBody: { marginTop: 2, fontSize: 11, lineHeight: 16, color: colors.muted },
+  sampleBtn: {
+    height: 36,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    backgroundColor: colors.white,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+  },
+  sampleBtnPressed: { backgroundColor: "#eefbf8" },
+  sampleBtnText: { fontSize: 11, fontWeight: "700", color: colors.accentText },
+  disabled: { opacity: 0.4 },
+  segment: {
+    marginTop: 20,
+    flexDirection: "row",
+    gap: 4,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.inputBg,
-    borderRadius: 10,
-    paddingHorizontal: 8,
+    borderRadius: 12,
+    padding: 4,
+  },
+  segmentBtn: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 8,
+    paddingHorizontal: 6,
     paddingVertical: 8,
     justifyContent: "center",
   },
   segmentBtnActive: {
-    borderColor: colors.accent,
-    backgroundColor: colors.accentSoft,
+    backgroundColor: colors.white,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   segmentText: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: "700",
     color: colors.slate,
     textAlign: "center",
@@ -1313,21 +1649,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.text,
   },
-  previewBox: {
-    marginTop: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.fileBg,
-    borderRadius: 10,
-    padding: 12,
-  },
-  previewText: { fontSize: 12, lineHeight: 18, color: colors.slate },
-  inlineBusy: {
-    marginTop: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
   readyBanner: {
     marginTop: 14,
     borderWidth: 1,
@@ -1344,18 +1665,10 @@ const styles = StyleSheet.create({
     gap: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.fileBg,
-    borderRadius: 10,
+    backgroundColor: "#fafbfc",
+    borderRadius: 8,
     padding: 14,
-    marginBottom: 10,
-  },
-  fileIcon: {
-    width: 18,
-    height: 24,
-    borderRadius: 2,
-    borderWidth: 2,
-    borderColor: "#cbd5e1",
-    backgroundColor: colors.white,
+    marginBottom: 14,
   },
   fileName: { fontSize: 13, fontWeight: "600", color: "#334155" },
   badgeReady: {
@@ -1445,9 +1758,84 @@ const styles = StyleSheet.create({
   modeBtnTextActive: { color: "#0f766e" },
   titleList: { maxHeight: 180, marginTop: 8 },
   modalActions: {
-    marginTop: 18,
+    marginTop: 20,
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: 8,
+  },
+  modalLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    color: colors.muted,
+  },
+  modalCancel: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  modalCancelText: { fontSize: 12, fontWeight: "600", color: colors.slate },
+  modalContinue: {
+    backgroundColor: colors.accent,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  modalContinueText: { fontSize: 12, fontWeight: "700", color: "#092823" },
+  cardDisabled: { opacity: 0.5 },
+  dropzoneDisabled: { borderColor: "#cbd5e1", backgroundColor: "#f8fafc" },
+  dropBusy: { alignItems: "center", gap: 4 },
+  editorActions: { marginTop: 12, flexDirection: "row", gap: 8, alignItems: "stretch" },
+  clearBtn: {
+    minHeight: 44,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    borderRadius: 8,
+    paddingHorizontal: 18,
+  },
+  clearBtnText: { fontSize: 12, fontWeight: "600", color: colors.slate },
+  detailsHead: {
+    marginTop: 4,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+  },
+  fileGroupLabel: { marginBottom: 8, fontSize: 12, fontWeight: "600", color: "#475569" },
+  fileMeta: { marginTop: 2, fontSize: 11, color: colors.muted },
+  versionText: { fontSize: 12, fontWeight: "500", color: colors.muted },
+  savedHint: { marginTop: 12, fontSize: 11, lineHeight: 17, color: colors.muted },
+  savedHintName: { fontWeight: "600", color: "#475569" },
+  msActions: { marginTop: 12, flexDirection: "row", gap: 12, alignItems: "stretch" },
+  msCancelBtn: {
+    minHeight: 44,
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    borderRadius: 8,
+    paddingHorizontal: 24,
+  },
+  processingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.75)",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  processingText: { fontSize: 14, fontWeight: "700", color: "#334155" },
+  alertIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#fffbeb",
+    alignItems: "center",
+    justifyContent: "center",
   },
 });

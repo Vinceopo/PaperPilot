@@ -1,129 +1,188 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import Svg, { Path } from "react-native-svg";
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
-import { buildDocumentPages, lineMatchesHighlight } from "../lib/documentPages";
-import IssuesDetectedPanel from "../components/cockpit/IssuesDetectedPanel";
+import { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
+import TraceDocumentViewer from "../components/cockpit/TraceDocumentViewer";
 import PrimaryButton from "../components/ui/PrimaryButton";
+
+const ACTIVE_TONE = {
+  critical: { backgroundColor: "rgba(255,241,242,0.9)", borderColor: "#fda4af" },
+  moderate: { backgroundColor: "rgba(255,247,237,0.9)", borderColor: "#fdba74" },
+  minor: { backgroundColor: "rgba(255,251,235,0.9)", borderColor: "#fcd34d" },
+};
+
+function formatLocation(entry) {
+  const parts = [];
+  if (entry.page != null) parts.push(`Page ${entry.page}`);
+  if (entry.line != null) parts.push(`Line ${entry.line}`);
+  return parts.length ? parts.join(", ") : "Document";
+}
+
+function toTarget(entry) {
+  const loc = entry.location || {};
+  return {
+    id: entry.id,
+    page: entry.page ?? loc.page ?? null,
+    line: entry.line ?? loc.line ?? null,
+    bbox: entry.bbox || loc.bbox || null,
+    excerpt: entry.excerpt || loc.excerpt || "",
+    severity: entry.severity || "minor",
+    finding: entry.finding || "",
+    section: entry.section || loc.section || "",
+  };
+}
 
 export default function DocumentReferenceScreen({ navigation }) {
   const { scanFlow } = useAppData();
   const result = scanFlow?.result;
-  const scrollRef = useRef(null);
-  const pageOffsets = useRef({});
+  const leavingRef = useRef(false);
+  const stepRef = useRef(scanFlow?.step);
+  stepRef.current = scanFlow?.step;
 
-  const pages = useMemo(
-    () =>
-      buildDocumentPages({
-        preview: result?.documentPreview,
-        pageCount: result?.pageCount,
-        formatChecks: result?.formatChecks,
-      }),
+  const { entries } = useMemo(
+    () => normalizeDetectedIssues(result?.formatChecks || [], result?.pageCount || 0),
     [result]
   );
 
-  const highlight = scanFlow?.traceHighlight;
+  const initial = scanFlow?.traceHighlight;
+  const [highlight, setHighlight] = useState(() =>
+    initial?.page != null || initial?.line != null
+      ? initial
+      : entries[0]
+        ? toTarget(entries[0])
+        : null
+  );
 
   useEffect(() => {
-    if (!highlight?.page || !scrollRef.current) return;
-    const y = pageOffsets.current[highlight.page];
-    if (typeof y === "number") {
-      scrollRef.current.scrollTo({ y: Math.max(0, y - 24), animated: true });
-    }
-  }, [highlight?.page, highlight?.line, highlight?.id, pages.length]);
+    if (highlight || !entries[0]) return;
+    setHighlight(toTarget(entries[0]));
+  }, [entries, highlight]);
+
+  useEffect(() => {
+    return navigation.addListener("beforeRemove", () => {
+      if (!leavingRef.current && stepRef.current === "documentTrace") scanFlow.backToSummary();
+    });
+  }, [navigation, scanFlow]);
+
+  const onSelectIssue = useCallback(
+    (entry) => {
+      const target = toTarget(entry);
+      setHighlight(target);
+      scanFlow.selectTraceIssue(entry);
+    },
+    [scanFlow]
+  );
+
+  function backToSummary() {
+    leavingRef.current = true;
+    scanFlow.backToSummary();
+    navigation.navigate("MainTabs", { screen: "Upload" });
+  }
+
+  function viewFullResult() {
+    leavingRef.current = true;
+    scanFlow.openFullResult();
+    navigation.navigate("MainTabs", { screen: "Results" });
+  }
 
   if (!result) {
     return (
-      <View style={styles.empty}>
+      <SafeAreaView style={styles.empty}>
         <Text style={styles.emptyTitle}>No scan to trace</Text>
-        <PrimaryButton title="Back to Upload" onPress={() => navigation.navigate("MainTabs", { screen: "Upload" })} />
-      </View>
+        <PrimaryButton
+          title="Back to Upload"
+          onPress={() => navigation.navigate("MainTabs", { screen: "Upload" })}
+        />
+      </SafeAreaView>
     );
   }
 
-  function onIssuePress(entry) {
-    scanFlow.selectTraceIssue(entry);
-  }
+  const activeId = highlight?.id;
 
   return (
-    <View style={styles.root}>
+    <SafeAreaView style={styles.root} edges={["top", "left", "right"]}>
       <View style={styles.toolbar}>
-        <Pressable
-          style={styles.backBtn}
-          onPress={() => {
-            scanFlow.backToSummary();
-            navigation.navigate("MainTabs", { screen: "Upload" });
-          }}
-          hitSlop={8}
-        >
-          <Text style={styles.backChevron}>‹</Text>
-          <Text style={styles.back}>Back to summary</Text>
-        </Pressable>
-        <Text style={styles.toolbarTitle} numberOfLines={1}>
-          Reference tracing
-        </Text>
-        <Text style={styles.toolbarHint}>
+        <View style={styles.toolbarRow}>
+          <Pressable
+            style={({ pressed }) => [styles.backBtn, pressed && { backgroundColor: "#eefbf8" }]}
+            onPress={backToSummary}
+            hitSlop={6}
+          >
+            <Svg width={14} height={14} viewBox="0 0 16 16">
+              <Path
+                d="M10.5 3.5 6 8l4.5 4.5"
+                fill="none"
+                stroke="#109b89"
+                strokeWidth={1.75}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </Svg>
+            <Text style={styles.backText}>Back to summary</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.fullBtn, pressed && { backgroundColor: "#047857" }]}
+            onPress={viewFullResult}
+          >
+            <Text style={styles.fullBtnText}>View Full Result</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.title}>Reference tracing</Text>
+        <Text style={styles.hint}>
           Tap an issue to jump to the matching page and line in your document.
         </Text>
-        <Pressable
-          onPress={() => {
-            scanFlow.openFullResult();
-            navigation.navigate("MainTabs", { screen: "Results" });
-          }}
-        >
-          <Text style={styles.fullResult}>Full result</Text>
-        </Pressable>
       </View>
 
-      <ScrollView
-        ref={scrollRef}
-        style={styles.docScroll}
-        contentContainerStyle={styles.docContent}
-        keyboardShouldPersistTaps="handled"
-      >
-        {pages.map((page) => (
-          <View
-            key={`page-${page.page}`}
-            style={styles.pageCard}
-            onLayout={(e) => {
-              pageOffsets.current[page.page] = e.nativeEvent.layout.y;
-            }}
-          >
-            <Text style={styles.pageLabel}>Page {page.page}</Text>
-            {(page.lines || []).map((line, index) => {
-              const lineNum = index + 1;
-              const active = lineMatchesHighlight(page.page, lineNum, highlight);
-              return (
-                <Text
-                  key={`${page.page}-${lineNum}`}
-                  style={[styles.lineText, active ? styles.lineHighlight : null]}
-                >
-                  {line || " "}
-                </Text>
-              );
-            })}
-          </View>
-        ))}
-        {!pages.length ? (
-          <Text style={styles.muted}>
-            Document preview is not available. Use the issues list below to jump by page and line.
+      <View style={styles.docFrame}>
+        <TraceDocumentViewer
+          file={scanFlow.file}
+          documentUrl={result.cloudinaryUrl || ""}
+          documentName={result.documentName || scanFlow.file?.name || ""}
+          preview={result.documentPreview}
+          pageCount={result.pageCount}
+          formatChecks={result.formatChecks}
+          highlight={highlight}
+        />
+      </View>
+
+      <View style={styles.aside}>
+        <View style={styles.asideHead}>
+          <Text style={styles.asideTitle}>
+            {entries.length} issue{entries.length === 1 ? "" : "s"}
           </Text>
-        ) : null}
-      </ScrollView>
-
-      <View style={styles.issuesPane}>
-        <Text style={styles.issuesTitle}>Issues · tap to scroll</Text>
-        <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
-          <IssuesDetectedPanel
-            formatChecks={result.formatChecks}
-            pageCount={result.pageCount}
-            onIssuePress={onIssuePress}
-            selectedIssueId={highlight?.id}
-            compact
-          />
-        </ScrollView>
+          <Text style={styles.asideHint}>Select an issue to jump to that page.</Text>
+        </View>
+        <FlatList
+          data={entries}
+          keyExtractor={(item) => item.id}
+          initialNumToRender={20}
+          windowSize={11}
+          extraData={activeId}
+          ItemSeparatorComponent={() => <View style={styles.separator} />}
+          ListEmptyComponent={<Text style={styles.noIssues}>No issues to trace.</Text>}
+          renderItem={({ item }) => {
+            const active = item.id === activeId;
+            const tone = ACTIVE_TONE[item.severity] || ACTIVE_TONE.minor;
+            return (
+              <Pressable
+                onPress={() => onSelectIssue(item)}
+                style={({ pressed }) => [
+                  styles.issueRow,
+                  active ? [styles.issueActive, tone] : pressed ? { backgroundColor: "#f8fafc" } : null,
+                ]}
+              >
+                <Text style={styles.issueLoc}>{formatLocation(item)}</Text>
+                <Text style={styles.issueFinding}>{item.finding}</Text>
+                <Text style={styles.issueSection}>{item.section}</Text>
+              </Pressable>
+            );
+          }}
+        />
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -131,73 +190,67 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.pageBg },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   emptyTitle: { fontSize: 16, fontWeight: "700", color: colors.text, marginBottom: 12 },
-  toolbar: {
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.card,
-  },
+  toolbar: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 },
+  toolbarRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   backBtn: {
-    alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     borderWidth: 1,
-    borderColor: colors.accent,
+    borderColor: "#16bfa8",
     backgroundColor: colors.white,
     borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
-  backChevron: { fontSize: 16, fontWeight: "700", color: colors.accentText, marginTop: -1 },
-  back: { fontSize: 14, fontWeight: "600", color: colors.accentText },
-  toolbarTitle: { marginTop: 10, fontSize: 16, fontWeight: "700", color: colors.text },
-  toolbarHint: { marginTop: 2, fontSize: 12, color: colors.slate },
-  fullResult: { fontSize: 12, fontWeight: "700", color: colors.emerald },
-  docScroll: { flex: 1, maxHeight: "42%" },
-  docContent: { padding: 14, gap: 12, paddingBottom: 20 },
-  pageCard: {
-    borderRadius: 10,
+  backText: { fontSize: 13, fontWeight: "600", color: "#109b89" },
+  fullBtn: {
+    backgroundColor: "#059669",
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  fullBtnText: { fontSize: 12, fontWeight: "700", color: colors.white },
+  title: { marginTop: 10, fontSize: 17, fontWeight: "700", color: "#172033" },
+  hint: { marginTop: 2, fontSize: 12, color: colors.muted },
+  docFrame: {
+    flex: 1.35,
+    marginHorizontal: 12,
+    overflow: "hidden",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#e8ecf1",
+  },
+  aside: {
+    flex: 1,
+    margin: 12,
+    overflow: "hidden",
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
-    padding: 14,
   },
-  pageLabel: {
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 1,
+  asideHead: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+    backgroundColor: "#f8fffd",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  asideTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
+  asideHint: { marginTop: 1, fontSize: 11, color: colors.muted },
+  separator: { height: 1, backgroundColor: "#f1f5f9" },
+  issueRow: { paddingHorizontal: 16, paddingVertical: 12, borderWidth: 1, borderColor: "transparent" },
+  issueActive: { borderWidth: 1 },
+  issueLoc: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.5,
     textTransform: "uppercase",
-    color: colors.muted,
-    marginBottom: 8,
+    color: "#16bfa8",
   },
-  lineText: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: "#334155",
-    fontFamily: "Georgia",
-  },
-  lineHighlight: {
-    backgroundColor: "rgba(254,226,226,0.85)",
-    textDecorationLine: "underline",
-    textDecorationColor: colors.rose,
-  },
-  muted: { fontSize: 12, color: colors.muted, paddingHorizontal: 4 },
-  issuesPane: {
-    flex: 1,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    padding: 12,
-    paddingBottom: 20,
-  },
-  issuesTitle: {
-    fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    color: colors.muted,
-    marginBottom: 8,
-  },
+  issueFinding: { marginTop: 4, fontSize: 14, fontWeight: "600", color: "#1e293b" },
+  issueSection: { marginTop: 2, fontSize: 11, color: colors.muted },
+  noIssues: { paddingHorizontal: 16, paddingVertical: 32, textAlign: "center", fontSize: 13, color: colors.muted },
 });

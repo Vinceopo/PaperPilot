@@ -1,79 +1,105 @@
-import { useEffect, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Animated, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
+import PaperRollAnimation from "../ui/PaperRollAnimation";
+import AnalysisProgress from "./AnalysisProgress";
+import PaperCarryAway, { PAPER_CARRY_HOLD_MS, PAPER_CARRY_TOTAL_MS } from "./PaperCarryAway";
 
-export default function AnalyzeProgressBar({ progress }) {
+/** If the bar never visibly reaches 100%, start the flight anyway after this long. */
+const MAX_HOLD_MS = 2500;
+
+/**
+ * "Analysing your document" screen: paper-roll animation and step progress, then the
+ * page flies off on a paper plane before the summary opens (calls onReveal).
+ */
+export default function AnalyzeProgressBar({ progress, resultReady = false, onReveal }) {
   const target = Math.min(100, Math.max(0, Number(progress?.percent) || 0));
   const [shown, setShown] = useState(0);
-  const stage = String(progress?.stage || "queued");
-  const message = progress?.message || "";
+  const shownRef = useRef(0);
+  const [phase, setPhase] = useState("progress");
+  const [flightDone, setFlightDone] = useState(false);
+  const fade = useRef(new Animated.Value(1)).current;
+  const stageDone = String(progress?.stage || "").toLowerCase() === "done";
 
   useEffect(() => {
     let frame = 0;
+    let value = shownRef.current;
     const tick = () => {
-      setShown((current) => {
-        if (current >= target - 0.15) return target;
-        return Math.min(target, current + Math.max(0.35, (target - current) * 0.14));
-      });
-      frame = requestAnimationFrame(tick);
+      value =
+        value >= target - 0.15
+          ? target
+          : Math.min(target, value + Math.max(0.35, (target - value) * 0.14));
+      shownRef.current = value;
+      setShown(value);
+      if (value !== target) frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
   }, [target]);
 
-  const width = `${Math.min(100, Math.max(0, shown))}%`;
+  const reachedFull = shown >= 99.5;
+
+  useEffect(() => {
+    if (!stageDone || phase !== "progress") return undefined;
+    const timer = setTimeout(() => setPhase("fly"), reachedFull ? PAPER_CARRY_HOLD_MS : MAX_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [stageDone, reachedFull, phase]);
+
+  // The reveal must not depend on the animation's own callbacks firing.
+  useEffect(() => {
+    if (phase !== "fly") return undefined;
+    const timer = setTimeout(() => setFlightDone(true), PAPER_CARRY_TOTAL_MS + 600);
+    return () => clearTimeout(timer);
+  }, [phase]);
+
+  useEffect(() => {
+    Animated.timing(fade, {
+      toValue: phase === "fly" ? 0 : 1,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [phase, fade]);
+
+  useEffect(() => {
+    if (flightDone && resultReady) onReveal?.();
+  }, [flightDone, resultReady, onReveal]);
 
   return (
-    <View style={styles.wrap}>
-      <Text style={styles.title}>Analysing…</Text>
-      <View style={styles.metaRow}>
-        <Text style={styles.stage}>{stage}</Text>
-        <Text style={styles.percent}>{Math.round(shown)}%</Text>
+    <View style={styles.page}>
+      <View style={styles.card}>
+        <Animated.View
+          style={[styles.inner, { opacity: fade }]}
+          pointerEvents={phase === "fly" ? "none" : "auto"}
+        >
+          <PaperRollAnimation size={176} />
+          <Text style={styles.title}>{stageDone ? "Analysis complete" : "Analysing your document…"}</Text>
+          <AnalysisProgress progress={progress} percent={shown} />
+        </Animated.View>
+        {phase === "fly" ? <PaperCarryAway onDone={() => setFlightDone(true)} /> : null}
       </View>
-      <View style={styles.track}>
-        <View style={[styles.fill, { width }]} />
-      </View>
-      {message ? <Text style={styles.message}>{message}</Text> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: {
+  page: { flex: 1, padding: 16, backgroundColor: colors.pageBg },
+  card: {
     flex: 1,
-    backgroundColor: colors.pageBg,
+    minHeight: 360,
     alignItems: "center",
     justifyContent: "center",
-    padding: 28,
-  },
-  title: { fontSize: 18, fontWeight: "700", color: colors.text },
-  metaRow: {
-    marginTop: 16,
-    width: "100%",
-    maxWidth: 320,
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  stage: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.slate,
-    textTransform: "capitalize",
-  },
-  track: {
-    marginTop: 8,
-    width: "100%",
-    maxWidth: 320,
-    height: 12,
-    borderRadius: 999,
-    backgroundColor: "#f1f5f9",
     overflow: "hidden",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingHorizontal: 24,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
-  fill: {
-    height: 12,
-    borderRadius: 999,
-    backgroundColor: colors.accent,
-  },
-  percent: { fontSize: 12, fontWeight: "600", color: colors.slate },
-  message: { marginTop: 8, fontSize: 12, color: colors.muted, textAlign: "center" },
+  inner: { width: "100%", maxWidth: 420, alignItems: "center", gap: 20 },
+  title: { fontSize: 16, fontWeight: "700", color: "#1e293b", textAlign: "center" },
 });

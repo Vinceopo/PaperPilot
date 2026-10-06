@@ -7,9 +7,6 @@ import { runComplianceScan, uploadManuscriptVersion } from "../api";
 import { isServerId, mapComplianceScanToResult } from "./scanMapper";
 import { scanNeedsPolling, waitForScanResult } from "./scanPoll";
 
-export const ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
-export const MAX_FILE_BYTES = 25_000_000;
-
 function titleFromFile(file) {
   return file?.name?.replace(/\.(pdf|docx)$/i, "") || "Manuscript";
 }
@@ -20,16 +17,18 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
   }
 
   const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
+  const report = (percent, stage, message) => onProgress?.({ percent, stage, message });
 
   let manuscriptId = isServerId(opts.manuscriptId) ? opts.manuscriptId : "";
   let versionId = isServerId(opts.versionId) ? opts.versionId : "";
   const title = String(opts.title || titleFromFile(file) || "").trim();
+  let uploadedUrl = "";
 
   if (!manuscriptId || !versionId) {
     if (!file) {
       throw new Error("Upload a manuscript before analysing.");
     }
-    onProgress?.({ percent: 5, stage: "parsing", message: "Uploading manuscript…" });
+    report(2, "uploading", "Uploading your document…");
     const created = await uploadManuscriptVersion({
       file,
       mechanicsId,
@@ -44,20 +43,25 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
       created.created_manuscript?.id ||
       manuscriptId;
     versionId = version.id || created.version_id || versionId;
+    uploadedUrl = version.cloudinary_url || "";
   }
 
   if (!isServerId(manuscriptId) || !isServerId(versionId)) {
     throw new Error("The manuscript is not saved on the server yet. Upload it again, then analyse.");
   }
 
-  onProgress?.({ percent: 12, stage: "queued", message: "Starting compliance scan…" });
+  report(10, "starting", "Sending your document to the analyser…");
   const started = await runComplianceScan({ manuscriptId, versionId, mechanicsId });
 
   let scan = started;
   if (scanNeedsPolling(started)) {
-    scan = await waitForScanResult(started.id, onProgress);
+    scan = await waitForScanResult(started.id, (payload) => {
+      const serverPct = Math.min(100, Math.max(0, Number(payload?.percent) || 0));
+      const done = payload?.stage === "done";
+      report(done ? 100 : 15 + serverPct * 0.85, payload?.stage, payload?.message);
+    });
   } else {
-    onProgress?.({ percent: 100, stage: "done", message: "Analysis complete." });
+    report(100, "done", "Analysis complete");
   }
 
   return mapComplianceScanToResult(scan, {
@@ -66,15 +70,18 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
     citationStyle: opts.citationStyle || "APA",
     pageCount: opts.pageCount,
     mechanicsId,
-    cloudinaryUrl: opts.cloudinaryUrl,
+    cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || uploadedUrl || "",
     documentPreview: opts.documentPreview,
+    versionId,
+    documentName: opts.documentName || file?.name || "",
   });
 }
 
 export async function downloadReport(result, opts = {}) {
   const versionNumber = Number(opts.versionNumber ?? result?.versionNumber ?? 1) || 1;
   const title = result?.documentTitle || "Untitled";
-  const score = Number(result?.overallScore ?? result?.rightPct ?? 0);
+  const fmt = (value, suffix = "") =>
+    value != null && Number.isFinite(Number(value)) ? `${Math.round(Number(value) * 10) / 10}${suffix}` : "—";
   const checks = Array.isArray(result?.formatChecks) ? result.formatChecks : [];
   const errors = checks.filter((c) => c.result === "FAIL").length;
   const warnings = checks.filter((c) => c.result === "REVIEW").length;
@@ -82,9 +89,9 @@ export async function downloadReport(result, opts = {}) {
     "PaperPilot compliance report",
     `Title: ${title}`,
     `Version: v${versionNumber}.0`,
-    `Score: ${score} / 100`,
-    `Right: ${result?.rightPct ?? score}% · Wrong: ${result?.wrongPct ?? ""}%`,
-    `Errors: ${errors} · Warnings: ${warnings} · Checks: ${checks.length}`,
+    `Score: ${fmt(result?.overallScore)} / 100`,
+    `Right: ${fmt(result?.rightPct, "%")} · Wrong: ${fmt(result?.wrongPct, "%")}`,
+    `Errors: ${errors} · Warnings: ${warnings} · Issue types: ${checks.length}`,
     "",
     "Full PDF download is available on the web app.",
   ].join("\n");

@@ -1,5 +1,6 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
+import { APP_TIME_ZONE } from "../../lib/timeZone";
 
 export default function VersionHistoryModal({ open, manuscript, versions, tier, onClose }) {
   return (
@@ -37,7 +38,7 @@ export default function VersionHistoryModal({ open, manuscript, versions, tier, 
                   {version.source_filename || version.filename}
                 </Text>
                 <Text style={styles.date}>
-                  {version.created_at ? new Date(version.created_at).toLocaleString() : ""}
+                  {version.created_at ? new Date(version.created_at).toLocaleString(undefined, { timeZone: APP_TIME_ZONE }) : ""}
                 </Text>
               </View>
             ))}

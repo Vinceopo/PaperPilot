@@ -4,9 +4,40 @@
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { scoreBand } from "./scoreBand";
 
 function storageKey(uid) {
   return uid ? `paperpilot.scannedManuscripts.${uid}` : "paperpilot.scannedManuscripts";
+}
+
+function dismissedKey(uid) {
+  return uid ? `paperpilot.dismissedScans.${uid}` : "paperpilot.dismissedScans";
+}
+
+export function versionScanId(version) {
+  return String(version?.scanId || version?.scanResult?.scanId || "");
+}
+
+export async function loadDismissedScanIds(uid) {
+  try {
+    const parsed = JSON.parse((await AsyncStorage.getItem(dismissedKey(uid))) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Scans the user deleted locally, so GET /scans does not bring them back. */
+export async function dismissScanIds(ids, uid) {
+  const list = [...(ids || [])].filter(Boolean);
+  if (!list.length) return;
+  const next = await loadDismissedScanIds(uid);
+  list.forEach((id) => next.add(String(id)));
+  try {
+    await AsyncStorage.setItem(dismissedKey(uid), JSON.stringify([...next]));
+  } catch {
+    // Ignore storage failures.
+  }
 }
 
 export function normalizeTitle(title) {
@@ -71,6 +102,112 @@ export function dedupeManuscriptsByTitle(items) {
   });
 }
 
+function versionPartsFromResult(scanResult) {
+  return {
+    issues: (scanResult.formatChecks || [])
+      .filter((c) => c.result === "FAIL" || c.result === "REVIEW")
+      .map((c) => ({
+        category: c.name || "Format",
+        severity:
+          c.severity === "minor"
+            ? "minor"
+            : c.severity === "moderate" || c.result === "REVIEW"
+              ? "moderate"
+              : "critical",
+        description: c.finding || c.details || c.description || c.name,
+        finding: c.finding || c.details || "",
+        explanation: c.explanation || c.details || c.description || "",
+        recommendation: c.recommendation || "",
+        locations: Array.isArray(c.locations) ? c.locations : [],
+        count: c.count,
+      })),
+    breakdown: (scanResult.scoreBreakdown || []).map((b) => ({
+      section: b.metric || b.section || "Section",
+      score: b.score == null ? null : Number(b.score),
+      status: b.status || null,
+      unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
+      unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
+      unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),
+      issueCount: b.issueCount == null ? null : Number(b.issueCount),
+      failedShare: b.failedShare == null ? null : Number(b.failedShare),
+    })),
+  };
+}
+
+/** Summaries from GET /scans for scans this device has not stored (scanned on another device). */
+export function mergeServerScans(items, summaries, dismissed = new Set()) {
+  const list = (Array.isArray(items) ? items : []).map((m) => ({ ...m, versions: [...(m.versions || [])] }));
+  const known = new Set(list.flatMap((m) => m.versions.map(versionScanId)).filter(Boolean));
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  let added = 0;
+
+  for (const scan of Array.isArray(summaries) ? summaries : []) {
+    const scanId = String(scan?.id || "");
+    if (!scanId || known.has(scanId) || dismissed.has(scanId)) continue;
+    const manuscriptId = String(scan.manuscript_id || "");
+    const title = String(scan.title || "").trim() || "Untitled manuscript";
+    const titleKey = normalizeTitle(title);
+    let idx = list.findIndex(
+      (m) =>
+        m.id === manuscriptId ||
+        m.serverManuscriptId === manuscriptId ||
+        (titleKey && normalizeTitle(m.title) === titleKey)
+    );
+    if (idx < 0) {
+      list.push({
+        id: manuscriptId || `doc-${scanId}`,
+        serverManuscriptId: manuscriptId || undefined,
+        title,
+        institution: "—",
+        citationStyle: "APA",
+        createdThisMonth: String(scan.created_at || "").startsWith(monthPrefix),
+        versions: [],
+      });
+      idx = list.length - 1;
+    } else if (!list[idx].serverManuscriptId && manuscriptId) {
+      list[idx] = { ...list[idx], serverManuscriptId: manuscriptId };
+    }
+    const score = scan.overall_score == null ? null : Number(scan.overall_score);
+    list[idx].versions.push({
+      id: `ver-${scanId}`,
+      manuscriptId: list[idx].id,
+      versionNumber: Number(scan.version_number) || 0,
+      scannedDate: String(scan.created_at || new Date().toISOString()).slice(0, 10),
+      score,
+      status: scoreBand(score).status,
+      issues: [],
+      breakdown: [],
+      scanId,
+      versionId: scan.manuscript_version_id || "",
+      scanResult: null,
+      trimmed: true,
+    });
+    known.add(scanId);
+    added += 1;
+  }
+  return { items: added ? dedupeManuscriptsByTitle(list) : items, added };
+}
+
+/** Store a freshly fetched full result on a version that only had a server summary. */
+export function attachScanResult(items, manuscriptId, versionId, scanResult) {
+  return (items || []).map((m) => {
+    if (m.id !== manuscriptId) return m;
+    return {
+      ...m,
+      versions: (m.versions || []).map((v) => {
+        if (v.id !== versionId) return v;
+        return {
+          ...v,
+          ...versionPartsFromResult(scanResult),
+          scanId: versionScanId(v) || scanResult.scanId,
+          scanResult: { ...scanResult, documentId: m.id, versionNumber: v.versionNumber },
+          trimmed: false,
+        };
+      }),
+    };
+  });
+}
+
 export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
   const list = dedupeManuscriptsByTitle(Array.isArray(items) ? items : []);
   const title = scanResult.documentTitle || "Untitled manuscript";
@@ -93,8 +230,11 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
     nextVersion = Math.max(nextVersion, maxVer + 1);
   }
 
-  const score = Number(scanResult.overallScore ?? 0);
-  const status = score >= 80 ? "compliant" : score >= 50 ? "needs_revision" : "critical";
+  const score =
+    scanResult.overallScore == null || !Number.isFinite(Number(scanResult.overallScore))
+      ? null
+      : Number(scanResult.overallScore);
+  const status = scoreBand(score).status;
 
   const version = {
     id: `ver-${documentId}-${nextVersion}-${Date.now()}`,
@@ -103,26 +243,9 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
     scannedDate: (scanResult.scannedAt || new Date().toISOString()).slice(0, 10),
     score,
     status,
-    issues: (scanResult.formatChecks || [])
-      .filter((c) => c.result === "FAIL" || c.result === "REVIEW")
-      .map((c) => ({
-        category: c.name || "Format",
-        severity:
-          c.severity === "minor"
-            ? "minor"
-            : c.severity === "moderate" || c.result === "REVIEW"
-              ? "moderate"
-              : "critical",
-        description: c.finding || c.details || c.description || c.name,
-        finding: c.finding || c.details || "",
-        explanation: c.explanation || c.details || c.description || "",
-        recommendation: c.recommendation || "",
-        locations: Array.isArray(c.locations) ? c.locations : [],
-      })),
-    breakdown: (scanResult.scoreBreakdown || []).map((b) => ({
-      section: b.metric || b.section || "Section",
-      score: Number(b.score ?? 0),
-    })),
+    ...versionPartsFromResult(scanResult),
+    scanId: scanResult.scanId || undefined,
+    versionId: scanResult.versionId || "",
     scanResult: {
       ...scanResult,
       documentId,
@@ -154,6 +277,23 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
   return list;
 }
 
+/**
+ * Drop one stored version and renumber the rest with the same chronological
+ * rules as dedupeManuscriptsByTitle. An empty manuscript is removed.
+ */
+export function removeManuscriptVersion(items, manuscriptId, versionId) {
+  const stripped = (items || [])
+    .map((m) => {
+      if (m.id !== manuscriptId) return m;
+      return {
+        ...m,
+        versions: (m.versions || []).filter((v) => v.id !== versionId),
+      };
+    })
+    .filter((m) => Array.isArray(m.versions) && m.versions.length > 0);
+  return dedupeManuscriptsByTitle(stripped);
+}
+
 export function versionToScanResult(manuscript, version) {
   if (!version) return null;
   if (version.scanResult && typeof version.scanResult === "object") {
@@ -177,7 +317,13 @@ export function versionToScanResult(manuscript, version) {
     versionNumber: version.versionNumber,
     scoreBreakdown: (version.breakdown || []).map((b) => ({
       metric: b.section,
-      score: Number(b.score ?? 0),
+      score: b.score == null || !Number.isFinite(Number(b.score)) ? null : Number(b.score),
+      status: b.status || null,
+      unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
+      unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
+      unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),
+      issueCount: b.issueCount == null ? null : Number(b.issueCount),
+      failedShare: b.failedShare == null ? null : Number(b.failedShare),
     })),
     formatChecks: issues.map((issue, idx) => ({
       id: `issue-${idx}`,

@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
+  OAuthProvider,
   signInWithCredential,
   signInWithEmailAndPassword,
   signOut,
@@ -74,16 +75,29 @@ export async function registerWithEmail(auth, email, password, displayName) {
 }
 
 /**
- * Signs in with a Google ID token (from expo-auth-session). Pass idToken/accessToken
- * from the OAuth response — popup flow is not available on React Native.
+ * Signs in with a Google ID token (see services/googleSignIn). Tokens requested with
+ * a hashed nonce must pass the raw nonce so Firebase can match it.
  */
-export async function signInWithGoogle(auth, remember, { idToken, accessToken } = {}) {
+export async function signInWithGoogle(auth, remember, { idToken, accessToken, rawNonce } = {}) {
   if (!idToken) {
     throw new Error("Google sign-in did not return an identity token.");
   }
   await setRememberMe(Boolean(remember));
-  const credential = GoogleAuthProvider.credential(idToken, accessToken || undefined);
-  return signInWithCredential(auth, credential);
+  const credential = rawNonce
+    ? new OAuthProvider("google.com").credential({ idToken, rawNonce })
+    : GoogleAuthProvider.credential(idToken, accessToken || undefined);
+  try {
+    return await signInWithCredential(auth, credential);
+  } catch (err) {
+    if (err?.code === "auth/invalid-credential") {
+      const wrapped = new Error(
+        "Firebase rejected the Google sign-in. Safelist the iOS client ID under Firebase Authentication → Google."
+      );
+      wrapped.code = "google/credential-rejected";
+      throw wrapped;
+    }
+    throw err;
+  }
 }
 
 /** @deprecated Prefer signInWithGoogle(auth, remember, tokens). */

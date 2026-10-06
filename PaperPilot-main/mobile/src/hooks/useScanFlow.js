@@ -3,13 +3,10 @@
  * File shape: { uri, name, mimeType, size }
  */
 
-import { useCallback, useState } from "react";
-import {
-  analyzeDocument,
-  downloadReport as downloadReportFn,
-  ACCEPTED_EXTENSIONS,
-  MAX_FILE_BYTES,
-} from "../lib/mockAnalysis";
+import { useCallback, useRef, useState } from "react";
+import { analyzeDocument, downloadReport as downloadReportFn } from "../lib/mockAnalysis";
+import { ACCEPTED_EXTENSIONS, MAX_FILE_SIZE_BYTES } from "../lib/uploadLimits";
+import { formatFileSize } from "../lib/formatFileSize";
 import { isServerId } from "../lib/scanMapper";
 
 function validateFile(file) {
@@ -18,8 +15,8 @@ function validateFile(file) {
   if (!ACCEPTED_EXTENSIONS.includes(ext)) {
     return `Only ${ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
   }
-  if (file.size > MAX_FILE_BYTES) {
-    return `File must be ${MAX_FILE_BYTES / 1_000_000} MB or smaller.`;
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    return `File must be ${formatFileSize(MAX_FILE_SIZE_BYTES)} or smaller.`;
   }
   return "";
 }
@@ -28,7 +25,22 @@ function titleFromFile(file) {
   return file?.name?.replace(/\.(pdf|docx)$/i, "") || "";
 }
 
-const INITIAL_PROGRESS = { percent: 0, stage: "queued", message: "" };
+const INITIAL_PROGRESS = { percent: 0, stage: "queued", message: "Starting analysis…" };
+
+/** Page/line plus everything the document viewer needs to paint the issue. */
+function traceTarget(entry) {
+  const loc = entry.location || {};
+  return {
+    id: entry.id,
+    page: entry.page ?? loc.page ?? null,
+    line: entry.line ?? loc.line ?? null,
+    bbox: entry.bbox || loc.bbox || null,
+    excerpt: entry.excerpt || loc.excerpt || "",
+    severity: entry.severity || "minor",
+    finding: entry.finding || "",
+    section: entry.section || loc.section || "",
+  };
+}
 
 export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript, getScanTarget } = {}) {
   const [step, setStep] = useState("idle");
@@ -42,6 +54,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const [downloadError, setDownloadError] = useState("");
   const [analyzeProgress, setAnalyzeProgress] = useState(INITIAL_PROGRESS);
   const [traceHighlight, setTraceHighlight] = useState(null);
+  const resultRef = useRef(null);
 
   const selectFile = useCallback((f) => {
     const err = f ? validateFile(f) : "";
@@ -55,10 +68,11 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const analyze = useCallback(async () => {
     if ((!file && !getScanTarget) || fileError || step === "analyzing") return;
     setStep("analyzing");
+    resultRef.current = null;
     setResult(null);
     setError("");
     setTraceHighlight(null);
-    setAnalyzeProgress({ percent: 0, stage: "queued", message: "Preparing analysis…" });
+    setAnalyzeProgress({ percent: 0, stage: "queued", message: "Starting analysis…" });
     try {
       const active = getActiveManuscript?.() || {};
       const title = String(active.title || titleFromFile(file) || "").trim();
@@ -84,7 +98,14 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
         pageCount: target.pageCount,
         cloudinaryUrl: target.cloudinaryUrl,
         documentPreview: target.documentPreview,
-        onProgress: setAnalyzeProgress,
+        documentName: file?.name || target.sourceFilename,
+        onProgress: (payload) => {
+          setAnalyzeProgress({
+            percent: Number(payload?.percent ?? 0),
+            stage: String(payload?.stage || "queued"),
+            message: String(payload?.message || ""),
+          });
+        },
       });
       if (title) scanResult.documentTitle = title;
       if (reuseId) scanResult.documentId = reuseId;
@@ -92,14 +113,19 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
 
       setDocumentId(scanResult.documentId);
       setVersionNumber(Number(target.versionNumber) || nextVersion);
+      resultRef.current = scanResult;
       setResult(scanResult);
-      setAnalyzeProgress({ percent: 100, stage: "done", message: "Analysis complete." });
-      setStep("summary");
+      setAnalyzeProgress({ percent: 100, stage: "done", message: "Analysis complete" });
     } catch (err) {
       setError(err?.message ?? "Analysis failed. Please try again.");
       setStep("error");
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
+
+  const revealSummary = useCallback(() => {
+    if (!resultRef.current) return;
+    setStep((current) => (current === "analyzing" ? "summary" : current));
+  }, []);
 
   const openFullResult = useCallback(() => {
     if (!result) return;
@@ -107,7 +133,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   }, [result]);
 
   const openDocumentTrace = useCallback((highlight) => {
-    if (highlight) setTraceHighlight(highlight);
+    if (highlight) setTraceHighlight(traceTarget(highlight));
     setStep("documentTrace");
   }, []);
 
@@ -117,7 +143,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
 
   const selectTraceIssue = useCallback((entry) => {
     if (!entry) return;
-    setTraceHighlight({ page: entry.page, line: entry.line, id: entry.id });
+    setTraceHighlight(traceTarget(entry));
   }, []);
 
   const retry = useCallback(() => {
@@ -143,6 +169,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     setFileInner(null);
     setFileError("");
     setError("");
+    resultRef.current = null;
     setResult(null);
     setTraceHighlight(null);
     setAnalyzeProgress(INITIAL_PROGRESS);
@@ -150,13 +177,24 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   }, []);
 
   const showSavedResult = useCallback((saved, version) => {
-    setResult(saved && typeof saved === "object" ? saved : null);
+    const nextResult = saved && typeof saved === "object" ? saved : null;
+    resultRef.current = nextResult;
+    setResult(nextResult);
     setVersionNumber(Number(version) || 1);
     setError("");
     setDownloadError("");
     setTraceHighlight(null);
     setAnalyzeProgress(INITIAL_PROGRESS);
     setStep(saved ? "results" : "idle");
+  }, []);
+
+  const patchResult = useCallback((patch) => {
+    if (!patch) return;
+    setResult((prev) => {
+      const next = prev ? { ...prev, ...patch } : prev;
+      resultRef.current = next;
+      return next;
+    });
   }, []);
 
   const backToSummary = useCallback(() => {
@@ -166,6 +204,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const backToDashboard = useCallback(() => {
     setFileInner(null);
     setFileError("");
+    resultRef.current = null;
     setResult(null);
     setError("");
     setDownloadError("");
@@ -193,6 +232,8 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     uploadNewVersion,
     backToDashboard,
     showSavedResult,
+    patchResult,
+    revealSummary,
     backToSummary,
     openFullResult,
     openDocumentTrace,

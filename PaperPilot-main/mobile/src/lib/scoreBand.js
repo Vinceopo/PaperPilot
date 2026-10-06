@@ -4,7 +4,19 @@
  */
 
 export function scoreBand(score) {
-  const n = Number(score) || 0;
+  if (score == null || score === "" || !Number.isFinite(Number(score))) {
+    return {
+      key: "not_evaluated",
+      label: "NOT EVALUATED",
+      status: "not_evaluated",
+      color: "slate",
+      barClass: "bg-slate-300",
+      pillClass: "bg-slate-100 text-slate-600 border-slate-200",
+      textClass: "text-slate-500",
+      softClass: "bg-slate-50 text-slate-600",
+    };
+  }
+  const n = Number(score);
   if (n >= 80) {
     return {
       key: "compliant",
@@ -41,6 +53,18 @@ export function scoreBand(score) {
   };
 }
 
+const BAND_TONES = {
+  compliant: { pillBg: "#d1fae5", pillBorder: "#a7f3d0", pillText: "#047857", text: "#059669", bar: "#10b981" },
+  needs_revision: { pillBg: "#fef3c7", pillBorder: "#fde68a", pillText: "#92400e", text: "#d97706", bar: "#f59e0b" },
+  critical: { pillBg: "#ffe4e6", pillBorder: "#fecdd3", pillText: "#be123c", text: "#e11d48", bar: "#f43f5e" },
+  not_evaluated: { pillBg: "#f1f5f9", pillBorder: "#e2e8f0", pillText: "#475569", text: "#64748b", bar: "#cbd5e1" },
+};
+
+/** React Native colors for a band (same palette as the web Tailwind classes). */
+export function bandTone(band) {
+  return BAND_TONES[band?.key] || BAND_TONES.critical;
+}
+
 /** Latest version = highest versionNumber, then most recent scannedDate. */
 export function latestVersion(manuscript) {
   const versions = Array.isArray(manuscript?.versions) ? [...manuscript.versions] : [];
@@ -56,8 +80,8 @@ export function latestVersion(manuscript) {
 /** Table-facing fields always derived from the latest version. */
 export function manuscriptSummary(manuscript) {
   const latest = latestVersion(manuscript);
-  const score = Number(latest?.score ?? 0);
-  const band = scoreBand(score);
+  const score = latest?.score == null || latest?.score === "" ? null : Number(latest.score);
+  const band = scoreBand(Number.isFinite(score) ? score : null);
   const versionCount = Array.isArray(manuscript?.versions) ? manuscript.versions.length : 0;
   return {
     ...manuscript,

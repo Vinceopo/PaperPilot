@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Animated, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { sendOtp, verifyOtp } from "../../api";
 import { formatCountdown } from "../../lib/messages";
 import { colors } from "../../theme";
@@ -24,10 +24,13 @@ export default function OtpStep({
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState("entering"); // entering | verifying | success
   const [round, setRound] = useState(0);
+  const checkScale = useRef(new Animated.Value(0.4)).current;
+  const checkOpacity = useRef(new Animated.Value(0)).current;
   const [devCode, setDevCode] = useState(initialDevCode || "");
   const [expiresAt, setExpiresAt] = useState(() => Date.now() + (expiresIn || 600) * 1000);
-  const [resendAt, setResendAt] = useState(() => Date.now() + (resendIn || 60) * 1000);
+  const [resendAt, setResendAt] = useState(() => Date.now() + (resendIn || 30) * 1000);
   const [now, setNow] = useState(() => Date.now());
   const attemptedRef = useRef("");
 
@@ -41,14 +44,24 @@ export default function OtpStep({
   const expired = secondsLeft === 0;
 
   async function submit(candidate) {
+    if (phase === "success") return;
     setBusy(true);
     setError("");
     setInfo("");
+    setPhase("verifying");
     try {
       const res = await verifyOtp({ email, purpose, code: candidate });
       const token = purpose === "verify_email" ? res.signup_token : res.reset_token;
+      setPhase("success");
+      Animated.parallel([
+        Animated.spring(checkScale, { toValue: 1, friction: 5, tension: 120, useNativeDriver: true }),
+        Animated.timing(checkOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+      ]).start();
+      // Let the checkmark land before handing off to the parent flow.
+      await new Promise((r) => setTimeout(r, 700));
       await onVerified(token);
     } catch (err) {
+      setPhase("entering");
       setError(err.message);
       setCode("");
       attemptedRef.current = "";
@@ -73,7 +86,7 @@ export default function OtpStep({
     try {
       const res = await sendOtp({ email, purpose });
       setExpiresAt(Date.now() + (res.expires_in || 600) * 1000);
-      setResendAt(Date.now() + (res.resend_in || 60) * 1000);
+      setResendAt(Date.now() + (res.resend_in || 30) * 1000);
       setDevCode(res.dev_code || "");
       setCode("");
       attemptedRef.current = "";
@@ -84,6 +97,26 @@ export default function OtpStep({
     } finally {
       setBusy(false);
     }
+  }
+
+  if (phase === "verifying" || phase === "success") {
+    return (
+      <View style={[styles.wrap, styles.statusWrap]} accessibilityLiveRegion="polite">
+        {phase === "success" ? (
+          <>
+            <Text style={styles.successTitle}>Verified Successfully</Text>
+            <Animated.View
+              style={[styles.checkCircle, { opacity: checkOpacity, transform: [{ scale: checkScale }] }]}
+              accessibilityLabel="Verified"
+            >
+              <Text style={styles.checkMark}>✓</Text>
+            </Animated.View>
+          </>
+        ) : (
+          <ActivityIndicator size="large" color={colors.accent} accessibilityLabel="Verifying" />
+        )}
+      </View>
+    );
   }
 
   return (
@@ -146,6 +179,17 @@ export default function OtpStep({
 
 const styles = StyleSheet.create({
   wrap: { marginTop: 20 },
+  statusWrap: { minHeight: 140, alignItems: "center", justifyContent: "center", gap: 18 },
+  successTitle: { fontSize: 24, fontWeight: "700", color: colors.navy, textAlign: "center" },
+  checkCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkMark: { fontSize: 32, fontWeight: "800", color: colors.white, lineHeight: 36 },
   emailCard: {
     borderRadius: 12,
     borderWidth: 1,

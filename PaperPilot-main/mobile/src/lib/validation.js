@@ -34,6 +34,15 @@ export function usernameError(value) {
   return "";
 }
 
+export function phoneError(value, { required = false } = {}) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) return required ? "Mobile number is required." : "";
+  if (!/^\d+$/.test(trimmed)) return "Mobile number must contain numbers only.";
+  if (trimmed.length !== 11) return "Mobile number must be exactly 11 digits. Example: 0912xxxxxxx";
+  if (!trimmed.startsWith("09")) return "Mobile number must start with 09. Example: 0912xxxxxxx";
+  return "";
+}
+
 export function passwordError(value) {
   const password = value || "";
   if (!password) return "Password is required.";
