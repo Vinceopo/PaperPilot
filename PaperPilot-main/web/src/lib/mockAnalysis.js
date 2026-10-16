@@ -54,7 +54,11 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
   const scan = await fetchScanWithProgress(
     () => runComplianceScan({ manuscriptId, versionId, mechanicsId }),
     (payload) => {
-      const serverPct = Math.min(100, Math.max(0, Number(payload?.percent) || 0));
+      if (payload?.percent == null) {
+        report(null, payload?.stage, payload?.message);
+        return;
+      }
+      const serverPct = Math.min(100, Math.max(0, Number(payload.percent) || 0));
       const done = payload?.stage === "done";
       report(done ? 100 : 15 + serverPct * 0.85, payload?.stage, payload?.message);
     }

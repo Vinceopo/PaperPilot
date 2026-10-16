@@ -406,7 +406,16 @@ export default function ManuscriptPanel({
           )}
         </div>
 
-        {error && <p className="text-xs text-rose-500">{error}</p>}
+        <ConfirmDialog
+          open={Boolean(error)}
+          title="Something went wrong"
+          message={error}
+          confirmLabel="OK"
+          cancelLabel={null}
+          tone="danger"
+          onConfirm={() => setError("")}
+          onCancel={() => setError("")}
+        />
         {success && !error && (
           <p className="text-xs font-semibold text-emerald-600" role="status">
             {success}

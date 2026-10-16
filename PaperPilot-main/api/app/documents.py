@@ -18,6 +18,8 @@ from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
 from app.mechanics_options import (
+    FONT_SIZE_KEYS,
+    MAX_HEADING_LEVELS,
     CHAPTER_FIRST_HIDDEN,
     PRELIM_ROMAN,
     WORD_SPACING_TWO,
@@ -974,7 +976,7 @@ def _parse_paper_size(value: str) -> dict:
         out.setdefault("label", f"{dims.group(1)} x {dims.group(2)}")
     elif out.get("label"):
         pass
-    elif text:
+    elif re.search(r"\b(?:A[3-5]|folio|executive|tabloid|bond)\b", text, re.I):
         out["label"] = text[:80]
     return out
 
@@ -1072,6 +1074,165 @@ def _parse_spacing(value: str) -> float | None:
 
 def _parse_inches(value: str) -> float | None:
     return parse_length_inches(value)
+
+
+MARGIN_SIDES = ("top", "bottom", "left", "right", "gutter", "header", "footer")
+_MARGIN_SIDE_ALT = "|".join(MARGIN_SIDES)
+# "1.5 inch" / '1"' — unit required so "page 1 on the left" is not a margin.
+_MEASURE_WITH_UNIT = (
+    r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)"
+    r"(?:\s*|-)(?:inches|inch|in|cm|mm|″|\")"
+)
+
+
+def _sides_from_margin_phrase(phrase: str, already: dict[str, float]) -> list[str]:
+    """'the right, top and bottom' / 'all other sides' -> side names."""
+    text = (phrase or "").lower()
+    if re.search(r"\b(?:other|remaining|rest)\b", text):
+        return [side for side in ("top", "bottom", "left", "right") if side not in already]
+    if re.search(r"\b(?:all|every|each)\s+(?:sides?|margins?)\b", text):
+        return ["top", "bottom", "left", "right"]
+    return [side for side in MARGIN_SIDES if re.search(rf"\b{side}\b", text)]
+
+
+def _simple_margin_amount(value: str) -> float | None:
+    """Accept '1' or '1.5 inch', not '1 inch on the right' assigned to the wrong side."""
+    amount = parse_length_inches(value)
+    if amount is None:
+        return None
+    if re.search(rf"\b(?:{_MARGIN_SIDE_ALT})\b", value or "", re.I):
+        return None
+    return amount
+
+
+def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]:
+    """Labeled 'Top: 1' and prose '1.5 inch on the left, 1 inch on the right, top and bottom'."""
+    margins: dict[str, float] = {}
+    window_match = re.search(r"\bmargins?\b.{0,500}", flat, re.I)
+    window = window_match.group(0) if window_match else flat
+    # Sides may be listed just before the word "margins" ("Top and bottom margins: 1 inch").
+    lead_match = re.search(r".{0,120}\bmargins?\b.{0,500}", flat, re.I)
+    lead_window = lead_match.group(0) if lead_match else flat
+
+    # "All margins should be 1 inch" / "Margins on all sides: 1 inch".
+    all_sides = re.search(
+        rf"\ball\s+(?:four\s+|the\s+)?(?:page\s+)?margins?\b[^.]{{0,80}}?({_MEASURE_WITH_UNIT})"
+        rf"|\bmargins?\s+on\s+(?:all|every|each)\s+sides?\b[^.]{{0,40}}?({_MEASURE_WITH_UNIT})"
+        rf"|({_MEASURE_WITH_UNIT})\s+margins?\s+on\s+(?:all|every|each)\s+sides?\b",
+        lead_window,
+        re.I,
+    )
+    if all_sides:
+        amount = parse_length_inches(next(group for group in all_sides.groups() if group))
+        if amount is not None:
+            for side in ("top", "bottom", "left", "right"):
+                margins[side] = amount
+
+    # "Top, Right and Bottom: 1.00\"" / "(left, right, top and bottom) should be 1.5 inches".
+    side_list = rf"(?:{_MARGIN_SIDE_ALT})(?:\s*(?:,|and|&|/)\s*(?:the\s+)?(?:{_MARGIN_SIDE_ALT}))+"
+    listed = re.compile(
+        rf"\b({side_list})\b\s*\)?\s*(?:margins?\s*)?"
+        rf"(?::|=|-|–|—|should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
+        rf"(?:set\s+(?:to|at)\s+)?({_MEASURE_WITH_UNIT})",
+        re.I,
+    )
+    for match in listed.finditer(lead_window):
+        amount = parse_length_inches(match.group(2))
+        if amount is None:
+            continue
+        for side in re.findall(rf"\b(?:{_MARGIN_SIDE_ALT})\b", match.group(1), re.I):
+            margins[side.lower()] = amount
+
+    prose = re.compile(
+        rf"({_MEASURE_WITH_UNIT})\s*(?:on|for|at)\s+(?:the\s+)?(.*?)(?=(?:{_MEASURE_WITH_UNIT})\s*(?:on|for|at)\b|$)",
+        re.I,
+    )
+    for match in prose.finditer(window):
+        amount = parse_length_inches(match.group(1))
+        if amount is None:
+            continue
+        phrase = match.group(2)
+        if not re.search(rf"\b(?:{_MARGIN_SIDE_ALT}|sides?|margins?)\b", phrase, re.I):
+            continue
+        for side in _sides_from_margin_phrase(phrase, margins):
+            margins[side] = amount
+
+    before_side = re.compile(
+        rf"({_MEASURE_WITH_UNIT})\s+(?:on\s+(?:the\s+)?)?({_MARGIN_SIDE_ALT})\s+margins?\b",
+        re.I,
+    )
+    for match in before_side.finditer(window):
+        amount = parse_length_inches(match.group(1))
+        if amount is not None:
+            margins[match.group(2).lower()] = amount
+
+    for side in MARGIN_SIDES:
+        if side in margins:
+            continue
+        side_raw = _value_after_label(
+            flat,
+            (f"{side.capitalize()} margin", f"{side} margin", side.capitalize(), side),
+            stop_words,
+        )
+        amount = _simple_margin_amount(side_raw) if side_raw else None
+        if amount is None:
+            match = re.search(
+                rf"\b{side}\s+margins?\s*(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
+                flat,
+                re.I,
+            )
+            if match:
+                amount = parse_length_inches(match.group(1))
+        if amount is not None:
+            margins[side] = amount
+
+    # "... and all other margins 1 inch" fills only the sides not named yet.
+    others = re.search(
+        rf"\b(?:other|remaining)\s+(?:sides?|margins?)\b[^.]{{0,40}}?({_MEASURE_WITH_UNIT})",
+        lead_window,
+        re.I,
+    )
+    if others and margins:
+        amount = parse_length_inches(others.group(1))
+        if amount is not None:
+            for side in ("top", "bottom", "left", "right"):
+                margins.setdefault(side, amount)
+
+    if not any(side in margins for side in ("top", "bottom", "left", "right")):
+        uniform = re.search(
+            rf"\b({MEASURE_PATTERN})\s+(?:on\s+all\s+sides\s+)?margins?\b"
+            rf"|\bmargins?\s*(?:of|:|=)?\s*({MEASURE_PATTERN})\s*(?:on\s+all\s+sides)?",
+            flat,
+            re.I,
+        )
+        amount = parse_length_inches(next((group for group in uniform.groups() if group), "")) if uniform else None
+        if amount:
+            margins = {side: amount for side in ("top", "bottom", "left", "right")}
+    return margins
+
+
+KNOWN_FONTS = (
+    "Times New Roman", "Arial", "Calibri", "Cambria", "Georgia", "Helvetica",
+    "Courier New", "Garamond", "Verdana", "Book Antiqua", "Bookman Old Style",
+    "Century Gothic", "Palatino Linotype", "Tahoma", "Trebuchet MS",
+)
+
+
+def _font_families_in(text: str) -> list[str]:
+    """Font families named in the text, in the order they appear ('Times' means Times New Roman)."""
+    found: dict[str, int] = {}
+    for family in KNOWN_FONTS:
+        match = re.search(rf"\b{re.escape(family)}\b", text or "", re.I)
+        if match:
+            found[family] = match.start()
+    if "Times New Roman" not in found:
+        # Capitalized "Times" next to a font word or point size, so "three times" is ignored.
+        for match in re.finditer(r"\bTimes\b(?!\s+New\b)(?:\s+Roman\b)?", text or ""):
+            nearby = (text or "")[max(0, match.start() - 50) : match.end() + 50]
+            if re.search(r"\b(?:font|typeface|pt|points?)\b", nearby, re.I):
+                found["Times New Roman"] = match.start()
+                break
+    return sorted(found, key=found.get)
 
 
 def derive_mechanics_rules(text: str) -> dict:
@@ -1175,34 +1336,7 @@ def derive_mechanics_rules(text: str) -> dict:
         rules["first_line_indent_inches"] = indent_val
         rules["indention"] = f"{indent_val} inch" if indent_val != 1 else "1 inch"
 
-    margins: dict[str, float] = {}
-    for side in ("top", "bottom", "left", "right", "gutter", "header", "footer"):
-        side_raw = _value_after_label(
-            flat,
-            (f"{side.capitalize()} margin", f"{side} margin", side.capitalize(), side),
-            stop,
-        )
-        amount = _parse_inches(side_raw) if side_raw else None
-        if amount is None:
-            match = re.search(
-                rf"\b{side}\s+margin\s*(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
-                flat,
-                re.I,
-            )
-            if match:
-                amount = parse_length_inches(match.group(1))
-        if amount is not None:
-            margins[side] = amount
-    if not margins:
-        uniform = re.search(
-            rf"\b({MEASURE_PATTERN})\s+(?:on\s+all\s+sides\s+)?margins?\b"
-            rf"|\bmargins?\s*(?:of|:|=)?\s*({MEASURE_PATTERN})\s*(?:on\s+all\s+sides)?",
-            flat,
-            re.I,
-        )
-        amount = parse_length_inches(next((group for group in uniform.groups() if group), "")) if uniform else None
-        if amount:
-            margins = {side: amount for side in ("top", "bottom", "left", "right")}
+    margins = _extract_margins(flat, stop)
     if margins:
         rules["margins_inches"] = margins
 
@@ -1225,18 +1359,14 @@ def derive_mechanics_rules(text: str) -> dict:
     if alignment:
         rules["alignment"] = alignment
 
-    known_fonts = (
-        "Times New Roman", "Arial", "Calibri", "Cambria", "Georgia",
-        "Helvetica", "Courier New", "Garamond", "Verdana",
-    )
-    fonts = [font for font in known_fonts if re.search(rf"\b{re.escape(font)}\b", flat, re.I)]
+    fonts = _font_families_in(flat)
     font_type = _value_after_label(flat, ("Font type", "Font", "Typeface", "Type"), stop)
     if font_type:
-        for font in known_fonts:
-            if re.search(rf"\b{re.escape(font)}\b", font_type, re.I):
-                if font not in fonts:
-                    fonts.insert(0, font)
-                break
+        mentioned = _font_families_in(font_type)
+        for family in reversed(mentioned):
+            if family in fonts:
+                fonts.remove(family)
+            fonts.insert(0, family)
     sizes = sorted(
         {
             float(value)
@@ -1244,11 +1374,25 @@ def derive_mechanics_rules(text: str) -> dict:
             if 6 <= float(value) <= 72
         }
     )
-    h1 = _value_after_label(flat, ("Heading 1", "Heading1", "H1"), stop)
-    h2 = _value_after_label(flat, ("Heading 2", "Heading2", "H2"), stop)
-    h3 = _value_after_label(
-        flat, ("Heading 3", "Heading3", "H3", "Content size", "Body size", "Body font size"), stop
+    def _heading_labels(level: int) -> tuple[str, ...]:
+        # "H4"-style short labels are too ambiguous past level 3.
+        short = (f"H{level}",) if level <= 3 else ()
+        return (f"Heading {level}", f"Heading{level}", *short)
+
+    # "Heading 3 and content size" (older guides) sets Heading 3 and body text together.
+    combined_h3 = re.search(r"(?i)\bheading\s*3\s+and\s+(?:content|body)", flat) is not None
+    body_labels = (
+        "Body text size", "Body font size", "Body size", "Content size", "Text size",
+        "Main body", "Main text", "Body text",
     )
+    size_sources = [
+        (_value_after_label(flat, _heading_labels(level), stop), f"heading{level}_size", _heading_labels(level))
+        for level in range(1, MAX_HEADING_LEVELS + 1)
+        if re.search(rf"(?i)\b(?:{'|'.join(map(re.escape, _heading_labels(level)))})\b", flat)
+    ]
+    body_raw = _value_after_label(flat, body_labels, stop)
+    if body_raw or not combined_h3:
+        size_sources.append((body_raw, "body_size", body_labels))
 
     def _nearby_pt(labels: tuple[str, ...]) -> float | None:
         label_alt = "|".join(re.escape(label) for label in labels)
@@ -1267,11 +1411,7 @@ def derive_mechanics_rules(text: str) -> dict:
         font["type"] = fonts[0]
     if sizes:
         font["sizes_points"] = sizes
-    for raw, key, labels in (
-        (h1, "heading1_size", ("Heading 1", "Heading1", "H1")),
-        (h2, "heading2_size", ("Heading 2", "Heading2", "H2")),
-        (h3, "heading3_content_size", ("Heading 3", "Heading3", "H3", "Content size", "Body size")),
-    ):
+    for raw, key, labels in size_sources:
         number = re.search(r"(\d+(?:\.\d+)?)", raw or "")
         value = float(number.group(1)) if number and 6 <= float(number.group(1)) <= 72 else None
         if value is None:
@@ -1280,6 +1420,30 @@ def derive_mechanics_rules(text: str) -> dict:
             font[key] = value
             sizes = sorted(set([*sizes, value]))
             font["sizes_points"] = sizes
+    if combined_h3 and "body_size" not in font and "heading3_size" in font:
+        font["body_size"] = font["heading3_size"]
+    if "body_size" not in font:
+        typeface_size = re.search(
+            r"\b(?:typeface|font(?:\s*family|\s*type)?|type)\b[^.]{0,120}?\bsize\s*(?:=|:)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+            re.I,
+        )
+        if not typeface_size:
+            # "Font Type and Size: Times New Roman; 12 points" / "Font size: 12".
+            typeface_size = re.search(
+                r"\bfont\s*(?:type\s*)?(?:and|&|/)\s*size\b\s*:?\s*[^.\d]{0,60}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
+                r"|\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b",
+                flat,
+                re.I,
+            )
+        if typeface_size:
+            number = float(next(group for group in typeface_size.groups() if group))
+            if 6 <= number <= 72:
+                font["body_size"] = number
+                sizes = sorted(set([*sizes, number]))
+                font["sizes_points"] = sizes
+    if "body_size" in font:
+        font["heading3_content_size"] = font["body_size"]
     font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
     if font_color:
         if re.search(r"black|automatic", font_color, re.I):
@@ -1332,14 +1496,22 @@ def derive_mechanics_rules(text: str) -> dict:
         ]
 
     heading_styles = {}
-    for level, number in (("heading1", "1"), ("heading2", "2"), ("heading3", "3")):
+    for number in range(1, MAX_HEADING_LEVELS + 1):
         style = heading_style_from_text(
             _line_value(text, (f"Heading {number} style", f"Heading {number} format", f"Level {number} heading"))
         )
         if style:
-            heading_styles[level] = style
+            heading_styles[f"heading{number}"] = style
     if heading_styles:
         rules.setdefault("font", {})["heading_styles"] = heading_styles
+    font_rules = rules.get("font") or {}
+    defined_levels = [
+        number
+        for number in range(1, MAX_HEADING_LEVELS + 1)
+        if f"heading{number}_size" in font_rules or f"heading{number}" in heading_styles
+    ]
+    if defined_levels:
+        font_rules["heading_levels"] = max(defined_levels)
 
     word_spacing = canonical_word_spacing(
         _line_value(text, ("Word spacing", "Spacing between words", "Spaces after periods", "Space after period"))
@@ -1374,20 +1546,24 @@ def derive_mechanics_rules(text: str) -> dict:
     elif re.search(r"page break.*(?:new chapter|chapter)|(?:new chapter|chapter).*page break", flat, re.I):
         rules["page_break_requirements"] = ["Only when starting a new chapter"]
 
-    table_layout = _line_value(text, ("Table layout", "Table naming")) or _value_after_label(
-        flat, ("Table layout", "Tables", "Table naming", "Table"), stop
-    )
+    def _section_value(long_labels: tuple[str, ...], word: str) -> str:
+        # A bare "Tables"/"Figures" only counts as a label when a colon follows it,
+        # so prose like "including tables, figures, appendices" is not a layout rule.
+        value = _line_value(text, long_labels) or _value_after_label(flat, long_labels, stop)
+        if value or not re.search(rf"(?i)\b{word}s?\s*:", flat):
+            return value
+        return _line_value(text, (f"{word}s", word)) or _value_after_label(flat, (f"{word}s", word), stop)
+
+    table_layout = _section_value(("Table layout", "Table naming"), "Table")
     if table_layout and len(table_layout) > 3:
         rules["table_layout_requirements"] = [table_layout[:300]]
 
-    figure_layout = _line_value(text, ("Figure layout", "Figure naming")) or _value_after_label(
-        flat, ("Figure layout", "Figures", "Figure naming", "Figure"), stop
-    )
+    figure_layout = _section_value(("Figure layout", "Figure naming"), "Figure")
     if figure_layout and len(figure_layout) > 3:
         rules["figure_layout_requirements"] = [figure_layout[:300]]
 
     citation = re.search(
-        r"\b(APA|MLA|Chicago|Harvard|IEEE|Vancouver|Turabian)\b"
+        r"\b(APA|MLA|IEEE)\b"
         r"(?:\s*(?:7th|6th|style|format|citation|referencing))?",
         flat,
         re.I,
@@ -1399,7 +1575,7 @@ def derive_mechanics_rules(text: str) -> dict:
             flat, ("Citation format", "Citation style", "Citation", "Reference style"), stop
         )
         if citation_raw:
-            style = re.search(r"\b(APA|MLA|Chicago|Harvard|IEEE|Vancouver|Turabian)\b", citation_raw, re.I)
+            style = re.search(r"\b(APA|MLA|IEEE)\b", citation_raw, re.I)
             if style:
                 rules["citation_style"] = style.group(1).upper()
 
@@ -1438,7 +1614,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     heading_styles = normalize_heading_styles(font.get("heading_styles") or raw.get("heading_styles"))
     if heading_styles:
         font_out["heading_styles"] = heading_styles
-    for key in ("heading1_size", "heading2_size", "heading3_content_size"):
+    for key in FONT_SIZE_KEYS:
         value = font.get(key, raw.get(key))
         try:
             number = float(value)
@@ -1450,6 +1626,15 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
                 sizes = [*list(sizes), number]
             else:
                 sizes = [number]
+    if "body_size" in font_out:
+        # Analysis services that predate body_size read the combined key.
+        font_out["heading3_content_size"] = font_out["body_size"]
+    try:
+        levels = int(font.get("heading_levels") or 0)
+    except (TypeError, ValueError):
+        levels = 0
+    if 1 <= levels <= MAX_HEADING_LEVELS:
+        font_out["heading_levels"] = levels
     if sizes:
         cleaned = []
         for value in sizes:
@@ -1544,7 +1729,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["margins_inches"] = margins
 
     citation = str(raw.get("citation_style") or "").strip().upper()
-    if citation in {"APA", "MLA", "IEEE", "CHICAGO", "HARVARD", "VANCOUVER", "TURABIAN"}:
+    if citation in {"APA", "MLA", "IEEE"}:
         rules["citation_style"] = citation
 
     pagination_in = raw.get("pagination") if isinstance(raw.get("pagination"), dict) else {}
@@ -1638,7 +1823,7 @@ _SAMPLE_SECTIONS = (
         (
             ("Heading 1 size", "12 pt"),
             ("Heading 2 size", "12 pt"),
-            ("Heading 3 and content size", "12 pt"),
+            ("Body text size", "12 pt"),
             ("Font type", "Times New Roman"),
             ("Font color", "Black"),
         ),
@@ -1648,7 +1833,6 @@ _SAMPLE_SECTIONS = (
         (
             ("Heading 1 style", "Bold, Title Case, centered"),
             ("Heading 2 style", "Bold, Title Case, flush left"),
-            ("Heading 3 style", "Bold italic, Title Case, flush left"),
         ),
     ),
     (

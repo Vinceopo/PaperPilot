@@ -15,9 +15,11 @@ from app.config import settings
 PAYMONGO_API = "https://api.paymongo.com"
 CHECKOUT_SESSIONS_URL = f"{PAYMONGO_API}/v1/checkout_sessions"
 
-# Amounts are in centavos (₱1.00 = 100).
+# Amounts are in centavos (₱1.00 = 100). Annual = 11 × monthly (one month free).
 PREMIUM_MONTHLY_CENTAVOS = 94_900
-PREMIUM_ANNUAL_CENTAVOS = 949_000
+PREMIUM_ANNUAL_CENTAVOS = 1_043_900
+PRO_MONTHLY_CENTAVOS = 149_900
+PRO_ANNUAL_CENTAVOS = 1_648_900
 
 DEFAULT_PAYMENT_METHODS = ["card", "gcash", "paymaya", "grab_pay", "qrph"]
 
@@ -63,21 +65,30 @@ def _request_json(method: str, url: str, payload: dict | None = None) -> dict:
         except json.JSONDecodeError:
             parsed = {"raw": err_body}
         errors = parsed.get("errors") if isinstance(parsed, dict) else None
-        message = "PayMongo request failed."
+        message = (
+            "The payment provider (PayMongo) could not process the request. "
+            "You were not charged. Try again, or contact support if it keeps happening."
+        )
         if isinstance(errors, list) and errors:
             first = errors[0] if isinstance(errors[0], dict) else {}
             message = str(first.get("detail") or first.get("title") or message)
         raise PayMongoError(message, status=502, detail=parsed) from exc
     except URLError as exc:
-        raise PayMongoError(f"Could not reach PayMongo: {exc.reason}", status=502) from exc
+        raise PayMongoError(
+            "The payment provider (PayMongo) could not be reached. "
+            "You were not charged. Wait a minute, then try again.",
+            status=502,
+        ) from exc
 
 
-def plan_amount_centavos(billing_period: str) -> int:
+def plan_amount_centavos(billing_period: str, tier: str = "premium") -> int:
+    if tier == "pro":
+        return PRO_ANNUAL_CENTAVOS if billing_period == "annual" else PRO_MONTHLY_CENTAVOS
     return PREMIUM_ANNUAL_CENTAVOS if billing_period == "annual" else PREMIUM_MONTHLY_CENTAVOS
 
 
-def plan_amount_pesos(billing_period: str) -> int:
-    return plan_amount_centavos(billing_period) // 100
+def plan_amount_pesos(billing_period: str, tier: str = "premium") -> int:
+    return plan_amount_centavos(billing_period, tier) // 100
 
 
 def retrieve_checkout_session(checkout_session_id: str) -> dict:
@@ -120,14 +131,18 @@ def create_checkout_session(
     customer_email: str | None = None,
     customer_name: str | None = None,
     reference_number: str,
+    tier: str = "premium",
 ) -> dict:
     period = "annual" if billing_period == "annual" else "monthly"
-    amount = plan_amount_centavos(period)
-    label = "PaperPilot Premium (Annual)" if period == "annual" else "PaperPilot Premium (Monthly)"
+    plan = "pro" if tier == "pro" else "premium"
+    amount = plan_amount_centavos(period, plan)
+    plan_name = "Pro" if plan == "pro" else "Premium"
+    label = f"PaperPilot {plan_name} ({'Annual' if period == 'annual' else 'Monthly'})"
+    allowance = "75 scans/week" if plan == "pro" else "50 scans/month"
     description = (
-        "50 scans/month · APA, MLA & IEEE · version history"
+        f"{allowance} · APA, MLA & IEEE · version history"
         if period == "monthly"
-        else "Annual Premium — 50 scans/month · APA, MLA & IEEE · version history"
+        else f"Annual {plan_name} (save 1 month) — {allowance} · APA, MLA & IEEE · version history"
     )
     methods = [
         m.strip()
@@ -156,8 +171,8 @@ def create_checkout_session(
         "metadata": {
             "uid": uid,
             "billing_period": period,
-            "tier": "premium",
-            "product": "paperpilot_premium",
+            "tier": plan,
+            "product": f"paperpilot_{plan}",
         },
     }
     billing: dict[str, str] = {}

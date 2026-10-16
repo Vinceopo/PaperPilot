@@ -1,22 +1,21 @@
-import { useEffect, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import * as WebBrowser from "expo-web-browser";
-import { useAuthRequest } from "expo-auth-session/providers/google";
-import Constants from "expo-constants";
+import { useState } from "react";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../api";
 import { auth, db, firebaseReady } from "../../firebase";
-import { FIREBASE_MISSING, GOOGLE_EXPO_GO_HINT, authMessage } from "../../lib/messages";
+import { FIREBASE_MISSING, authMessage } from "../../lib/messages";
 import { passwordChecks, registerErrors, registerFieldError } from "../../lib/validation";
 import { registerWithEmail, saveUserProfile, signInWithEmail, signInWithGoogle } from "../../services/auth";
+import { promptGoogleSignIn } from "../../services/googleSignIn";
 import { colors } from "../../theme";
+import FloatingLabelInput from "../ui/FloatingLabelInput";
 import PrimaryButton from "../ui/PrimaryButton";
-import TextField from "../ui/TextField";
 import AuthShell from "./AuthShell";
+import GoogleButton from "./GoogleButton";
 import OtpStep from "./OtpStep";
+import TermsModal from "./TermsModal";
 
-WebBrowser.maybeCompleteAuthSession();
-
-const isExpoGo = Constants.appOwnership === "expo";
+const TWO_COLUMN_MIN_WIDTH = 640;
+const TERMS_REQUIRED = "You must agree to the Terms and Conditions to create an account.";
 
 const EMPTY = {
   firstName: "",
@@ -28,7 +27,7 @@ const EMPTY = {
   confirmPassword: "",
 };
 
-export default function RegisterScreen({ onGoToLogin, onContinueAsGuest, onRegistered }) {
+export default function RegisterScreen({ onGoToLogin, onRegistered }) {
   const [step, setStep] = useState("form");
   const [values, setValues] = useState(EMPTY);
   const [errors, setErrors] = useState({});
@@ -36,13 +35,28 @@ export default function RegisterScreen({ onGoToLogin, onContinueAsGuest, onRegis
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
   const [otpMeta, setOtpMeta] = useState(null);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [termsError, setTermsError] = useState("");
+  const [termsOpen, setTermsOpen] = useState(false);
+  const { width } = useWindowDimensions();
+  const twoColumn = width >= TWO_COLUMN_MIN_WIDTH;
 
-  const googleClientId = Constants.expoConfig?.extra?.googleWebClientId;
-  const googleEnabled = Boolean(googleClientId) && !isExpoGo;
-  const [request, response, promptGoogle] = useAuthRequest({
-    clientId: googleClientId,
-    responseType: "id_token",
-  });
+  function setAgreed(value) {
+    setAgreedToTerms(value);
+    if (value) setTermsError("");
+  }
+
+  function inputProps(field, label, extra = {}) {
+    return {
+      label,
+      value: values[field],
+      onChangeText: (v) => setField(field, v),
+      onBlur: () => onBlurField(field),
+      error: errors[field],
+      disabled: busy,
+      ...extra,
+    };
+  }
 
   function setField(field, value) {
     const nextValues = { ...values, [field]: value };
@@ -62,23 +76,13 @@ export default function RegisterScreen({ onGoToLogin, onContinueAsGuest, onRegis
     setErrors((prev) => ({ ...prev, [field]: registerFieldError(field, values) }));
   }
 
-  useEffect(() => {
-    if (response?.type !== "success" || !auth) return;
-    const idToken = response.authentication?.idToken || response.params?.id_token;
-    const accessToken = response.authentication?.accessToken || response.params?.access_token;
-    setBusy(true);
-    setFormError("");
-    signInWithGoogle(auth, true, { idToken, accessToken })
-      .catch((err) => setFormError(authMessage(err)))
-      .finally(() => setBusy(false));
-  }, [response]);
-
   async function onSubmit() {
     setFormError("");
     const next = registerErrors(values);
     setErrors(next);
     setTouched(Object.keys(EMPTY).reduce((acc, key) => ({ ...acc, [key]: true }), {}));
-    if (Object.keys(next).length > 0) return;
+    setTermsError(agreedToTerms ? "" : TERMS_REQUIRED);
+    if (Object.keys(next).length > 0 || !agreedToTerms) return;
     if (!firebaseReady || !auth) {
       setFormError(FIREBASE_MISSING);
       return;
@@ -149,21 +153,18 @@ export default function RegisterScreen({ onGoToLogin, onContinueAsGuest, onRegis
 
   async function onGoogle() {
     setFormError("");
-    if (isExpoGo) {
-      setFormError(GOOGLE_EXPO_GO_HINT);
+    if (!agreedToTerms) {
+      setTermsError(TERMS_REQUIRED);
       return;
     }
     if (!firebaseReady || !auth) {
       setFormError("Add Firebase keys to mobile/app.json to enable Google sign-up.");
       return;
     }
-    if (!request) {
-      setFormError("Google sign-in is not configured.");
-      return;
-    }
     setBusy(true);
     try {
-      await promptGoogle();
+      const tokens = await promptGoogleSignIn();
+      await signInWithGoogle(auth, true, tokens);
     } catch (err) {
       setFormError(authMessage(err));
     } finally {
@@ -209,72 +210,46 @@ export default function RegisterScreen({ onGoToLogin, onContinueAsGuest, onRegis
       variant="register"
       title="Create your account"
       subtitle="Join PaperPilot to save scores and reports."
-      onContinueAsGuest={onContinueAsGuest}
       footer={loginFooter}
     >
       <View style={styles.form}>
-        <TextField
-          label="First name"
-          value={values.firstName}
-          onChangeText={(v) => setField("firstName", v)}
-          onBlur={() => onBlurField("firstName")}
-          error={errors.firstName}
-          autoComplete="given-name"
-          disabled={busy}
+        <View style={twoColumn ? styles.nameRow : styles.nameStack}>
+          <FloatingLabelInput
+            {...inputProps("firstName", "First name", { icon: "user", autoComplete: "given-name", autoCapitalize: "words" })}
+            style={twoColumn ? styles.nameCell : null}
+          />
+          <FloatingLabelInput
+            {...inputProps("middleName", "Middle name (optional)", {
+              icon: "user",
+              autoComplete: "additional-name",
+              autoCapitalize: "words",
+            })}
+            style={twoColumn ? styles.nameCell : null}
+          />
+        </View>
+        <FloatingLabelInput
+          {...inputProps("lastName", "Last name", { icon: "user", autoComplete: "family-name", autoCapitalize: "words" })}
         />
-        <TextField
-          label="Middle name (optional)"
-          value={values.middleName}
-          onChangeText={(v) => setField("middleName", v)}
-          onBlur={() => onBlurField("middleName")}
-          error={errors.middleName}
-          autoComplete="additional-name"
-          disabled={busy}
+        <FloatingLabelInput
+          {...inputProps("username", "Username", {
+            icon: "at",
+            autoComplete: "username",
+            maxLength: 20,
+            hint: "3–20 characters: letters, numbers, underscore, or period.",
+          })}
         />
-        <TextField
-          label="Last name"
-          value={values.lastName}
-          onChangeText={(v) => setField("lastName", v)}
-          onBlur={() => onBlurField("lastName")}
-          error={errors.lastName}
-          autoComplete="family-name"
-          disabled={busy}
-        />
-        <TextField
-          label="Username"
-          value={values.username}
-          onChangeText={(v) => setField("username", v)}
-          onBlur={() => onBlurField("username")}
-          error={errors.username}
-          hint="3–20 characters: letters, numbers, underscore, or period."
-          autoCapitalize="none"
-          autoComplete="username"
-          maxLength={20}
-          disabled={busy}
-        />
-        <TextField
-          label="Email"
-          value={values.email}
-          onChangeText={(v) => setField("email", v)}
-          onBlur={() => onBlurField("email")}
-          error={errors.email}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          autoComplete="email"
-          disabled={busy}
+        <FloatingLabelInput
+          {...inputProps("email", "Email", { icon: "mail", keyboardType: "email-address", autoComplete: "email" })}
         />
         <View>
-          <TextField
-            label="Password"
-            value={values.password}
-            onChangeText={(v) => setField("password", v)}
-            onBlur={() => onBlurField("password")}
-            error={errors.password}
-            secureTextEntry
-            showPasswordToggle
-            autoCapitalize="none"
-            autoComplete="password-new"
-            disabled={busy}
+          <FloatingLabelInput
+            {...inputProps("password", "Password", {
+              icon: "lock",
+              secureTextEntry: true,
+              showPasswordToggle: true,
+              autoComplete: "new-password",
+              textContentType: "newPassword",
+            })}
           />
           {values.password && !errors.password ? (
             <View style={styles.checks}>
@@ -286,18 +261,42 @@ export default function RegisterScreen({ onGoToLogin, onContinueAsGuest, onRegis
             </View>
           ) : null}
         </View>
-        <TextField
-          label="Confirm password"
-          value={values.confirmPassword}
-          onChangeText={(v) => setField("confirmPassword", v)}
-          onBlur={() => onBlurField("confirmPassword")}
-          error={errors.confirmPassword}
-          secureTextEntry
-          showPasswordToggle
-          autoCapitalize="none"
-          autoComplete="password-new"
-          disabled={busy}
+        <FloatingLabelInput
+          {...inputProps("confirmPassword", "Confirm password", {
+            icon: "lock",
+            secureTextEntry: true,
+            showPasswordToggle: true,
+            autoComplete: "new-password",
+            textContentType: "newPassword",
+          })}
         />
+
+        <View>
+          <View style={styles.termsRow}>
+            <Pressable
+              onPress={() => setAgreed(!agreedToTerms)}
+              disabled={busy}
+              hitSlop={8}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: agreedToTerms, disabled: busy }}
+              accessibilityLabel="I agree to the Terms and Conditions"
+              style={[
+                styles.checkbox,
+                agreedToTerms && styles.checkboxChecked,
+                termsError ? styles.checkboxError : null,
+              ]}
+            >
+              {agreedToTerms ? <Text style={styles.checkboxMark}>✓</Text> : null}
+            </Pressable>
+            <Text style={styles.termsText}>
+              <Text onPress={() => !busy && setAgreed(!agreedToTerms)}>I agree to the </Text>
+              <Text style={styles.termsLink} onPress={() => setTermsOpen(true)} accessibilityRole="link">
+                Terms and Conditions
+              </Text>
+            </Text>
+          </View>
+          {termsError ? <Text style={styles.termsError}>{termsError}</Text> : null}
+        </View>
 
         {formError ? <Text style={styles.error}>{formError}</Text> : null}
 
@@ -306,38 +305,48 @@ export default function RegisterScreen({ onGoToLogin, onContinueAsGuest, onRegis
           onPress={onSubmit}
           busy={busy}
         />
-
-        <TouchableOpacity
-          style={[styles.google, (!googleEnabled || busy) && styles.googleDisabled]}
-          onPress={onGoogle}
-          disabled={busy || !googleEnabled}
-          accessibilityRole="button"
-        >
-          <Text style={styles.googleText}>Sign up with Google</Text>
-        </TouchableOpacity>
-        {isExpoGo ? <Text style={styles.googleHint}>{GOOGLE_EXPO_GO_HINT}</Text> : null}
       </View>
+
+      <GoogleButton label="Sign up with Google" onPress={onGoogle} disabled={busy} />
+      <TermsModal
+        open={termsOpen}
+        onClose={() => setTermsOpen(false)}
+        onAgree={() => {
+          setAgreed(true);
+          setTermsOpen(false);
+        }}
+      />
     </AuthShell>
   );
 }
 
 const styles = StyleSheet.create({
-  form: { marginTop: 20, gap: 14 },
-  checks: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
+  form: { marginTop: 28, gap: 16 },
+  nameRow: { flexDirection: "row", gap: 16 },
+  nameStack: { gap: 16 },
+  nameCell: { flex: 1, width: "auto" },
+  checks: { flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 4, marginTop: 8 },
   check: { fontSize: 12.5, color: colors.muted },
-  checkMet: { color: colors.accentText },
-  error: { fontSize: 13, color: colors.rose },
-  google: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: "center",
+  checkMet: { color: colors.accent },
+  error: { fontSize: 14, color: colors.rose },
+  termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  checkbox: {
+    marginTop: 1,
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: "#cbd5e1",
     backgroundColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  googleDisabled: { opacity: 0.55 },
-  googleText: { fontSize: 14, fontWeight: "600", color: colors.text },
-  googleHint: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: -4 },
-  footer: { marginTop: 22, textAlign: "center", fontSize: 14, color: colors.slate },
-  footerLink: { fontWeight: "700", color: colors.accentText },
+  checkboxChecked: { borderColor: colors.accent, backgroundColor: colors.accent },
+  checkboxError: { borderColor: colors.rose },
+  checkboxMark: { fontSize: 12, lineHeight: 14, fontWeight: "700", color: colors.white },
+  termsText: { flex: 1, fontSize: 14, lineHeight: 20, color: colors.slate },
+  termsLink: { fontWeight: "600", color: colors.accent, textDecorationLine: "underline" },
+  termsError: { marginTop: 6, fontSize: 12.5, color: colors.rose },
+  footer: { marginTop: 24, textAlign: "center", fontSize: 14, color: colors.slate },
+  footerLink: { fontWeight: "600", color: colors.accent },
 });

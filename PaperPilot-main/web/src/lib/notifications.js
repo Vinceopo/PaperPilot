@@ -3,6 +3,7 @@
  * Used by the Notifications page and the header bell badge.
  */
 
+import { isPaidTier, planName, planPrice } from "./plans.js";
 import { APP_TIME_ZONE } from "./timeZone.js";
 
 function storageKey(uid) {
@@ -107,17 +108,17 @@ export function notificationFromScan(scanResult, versionNumber = 1) {
 
 export function notificationFromSubscription(subscription) {
   const tier = String(subscription?.tier || "").toLowerCase();
-  if (tier !== "premium") return null;
+  if (!isPaidTier(tier)) return null;
   const period = subscription?.billing_period === "annual" ? "annual" : "monthly";
-  const amount = period === "annual" ? 9490 : 949;
+  const amount = planPrice(tier, period);
   return {
     id: `pay-${subscription?.renews_at || Date.now()}`,
     type: "payment",
     title: "Payment successful",
-    body: `You're now on Premium — ₱${amount.toLocaleString("en-PH")}.00 charged.`,
+    body: `You're now on ${planName(tier)} — ₱${amount.toLocaleString("en-PH")}.00 charged.`,
     createdAt: new Date().toISOString(),
     read: false,
-    meta: { billingPeriod: period },
+    meta: { billingPeriod: period, tier },
   };
 }
 

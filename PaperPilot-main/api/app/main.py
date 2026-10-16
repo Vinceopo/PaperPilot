@@ -27,6 +27,9 @@ from app.compliance_db import (
     create_version,
     delete_mechanics,
     delete_manuscript,
+    delete_version,
+    deleted_scan_ids,
+    VersionScanRunning,
     get_mechanics,
     get_pending_checkout,
     get_scan,
@@ -35,6 +38,7 @@ from app.compliance_db import (
     get_version_full,
     init_db as init_compliance_db,
     is_current_version,
+    is_paid_tier,
     latest_pending_checkout_id,
     list_manuscripts,
     list_mechanics,
@@ -42,6 +46,7 @@ from app.compliance_db import (
     list_versions,
     persist_scan,
     require_premium,
+    running_scan_ids,
     save_pending_checkout,
     subscription_snapshot,
     update_mechanics,
@@ -171,7 +176,8 @@ def chrome_devtools_probe():
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
-def analyze(body: AnalyzeRequest):
+def analyze(body: AnalyzeRequest, authorization: str | None = Header(default=None)):
+    authenticated_uid(authorization)
     try:
         ai = analyze_with_gemini(body.title, body.abstract, body.text)
         rules = evaluate_manuscript(body.title, body.abstract, body.text)
@@ -188,7 +194,8 @@ def analyze(body: AnalyzeRequest):
 
 
 @app.post("/extract-pdf")
-async def extract_pdf(body: CloudinaryDocumentRequest):
+async def extract_pdf(body: CloudinaryDocumentRequest, authorization: str | None = Header(default=None)):
+    authenticated_uid(authorization)
     try:
         data, hint = fetch_cloudinary_bytes(body.cloudinary_url)
     except CloudinaryFetchError as exc:
@@ -293,6 +300,20 @@ def _document_preview_pages(parsed: dict, text: str, limit: int = 500) -> list[d
 
 def _raise_upgrade(exc: UpgradeRequired) -> None:
     raise HTTPException(status_code=403, detail=exc.detail) from None
+
+
+def _feature_tier(tier: str) -> str:
+    """Pro has every Premium analysis feature; the ML service only knows free/premium."""
+    return "premium" if is_paid_tier(tier) else "free"
+
+
+def _scan_rules(rules: dict) -> dict:
+    """Profiles saved before Chicago was removed are checked as APA (the default style)."""
+    out = dict(rules or {})
+    style = str(out.get("citation_style") or "").strip().upper()
+    if style == "CHICAGO":
+        out["citation_style"] = "APA"
+    return out
 
 
 @app.get("/mechanics")
@@ -518,6 +539,7 @@ async def manuscript_version_create(
             parsed,
             manuscript_id,
             cloudinary_url=body.cloudinary_url,
+            client_request_id=body.client_request_id,
         )
         return {"created_manuscript": created_parent, "version": version}
     except CloudinaryFetchError as exc:
@@ -545,6 +567,20 @@ def manuscript_delete(
 ):
     """Permanently remove this manuscript, its versions, and its scans."""
     deleted = delete_manuscript(uid, manuscript_id, title)
+    return {"deleted": deleted}
+
+
+@app.delete("/manuscripts/{manuscript_id}/versions/{version_id}")
+def manuscript_version_delete(
+    manuscript_id: str,
+    version_id: str,
+    uid: str = Depends(authenticated_uid),
+):
+    """Permanently remove one version and its scans on every device."""
+    try:
+        deleted = delete_version(uid, manuscript_id, version_id)
+    except VersionScanRunning as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return {"deleted": deleted}
 
 
@@ -599,7 +635,12 @@ def compliance_scan_create(
     if not version or not mechanics:
         raise HTTPException(status_code=404, detail="Manuscript version or mechanics not found.")
     try:
-        subscription = check_scan_eligibility(uid, manuscript_id, version_id)
+        subscription = check_scan_eligibility(
+            uid,
+            manuscript_id,
+            version_id,
+            citation_style=_scan_rules(mechanics.get("rules") or {}).get("citation_style"),
+        )
     except UpgradeRequired as exc:
         _raise_upgrade(exc)
     except LookupError:
@@ -622,10 +663,13 @@ def compliance_scan_create(
             raw_bytes, _hint = fetch_cloudinary_bytes(document_url)
         except CloudinaryFetchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        except Exception as exc:
+        except Exception:
             raise HTTPException(
                 status_code=502,
-                detail=f"Could not download the document for analysis: {exc}",
+                detail=(
+                    "Your saved document could not be downloaded for analysis. "
+                    "No scan was used. Try again in a minute, or upload the file again."
+                ),
             ) from None
         scan_id = str(uuid.uuid4())
         try:
@@ -634,8 +678,8 @@ def compliance_scan_create(
                 document_url=None,
                 document_base64=base64.b64encode(raw_bytes).decode("ascii"),
                 filename=version.get("source_filename") or "document.pdf",
-                mechanics_rules=mechanics["rules"],
-                tier=subscription["tier"],
+                mechanics_rules=_scan_rules(mechanics["rules"]),
+                tier=_feature_tier(subscription["tier"]),
             )
         except MLServiceError as exc:
             status = exc.status_code if exc.status_code and exc.status_code < 500 else 502
@@ -655,7 +699,7 @@ def compliance_scan_create(
             raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
 
     result = run_compliance_scan(
-        version["parsed_data"], mechanics["rules"], subscription["tier"]
+        version["parsed_data"], _scan_rules(mechanics["rules"]), _feature_tier(subscription["tier"])
     )
     extra = {
         "page_count": result.get("page_count") or 0,
@@ -687,7 +731,13 @@ def compliance_scan_create(
 @app.get("/scans")
 def compliance_scans_list(uid: str = Depends(authenticated_uid)):
     """Finished scans (summary only) so My Manuscripts can be rebuilt on any device."""
-    return {"items": list_scan_summaries(uid)}
+    # Scans whose client stopped polling (page reload, app closed) are finished here.
+    for scan_id in running_scan_ids(uid)[:3]:
+        try:
+            hydrate_scan_from_ml(uid, scan_id)
+        except Exception:
+            continue
+    return {"items": list_scan_summaries(uid), "deleted": deleted_scan_ids(uid)}
 
 
 @app.get("/scans/{scan_id}/progress")
@@ -762,10 +812,13 @@ def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authentica
     billing_period = (body.billing_period or "monthly").lower()
     if billing_period not in ("monthly", "annual"):
         billing_period = "monthly"
+    tier = "pro" if plan == "pro" else "premium"
 
     base = (settings.app_public_url or "https://paperpilotph.vercel.app").rstrip("/")
-    success_url = f"{base}/?billing=success"
-    cancel_url = f"{base}/?billing=canceled"
+    # Mobile checkouts land on a web page that hands control back to the app.
+    app_return = "&app=1" if body.return_to == "app" else ""
+    success_url = f"{base}/?billing=success{app_return}"
+    cancel_url = f"{base}/?billing=canceled{app_return}"
     reference = f"pp-{uid[:8]}-{uuid.uuid4().hex[:12]}"
 
     customer_email = None
@@ -788,31 +841,38 @@ def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authentica
             customer_email=customer_email,
             customer_name=customer_name,
             reference_number=reference,
+            tier=tier,
         )
     except PayMongoError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
+    checkout_error = (
+        "The payment page could not be opened because PayMongo sent an incomplete reply. "
+        "You were not charged. Try again in a minute."
+    )
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
-        raise HTTPException(status_code=502, detail="PayMongo returned an unexpected response.")
+        raise HTTPException(status_code=502, detail=checkout_error)
     attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
     checkout_url = attrs.get("checkout_url")
     session_id = data.get("id")
     if not checkout_url or not session_id:
-        raise HTTPException(status_code=502, detail="PayMongo checkout URL missing.")
+        raise HTTPException(status_code=502, detail=checkout_error)
 
     save_pending_checkout(
         uid,
         checkout_session_id=str(session_id),
         billing_period=billing_period,
         reference_number=reference,
-        amount_pesos=plan_amount_pesos(billing_period),
+        amount_pesos=plan_amount_pesos(billing_period, tier),
+        tier=tier,
     )
     return {
         "checkout_url": checkout_url,
         "checkout_session_id": session_id,
+        "plan": tier,
         "billing_period": billing_period,
-        "amount": plan_amount_pesos(billing_period),
+        "amount": plan_amount_pesos(billing_period, tier),
         "currency": "PHP",
         "provider": "paymongo",
     }
@@ -833,11 +893,14 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
     session_id = (body.checkout_session_id or "").strip() or latest_pending_checkout_id(uid)
     if not session_id:
         snap = subscription_snapshot(uid)
-        if str(snap.get("tier") or "").lower() == "premium":
+        if is_paid_tier(snap.get("tier")):
             return {**snap, "confirmed": True, "already_premium": True}
         raise HTTPException(
             status_code=404,
-            detail="No pending PayMongo checkout found for this account.",
+            detail=(
+                "No pending payment was found for this account. "
+                "If you were charged, wait a minute and refresh; otherwise choose a plan again."
+            ),
         )
 
     pending = get_pending_checkout(session_id)
@@ -851,7 +914,7 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
     if already_applied:
         return {
             **current,
-            "confirmed": str(current.get("tier") or "").lower() == "premium",
+            "confirmed": is_paid_tier(current.get("tier")),
             "already_applied": True,
             "checkout_session_id": session_id,
         }
@@ -909,6 +972,7 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
             checkout_session_id=session_id,
             payment_id=str(payment_id) if payment_id else None,
             reference_number=str(attrs.get("reference_number") or "") or None,
+            tier="pro" if str((pending or {}).get("tier") or meta.get("tier") or "").lower() == "pro" else "premium",
         )
 
     return {
@@ -948,7 +1012,7 @@ async def paymongo_webhook(
 
     # Respond quickly after verify; handler is sync/RTDB and should stay short.
     result = handle_paymongo_event(payload if isinstance(payload, dict) else {})
-    return JSONResponse(result, status_code=200)
+    return JSONResponse(result, status_code=200 if result.get("ok", True) else 500)
 
 
 def _require(error: str | None) -> None:
@@ -1209,7 +1273,10 @@ def auth_otp_send(body: OtpSendRequest):
         log.error("OTP email to %s failed: %s", email, exc)
         raise HTTPException(
             status_code=502,
-            detail="We couldn't send the verification email right now. Please try again in a few minutes.",
+            detail=(
+                "We couldn't send the verification email right now. "
+                "Please try again in a few minutes."
+            ),
         ) from exc
     minutes = max(1, ttl // 60)
     payload = {

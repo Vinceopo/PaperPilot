@@ -18,6 +18,8 @@ from docx.text.paragraph import Paragraph
 from docx.text.run import Run
 
 from app.mechanics_options import (
+    FONT_SIZE_KEYS,
+    MAX_HEADING_LEVELS,
     canonical_landscape_pages,
     canonical_word_spacing,
     normalize_heading_styles,
@@ -987,7 +989,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     heading_styles = normalize_heading_styles(font.get("heading_styles") or raw.get("heading_styles"))
     if heading_styles:
         font_out["heading_styles"] = heading_styles
-    for key in ("heading1_size", "heading2_size", "heading3_content_size"):
+    for key in FONT_SIZE_KEYS:
         value = font.get(key, raw.get(key))
         try:
             number = float(value)
@@ -999,6 +1001,15 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
                 sizes = [*list(sizes), number]
             else:
                 sizes = [number]
+    if "body_size" in font_out:
+        # Analysis services that predate body_size read the combined key.
+        font_out["heading3_content_size"] = font_out["body_size"]
+    try:
+        levels = int(font.get("heading_levels") or 0)
+    except (TypeError, ValueError):
+        levels = 0
+    if 1 <= levels <= MAX_HEADING_LEVELS:
+        font_out["heading_levels"] = levels
     if sizes:
         cleaned = []
         for value in sizes:
@@ -1092,7 +1103,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["margins_inches"] = margins
 
     citation = str(raw.get("citation_style") or "").strip().upper()
-    if citation in {"APA", "MLA", "IEEE", "CHICAGO", "HARVARD", "VANCOUVER", "TURABIAN"}:
+    if citation in {"APA", "MLA", "IEEE"}:
         rules["citation_style"] = citation
 
     pagination_in = raw.get("pagination") if isinstance(raw.get("pagination"), dict) else {}

@@ -80,6 +80,10 @@ def _first_payment_id(resource: dict) -> str | None:
     return None
 
 
+def _plan_tier(value: Any) -> str:
+    return "pro" if str(value or "").lower() == "pro" else "premium"
+
+
 def _resolve_uid(resource: dict, *, checkout_session_id: str | None = None) -> tuple[str, str, dict | None]:
     """Return (uid, billing_period, pending_checkout)."""
     meta = _metadata(resource)
@@ -100,6 +104,7 @@ def _resolve_uid(resource: dict, *, checkout_session_id: str | None = None) -> t
 def fulfill_checkout_paid(resource: dict) -> bool:
     session_id = str(resource.get("id") or "")
     uid, billing_period, pending = _resolve_uid(resource, checkout_session_id=session_id)
+    tier = _plan_tier((pending or {}).get("tier") or _metadata(resource).get("tier"))
     if pending and pending.get("status") == "paid":
         return False  # already fulfilled
     if not uid:
@@ -114,6 +119,7 @@ def fulfill_checkout_paid(resource: dict) -> bool:
         checkout_session_id=session_id or None,
         payment_id=_first_payment_id(resource),
         reference_number=str(attrs.get("reference_number") or "") or None,
+        tier=tier,
     )
     return True
 
@@ -138,6 +144,7 @@ def fulfill_link_paid(resource: dict) -> bool:
         payment_id=_first_payment_id(resource) or str(resource.get("id") or "") or None,
         reference_number=str(attrs.get("reference_number") or attrs.get("external_reference_number") or "")
         or None,
+        tier=_plan_tier(meta.get("tier")),
     )
     return True
 
@@ -160,12 +167,12 @@ def handle_paymongo_event(payload: dict) -> dict[str, Any]:
     except Exception:
         logger.exception("PayMongo event handler failed type=%s id=%s", event_type, event_id)
         result["handled"] = False
-        # Still mark processed so a poison message does not loop forever;
-        # operators can replay from PayMongo dashboard after a fix.
-    finally:
-        if event_id:
-            complete_webhook_event(event_id)
+        # Leave the event unprocessed so PayMongo's retry (bounded on their side) can apply it.
+        result["ok"] = False
+        return result
 
+    if event_id:
+        complete_webhook_event(event_id)
     return result
 
 
@@ -189,8 +196,8 @@ def _dispatch(event_type: str, resource: dict) -> bool:
         meta = _metadata(resource)
         uid = str(meta.get("uid") or "").strip()
         cs_id = meta.get("checkout_session_id")
-        if not uid and cs_id:
-            pending = get_pending_checkout(str(cs_id))
+        pending = get_pending_checkout(str(cs_id)) if cs_id else None
+        if not uid:
             uid = str((pending or {}).get("owner_uid") or "")
         if not uid:
             # May already have been fulfilled via checkout_session.payment.paid
@@ -200,12 +207,13 @@ def _dispatch(event_type: str, resource: dict) -> bool:
         amount = attrs.get("amount")
         activate_premium_from_payment(
             uid,
-            billing_period=str(meta.get("billing_period") or "monthly"),
+            billing_period=str(meta.get("billing_period") or (pending or {}).get("billing_period") or "monthly"),
             payment_method=_payment_source_type(resource) or "paymongo",
             amount_pesos=(amount // 100) if isinstance(amount, int) else None,
             checkout_session_id=str(cs_id) if cs_id else None,
             payment_id=str(resource.get("id") or "") or None,
             reference_number=attrs.get("external_reference_number"),
+            tier=_plan_tier(meta.get("tier") or (pending or {}).get("tier")),
         )
         return True
 
@@ -254,6 +262,7 @@ def _dispatch(event_type: str, resource: dict) -> bool:
             checkout_session_id=None,
             payment_id=None,
             reference_number=sub_id or None,
+            tier=_plan_tier(meta.get("tier")),
         )
         return True
 
@@ -270,6 +279,7 @@ def _dispatch(event_type: str, resource: dict) -> bool:
             billing_period=str(meta.get("billing_period") or "monthly"),
             payment_id=_first_payment_id(resource),
             amount_pesos=_amount_pesos(resource),
+            tier=meta.get("tier"),
         )
         return True
 

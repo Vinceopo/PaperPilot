@@ -47,8 +47,10 @@ class Settings(BaseSettings):
     firebase_database_url: str = ""
     free_scan_limit: int = 3
     premium_scan_limit: int = 50
-    # Each successful scan uses one credit. Free is always 3/month, Premium is always 50/month.
-    # Kept for older env files. The API enforces 3 and 50 even if this is set higher.
+    pro_scan_limit: int = 75
+    # Each successful scan uses one credit. Free is always 3/month, Premium is always 50/month,
+    # Pro is always 75/week.
+    # Kept for older env files. The API enforces 3, 50 and 75 even if this is set higher.
     disable_scan_limit: bool = False
     # Documents are uploaded with Cloudinary upload_large (20MB chunks).
     # 100MB matches the client ceiling. A lower env value must not reject those files.

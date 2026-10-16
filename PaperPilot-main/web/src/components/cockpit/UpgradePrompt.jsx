@@ -1,18 +1,33 @@
-export default function UpgradePrompt({ message, onClose, onUpgrade }) {
+import { normalizeTier } from "../../lib/plans";
+
+export default function UpgradePrompt({ message, tier, onClose, onUpgrade }) {
   if (!message) return null;
+  const current = normalizeTier(tier);
+  const target = current === "free" ? "premium" : "pro";
+  const atTop = current === "pro";
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/50 p-5 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
       <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-2xl">
         <span className="inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold uppercase tracking-wider text-[#109b89]">
-          Premium
+          {target === "pro" ? "Pro" : "Premium"}
         </span>
-        <h2 id="upgrade-title" className="mt-4 text-xl font-semibold text-slate-800">Upgrade to Premium</h2>
+        <h2 id="upgrade-title" className="mt-4 text-xl font-semibold text-slate-800">
+          {atTop ? "Scan limit reached" : target === "pro" ? "Upgrade to Pro" : "Upgrade to Premium"}
+        </h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-500">{message}</p>
-        <ul className="mt-4 space-y-2 text-sm text-slate-600">
-          <li>✓ Up to 50 compliance scans each month</li>
-          <li>✓ Complete manuscript version history</li>
-          <li>✓ Deeper AI explanations and recommendations</li>
-        </ul>
+        {!atTop && (
+          <ul className="mt-4 space-y-2 text-sm text-slate-600">
+            {target === "pro" ? (
+              <li>✓ Up to 75 compliance scans every week</li>
+            ) : (
+              <>
+                <li>✓ Up to 50 compliance scans each month</li>
+                <li>✓ Complete manuscript version history</li>
+                <li>✓ Deeper AI explanations and recommendations</li>
+              </>
+            )}
+          </ul>
+        )}
         <div className="mt-6 flex gap-3">
           <button
             type="button"

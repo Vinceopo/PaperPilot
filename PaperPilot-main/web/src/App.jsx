@@ -60,6 +60,8 @@ import {
 } from "./lib/scannedLibrary.js";
 import { latestVersion } from "./lib/scoreBand.js";
 import { formatFileSize } from "./lib/formatFileSize.js";
+import { supportedCitationStyle } from "./lib/formatMechanicsForm.js";
+import { isPaidTier, planLimit, planName, resetWindow } from "./lib/plans.js";
 import {
   loadNotifications,
   saveNotifications,
@@ -133,11 +135,36 @@ export default function App() {
   const [upgradeMessage, setUpgradeMessage] = useState("");
   const [registrationSuccess, setRegistrationSuccess] = useState(() => pendingRegistration());
   const [activePage, setActivePage] = useState("upload"); // "upload" | "manuscripts" | "account" | "subscription" | "notifications"
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= 768
+  );
   const [scannedLibrary, setScannedLibrary] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const lastSavedScanKey = useRef("");
   const scannedLibraryRef = useRef([]);
+  // A dashboard load started before a delete can finish after it; never show deleted formats again.
+  const deletedMechanicsRef = useRef(new Set());
+  // Bumped on every local save/rename/edit/delete so an older dashboard load can't overwrite it.
+  const mechanicsChangeRef = useRef(0);
+  const silentLoadRef = useRef(null);
+  const withoutDeletedMechanics = useCallback(
+    (items) => items.filter((item) => !deletedMechanicsRef.current.has(item.id)),
+    []
+  );
+  // Plan replies can arrive out of order (a slow dashboard load finishing after a
+  // checkout confirm), so a reply requested before the latest plan update is dropped.
+  const subscriptionTicketRef = useRef(0);
+  const subscriptionAppliedRef = useRef(0);
+  const nextSubscriptionTicket = useCallback(() => ++subscriptionTicketRef.current, []);
+  const storeSubscription = useCallback((next, ticket) => {
+    if (!next || typeof next !== "object") return false;
+    const order = ticket ?? ++subscriptionTicketRef.current;
+    if (order < subscriptionAppliedRef.current) return false;
+    subscriptionAppliedRef.current = order;
+    setSubscription(next);
+    writeCachedSubscription(auth?.currentUser?.uid, next);
+    return true;
+  }, []);
   const notificationsRef = useRef([]);
   const notificationsRootRef = useRef(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -260,7 +287,7 @@ export default function App() {
     }
     const mechanicsId = selectedMechanicsIdRef.current;
     const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
-    const citationStyle = String(profile?.rules?.citation_style || "APA").toUpperCase();
+    const citationStyle = supportedCitationStyle(profile?.rules?.citation_style);
     return {
       manuscriptId,
       versionId,
@@ -382,17 +409,16 @@ export default function App() {
   useEffect(() => {
     if (!user || (scanFlow.step !== "summary" && scanFlow.step !== "results")) return undefined;
     let cancelled = false;
+    const ticket = nextSubscriptionTicket();
     getSubscription()
       .then((next) => {
-        if (cancelled || !next) return;
-        setSubscription(next);
-        writeCachedSubscription(user.uid, next);
+        if (!cancelled) storeSubscription(next, ticket);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [scanFlow.step, user]);
+  }, [scanFlow.step, user, nextSubscriptionTicket, storeSubscription]);
 
   useEffect(() => {
     if (!fileDetailsFocusKey || !manuscriptReady) return;
@@ -425,6 +451,30 @@ export default function App() {
     if (loaded.length) saveScannedManuscripts(loaded, user?.uid);
     lastSavedScanKey.current = "";
     setNotifications(loadNotifications(user?.uid));
+  }, [user?.uid]);
+
+  // Signing out (or into another account) must not leave the previous user's session on screen.
+  const sessionUidRef = useRef(user?.uid || "");
+  useEffect(() => {
+    const uid = user?.uid || "";
+    const previous = sessionUidRef.current;
+    sessionUidRef.current = uid;
+    if (!previous || previous === uid) return;
+    setMechanics([]);
+    setSelectedMechanicsId("");
+    setManuscripts([]);
+    setCurrentManuscript(null);
+    setCurrentVersion(null);
+    subscriptionAppliedRef.current = ++subscriptionTicketRef.current;
+    setSubscription(uid ? readCachedSubscription(uid) : null);
+    setBillingReturn(null);
+    setUpgradeMessage("");
+    setError("");
+    setActivePage("upload");
+    setManuscriptReady(false);
+    setFileDetailsNotice("");
+    resetUploadWizard(1);
+    scanFlow.backToDashboard();
   }, [user?.uid]);
 
   useEffect(() => {
@@ -543,9 +593,12 @@ export default function App() {
       const previous = scannedLibraryRef.current;
       const kept = new Set(next.flatMap((m) => (m.versions || []).map(versionScanId)));
       dismissScanIds(
-        previous.flatMap((m) => (m.versions || []).map(versionScanId)).filter((id) => id && !kept.has(id)),
+        previous
+          .flatMap((m) => (m.versions || []).map(versionScanId))
+          .filter((id) => id && !kept.has(id)),
         user?.uid
       );
+      scannedLibraryRef.current = next;
       setScannedLibrary(next);
       saveScannedManuscripts(next, user?.uid);
       const current = currentManuscriptRef.current;
@@ -608,7 +661,7 @@ export default function App() {
       if (next) {
         setRegistrationSuccess(pendingRegistration(next));
         const cached = readCachedSubscription(next.uid);
-        if (cached) setSubscription(cached);
+        if (cached) setSubscription((current) => current || cached);
       }
       setAuthReady(true);
     });
@@ -645,18 +698,23 @@ export default function App() {
     getProfile().catch(() => {});
   }, [user?.uid]);
 
-  const loadDashboard = useCallback(async () => {
+  const loadDashboard = useCallback(async (opts) => {
     if (!auth?.currentUser) return;
-    setLoading(true);
-    setError("");
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       // Vercel Python cold-starts install deps on first request — warm first so
       // the three parallel dashboard calls don't all race a 60s install.
-      await warmApi();
+      if (!silent) await warmApi();
 
       // Load each resource independently — a 503 on manuscripts/subscription
       // must not wipe a successful mechanics list (that caused "already exists"
       // saves while Use a Saved Format looked empty).
+      const subscriptionTicket = nextSubscriptionTicket();
+      const mechanicsChange = mechanicsChangeRef.current;
       const [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] = await Promise.allSettled([
         listMechanics(),
         listManuscripts(),
@@ -677,12 +735,34 @@ export default function App() {
         }
       }
 
+      // Scans made on another device (e.g. mobile) join the local library as versions.
+      if (scansResult.status === "fulfilled") {
+        const uid = auth.currentUser?.uid;
+        const { items, changed } = mergeServerScans(
+          scannedLibraryRef.current,
+          itemsFrom(scansResult.value, "items"),
+          loadDismissedScanIds(uid),
+          scansResult.value?.deleted
+        );
+        if (changed) {
+          scannedLibraryRef.current = items;
+          setScannedLibrary(items);
+          saveScannedManuscripts(items, uid);
+        }
+      }
+
       const failures = [];
-      if (mechanicsResult.status === "fulfilled") {
-        const nextMechanics = itemsFrom(mechanicsResult.value, "mechanics");
+      // Formats changed on screen while this load was in flight; the on-screen list is newer.
+      const mechanicsStale = mechanicsChange !== mechanicsChangeRef.current;
+      if (mechanicsResult.status === "fulfilled" && !mechanicsStale) {
+        const nextMechanics = withoutDeletedMechanics(itemsFrom(mechanicsResult.value, "mechanics"));
         setMechanics(nextMechanics);
-        setSelectedMechanicsId((current) => current || nextMechanics[0]?.id || "");
-      } else {
+        setSelectedMechanicsId((current) =>
+          current && nextMechanics.some((item) => item.id === current)
+            ? current
+            : nextMechanics[0]?.id || ""
+        );
+      } else if (mechanicsResult.status === "rejected") {
         failures.push(mechanicsResult.reason?.message || "Could not load format mechanics.");
       }
       if (manuscriptsResult.status === "fulfilled") {
@@ -691,24 +771,83 @@ export default function App() {
         failures.push(manuscriptsResult.reason?.message || "Could not load manuscripts.");
       }
       if (subscriptionResult.status === "fulfilled") {
-        setSubscription(subscriptionResult.value);
-        writeCachedSubscription(auth.currentUser?.uid, subscriptionResult.value);
+        storeSubscription(subscriptionResult.value, subscriptionTicket);
       } else {
         failures.push(subscriptionResult.reason?.message || "Could not load subscription.");
       }
-      if (failures.length) {
+      if (failures.length && !silent) {
         setError(failures[0]);
       }
     } catch (err) {
-      setError(err.message);
+      if (!silent) setError(err.message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, []);
+  }, [nextSubscriptionTicket, storeSubscription, withoutDeletedMechanics]);
 
   useEffect(() => {
     if (signedIn) loadDashboard();
   }, [signedIn, loadDashboard]);
+
+  // Changes made on another device (formats, versions, scans, plan) show up without a manual refresh:
+  // on returning to the tab and every 30 seconds while it is visible.
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    let last = Date.now();
+    const refresh = (minGap) => {
+      if (document.visibilityState !== "visible" || Date.now() - last < minGap) return;
+      if (silentLoadRef.current) return;
+      last = Date.now();
+      silentLoadRef.current = loadDashboard({ silent: true }).finally(() => {
+        silentLoadRef.current = null;
+      });
+    };
+    const onReturn = () => refresh(3000);
+    const timer = window.setInterval(() => refresh(25000), 30000);
+    document.addEventListener("visibilitychange", onReturn);
+    window.addEventListener("focus", onReturn);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onReturn);
+      window.removeEventListener("focus", onReturn);
+    };
+  }, [signedIn, loadDashboard]);
+
+  useEffect(() => {
+    if (signedIn && activePage === "manuscripts") void loadDashboard({ silent: true });
+  }, [signedIn, activePage, loadDashboard]);
+
+  // Stored versions can be server summaries only; fetch the full scan when opened.
+  async function resolveSavedResult(manuscript, version) {
+    if (!version) return null;
+    const scanId = versionScanId(version);
+    if ((version.scanResult && !version.trimmed) || !isServerId(scanId)) {
+      return versionToScanResult(manuscript, version);
+    }
+    try {
+      const scan = await getComplianceScan(scanId);
+      const full = mapComplianceScanToResult(scan, {
+        documentId: manuscript?.id,
+        documentTitle: manuscript?.title,
+        citationStyle: manuscript?.citationStyle,
+        versionId: version.versionId,
+      });
+      const next = attachScanResult(scannedLibraryRef.current, manuscript.id, version.id, full);
+      scannedLibraryRef.current = next;
+      setScannedLibrary(next);
+      saveScannedManuscripts(next, user?.uid);
+      const updated = next.find((m) => m.id === manuscript.id);
+      const updatedVersion = updated?.versions?.find((v) => v.id === version.id);
+      return versionToScanResult(updated || manuscript, updatedVersion || version);
+    } catch (err) {
+      setError(
+        err?.message
+          ? `This version could not be loaded: ${err.message}`
+          : "This version could not be loaded. Check your connection, then open it again."
+      );
+      return null;
+    }
+  }
 
   useEffect(() => {
     const wizard =
@@ -743,10 +882,21 @@ export default function App() {
         fileType: payload.file_type,
         extractedText: payload.extracted_text,
       });
-      const data = await listMechanics();
-      const next = itemsFrom(data, "mechanics");
-      setMechanics(next);
-      setSelectedMechanicsId(created.id || next[0]?.id || "");
+      mechanicsChangeRef.current += 1;
+      if (created?.id) {
+        setMechanics((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setSelectedMechanicsId(created.id);
+      }
+      try {
+        const data = await listMechanics();
+        const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
+        if (!created?.id || next.some((item) => item.id === created.id)) {
+          setMechanics(next);
+          setSelectedMechanicsId(created?.id || next[0]?.id || "");
+        }
+      } catch {
+        // The saved format is already on screen; the next refresh brings the full list.
+      }
       return true;
     } catch (err) {
       // Name conflict usually means the profile is already in SQLite — refresh the
@@ -754,7 +904,7 @@ export default function App() {
       if (err?.status === 409 || /already exists/i.test(err?.message || "")) {
         try {
           const data = await listMechanics();
-          const next = itemsFrom(data, "mechanics");
+          const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
           setMechanics(next);
           const match = next.find(
             (item) => item.name.toLowerCase() === String(payload.name || "").trim().toLowerCase()
@@ -783,6 +933,7 @@ export default function App() {
         name: payload.name,
         rules: payload.rules,
       });
+      mechanicsChangeRef.current += 1;
       setMechanics((current) =>
         current.map((item) => (item.id === mechanicsId ? { ...item, ...updated } : item))
       );
@@ -800,6 +951,7 @@ export default function App() {
     setError("");
     try {
       const updated = await renameMechanicsRequest(mechanicsId, name);
+      mechanicsChangeRef.current += 1;
       setMechanics((current) =>
         current.map((item) => (item.id === mechanicsId ? updated : item))
       );
@@ -816,9 +968,16 @@ export default function App() {
     setMechanicsBusy(true);
     setError("");
     try {
-      await deleteMechanicsRequest(mechanicsId);
+      try {
+        await deleteMechanicsRequest(mechanicsId);
+      } catch (err) {
+        // 404 means it is already gone on the server (e.g. deleted on another device).
+        if (err?.status !== 404) throw err;
+      }
+      deletedMechanicsRef.current.add(mechanicsId);
+      mechanicsChangeRef.current += 1;
       const remainingItems = mechanics.filter((item) => item.id !== mechanicsId);
-      setMechanics(remainingItems);
+      setMechanics((current) => current.filter((item) => item.id !== mechanicsId));
       if (selectedMechanicsId === mechanicsId) {
         setSelectedMechanicsId(remainingItems[0]?.id || "");
         setCurrentVersion(null);
@@ -995,7 +1154,7 @@ export default function App() {
 
   const tier = String(subscription?.tier || "free").toLowerCase();
   const used = Number(subscription?.used ?? subscription?.scans_used ?? 0);
-  const limit = tier === "premium" ? 50 : 3;
+  const limit = Number(subscription?.limit) || planLimit(tier);
   const remaining = Math.max(limit - Math.max(0, used), 0);
   const selectedMechanics = mechanics.find((item) => item.id === selectedMechanicsId);
   const scanReady = isScanReady(currentVersion, currentManuscript);
@@ -1067,6 +1226,10 @@ export default function App() {
         className={`fixed inset-y-0 left-0 z-40 w-80 flex-col bg-[#101a30] px-5 py-6 text-white transition-transform duration-300 md:flex ${
           sidebarOpen ? "flex translate-x-0" : "hidden -translate-x-full md:hidden"
         }`}
+        onClick={(e) => {
+          // On phones the sidebar covers the page, so close it after navigating.
+          if (window.innerWidth < 768 && e.target.closest?.("nav button")) setSidebarOpen(false);
+        }}
       >
         <div className="relative px-2">
           <button
@@ -1185,14 +1348,16 @@ export default function App() {
             <>
               <div className="hidden text-right lg:block">
                 <p className="text-xs font-semibold capitalize text-slate-700">{tier} plan</p>
-                <p className="text-[10px] text-slate-400">{remaining} of {limit} scans remaining</p>
+                <p className="text-[10px] text-slate-400">
+                  {remaining} of {limit} scans remaining this {resetWindow(tier)}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setActivePage("subscription")}
                 className="rounded-md bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-[#092823] shadow-sm hover:bg-[#12ae99]"
               >
-                {tier === "premium" ? "Manage subscription" : "Subscribe to Premium"}
+                {isPaidTier(tier) ? "Manage subscription" : "Subscribe to Premium"}
               </button>
             </>
           )}
@@ -1245,13 +1410,17 @@ export default function App() {
 
       <main className="w-full p-5 md:p-8">
 
-        {/* ── Global API error banner ─────────────────────────────────────── */}
-        {error && (
-          <div className="mb-5 flex items-start justify-between gap-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700" role="alert">
-            <span>{error}</span>
-            <button onClick={() => setError("")} aria-label="Dismiss error">✕</button>
-          </div>
-        )}
+        {/* ── Global API error dialog ─────────────────────────────────────── */}
+        <ConfirmDialog
+          open={Boolean(error)}
+          title="Something went wrong"
+          message={error}
+          confirmLabel="OK"
+          cancelLabel={null}
+          tone="danger"
+          onConfirm={() => setError("")}
+          onCancel={() => setError("")}
+        />
 
         {/* ══════════════════════════════════════════════════════════════════
             ACCOUNT SETTINGS PAGE
@@ -1271,8 +1440,7 @@ export default function App() {
             billingReturn={billingReturn}
             onBillingSettled={() => setBillingReturn(null)}
             onSubscriptionChange={(next) => {
-              setSubscription(next);
-              writeCachedSubscription(user?.uid, next);
+              storeSubscription(next);
               const note = notificationFromSubscription(next);
               if (note) appendNotifications(note);
             }}
@@ -1622,8 +1790,20 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
+                      const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
+                      if (!isPaidTier(tier) && scanStyle !== "APA") {
+                        setUpgradeMessage(
+                          `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
+                        );
+                        return;
+                      }
                       if (remaining <= 0) {
-                        setUpgradeMessage(`You have used all ${limit} scans included in your ${tier} plan this month.`);
+                        setUpgradeMessage(
+                          `You have used all ${limit} scans included in your ${planName(tier)} plan this ${resetWindow(tier)}.` +
+                            (subscription?.reset_at
+                              ? ` Your scans reset on ${new Date(subscription.reset_at).toLocaleDateString()}.`
+                              : "")
+                        );
                         return;
                       }
                       setFileDetailsConfirm("analyse");
@@ -1708,6 +1888,7 @@ export default function App() {
 
       <UpgradePrompt
         message={upgradeMessage}
+        tier={tier}
         onClose={() => setUpgradeMessage("")}
         onUpgrade={() => {
           setUpgradeMessage("");

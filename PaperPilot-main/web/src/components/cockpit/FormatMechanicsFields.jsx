@@ -3,20 +3,21 @@
  * Values shown are the actual rules (from extraction, saved profile, or sample starter).
  */
 
+import { supportedCitationStyle } from "../../lib/formatMechanicsForm.js";
 import { useEffect, useId, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Plus, Trash2, X } from "lucide-react";
 import {
   BODY_NUMBERING_OPTIONS,
   CHAPTER_FIRST_PAGE_OPTIONS,
-  CHAPTER_MARKER_OPTIONS,
-  HEADING_LEVELS,
-  HEADING_STYLE_FIELDS,
+  HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
+  MAX_HEADING_LEVELS,
   PAGE_POSITIONS,
   PRELIMINARY_STYLE_OPTIONS,
   TITLE_PAGE_OPTIONS,
   WORD_SPACING_OPTIONS,
-  emptyHeadingStyles,
+  emptyHeading,
+  headingLabel,
 } from "../../lib/mechanicsOptions";
 
 const LINE_SPACING_OPTIONS = [
@@ -187,20 +188,31 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
   function setValue(key) {
     return (value) => onChange?.({ ...form, [key]: value });
   }
-  const headingStyles = form.headingStyles || emptyHeadingStyles();
-  function setHeadingStyle(level, key) {
-    return (value) =>
-      onChange?.({
-        ...form,
-        headingStyles: { ...headingStyles, [level]: { ...headingStyles[level], [key]: value } },
-      });
+  const headings = Array.isArray(form.headings) ? form.headings : [];
+  function setHeadings(next) {
+    onChange?.({ ...form, headings: next });
   }
-  const chapterMarkers = Array.isArray(form.paginationChapterMarkers) ? form.paginationChapterMarkers : [];
-  function toggleChapterMarker(key) {
-    const next = chapterMarkers.includes(key)
-      ? chapterMarkers.filter((item) => item !== key)
-      : [...chapterMarkers, key];
-    onChange?.({ ...form, paginationChapterMarkers: next });
+  function updateHeading(index, update) {
+    setHeadings(headings.map((heading, i) => (i === index ? update(heading) : heading)));
+  }
+  function setHeadingValue(index, key, value) {
+    updateHeading(index, (heading) => ({ ...heading, [key]: value }));
+  }
+  function addHeadingRule(index, key) {
+    updateHeading(index, (heading) => ({ ...heading, fields: [...(heading.fields || []), key] }));
+  }
+  function removeHeadingRule(index, key) {
+    updateHeading(index, (heading) => ({
+      ...heading,
+      [key]: "",
+      fields: (heading.fields || []).filter((field) => field !== key),
+    }));
+  }
+  function addHeading() {
+    setHeadings([...headings, emptyHeading()]);
+  }
+  function removeHeading(index) {
+    setHeadings(headings.filter((_, i) => i !== index));
   }
 
   return (
@@ -327,39 +339,15 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
 
       <Section title="Font">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Heading 1 size">
+          <Field label="Body text size" hint="Paragraph text, in points">
             <input
               disabled={disabled}
               type="number"
               min="6"
               max="72"
               step="0.5"
-              value={form.fontHeading1Size}
-              onChange={set("fontHeading1Size")}
-              className={inputClass}
-            />
-          </Field>
-          <Field label="Heading 2 size">
-            <input
-              disabled={disabled}
-              type="number"
-              min="6"
-              max="72"
-              step="0.5"
-              value={form.fontHeading2Size}
-              onChange={set("fontHeading2Size")}
-              className={inputClass}
-            />
-          </Field>
-          <Field label="Heading 3 and Content size">
-            <input
-              disabled={disabled}
-              type="number"
-              min="6"
-              max="72"
-              step="0.5"
-              value={form.fontHeading3Size}
-              onChange={set("fontHeading3Size")}
+              value={form.bodySize}
+              onChange={set("bodySize")}
               className={inputClass}
             />
           </Field>
@@ -382,24 +370,101 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
         </div>
       </Section>
 
-      <Section title="Heading styles">
-        {HEADING_LEVELS.map(({ key: level, label }) => (
-          <div key={level}>
-            <p className="text-[11px] font-semibold text-slate-600">{label}</p>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4">
-              {HEADING_STYLE_FIELDS.map((field) => (
-                <Field key={field.key} label={<span className="font-normal text-slate-500">{field.label}</span>}>
-                  <ChoiceSelect
-                    disabled={disabled}
-                    value={headingStyles[level]?.[field.key]}
-                    onChange={setHeadingStyle(level, field.key)}
-                    options={field.options}
-                  />
-                </Field>
-              ))}
+      <Section title="Headings">
+        {headings.length ? null : (
+          <p className="text-[11px] text-slate-400">No heading rules in this format.</p>
+        )}
+        {headings.map((heading, index) => {
+          const label = headingLabel(index);
+          const shown = HEADING_RULE_FIELDS.filter((field) => heading.fields?.includes(field.key));
+          const missing = HEADING_RULE_FIELDS.filter((field) => !heading.fields?.includes(field.key));
+          return (
+            <div key={index} className="rounded-lg border border-slate-200 bg-white p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold text-slate-600">{label}</p>
+                {disabled ? null : (
+                  <button
+                    type="button"
+                    onClick={() => removeHeading(index)}
+                    className="grid h-6 w-6 place-items-center rounded-md text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                    aria-label={`Remove ${label}`}
+                    title={`Remove ${label}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              {shown.length ? (
+                <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-4">
+                  {shown.map((field) => (
+                    <div key={field.key}>
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-[11px] text-slate-500">{field.label}</span>
+                        {disabled ? null : (
+                          <button
+                            type="button"
+                            onClick={() => removeHeadingRule(index, field.key)}
+                            className="grid h-4 w-4 place-items-center rounded text-slate-400 hover:text-rose-600"
+                            aria-label={`Remove ${field.label} from ${label}`}
+                            title="Remove rule"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                      {field.key === "size" ? (
+                        <input
+                          disabled={disabled}
+                          type="number"
+                          min="6"
+                          max="72"
+                          step="0.5"
+                          value={heading.size}
+                          onChange={(e) => setHeadingValue(index, "size", e.target.value)}
+                          className={inputClass}
+                        />
+                      ) : (
+                        <ChoiceSelect
+                          disabled={disabled}
+                          value={heading[field.key]}
+                          onChange={(value) => setHeadingValue(index, field.key, value)}
+                          options={field.options}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-[10px] text-slate-400">No rules set for this heading.</p>
+              )}
+              {!disabled && missing.length ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {missing.map((field) => (
+                    <button
+                      key={field.key}
+                      type="button"
+                      onClick={() => addHeadingRule(index, field.key)}
+                      className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-500 hover:border-[#16bfa8] hover:text-[#109b89]"
+                    >
+                      <Plus className="h-3 w-3" />
+                      {field.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          </div>
-        ))}
+          );
+        })}
+        {!disabled && headings.length < MAX_HEADING_LEVELS ? (
+          <button
+            type="button"
+            onClick={addHeading}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-slate-300 px-3 py-1.5 text-[11px] font-semibold text-slate-600 hover:border-[#16bfa8] hover:text-[#109b89]"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add heading level
+          </button>
+        ) : null}
       </Section>
 
       <Section title="Pagination">
@@ -504,14 +569,13 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
         <Field label="Citation style">
           <select
             disabled={disabled}
-            value={form.citationFormat}
+            value={supportedCitationStyle(form.citationFormat)}
             onChange={set("citationFormat")}
             className={inputClass}
           >
             <option value="APA">APA</option>
             <option value="MLA">MLA</option>
             <option value="IEEE">IEEE</option>
-            <option value="CHICAGO">Chicago</option>
           </select>
         </Field>
       </Section>

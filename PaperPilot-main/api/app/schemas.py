@@ -105,11 +105,13 @@ class ManuscriptVersionCloudinaryRequest(BaseModel):
     mechanics_id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1, max_length=300)
     manuscript_id: str | None = Field(default=None, max_length=80)
+    client_request_id: str | None = Field(default=None, max_length=120)
 
 
 class SubscribeRequest(BaseModel):
-    plan: str = Field(..., pattern="^(free|premium)$")
+    plan: str = Field(..., pattern="^(free|premium|pro)$")
     billing_period: str | None = Field(default="monthly", pattern="^(monthly|annual)$")
+    return_to: str | None = Field(default=None, pattern="^(web|app)$")
 
 
 class CancelSubscriptionRequest(BaseModel):

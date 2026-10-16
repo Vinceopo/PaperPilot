@@ -11,6 +11,7 @@ import {
 import { manuscriptSummary } from "../../lib/scoreBand.js";
 import { formatScore } from "../../lib/scoreFormat.js";
 import { removeManuscriptVersion } from "../../lib/scannedLibrary.js";
+import { deleteManuscriptVersion } from "../../api.js";
 import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 import ManuscriptDetailModal from "./ManuscriptDetailModal.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
@@ -102,7 +103,20 @@ export default function MyManuscriptsScreen({
   const viewing = items.find((m) => m.id === viewId) || null;
   const pendingDelete = items.find((m) => m.id === deleteId) || null;
 
-  function deleteVersion(manuscriptId, versionId) {
+  async function deleteVersion(manuscriptId, versionId) {
+    const manuscript = items.find((m) => m.id === manuscriptId);
+    const version = (manuscript?.versions || []).find((v) => v.id === versionId);
+    if (version?.versionId) {
+      try {
+        await deleteManuscriptVersion({
+          manuscriptId: manuscript.serverManuscriptId || manuscript.id,
+          versionId: version.versionId,
+        });
+      } catch (err) {
+        // 404 means it is already gone on the server (e.g. deleted on another device).
+        if (err?.status !== 404) throw err;
+      }
+    }
     setItems((prev) => removeManuscriptVersion(prev, manuscriptId, versionId));
   }
 

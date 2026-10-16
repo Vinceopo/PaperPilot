@@ -31,18 +31,39 @@ def _headers() -> dict[str, str]:
     }
 
 
+def _error_detail(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return detail.strip()[:300] if isinstance(detail, str) else ""
+
+
 def _request(method: str, path: str, *, json_body: dict | None = None) -> dict[str, Any]:
     if not ml_service_configured():
-        raise MLServiceError("ML service is not configured (ML_SERVICE_URL / ML_SERVICE_KEY).")
+        raise MLServiceError(
+            "Scanning is unavailable because the analysis service is not set up on the server. "
+            "Please contact support."
+        )
     url = f"{_base_url()}{path}"
     try:
         with httpx.Client(timeout=120.0, follow_redirects=True) as client:
             response = client.request(method, url, headers=_headers(), json=json_body)
     except httpx.RequestError as exc:
-        raise MLServiceError(f"Could not reach ML service: {exc}") from exc
+        raise MLServiceError(
+            "The analysis server could not be reached. Wait a minute, then run the scan again."
+        ) from exc
     if response.status_code >= 400:
-        detail = response.text[:500] if response.text else response.reason_phrase
-        raise MLServiceError(detail or "ML service request failed.", response.status_code)
+        if response.status_code == 404:
+            message = "The analysis job was not found on the analysis server."
+        elif response.status_code >= 500:
+            message = "The analysis server had a problem. Wait a minute, then run the scan again."
+        else:
+            message = _error_detail(response) or (
+                "The analysis server rejected this document. Check the file, then run the scan again."
+            )
+        raise MLServiceError(message, response.status_code)
     if not response.content:
         return {}
     return response.json()

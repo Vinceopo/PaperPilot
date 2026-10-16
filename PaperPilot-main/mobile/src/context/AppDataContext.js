@@ -7,35 +7,52 @@ import {
   useRef,
   useState,
 } from "react";
+import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../firebase";
 import { enforceAuthSession } from "../services/auth";
 import {
+  deleteManuscript as deleteManuscriptRequest,
   deleteMechanics as deleteMechanicsRequest,
   extractMechanics,
+  getComplianceScan,
+  getProfile,
+  getScanDocument,
   getSubscription,
   itemsFrom,
   listManuscripts,
   listMechanics,
+  listScans,
   previewManuscript,
   renameMechanics as renameMechanicsRequest,
   saveMechanicsProfile,
+  updateMechanicsProfile,
   uploadManuscriptVersion,
 } from "../api";
-import { isServerId, scanTargetIds } from "../lib/scanMapper";
+import { isServerId, mapComplianceScanToResult, scanTargetIds } from "../lib/scanMapper";
+import { supportedCitationStyle } from "../lib/formatMechanicsForm";
+import { planLimit } from "../lib/plans";
 import { useScanFlow } from "../hooks/useScanFlow";
+import { latestVersion } from "../lib/scoreBand";
 import {
+  attachScanResult,
+  dismissScanIds,
+  loadDismissedScanIds,
   loadScannedManuscripts,
+  mergeServerScans,
   normalizeTitle,
   saveScannedManuscripts,
   upsertFromScanResult,
+  versionScanId,
+  versionToScanResult,
 } from "../lib/scannedLibrary";
 import {
   loadNotifications,
   saveNotifications,
   pushNotification as pushNotificationEntry,
   notificationFromScan,
+  notificationFromSubscription,
   notificationFromUpload,
   unreadCount,
   markAllRead as markAllReadEntries,
@@ -84,6 +101,7 @@ export function AppDataProvider({ children }) {
   const [manuscriptBusy, setManuscriptBusy] = useState(false);
   const [upgradeMessage, setUpgradeMessage] = useState("");
   const [scannedLibrary, setScannedLibrary] = useState([]);
+  const [libraryUid, setLibraryUid] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [fileDetailsNotice, setFileDetailsNotice] = useState("");
   const [manuscriptReady, setManuscriptReady] = useState(false);
@@ -93,8 +111,32 @@ export function AppDataProvider({ children }) {
 
   const lastSavedScanKey = useRef("");
   const subscriptionLoadedRef = useRef("");
+  // Plan replies can arrive out of order (a refresh on returning from PayMongo finishing
+  // after the checkout confirm), so a reply requested before the latest plan update is dropped.
+  const subscriptionTicketRef = useRef(0);
+  const subscriptionAppliedRef = useRef(0);
+  const nextSubscriptionTicket = useCallback(() => ++subscriptionTicketRef.current, []);
+  const storeSubscription = useCallback((next, ticket) => {
+    if (!next || typeof next !== "object") return false;
+    const order = ticket ?? ++subscriptionTicketRef.current;
+    if (order < subscriptionAppliedRef.current) return false;
+    subscriptionAppliedRef.current = order;
+    setSubscription(next);
+    subscriptionLoadedRef.current = auth?.currentUser?.uid || "";
+    void writeCachedSubscription(auth?.currentUser?.uid, next);
+    return true;
+  }, []);
   const authUidRef = useRef("");
   const scannedLibraryRef = useRef([]);
+  // A dashboard load started before a delete can finish after it; never show deleted formats again.
+  const deletedMechanicsRef = useRef(new Set());
+  // Bumped on every local save/rename/edit/delete so an older dashboard load can't overwrite it.
+  const mechanicsChangeRef = useRef(0);
+  const silentLoadRef = useRef(null);
+  const withoutDeletedMechanics = useCallback(
+    (items) => items.filter((item) => !deletedMechanicsRef.current.has(item.id)),
+    []
+  );
   const notificationsRef = useRef([]);
   const uploadSessionRef = useRef(0);
   const currentManuscriptRef = useRef(null);
@@ -151,7 +193,7 @@ export function AppDataProvider({ children }) {
     }
     const mechanicsId = selectedMechanicsIdRef.current;
     const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
-    const citationStyle = String(profile?.rules?.citation_style || "APA").toUpperCase();
+    const citationStyle = supportedCitationStyle(profile?.rules?.citation_style);
     return {
       manuscriptId,
       versionId,
@@ -160,6 +202,7 @@ export function AppDataProvider({ children }) {
       versionNumber: version?.version_number,
       cloudinaryUrl: version?.cloudinary_url || "",
       documentPreview: version?.parsed_data || version?.preview || null,
+      sourceFilename: version?.source_filename || version?.filename || "",
     };
   }, []);
 
@@ -169,6 +212,8 @@ export function AppDataProvider({ children }) {
     getActiveManuscript,
     getScanTarget,
   });
+  const scanFlowRef = useRef(scanFlow);
+  scanFlowRef.current = scanFlow;
 
   function persistNotifications(next) {
     setNotifications(next);
@@ -255,7 +300,9 @@ export function AppDataProvider({ children }) {
     (async () => {
       const loaded = await loadScannedManuscripts(user?.uid);
       if (cancelled) return;
+      scannedLibraryRef.current = loaded;
       setScannedLibrary(loaded);
+      setLibraryUid(user?.uid || "");
       if (loaded.length) await saveScannedManuscripts(loaded, user?.uid);
       lastSavedScanKey.current = "";
       const notes = await loadNotifications(user?.uid);
@@ -267,6 +314,10 @@ export function AppDataProvider({ children }) {
   }, [user?.uid]);
 
   useEffect(() => {
+    // Only a fresh scan is saved; reopening a stored result must not add a version.
+    if (!scanFlow.persistScan) return;
+    // Saving before the stored library loads would overwrite it with this scan alone.
+    if (libraryUid !== (user?.uid || "")) return;
     if (!scanFlow.result || !["summary", "results"].includes(scanFlow.step)) return;
     const key = `${scanFlow.result.documentId}|${scanFlow.versionNumber}|${scanFlow.result.scannedAt || ""}`;
     if (lastSavedScanKey.current === key) return;
@@ -277,56 +328,104 @@ export function AppDataProvider({ children }) {
       return next;
     });
     appendNotifications(notificationFromScan(scanFlow.result, scanFlow.versionNumber));
+    const ticket = nextSubscriptionTicket();
     void getSubscription()
-      .then((data) => {
-        if (!data) return;
-        setSubscription(data);
-        void writeCachedSubscription(user?.uid, data);
-      })
+      .then((data) => storeSubscription(data, ticket))
       .catch(() => {});
-  }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, user?.uid]);
+  }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, scanFlow.persistScan, user?.uid, libraryUid]);
 
-  const loadDashboard = useCallback(async () => {
+  // Accounts created with Google never pass through /auth/register, so the API
+  // creates their database profile the first time it is requested.
+  useEffect(() => {
+    if (!user?.uid) return;
+    getProfile().catch(() => {});
+  }, [user?.uid]);
+
+  const loadDashboard = useCallback(async (opts) => {
     if (!auth?.currentUser) return;
-    setLoading(true);
-    setError("");
-    try {
-      const [mechanicsData, manuscriptsData, subscriptionData] = await Promise.all([
-        listMechanics(),
-        listManuscripts(),
-        getSubscription(),
-      ]);
-      const nextMechanics = itemsFrom(mechanicsData, "mechanics");
-      setMechanics(nextMechanics);
-      setManuscripts(itemsFrom(manuscriptsData, "manuscripts"));
-      setSubscription(subscriptionData);
-      subscriptionLoadedRef.current = auth.currentUser?.uid || "";
-      void writeCachedSubscription(auth.currentUser?.uid, subscriptionData);
-      setSelectedMechanicsId((current) => current || nextMechanics[0]?.id || "");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setError("");
     }
-  }, []);
+    try {
+      // A failure on one resource must not wipe the others that loaded.
+      const subscriptionTicket = nextSubscriptionTicket();
+      const mechanicsChange = mechanicsChangeRef.current;
+      const [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] =
+        await Promise.allSettled([listMechanics(), listManuscripts(), getSubscription(), listScans()]);
+      if (scansResult.status === "fulfilled") {
+        const uid = auth.currentUser?.uid;
+        const dismissed = await loadDismissedScanIds(uid);
+        const { items, changed } = mergeServerScans(
+          scannedLibraryRef.current,
+          itemsFrom(scansResult.value, "items"),
+          dismissed,
+          scansResult.value?.deleted
+        );
+        if (changed) {
+          scannedLibraryRef.current = items;
+          setScannedLibrary(items);
+          void saveScannedManuscripts(items, uid);
+        }
+      }
+
+      const failures = [];
+      // Formats changed on screen while this load was in flight; the on-screen list is newer.
+      const mechanicsStale = mechanicsChange !== mechanicsChangeRef.current;
+      if (mechanicsResult.status === "fulfilled" && !mechanicsStale) {
+        const nextMechanics = withoutDeletedMechanics(itemsFrom(mechanicsResult.value, "mechanics"));
+        setMechanics(nextMechanics);
+        setSelectedMechanicsId((current) =>
+          current && nextMechanics.some((item) => item.id === current)
+            ? current
+            : nextMechanics[0]?.id || ""
+        );
+      } else if (mechanicsResult.status === "rejected") {
+        failures.push(mechanicsResult.reason?.message || "Could not load format mechanics.");
+      }
+      if (manuscriptsResult.status === "fulfilled") {
+        setManuscripts(itemsFrom(manuscriptsResult.value, "manuscripts"));
+      } else {
+        failures.push(manuscriptsResult.reason?.message || "Could not load manuscripts.");
+      }
+      if (subscriptionResult.status === "fulfilled") {
+        storeSubscription(subscriptionResult.value, subscriptionTicket);
+      } else {
+        failures.push(subscriptionResult.reason?.message || "Could not load subscription.");
+      }
+      if (failures.length && !silent) setError(failures[0]);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [nextSubscriptionTicket, storeSubscription, withoutDeletedMechanics]);
 
   const refreshSubscription = useCallback(async () => {
     if (!auth?.currentUser) return null;
     try {
+      const ticket = nextSubscriptionTicket();
       const data = await getSubscription();
-      setSubscription(data);
-      subscriptionLoadedRef.current = auth.currentUser?.uid || "";
-      void writeCachedSubscription(auth.currentUser?.uid, data);
+      storeSubscription(data, ticket);
       return data;
     } catch {
       return null;
     }
-  }, []);
+  }, [nextSubscriptionTicket, storeSubscription]);
 
+  /** Use a subscription snapshot returned by the API (cancel, confirm, switch) right away. */
+  function applySubscription(next) {
+    if (!storeSubscription(next)) return;
+    const note = notificationFromSubscription(next);
+    if (note) appendNotifications(note);
+  }
+
+  // Wait for the device library so server scans merge into it rather than being overwritten.
   useEffect(() => {
-    if (user) loadDashboard();
-    else {
+    if (user) {
+      if (libraryUid === user.uid) loadDashboard();
+    } else {
       subscriptionLoadedRef.current = "";
+      subscriptionAppliedRef.current = ++subscriptionTicketRef.current;
       setMechanics([]);
       setManuscripts([]);
       setSubscription(null);
@@ -337,9 +436,34 @@ export function AppDataProvider({ children }) {
       setNotifications([]);
       setManuscriptReady(false);
       setFileDetailsNotice("");
+      setUpgradeMessage("");
       resetUploadWizard(1);
+      // The next account on this device must not inherit (or save) this user's scan.
+      scanFlow.backToDashboard();
     }
-  }, [user, loadDashboard]);
+  }, [user, libraryUid, loadDashboard]);
+
+  // Pick up formats, versions, scan counts and plan changes made on another device:
+  // on returning to the app and every 30 seconds while it is open.
+  useEffect(() => {
+    if (!user?.uid || libraryUid !== user.uid) return undefined;
+    const refresh = () => {
+      if (AppState.currentState !== "active" || silentLoadRef.current) return;
+      silentLoadRef.current = loadDashboard({ silent: true })
+        .catch(() => {})
+        .finally(() => {
+          silentLoadRef.current = null;
+        });
+    };
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state === "active") refresh();
+    });
+    const timer = setInterval(refresh, 30000);
+    return () => {
+      clearInterval(timer);
+      listener.remove();
+    };
+  }, [user?.uid, libraryUid, loadDashboard]);
 
   function handleGateError(err) {
     if (err?.code === "upgrade_required" || err?.detail?.code === "upgrade_required") {
@@ -369,10 +493,21 @@ export function AppDataProvider({ children }) {
         fileType: payload.file_type || payload.fileType,
         extractedText: payload.extracted_text || payload.extractedText,
       });
-      const data = await listMechanics();
-      const next = itemsFrom(data, "mechanics");
-      setMechanics(next);
-      setSelectedMechanicsId(created.id || next[0]?.id || "");
+      mechanicsChangeRef.current += 1;
+      if (created?.id) {
+        setMechanics((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setSelectedMechanicsId(created.id);
+      }
+      try {
+        const data = await listMechanics();
+        const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
+        if (!created?.id || next.some((item) => item.id === created.id)) {
+          setMechanics(next);
+          setSelectedMechanicsId(created?.id || next[0]?.id || "");
+        }
+      } catch {
+        // The saved format is already on screen; the next refresh brings the full list.
+      }
       return true;
     } catch (err) {
       throw err;
@@ -390,11 +525,31 @@ export function AppDataProvider({ children }) {
     });
   }
 
+  async function onMechanicsUpdateProfile(mechanicsId, payload) {
+    setMechanicsBusy(true);
+    setError("");
+    try {
+      const updated = await updateMechanicsProfile(mechanicsId, {
+        name: payload.name,
+        rules: payload.rules,
+      });
+      mechanicsChangeRef.current += 1;
+      setMechanics((current) =>
+        current.map((item) => (item.id === mechanicsId ? { ...item, ...updated } : item))
+      );
+      setSelectedMechanicsId(mechanicsId);
+      return true;
+    } finally {
+      setMechanicsBusy(false);
+    }
+  }
+
   async function onMechanicsRename(mechanicsId, name) {
     setMechanicsBusy(true);
     setError("");
     try {
       const updated = await renameMechanicsRequest(mechanicsId, name);
+      mechanicsChangeRef.current += 1;
       setMechanics((current) =>
         current.map((item) => (item.id === mechanicsId ? updated : item))
       );
@@ -411,9 +566,16 @@ export function AppDataProvider({ children }) {
     setMechanicsBusy(true);
     setError("");
     try {
-      await deleteMechanicsRequest(mechanicsId);
+      try {
+        await deleteMechanicsRequest(mechanicsId);
+      } catch (err) {
+        // 404 means it is already gone on the server (e.g. deleted on another device).
+        if (err?.status !== 404) throw err;
+      }
+      deletedMechanicsRef.current.add(mechanicsId);
+      mechanicsChangeRef.current += 1;
       const remainingItems = mechanics.filter((item) => item.id !== mechanicsId);
-      setMechanics(remainingItems);
+      setMechanics((current) => current.filter((item) => item.id !== mechanicsId));
       if (selectedMechanicsId === mechanicsId) {
         setSelectedMechanicsId(remainingItems[0]?.id || "");
         setCurrentVersion(null);
@@ -439,20 +601,143 @@ export function AppDataProvider({ children }) {
 
   const updateScannedLibrary = useCallback(
     (next) => {
+      const previous = scannedLibraryRef.current;
+      const kept = new Set(next.flatMap((m) => (m.versions || []).map(versionScanId)));
+      void dismissScanIds(
+        previous
+          .flatMap((m) => (m.versions || []).map(versionScanId))
+          .filter((id) => id && !kept.has(id)),
+        user?.uid
+      );
+      scannedLibraryRef.current = next;
       setScannedLibrary(next);
       void saveScannedManuscripts(next, user?.uid);
-      setCurrentManuscript((current) => {
-        if (current?.id && !next.some((m) => m.id === current.id)) {
+      const current = currentManuscriptRef.current;
+      const sameManuscript = (m) =>
+        m.id === current?.id || (current?.title && normalizeTitle(m.title) === normalizeTitle(current.title));
+      const before = previous.find(sameManuscript);
+      const after = next.find(sameManuscript);
+      if (before && (after?.versions?.length || 0) < (before.versions?.length || 0)) {
+        const latest = after ? latestVersion(after) : null;
+        const flow = scanFlowRef.current;
+        const viewingThis =
+          flow?.result && (flow.result.documentId === before.id || flow.result.documentId === after?.id);
+        const onVersionScreen = ["summary", "documentTrace", "results"].includes(flow?.step);
+        if (!latest) {
           setCurrentVersion(null);
           setManuscriptReady(false);
           setFileDetailsNotice("");
+          setUploadWizardStep(1);
+          setWizardMaxStep(1);
+          if (viewingThis && onVersionScreen) flow.backToDashboard();
+        } else {
+          setCurrentVersion((ver) => (ver ? { ...ver, version_number: latest.versionNumber } : ver));
+          if (viewingThis && onVersionScreen) {
+            const saved = versionToScanResult(after, latest);
+            if (saved) flow.showSavedResult(saved, latest.versionNumber);
+          }
+        }
+      }
+      setCurrentManuscript((open) => {
+        if (open?.id && !next.some((m) => m.id === open.id)) {
+          setCurrentVersion(null);
+          setManuscriptReady(false);
+          setFileDetailsNotice("");
+          setUploadWizardStep(1);
+          setWizardMaxStep(1);
           return null;
         }
-        return current;
+        return open;
       });
     },
     [user?.uid]
   );
+
+  async function deleteManuscriptPermanently(manuscript) {
+    const title = manuscript?.title || "";
+    const titleKey = normalizeTitle(title);
+    await deleteManuscriptRequest({
+      manuscriptId: manuscript?.serverManuscriptId || manuscript?.id,
+      title,
+    });
+    setManuscripts((list) =>
+      list.filter(
+        (item) =>
+          item.id !== manuscript?.id &&
+          item.id !== manuscript?.serverManuscriptId &&
+          normalizeTitle(item.title) !== titleKey
+      )
+    );
+    updateScannedLibrary(
+      scannedLibraryRef.current.filter(
+        (item) => item.id !== manuscript?.id && normalizeTitle(item.title) !== titleKey
+      )
+    );
+  }
+
+  // Stored versions can be trimmed or server-only; fetch the full scan when opened.
+  async function resolveSavedResult(manuscript, version) {
+    if (!version) return null;
+    const scanId = versionScanId(version);
+    if ((version.scanResult && !version.trimmed) || !isServerId(scanId)) {
+      return versionToScanResult(manuscript, version);
+    }
+    try {
+      const scan = await getComplianceScan(scanId);
+      const full = mapComplianceScanToResult(scan, {
+        documentId: manuscript?.id,
+        documentTitle: manuscript?.title,
+        citationStyle: manuscript?.citationStyle,
+        versionId: version.versionId || version.scanResult?.versionId,
+        documentName: version.scanResult?.documentName,
+        cloudinaryUrl: version.scanResult?.cloudinaryUrl,
+      });
+      const next = attachScanResult(scannedLibraryRef.current, manuscript.id, version.id, full);
+      scannedLibraryRef.current = next;
+      setScannedLibrary(next);
+      void saveScannedManuscripts(next, user?.uid);
+      const updated = next.find((m) => m.id === manuscript.id);
+      const updatedVersion = updated?.versions?.find((v) => v.id === version.id);
+      return versionToScanResult(updated || manuscript, updatedVersion || version);
+    } catch {
+      return versionToScanResult(manuscript, version);
+    }
+  }
+
+  /** Show a stored version on the Results screen; backfills the document URL for tracing. */
+  async function openSavedResult(manuscript, version) {
+    const saved = await resolveSavedResult(manuscript, version);
+    if (!saved) return false;
+    scanFlow.showSavedResult(saved, version?.versionNumber);
+    if (saved.cloudinaryUrl || !isServerId(saved.scanId)) return true;
+    getScanDocument(saved.scanId)
+      .then((doc) => {
+        const url = String(doc?.cloudinary_url || "").trim();
+        if (!url) return;
+        const patch = {
+          cloudinaryUrl: url,
+          documentName: saved.documentName || doc?.source_filename || "",
+          versionId: saved.versionId || doc?.manuscript_version_id || "",
+        };
+        scanFlow.patchResult(patch);
+        updateScannedLibrary(
+          scannedLibraryRef.current.map((m) =>
+            m.id !== manuscript.id
+              ? m
+              : {
+                  ...m,
+                  versions: (m.versions || []).map((v) =>
+                    v.id === version.id && v.scanResult
+                      ? { ...v, scanResult: { ...v.scanResult, ...patch } }
+                      : v
+                  ),
+                }
+          )
+        );
+      })
+      .catch(() => {});
+    return true;
+  }
 
   async function onManuscriptUpload({ file, title, manuscriptId }) {
     setError("");
@@ -618,7 +903,7 @@ export function AppDataProvider({ children }) {
 
   const tier = String(subscription?.tier || "free").toLowerCase();
   const used = Number(subscription?.used ?? subscription?.scans_used ?? 0);
-  const limit = tier === "premium" ? 50 : 3;
+  const limit = Number(subscription?.limit) || planLimit(tier);
   const remaining = Math.max(limit - Math.max(0, used), 0);
   const notificationUnread = useMemo(() => unreadCount(notifications), [notifications]);
 
@@ -658,8 +943,12 @@ export function AppDataProvider({ children }) {
       remaining,
       loadDashboard,
       refreshSubscription,
+      applySubscription,
       scannedLibrary,
       updateScannedLibrary,
+      deleteManuscriptPermanently,
+      openSavedResult,
+      resolveSavedResult,
       uploadTargets,
       selectUploadTarget,
       uploadWizardStep,
@@ -676,6 +965,7 @@ export function AppDataProvider({ children }) {
       handleBackToDashboard,
       onExtractMechanics,
       onSaveMechanicsProfile,
+      onMechanicsUpdateProfile,
       onPreviewManuscript,
       onMechanicsRename,
       onMechanicsDelete,

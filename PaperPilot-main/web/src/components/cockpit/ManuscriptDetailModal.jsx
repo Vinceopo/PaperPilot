@@ -11,6 +11,7 @@ import { scoreBand } from "../../lib/scoreBand.js";
 import { CATEGORY_STATUS_LABEL, formatCount, formatScore, hasValue, plural } from "../../lib/scoreFormat.js";
 import { downloadReport } from "../../lib/mockAnalysis.js";
 import { versionToScanResult } from "../../lib/scannedLibrary.js";
+import { isPaidTier } from "../../lib/plans.js";
 import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
 const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
@@ -27,6 +28,20 @@ function formatDate(iso) {
   } catch {
     return iso;
   }
+}
+
+/** Date and time of a scan; older entries only stored the day. */
+function formatDateTime(iso) {
+  if (!iso || iso.length <= 10) return formatDate(iso);
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return formatDate(iso);
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function severityClass(severity) {
@@ -56,7 +71,7 @@ export default function ManuscriptDetailModal({
   resolveResult,
   onClose,
 }) {
-  const isPremium = String(tier || "free").toLowerCase() === "premium";
+  const isPremium = isPaidTier(tier);
 
   const versionsDesc = useMemo(() => {
     const list = [...(manuscript?.versions || [])];
@@ -70,6 +85,8 @@ export default function ManuscriptDetailModal({
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
     setSelectedId(latestId);
@@ -112,9 +129,10 @@ export default function ManuscriptDetailModal({
       const payload = resolveResult
         ? await resolveResult(manuscript, selected)
         : versionToScanResult(manuscript, selected);
+      if (!payload) throw new Error("This version's report could not be loaded. Check your connection, then try again.");
       await downloadReport(payload, { versionNumber: selected.versionNumber });
     } catch (err) {
-      setDownloadError(err?.message || "Download failed.");
+      setDownloadError(err?.message || "The report could not be downloaded. Try again in a moment.");
     } finally {
       setDownloadBusy(false);
     }
@@ -203,7 +221,7 @@ export default function ManuscriptDetailModal({
                         ) : null}
                       </div>
                       <p className={`mt-0.5 text-[11px] ${active ? "text-slate-300" : "text-slate-400"}`}>
-                        {formatDate(ver.scannedDate)}
+                        {formatDateTime(ver.scannedAt || ver.scannedDate)}
                       </p>
                       <p className={`mt-1 text-[10px] font-semibold ${active ? "text-[#16bfa8]" : locked ? "text-slate-400" : vb.textClass}`}>
                         {locked ? "Premium only" : `Score ${formatScore(ver.score, 0)}`}
@@ -240,7 +258,7 @@ export default function ManuscriptDetailModal({
                   <div>
                     <p className="text-xs font-semibold text-slate-500">Selected version</p>
                     <p className="text-sm font-medium text-slate-400">
-                      {versionLabel} · {formatDate(selected.scannedDate)}
+                      {versionLabel} · {formatDateTime(selected.scannedAt || selected.scannedDate)}
                     </p>
                   </div>
                   <div className="text-right">
@@ -307,7 +325,18 @@ export default function ManuscriptDetailModal({
                     </div>
                   </div>
 
-                  {issues.length === 0 ? (
+                  {issues.length === 0 && selected.trimmed && onOpenResult ? (
+                    <div className="mt-3 text-sm text-slate-500">
+                      <p>This version was scanned on another device. Open it to load its issues.</p>
+                      <button
+                        type="button"
+                        onClick={() => selectVersion(selected)}
+                        className="mt-2 rounded-lg bg-[#16bfa8] px-4 py-2 text-xs font-bold text-white hover:bg-[#12ae99]"
+                      >
+                        View full results
+                      </button>
+                    </div>
+                  ) : issues.length === 0 ? (
                     <p className="mt-3 text-sm text-slate-400">No issues recorded for this version.</p>
                   ) : (
                     <ul className="mt-4 space-y-3">
@@ -400,15 +429,34 @@ export default function ManuscriptDetailModal({
       <ConfirmDialog
         open={Boolean(pendingDeleteId)}
         title="Delete this version?"
-        message="The version label will update to match the versions that are still saved."
+        message="It will be removed on web and mobile. The other versions keep their numbers."
         confirmLabel="Delete version"
         tone="danger"
+        busy={deleteBusy}
         onCancel={() => setPendingDeleteId(null)}
-        onConfirm={() => {
+        onConfirm={async () => {
           const id = pendingDeleteId;
-          setPendingDeleteId(null);
-          if (id) onDeleteVersion?.(manuscript.id, id);
+          if (!id) return;
+          setDeleteBusy(true);
+          try {
+            await onDeleteVersion?.(manuscript.id, id);
+          } catch (err) {
+            setDeleteError(err?.message || "Could not delete this version.");
+          } finally {
+            setDeleteBusy(false);
+            setPendingDeleteId(null);
+          }
         }}
+      />
+      <ConfirmDialog
+        open={Boolean(deleteError)}
+        title="Something went wrong"
+        message={deleteError}
+        confirmLabel="OK"
+        cancelLabel={null}
+        tone="danger"
+        onConfirm={() => setDeleteError("")}
+        onCancel={() => setDeleteError("")}
       />
     </div>
   );

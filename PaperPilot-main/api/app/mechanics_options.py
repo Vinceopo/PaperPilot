@@ -44,7 +44,10 @@ LANDSCAPE_TABLES_FIGURES = "Allowed for tables and figures"
 LANDSCAPE_ANY = "Allowed on any page"
 LANDSCAPE_OPTIONS = (LANDSCAPE_NOT_ALLOWED, LANDSCAPE_TABLES_FIGURES, LANDSCAPE_ANY)
 
-HEADING_LEVELS = ("heading1", "heading2", "heading3")
+MAX_HEADING_LEVELS = 9
+HEADING_LEVELS = tuple(f"heading{n}" for n in range(1, MAX_HEADING_LEVELS + 1))
+# "heading3_content_size" is the older combined Heading 3 + body size.
+FONT_SIZE_KEYS = ("body_size", "heading3_content_size", *(f"{level}_size" for level in HEADING_LEVELS))
 HEADING_CASES = ("upper", "title")
 HEADING_ALIGNMENTS = ("center", "left")
 

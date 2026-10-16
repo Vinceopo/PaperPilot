@@ -87,7 +87,7 @@ def parse_rule_value(source_text: str, rule_type: str) -> str:
         if rule_type == "paragraph_indent" and re.search(r"\bone\s+tab\b", lowered):
             return "0.5 inch"
     if rule_type == "citation_style":
-        match = re.search(r"\b(APA|MLA|IEEE|Chicago|Harvard)\b", text, re.I)
+        match = re.search(r"\b(APA|MLA|IEEE)\b", text, re.I)
         if match:
             return match.group(1).upper()
     if rule_type == "paper_size":

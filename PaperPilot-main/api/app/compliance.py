@@ -8,6 +8,8 @@ from app.mechanics_options import (
     BODY_CONTINUOUS,
     BODY_RESTART,
     DEFAULT_CHAPTER_MARKERS,
+    FONT_SIZE_KEYS,
+    HEADING_LEVELS,
     LANDSCAPE_ANY,
     LANDSCAPE_TABLES_FIGURES,
     PRELIM_ARABIC,
@@ -248,7 +250,22 @@ def _docx_body_pt(parsed: dict, rules: dict) -> float:
         return max(weights.items(), key=lambda item: item[1])[0]
     font = rules.get("font") or {}
     sizes = font.get("sizes_points") or []
-    return float(font.get("heading3_content_size") or (min(sizes) if sizes else 12.0))
+    return float(_body_size(font) or (min(sizes) if sizes else 12.0))
+
+
+def _docx_body_spacing(parsed: dict) -> float | None:
+    """The document's own dominant line spacing, weighted by text length."""
+    weights: dict[float, int] = defaultdict(int)
+    for paragraph in parsed.get("paragraphs") or []:
+        if (paragraph.get("source") or "body") in CHROME_SOURCES:
+            continue
+        spacing = (paragraph.get("formatting") or {}).get("line_spacing")
+        text = str(paragraph.get("text") or "").strip()
+        if spacing and text:
+            weights[round(float(spacing) * 4) / 4] += len(text)
+    if not weights:
+        return None
+    return max(weights.items(), key=lambda item: item[1])[0]
 
 
 def _docx_body_spacing(parsed: dict) -> float | None:
@@ -357,7 +374,7 @@ def _visual_chars_per_line(
     if font_pt is None:
         font = rules.get("font") or {}
         sizes = font.get("sizes_points") or []
-        body = font.get("heading3_content_size")
+        body = _body_size(font)
         font_pt = float(body or (min(sizes) if sizes else 11.0))
     avg_char_inches = max(0.03, (float(font_pt) * char_em) / PT_PER_INCH)
     chars = max(20, int(usable / avg_char_inches))
@@ -840,11 +857,67 @@ def _size_matches(actual: float | None, expected: float | None) -> bool:
     return abs(float(actual) - float(expected)) <= SIZE_TOLERANCE
 
 
+HEADING_ROLE_RE = re.compile(r"^heading(\d)$")
+HEADING_STYLE_RE = re.compile(r"heading\s*(\d)")
+
+
+def _is_heading_role(role) -> bool:
+    return bool(HEADING_ROLE_RE.match(str(role or "")))
+
+
+def _heading_label(role: str) -> str:
+    return f"Heading {role[len('heading'):]}"
+
+
+def _body_size(font: dict):
+    value = font.get("body_size")
+    return font.get("heading3_content_size") if value is None else value
+
+
+def _heading_sizes(font: dict, *, include_legacy: bool = True) -> dict[str, float]:
+    """Size per heading level the format defines. Without body_size, the older combined
+    "Heading 3 and content size" also counts as the Heading 3 size."""
+    sizes = {level: float(font[f"{level}_size"]) for level in HEADING_LEVELS if font.get(f"{level}_size") is not None}
+    if (
+        include_legacy
+        and "heading3" not in sizes
+        and font.get("body_size") is None
+        and font.get("heading3_content_size") is not None
+    ):
+        sizes["heading3"] = float(font["heading3_content_size"])
+    return sizes
+
+
+def _defined_heading_levels(font: dict) -> set[str]:
+    """Heading roles this format actually defines (count, size, or style)."""
+    defined: set[str] = set()
+    try:
+        count = int(font.get("heading_levels") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if 1 <= count <= len(HEADING_LEVELS):
+        defined.update(HEADING_LEVELS[:count])
+    defined.update(_heading_sizes(font).keys())
+    styles = font.get("heading_styles") if isinstance(font.get("heading_styles"), dict) else {}
+    for key in styles:
+        if key in HEADING_LEVELS:
+            defined.add(key)
+    return {level for level in HEADING_LEVELS if level in defined}
+
+
+def _lowest_defined_heading(defined: set[str]) -> str | None:
+    if not defined:
+        return None
+    return min(defined, key=lambda role: int(role[len("heading") :]))
+
+
 def _annotate_roles(units: list[dict], rules: dict) -> None:
     font = rules.get("font") or {}
-    h1 = font.get("heading1_size")
-    h2 = font.get("heading2_size")
-    body = font.get("heading3_content_size")
+    # The combined legacy size equals body text, so it cannot tell headings apart by size.
+    heading_sizes = _heading_sizes(font, include_legacy=False)
+    defined = _defined_heading_levels(font)
+    lowest_heading = _lowest_defined_heading(defined)
+    body = _body_size(font)
     for unit in units:
         text = (unit.get("text") or "").strip()
         style = str(unit.get("style") or "").lower()
@@ -859,24 +932,21 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
         if unit.get("source") == "table":
             unit["role"] = "table"
             continue
-        if re.search(r"heading\s*1|^title$", style):
+        if re.search(r"^title$", style) and "heading1" in defined:
             unit["role"] = "heading1"
             continue
-        if re.search(r"heading\s*2", style):
-            unit["role"] = "heading2"
-            continue
-        if re.search(r"heading\s*3", style):
-            unit["role"] = "heading3"
-            continue
+        style_level = HEADING_STYLE_RE.search(style)
+        if style_level:
+            role = f"heading{style_level.group(1)}"
+            if role in defined:
+                unit["role"] = role
+                continue
         if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not PROSE_REFERENCE_RE.match(text):
             unit["role"] = "caption"
             continue
-        if size is not None and (h1 or h2 or body):
-            distances = []
-            if h1 is not None:
-                distances.append(("heading1", abs(size - float(h1))))
-            if h2 is not None:
-                distances.append(("heading2", abs(size - float(h2))))
+        if size is not None and (heading_sizes or body):
+            # On a tie the lower heading level wins, and body text loses to any heading.
+            distances = [(level, abs(size - value)) for level, value in heading_sizes.items()]
             if body is not None:
                 distances.append(("body", abs(size - float(body))))
             role, dist = min(distances, key=lambda item: item[1])
@@ -884,26 +954,32 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             heading_like = len(text) <= 90 and (
                 _is_bold(unit) or (text.isupper() and len(text.split()) <= 12)
             )
-            if role in {"heading1", "heading2"} and dist <= SIZE_TOLERANCE and heading_like:
+            if role != "body" and dist <= SIZE_TOLERANCE and heading_like:
                 unit["role"] = role
                 continue
-            if role in {"heading1", "heading2"} and dist + 0.35 < body_dist and heading_like:
+            if role != "body" and dist + 0.35 < body_dist and heading_like:
                 unit["role"] = role
                 continue
-        if len(text) <= 80 and (_is_bold(unit) or (text.isupper() and 1 <= len(text.split()) <= 12)):
-            unit["role"] = "heading1" if CHAPTER_RE.match(text) or text.isupper() else "heading2"
+        if (
+            defined
+            and lowest_heading
+            and len(text) <= 80
+            and (_is_bold(unit) or (text.isupper() and 1 <= len(text.split()) <= 12))
+        ):
+            if CHAPTER_RE.match(text) or text.isupper():
+                unit["role"] = "heading1" if "heading1" in defined else lowest_heading
+            else:
+                unit["role"] = "heading2" if "heading2" in defined else lowest_heading
             continue
         unit["role"] = "body"
     _mark_toc_lines(units)
 
 
 def _expected_size_for_role(role: str, font: dict) -> float | None:
-    if role == "heading1":
-        return font.get("heading1_size")
-    if role == "heading2":
-        return font.get("heading2_size")
-    if role in {"body", "caption", "heading3"}:
-        return font.get("heading3_content_size")
+    if _is_heading_role(role):
+        return _heading_sizes(font).get(role)
+    if role in {"body", "caption"}:
+        return _body_size(font)
     return None
 
 
@@ -940,7 +1016,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
     font_rule = rules.get("font") or {}
     allowed_fonts = {_font_key(font) for font in font_rule.get("families", [])}
     listed_sizes = {round(float(size), 2) for size in font_rule.get("sizes_points", [])}
-    role_sizes = any(font_rule.get(key) for key in ("heading1_size", "heading2_size", "heading3_content_size"))
+    role_sizes = any(font_rule.get(key) for key in FONT_SIZE_KEYS)
     want_black = bool(re.search(r"black|automatic", str(font_rule.get("color") or ""), re.I))
     if not allowed_fonts and not listed_sizes and not role_sizes and not want_black:
         return
@@ -975,7 +1051,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         if shown_font is None:
             family_ok = True
         color_ok = True
-        if want_black and role in {"body", "heading1", "heading2", "heading3", "caption"}:
+        if want_black and (role in {"body", "caption"} or _is_heading_role(role)):
             color_ok = _mostly_black(unit) is not False
         stats.observe(family_ok and size_ok and color_ok)
         loc = _unit_location(unit, "Fonts")
@@ -1000,14 +1076,11 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 loc,
             )
         if not size_ok and shown_size is not None:
-            role_label = {
-                "heading1": "Heading 1",
-                "heading2": "Heading 2",
-                "heading3": "Heading 3",
-                "caption": "caption",
-                "body": "body text",
-                "title_page": "title page text",
-            }.get(role, "text")
+            role_label = (
+                _heading_label(role)
+                if _is_heading_role(role)
+                else {"caption": "caption", "body": "body text", "title_page": "title page text"}.get(role, "text")
+            )
             expected_label = expected_size if expected_size is not None else sorted(listed_sizes)
             collector.add(
                 "font_size",
@@ -1966,7 +2039,7 @@ def _check_citations(units: list[dict], text: str, rules: dict, collector: Issue
         if not predicted or predicted["style_confidence"] < 0.62:
             continue
         predicted_style = predicted["citation_style"]
-        style_aliases = {"APA": {"APA", "HARVARD", "CHICAGO", "TURABIAN"}, "IEEE": {"IEEE", "VANCOUVER"}}
+        style_aliases = {"APA": {"APA", "HARVARD", "TURABIAN"}, "IEEE": {"IEEE", "VANCOUVER"}}
         expected_set = style_aliases.get(style, {style})
         if predicted_style not in expected_set and predicted_style != style:
             collector.add(
@@ -2021,7 +2094,7 @@ def _heading_groups(units: list[dict]) -> list[tuple[str, list[dict]]]:
     groups: list[tuple[str, list[dict]]] = []
     for unit in units:
         role = unit.get("role")
-        if role not in {"heading1", "heading2", "heading3"} or not (unit.get("text") or "").strip():
+        if not _is_heading_role(role) or not (unit.get("text") or "").strip():
             continue
         if (unit.get("source") or "body") != "body":
             continue
@@ -2063,7 +2136,7 @@ def _check_heading_styles(units: list[dict], rules: dict, stats: CategoryStats, 
         stats.observe(not problems)
         if not problems:
             continue
-        label = {"heading1": "Heading 1", "heading2": "Heading 2", "heading3": "Heading 3"}[level]
+        label = _heading_label(level)
         required = ", ".join(problems)
         collector.add(
             f"{level}_style",
@@ -2113,7 +2186,7 @@ def _check_word_spacing(
     }
     seen: set = set()
     for unit in units:
-        if unit.get("role") not in {"body", "heading1", "heading2", "heading3", "caption"}:
+        if unit.get("role") not in {"body", "caption"} and not _is_heading_role(unit.get("role")):
             continue
         if (unit.get("source") or "body") != "body":
             continue

@@ -15,13 +15,43 @@ _RESPONSE_PARSED_LIMIT = 2_500_000
 
 
 class UpgradeRequired(Exception):
-    def __init__(self, tier: str, limit: int, used: int):
+    def __init__(
+        self,
+        tier: str,
+        limit: int,
+        used: int,
+        *,
+        reset_at: str | None = None,
+        feature: bool = False,
+        message: str | None = None,
+    ):
+        tier = str(tier or "free").lower()
+        reset_period = "weekly" if tier == "pro" else "monthly"
+        if not message and feature:
+            message = (
+                "Older versions and version history are available on Premium and Pro. "
+                "Upgrade on the Subscription page to unlock them."
+            )
+        elif not message:
+            window = "week" if reset_period == "weekly" else "month"
+            reset_date = _parse_iso(reset_at)
+            # Users are in the Philippines (UTC+8); a UTC date can show the previous day.
+            local_reset = reset_date.astimezone(timezone(timedelta(hours=8))) if reset_date else None
+            when = f" Your scans reset on {local_reset.strftime('%b %d, %Y')}." if local_reset else ""
+            next_step = (
+                " Wait for the reset to scan again."
+                if tier == "pro"
+                else " Upgrade on the Subscription page for more scans."
+            )
+            message = f"You have used all {limit} scans for this {window}.{when}{next_step}"
         self.detail = {
             "code": "upgrade_required",
-            "message": "Upgrade to Premium to access this feature or increase your monthly scan limit.",
+            "message": message,
             "tier": tier,
             "limit": limit,
             "used": used,
+            "reset_period": reset_period,
+            "reset_at": reset_at,
         }
         super().__init__(self.detail["message"])
 
@@ -31,6 +61,10 @@ class MechanicsNameConflict(ValueError):
 
 
 class MechanicsInUse(ValueError):
+    pass
+
+
+class VersionScanRunning(ValueError):
     pass
 
 
@@ -71,6 +105,31 @@ def _month_bounds(now: datetime) -> tuple[str, str]:
     else:
         end = start.replace(month=start.month + 1)
     return _iso(start), _iso(end)
+
+
+PAID_TIERS = ("premium", "pro")
+WEEK = timedelta(days=7)
+
+
+def is_paid_tier(tier) -> bool:
+    return str(tier or "").lower() in PAID_TIERS
+
+
+def _reset_period(tier) -> str:
+    """Pro allowance resets every 7 days; Free and Premium reset monthly."""
+    return "weekly" if str(tier or "").lower() == "pro" else "monthly"
+
+
+def _usage_bounds(tier, now: datetime, anchor: datetime | None = None) -> tuple[str, str]:
+    """Pro resets weekly; Premium resets on its billing date; Free on the 1st of the month."""
+    if _reset_period(tier) != "weekly":
+        if str(tier or "").lower() == "premium" and anchor:
+            start, end = _billing_cycle_bounds(anchor, now)
+            return _iso(start), _iso(end)
+        return _month_bounds(now)
+    start = anchor if anchor and anchor <= now else now
+    start = start + WEEK * ((now - start) // WEEK)
+    return _iso(start), _iso(start + WEEK)
 
 
 def _name_key(name: str) -> str:
@@ -219,6 +278,9 @@ def delete_mechanics(owner_uid: str, mechanics_id: str) -> bool:
             continue
         if scan.get("mechanics_id") != mechanics_id:
             continue
+        # Finished results stay in the user's history; only unfinished scans need the profile.
+        if scan.get("status", "done") == "done":
+            continue
         _reference(f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}").delete()
         _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").delete()
 
@@ -245,13 +307,82 @@ def _delete_manuscript_tree(owner_uid: str, manuscript_id: str) -> bool:
         return False
     _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").delete()
     scans = _reference(f"{ROOT}/compliance_scans/{owner_uid}").get() or {}
+    removed = []
     if isinstance(scans, dict):
         for scan_id, scan in list(scans.items()):
             if not isinstance(scan, dict) or scan.get("manuscript_id") != manuscript_id:
                 continue
-            _reference(f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}").delete()
-            _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").delete()
+            _delete_scan(owner_uid, scan_id)
+            removed.append(scan_id)
+    _mark_scans_deleted(owner_uid, removed)
     ref.delete()
+    return True
+
+
+def _delete_scan(owner_uid: str, scan_id: str) -> None:
+    _reference(f"{ROOT}/section_formatting_checks/{owner_uid}/{scan_id}").delete()
+    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").delete()
+    _reference(f"{ROOT}/scan_index/{owner_uid}/{scan_id}").delete()
+
+
+def _mark_scans_deleted(owner_uid: str, scan_ids) -> None:
+    """Other devices drop their stored copies of these scans on their next refresh."""
+    now_text = _iso(_now())
+    for scan_id in scan_ids:
+        _reference(f"{ROOT}/deleted_scans/{owner_uid}/{scan_id}").set(now_text)
+
+
+def deleted_scan_ids(owner_uid: str) -> list[str]:
+    rows = _reference(f"{ROOT}/deleted_scans/{owner_uid}").get(shallow=True) or {}
+    return sorted(str(key) for key in rows) if isinstance(rows, dict) else []
+
+
+def delete_version(owner_uid: str, manuscript_id: str, version_id: str) -> bool:
+    """Remove one version and its scans. Version numbers are never reused."""
+    owner_versions = f"{ROOT}/manuscript_versions/{owner_uid}"
+    if not isinstance(_reference(f"{owner_versions}/{manuscript_id}/{version_id}").get(), dict):
+        # Clients group same-title manuscripts, so the id sent may be a sibling's.
+        parents = _reference(owner_versions).get(shallow=True) or {}
+        manuscript_id = next(
+            (
+                str(mid)
+                for mid in (parents if isinstance(parents, dict) else {})
+                if isinstance(_reference(f"{owner_versions}/{mid}/{version_id}").get(), dict)
+            ),
+            manuscript_id,
+        )
+    ms_ref = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}")
+    manuscript = ms_ref.get()
+    versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get() or {}
+    if not isinstance(manuscript, dict) or not isinstance(versions, dict):
+        return False
+    if not isinstance(versions.get(version_id), dict):
+        return False
+
+    scan_ids = _reference(f"{ROOT}/compliance_scans/{owner_uid}").get(shallow=True) or {}
+    matched = []
+    for scan_id in scan_ids if isinstance(scan_ids, dict) else {}:
+        base = f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}"
+        if _reference(f"{base}/manuscript_version_id").get() != version_id:
+            continue
+        if _reference(f"{base}/status").get() == "running":
+            raise VersionScanRunning(
+                "This version is still being analysed. Wait for the scan to finish, then delete it."
+            )
+        matched.append(str(scan_id))
+
+    for scan_id in matched:
+        _delete_scan(owner_uid, scan_id)
+    _mark_scans_deleted(owner_uid, matched)
+
+    remaining = {vid: row for vid, row in versions.items() if vid != version_id and isinstance(row, dict)}
+    if not remaining:
+        _delete_manuscript_tree(owner_uid, manuscript_id)
+        return True
+    _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").delete()
+    if manuscript.get("current_version_id") == version_id:
+        latest = max(remaining.values(), key=lambda row: int(row.get("version_number") or 0))
+        ms_ref.update({"current_version_id": latest.get("id"), "updated_at": _iso(_now())})
     return True
 
 
@@ -298,10 +429,32 @@ def create_version(
     parsed: dict,
     manuscript_id: str | None,
     cloudinary_url: str | None = None,
+    client_request_id: str | None = None,
 ) -> tuple[dict, bool]:
     created, version_id = _iso(_now()), str(uuid.uuid4())
     if not get_mechanics(owner_uid, mechanics_id):
         raise LookupError("Mechanics not found.")
+
+    # A retried save (lost response, flaky network) returns the version it already created.
+    request_ref = None
+    request_key = re.sub(r"[^A-Za-z0-9_-]", "_", str(client_request_id or "").strip())[:120]
+    if request_key:
+        request_ref = _reference(f"{ROOT}/version_requests/{owner_uid}/{request_key}")
+        previous = request_ref.get()
+        if isinstance(previous, dict) and previous.get("manuscript_id") and previous.get("version_id"):
+            existing = get_version(owner_uid, previous["manuscript_id"], previous["version_id"])
+            if existing:
+                return existing, bool(previous.get("created_parent"))
+
+    if manuscript_id is None:
+        # Another device may not know the server id yet; the same title is the same manuscript.
+        title_key = _title_key(title)
+        rows = _reference(f"{ROOT}/manuscripts/{owner_uid}").get() or {}
+        if title_key and isinstance(rows, dict):
+            for mid, row in rows.items():
+                if isinstance(row, dict) and _title_key(row.get("title") or "") == title_key:
+                    manuscript_id = str(row.get("id") or mid)
+                    break
 
     created_parent = manuscript_id is None
     if created_parent:
@@ -318,40 +471,59 @@ def create_version(
             }
         )
 
-    ms_ref = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}")
-    manuscript = ms_ref.get()
-    if not isinstance(manuscript, dict):
-        raise LookupError("Manuscript not found.")
+    try:
+        ms_ref = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}")
+        manuscript = ms_ref.get()
+        if not isinstance(manuscript, dict):
+            raise LookupError("Manuscript not found.")
 
-    stored_versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get() or {}
-    existing_numbers = [
-        int(row.get("version_number") or 0)
-        for row in (stored_versions.values() if isinstance(stored_versions, dict) else [])
-        if isinstance(row, dict)
-    ]
-    next_number = (max(existing_numbers) if existing_numbers else 0) + 1
-    version = {
-        "id": version_id,
-        "manuscript_id": manuscript_id,
-        "mechanics_id": mechanics_id,
-        "version_number": next_number,
-        "source_filename": filename,
-        "file_type": file_type,
-        "extracted_text": text,
-        "parsed_data": parsed,
-        "created_at": created,
-    }
-    if cloudinary_url:
-        version["cloudinary_url"] = cloudinary_url.strip()
-    _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").set(version)
-    ms_ref.update(
-        {
-            "title": title.strip(),
-            "current_version_id": version_id,
-            "version_counter": next_number,
-            "updated_at": created,
+        stored_versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get() or {}
+        existing_numbers = [
+            int(row.get("version_number") or 0)
+            for row in (stored_versions.values() if isinstance(stored_versions, dict) else [])
+            if isinstance(row, dict)
+        ]
+        highest = max(existing_numbers) if existing_numbers else 0
+        # Transaction so web and mobile saving at the same time never get the same number.
+        next_number = int(
+            _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}/version_counter").transaction(
+                lambda current: max(int(current or 0), highest) + 1
+            )
+        )
+        version = {
+            "id": version_id,
+            "manuscript_id": manuscript_id,
+            "mechanics_id": mechanics_id,
+            "version_number": next_number,
+            "source_filename": filename,
+            "file_type": file_type,
+            "extracted_text": text,
+            "parsed_data": parsed,
+            "created_at": created,
         }
-    )
+        if cloudinary_url:
+            version["cloudinary_url"] = cloudinary_url.strip()
+        _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").set(version)
+        ms_ref.update(
+            {
+                "title": title.strip(),
+                "current_version_id": version_id,
+                "updated_at": created,
+            }
+        )
+    except Exception:
+        if created_parent:
+            _delete_manuscript_tree(owner_uid, manuscript_id)
+        raise
+    if request_ref is not None:
+        request_ref.set(
+            {
+                "manuscript_id": manuscript_id,
+                "version_id": version_id,
+                "created_parent": created_parent,
+                "created_at": created,
+            }
+        )
     return get_version(owner_uid, manuscript_id, version_id), created_parent
 
 
@@ -526,29 +698,31 @@ def is_current_version(owner_uid: str, manuscript_id: str, version_id: str) -> b
 
 def _subscription_row(owner_uid: str) -> dict:
     now, now_text = _now(), _iso(_now())
-    start, end = _month_bounds(now)
     ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
     row = ref.get()
     if not isinstance(row, dict):
+        start, end = _month_bounds(now)
         row = {
             "owner_uid": owner_uid,
             "tier": "free",
             "scans_used": 0,
             "period_start": start,
             "period_end": end,
+            "reset_period": "monthly",
             "created_at": now_text,
             "updated_at": now_text,
         }
         ref.set(row)
         return row
-    start, end = _usage_bounds(row, now)
-    stored_end = _parse_iso(row.get("period_end"))
-    if stored_end is None or stored_end <= _parse_iso(start):
+    if now_text >= str(row.get("period_end") or ""):
+        tier = row.get("tier")
+        start, end = _usage_bounds(tier, now, _parse_iso(row.get("period_end")))
         row = {
             **row,
             "scans_used": 0,
             "period_start": start,
             "period_end": end,
+            "reset_period": _reset_period(tier),
             "updated_at": now_text,
         }
         ref.set(row)
@@ -558,17 +732,6 @@ def _subscription_row(owner_uid: str) -> dict:
         ref.update(fix)
         row = {**row, **fix}
     return row
-
-
-def _cycle_anchor(row: dict) -> datetime | None:
-    """Payment date the Premium scan allowance cycles from; None for Free users."""
-    if str(row.get("tier") or "").lower() != "premium" or row.get("premium_ended"):
-        return None
-    anchor = _parse_iso(row.get("cycle_anchor"))
-    if anchor:
-        return anchor
-    payment = _latest_payment(row)
-    return _parse_iso(payment.get("at")) if payment else None
 
 
 def _billing_cycle_bounds(anchor: datetime, now: datetime) -> tuple[datetime, datetime]:
@@ -585,15 +748,6 @@ def _billing_cycle_bounds(anchor: datetime, now: datetime) -> tuple[datetime, da
     return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
-def _usage_bounds(row: dict, now: datetime) -> tuple[str, str]:
-    """Premium scans reset on the billing date; Free scans reset on the 1st of the month."""
-    anchor = _cycle_anchor(row)
-    if anchor:
-        start, end = _billing_cycle_bounds(anchor, now)
-        return _iso(start), _iso(end)
-    return _month_bounds(now)
-
-
 def _history_list(row: dict) -> list[dict]:
     history = row.get("history")
     if isinstance(history, list):
@@ -605,11 +759,18 @@ def _history_list(row: dict) -> list[dict]:
 
 FREE_SCAN_LIMIT = 3
 PREMIUM_SCAN_LIMIT = 50
+PRO_SCAN_LIMIT = 75
 
 
 def _plan_limit(tier: str) -> int:
-    """Free is 3 scans and Premium is 50. Env overrides cannot raise those caps."""
-    if str(tier or "").lower() == "premium":
+    """Free is 3 scans/month, Premium 50/month, Pro 75/week. Env overrides cannot raise those caps."""
+    tier = str(tier or "").lower()
+    if tier == "pro":
+        configured = int(settings.pro_scan_limit or PRO_SCAN_LIMIT)
+        if configured < 1 or configured > PRO_SCAN_LIMIT:
+            return PRO_SCAN_LIMIT
+        return configured
+    if tier == "premium":
         configured = int(settings.premium_scan_limit or PREMIUM_SCAN_LIMIT)
         if configured < 1 or configured > PREMIUM_SCAN_LIMIT:
             return PREMIUM_SCAN_LIMIT
@@ -689,8 +850,21 @@ def _coverage_end(row: dict) -> datetime | None:
     return best
 
 
+def _last_paid_tier(row: dict) -> str:
+    """Paid tier to restore while the paid window is still open (older rows are Premium)."""
+    stored = str(row.get("paid_tier") or "").lower()
+    if stored in PAID_TIERS:
+        return stored
+    for entry in sorted(_history_list(row), key=lambda h: str(h.get("at") or ""), reverse=True):
+        if str(entry.get("action") or "") not in ("subscribed", "renewed"):
+            continue
+        tier = str(entry.get("tier") or "").lower()
+        return tier if tier in PAID_TIERS else "premium"
+    return "premium"
+
+
 def _drop_paid_access(owner_uid: str, *, status: str, end_premium: bool = False) -> dict:
-    """Leave Premium and start a fresh Free allowance of 3 scans."""
+    """Leave Premium/Pro and start a fresh Free allowance of 3 scans."""
     now = _now()
     now_text = _iso(now)
     start, end = _month_bounds(now)
@@ -701,6 +875,9 @@ def _drop_paid_access(owner_uid: str, *, status: str, end_premium: bool = False)
         "renews_at": "",
         "period_start": start,
         "period_end": end,
+        "reset_period": "monthly",
+        "billing_period_start": "",
+        "billing_period_end": "",
         "pending_checkout_session_id": None,
         "premium_ended": True if end_premium else False,
         "updated_at": now_text,
@@ -722,13 +899,12 @@ def subscription_snapshot(owner_uid: str) -> dict:
     used = int(row.get("scans_used") or 0)
     coverage_end = None if row.get("premium_ended") else _coverage_end(row)
     window_open = bool(coverage_end and coverage_end >= _now())
-    premium_left = PREMIUM_SCAN_LIMIT - used
     # Uploading mechanics or refreshing the dashboard must not change the plan.
-    # Premium stays on until the paid date, unless the user explicitly cancels.
-    if window_open and stored != "premium":
+    # Paid access stays on until the paid date, unless the user explicitly cancels.
+    if window_open and stored not in PAID_TIERS:
         now_text = _iso(_now())
         restored = {
-            "tier": "premium",
+            "tier": _last_paid_tier(row),
             "status": "active",
             "renews_at": _iso(coverage_end),
             "premium_ended": False,
@@ -736,34 +912,25 @@ def subscription_snapshot(owner_uid: str) -> dict:
         }
         _reference(f"{ROOT}/subscriptions/{owner_uid}").update(restored)
         row = {**row, **restored}
-        stored = "premium"
+        stored = restored["tier"]
         status = "active"
         renews_at = restored["renews_at"]
-    entitled = window_open and stored == "premium" and premium_left > 0
-    if entitled:
-        tier = "premium"
-        if stored != "premium":
-            now_text = _iso(_now())
-            _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
-                {"tier": "premium", "updated_at": now_text}
-            )
-            row = {**row, "tier": "premium"}
-    elif stored == "premium" and not window_open:
+    if stored in PAID_TIERS and window_open:
+        tier = stored
+    elif stored in PAID_TIERS:
         dropped = _drop_paid_access(owner_uid, status="expired", end_premium=True)
         row = {**row, **dropped}
         tier = "free"
         used = 0
-    elif stored == "premium" and window_open:
-        tier = "premium"
-    elif stored != "premium" and used > FREE_SCAN_LIMIT and not window_open:
-        dropped = _drop_paid_access(owner_uid, status="free", end_premium=True)
-        row = {**row, **dropped}
+    elif used > FREE_SCAN_LIMIT:
+        # Overshoot (e.g. parallel scans) must not hand out a fresh allowance.
         tier = "free"
-        used = 0
+        used = FREE_SCAN_LIMIT
     else:
-        tier = "free" if stored != "premium" else "premium"
+        tier = "free"
     limit = _plan_limit(tier)
     remaining = max(limit - used, 0)
+    paid = tier in PAID_TIERS
     history = []
     seen_payments: set[str] = set()
     for entry in sorted(_history_list(row), key=lambda h: str(h.get("at") or "")):
@@ -775,14 +942,21 @@ def subscription_snapshot(owner_uid: str) -> dict:
     history.reverse()
     return {
         "tier": tier,
-        "status": row.get("status") or ("active" if tier == "premium" else "free"),
+        "status": row.get("status") or ("active" if paid else "free"),
         "billing_period": row.get("billing_period") or None,
+        "billing_period_start": (row.get("billing_period_start") or None) if paid else None,
+        "billing_period_end": (row.get("billing_period_end") or row.get("renews_at") or None)
+        if paid
+        else None,
         "payment_method": row.get("payment_method") or None,
         "renews_at": row.get("renews_at") or None,
         "last_checkout_session_id": row.get("last_checkout_session_id") or None,
         "limit": limit,
         "used": used,
         "remaining": remaining,
+        "reset_period": _reset_period(tier),
+        "period_start": row.get("period_start"),
+        "period_end": row.get("period_end"),
         "payment_issue": bool(row.get("payment_issue")),
         "payment_issue_reason": row.get("payment_issue_reason") or None,
         "provider": row.get("provider") or None,
@@ -809,12 +983,14 @@ def save_pending_checkout(
     billing_period: str,
     reference_number: str,
     amount_pesos: int,
+    tier: str = "premium",
 ) -> None:
     now = _iso(_now())
     _reference(f"{ROOT}/paymongo_checkouts/{checkout_session_id}").set(
         {
             "id": checkout_session_id,
             "owner_uid": owner_uid,
+            "tier": "pro" if tier == "pro" else "premium",
             "billing_period": billing_period,
             "reference_number": reference_number,
             "amount": amount_pesos,
@@ -843,20 +1019,45 @@ def latest_pending_checkout_id(owner_uid: str) -> str | None:
     return sid or None
 
 
-def _claim_fulfillment(owner_uid: str, *keys: str | None) -> bool:
-    """First caller to apply a payment wins; PayMongo webhooks and the return-page confirm all race here."""
-    claim_id = str(uuid.uuid4())
-    for key in keys:
-        if not key:
-            continue
-        safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(key))[:200]
-        stored = _reference(f"{ROOT}/paymongo_fulfillments/{safe}").transaction(
-            lambda current: current
-            or {"claim": claim_id, "owner_uid": owner_uid, "at": _iso(_now())}
-        )
-        if not isinstance(stored, dict) or stored.get("claim") != claim_id:
-            return False
-    return True
+def _payment_already_applied(checkout_session_id: str | None, payment_id: str | None) -> bool:
+    """Webhook, payment.paid and the confirm fallback can all report one payment."""
+    if checkout_session_id:
+        pending = get_pending_checkout(checkout_session_id)
+        if isinstance(pending, dict) and pending.get("status") == "paid":
+            return True
+    if payment_id:
+        if isinstance(_reference(f"{ROOT}/paymongo_payments/{payment_id}").get(), dict):
+            return True
+    return False
+
+
+def _paid_term_patch(row: dict, tier: str, period: str, now: datetime) -> dict:
+    """Billing dates and scan window for a purchase or renewal.
+
+    Same plan while still paid: extend from the current paid-through date and keep the
+    scan counter and reset window. New plan (or lapsed): start a fresh term and allowance.
+    """
+    current = str(row.get("tier") or "").lower()
+    coverage = None if row.get("premium_ended") else _coverage_end(row)
+    if current == tier and coverage and coverage > now:
+        renews = _billing_period_end(coverage, period)
+        return {
+            "billing_period_start": row.get("billing_period_start") or _iso(now),
+            "billing_period_end": _iso(renews),
+            "renews_at": _iso(renews),
+            "reset_period": _reset_period(tier),
+        }
+    start, end = _usage_bounds(tier, now, now)
+    renews = _billing_period_end(now, period)
+    return {
+        "billing_period_start": _iso(now),
+        "billing_period_end": _iso(renews),
+        "renews_at": _iso(renews),
+        "period_start": start,
+        "period_end": end,
+        "reset_period": _reset_period(tier),
+        "scans_used": 0,
+    }
 
 
 def _payment_keys(entry: dict) -> set[str]:
@@ -872,33 +1073,93 @@ def activate_premium_from_payment(
     checkout_session_id: str | None = None,
     payment_id: str | None = None,
     reference_number: str | None = None,
+    tier: str = "premium",
+) -> dict:
+    if _payment_already_applied(checkout_session_id, payment_id):
+        return subscription_snapshot(owner_uid)
+    claims = _claim_payment_activation(checkout_session_id, payment_id)
+    if claims is None:
+        return subscription_snapshot(owner_uid)
+    try:
+        return _apply_paid_activation(
+            owner_uid,
+            billing_period=billing_period,
+            payment_method=payment_method,
+            amount_pesos=amount_pesos,
+            checkout_session_id=checkout_session_id,
+            payment_id=payment_id,
+            reference_number=reference_number,
+            tier=tier,
+        )
+    except Exception:
+        _release_payment_activation(claims)
+        raise
+
+
+def _claim_payment_activation(
+    checkout_session_id: str | None, payment_id: str | None
+) -> list | None:
+    """Atomically claim a payment so the webhook and confirm fallback cannot both apply it.
+
+    Returns the claimed references, or None when another caller already claimed it.
+    """
+    keys = [f"cs_{checkout_session_id}" if checkout_session_id else "", f"pay_{payment_id}" if payment_id else ""]
+    claimed = []
+    for key in filter(None, keys):
+        safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in key)[:200]
+        ref = _reference(f"{ROOT}/paymongo_activation_claims/{safe}")
+        count = int(ref.transaction(lambda current: int(current or 0) + 1) or 0)
+        claimed.append(ref)
+        if count != 1:
+            _release_payment_activation(claimed)
+            return None
+    return claimed
+
+
+def _release_payment_activation(claims: list) -> None:
+    for ref in claims:
+        try:
+            ref.transaction(lambda current: max(int(current or 0) - 1, 0))
+        except Exception:
+            continue
+
+
+def _apply_paid_activation(
+    owner_uid: str,
+    *,
+    billing_period: str,
+    payment_method: str | None,
+    amount_pesos: int | None,
+    checkout_session_id: str | None,
+    payment_id: str | None,
+    reference_number: str | None,
+    tier: str,
 ) -> dict:
     keys = {k for k in (payment_id, checkout_session_id) if k}
     if keys and any(keys & _payment_keys(h) for h in _history_list(_subscription_row(owner_uid))):
         return subscription_snapshot(owner_uid)
-    if not _claim_fulfillment(owner_uid, payment_id, checkout_session_id):
-        return subscription_snapshot(owner_uid)
     now = _now()
     now_text = _iso(now)
+    plan = "pro" if str(tier or "").lower() == "pro" else "premium"
     period = "annual" if billing_period == "annual" else "monthly"
-    renews = _billing_period_end(now, period)
-    start, end = _billing_cycle_bounds(now, now)
+    row = _subscription_row(owner_uid)
+    previous_tier = str(row.get("tier") or "free").lower()
+    term = _paid_term_patch(row, plan, period, now)
     patch = {
-        "tier": "premium",
+        "tier": plan,
+        "paid_tier": plan,
         "status": "active",
         "billing_period": period,
         "payment_method": payment_method or "paymongo",
         "provider": "paymongo",
-        "renews_at": _iso(renews),
-        "cycle_anchor": now_text,
-        "period_start": _iso(start),
-        "period_end": _iso(end),
-        "scans_used": 0,
         "premium_ended": False,
+        "payment_issue": False,
+        "payment_issue_reason": None,
         "last_checkout_session_id": checkout_session_id,
         "last_payment_id": payment_id,
         "last_reference_number": reference_number,
         "updated_at": now_text,
+        **term,
     }
     _reference(f"{ROOT}/subscriptions/{owner_uid}").update(patch)
     _append_history(
@@ -907,7 +1168,11 @@ def activate_premium_from_payment(
             "id": payment_id or checkout_session_id or str(uuid.uuid4()),
             "action": "subscribed",
             "at": now_text,
+            "tier": plan,
+            "previous_tier": previous_tier,
             "billing_period": period,
+            "billing_period_start": term["billing_period_start"],
+            "billing_period_end": term["billing_period_end"],
             "payment_method": payment_method or "paymongo",
             "amount": amount_pesos,
             "checkout_session_id": checkout_session_id,
@@ -929,7 +1194,10 @@ def activate_premium_from_payment(
                 "id": payment_id,
                 "owner_uid": owner_uid,
                 "checkout_session_id": checkout_session_id,
+                "tier": plan,
                 "billing_period": period,
+                "billing_period_start": term["billing_period_start"],
+                "billing_period_end": term["billing_period_end"],
                 "created_at": now_text,
             }
         )
@@ -939,6 +1207,10 @@ def activate_premium_from_payment(
 def cancel_user_subscription(owner_uid: str, *, immediate: bool = True) -> dict:
     """End Premium now and start a fresh Free allowance of 3 scans."""
     _ = immediate
+    snapshot = subscription_snapshot(owner_uid)
+    if not is_paid_tier(snapshot.get("tier")):
+        # Free accounts have nothing to cancel; resetting here would refill their scans.
+        return snapshot
     row = _subscription_row(owner_uid)
     now_text = _iso(_now())
     _drop_paid_access(owner_uid, status="canceled", end_premium=True)
@@ -948,6 +1220,7 @@ def cancel_user_subscription(owner_uid: str, *, immediate: bool = True) -> dict:
             "id": str(uuid.uuid4()),
             "action": "canceled",
             "at": now_text,
+            "tier": row.get("tier"),
             "billing_period": row.get("billing_period"),
             "payment_method": row.get("payment_method"),
             "amount": None,
@@ -1063,25 +1336,28 @@ def renew_premium_period(
     billing_period: str,
     payment_id: str | None,
     amount_pesos: int | None,
+    tier: str | None = None,
 ) -> dict:
+    if _payment_already_applied(None, payment_id):
+        return subscription_snapshot(owner_uid)
     now = _now()
     now_text = _iso(now)
     period = "annual" if billing_period == "annual" else "monthly"
-    renews = _billing_period_end(now, period)
-    start, end = _billing_cycle_bounds(now, now)
+    row = _subscription_row(owner_uid)
+    requested = str(tier or "").lower()
+    plan = requested if requested in PAID_TIERS else _last_paid_tier(row)
+    term = _paid_term_patch(row, plan, period, now)
     patch = {
-        "tier": "premium",
+        "tier": plan,
+        "paid_tier": plan,
         "status": "active",
+        "premium_ended": False,
         "payment_issue": False,
         "payment_issue_reason": None,
         "billing_period": period,
-        "renews_at": _iso(renews),
-        "cycle_anchor": now_text,
-        "period_start": _iso(start),
-        "period_end": _iso(end),
-        "scans_used": 0,
         "last_payment_id": payment_id,
         "updated_at": now_text,
+        **term,
     }
     _reference(f"{ROOT}/subscriptions/{owner_uid}").update(patch)
     if payment_id:
@@ -1089,7 +1365,10 @@ def renew_premium_period(
             {
                 "id": payment_id,
                 "owner_uid": owner_uid,
+                "tier": plan,
                 "billing_period": period,
+                "billing_period_start": term["billing_period_start"],
+                "billing_period_end": term["billing_period_end"],
                 "created_at": now_text,
             }
         )
@@ -1099,7 +1378,10 @@ def renew_premium_period(
             "id": payment_id or str(uuid.uuid4()),
             "action": "renewed",
             "at": now_text,
+            "tier": plan,
             "billing_period": period,
+            "billing_period_start": term["billing_period_start"],
+            "billing_period_end": term["billing_period_end"],
             "payment_method": "paymongo",
             "amount": amount_pesos,
             "payment_id": payment_id,
@@ -1118,10 +1400,10 @@ def downgrade_to_free_from_payment(
     if not uid:
         return None
     now_text = _iso(_now())
+    # Mark the paid window as ended, otherwise the snapshot restores the paid tier.
+    _drop_paid_access(uid, status="refunded" if "refund" in reason else "unpaid", end_premium=True)
     _reference(f"{ROOT}/subscriptions/{uid}").update(
         {
-            "tier": "free",
-            "status": "refunded" if "refund" in reason else "unpaid",
             "payment_issue": False,
             "payment_issue_reason": None,
             "updated_at": now_text,
@@ -1178,20 +1460,46 @@ def log_merchant_event(event_type: str, resource: dict) -> None:
 
 def require_premium(owner_uid: str) -> None:
     sub = subscription_snapshot(owner_uid)
-    if sub["tier"] != "premium":
-        raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"])
+    if not is_paid_tier(sub["tier"]):
+        raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"], feature=True)
 
 
-def check_scan_eligibility(owner_uid: str, manuscript_id: str, version_id: str) -> dict:
+def check_scan_eligibility(
+    owner_uid: str, manuscript_id: str, version_id: str, citation_style: str | None = None
+) -> dict:
+    citation_style = str(citation_style or "").strip().upper() or None
     sub = subscription_snapshot(owner_uid)
     current = is_current_version(owner_uid, manuscript_id, version_id)
     if current is None:
         raise LookupError("Manuscript not found.")
-    if sub["tier"] != "premium" and not current:
-        raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"])
-    if sub["used"] >= sub["limit"]:
-        raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"])
+    if not is_paid_tier(sub["tier"]) and not current:
+        raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"], feature=True)
+    if not is_paid_tier(sub["tier"]) and citation_style and citation_style != "APA":
+        raise UpgradeRequired(
+            sub["tier"],
+            sub["limit"],
+            sub["used"],
+            feature=True,
+            message=(
+                f"{citation_style} citation checks are available on Premium and Pro. "
+                "The Free plan checks APA only — change this format's citation style to APA, "
+                "or upgrade on the Subscription page."
+            ),
+        )
+    # Running scans are charged when they finish, so count them now or parallel scans overshoot.
+    if sub["used"] + _in_flight_scan_count(owner_uid) >= sub["limit"]:
+        raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"], reset_at=sub.get("reset_at"))
     return sub
+
+
+def _in_flight_scan_count(owner_uid: str) -> int:
+    cutoff = _now() - timedelta(minutes=30)
+    count = 0
+    for created_at, _ in _running_scans(owner_uid):
+        started = _parse_iso(created_at)
+        if started and started >= cutoff:
+            count += 1
+    return count
 
 
 def _assert_scan_inputs(
@@ -1199,6 +1507,8 @@ def _assert_scan_inputs(
     manuscript_id: str,
     version_id: str,
     mechanics_id: str,
+    *,
+    enforce_limit: bool = True,
 ) -> tuple[dict, dict, dict, dict]:
     snap = subscription_snapshot(owner_uid)
     sub = _subscription_row(owner_uid)
@@ -1209,10 +1519,15 @@ def _assert_scan_inputs(
     if not isinstance(manuscript, dict) or not isinstance(version, dict) or not isinstance(mechanics, dict):
         raise LookupError("Requested scan input was not found.")
 
-    old_version = snap["tier"] != "premium" and manuscript.get("current_version_id") != version_id
-    limit_hit = int(snap["used"] or 0) >= limit
-    if old_version or limit_hit:
-        raise UpgradeRequired(snap["tier"] or "free", limit, int(snap["used"] or 0))
+    if not enforce_limit:
+        return sub, manuscript, version, mechanics
+    old_version = not is_paid_tier(snap["tier"]) and manuscript.get("current_version_id") != version_id
+    if old_version:
+        raise UpgradeRequired(snap["tier"] or "free", limit, int(snap["used"] or 0), feature=True)
+    if int(snap["used"] or 0) >= limit:
+        raise UpgradeRequired(
+            snap["tier"] or "free", limit, int(snap["used"] or 0), reset_at=snap.get("reset_at")
+        )
     return sub, manuscript, version, mechanics
 
 
@@ -1271,13 +1586,20 @@ def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) ->
         ).set(check)
 
 
-def _increment_scan_usage(owner_uid: str, sub: dict, created: str) -> None:
-    _reference(f"{ROOT}/subscriptions/{owner_uid}").update(
-        {
-            "scans_used": int(sub.get("scans_used") or 0) + 1,
-            "updated_at": created,
-        }
+def _increment_scan_usage(owner_uid: str, created: str) -> None:
+    # Transaction so scans finishing at the same time on web and mobile both count.
+    _reference(f"{ROOT}/subscriptions/{owner_uid}/scans_used").transaction(
+        lambda current: int(current or 0) + 1
     )
+    _reference(f"{ROOT}/subscriptions/{owner_uid}").update({"updated_at": created})
+
+
+def _claim_scan_usage(owner_uid: str, scan_id: str) -> bool:
+    """True only for the first finalize of a scan, so repeated polls never charge twice."""
+    claims = _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}/usage_claims").transaction(
+        lambda current: int(current or 0) + 1
+    )
+    return int(claims or 0) == 1
 
 
 def create_pending_scan(
@@ -1334,14 +1656,16 @@ def finalize_scan_from_ml(
         row.update(
             {
                 "status": "failed",
-                "error": error or "Analysis failed.",
+                "error": error or "The analysis could not finish. No scan was used. Run the scan again.",
                 "updated_at": updated,
             }
         )
         _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").update(row)
         return get_scan(owner_uid, scan_id) or row
 
-    sub, _, _, _ = _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id)
+    # The limit was checked when the scan started; re-checking here would leave an admitted
+    # scan stuck in "running" forever.
+    _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id, enforce_limit=False)
     issues = result.get("issues") or []
     sections = result.get("sections") or []
     overall_score = _optional_float(result.get("overall_score"))
@@ -1359,9 +1683,10 @@ def finalize_scan_from_ml(
             "error": None,
         }
     )
-    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(row)
+    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").update(row)
     _write_section_checks(owner_uid, scan_id, sections)
-    _increment_scan_usage(owner_uid, sub, created)
+    if _claim_scan_usage(owner_uid, scan_id):
+        _increment_scan_usage(owner_uid, created)
     return get_scan(owner_uid, scan_id) or row
 
 
@@ -1377,7 +1702,7 @@ def persist_scan(
     extra: dict | None = None,
 ) -> dict:
     scan_id, created = str(uuid.uuid4()), _iso(_now())
-    sub, _, _, _ = _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id)
+    _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id)
 
     scan = {
         "id": scan_id,
@@ -1396,8 +1721,34 @@ def persist_scan(
         scan.update(extra)
     _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(scan)
     _write_section_checks(owner_uid, scan_id, sections)
-    _increment_scan_usage(owner_uid, sub, created)
+    _increment_scan_usage(owner_uid, created)
     return get_scan(owner_uid, scan_id)
+
+
+def _running_scans(owner_uid: str) -> list[tuple[str, str]]:
+    """(created_at, scan_id) of scans still waiting on the ML service, oldest first.
+
+    Finished scans are in scan_index, so only the few unindexed ones are read (status only).
+    """
+    scan_ids = _reference(f"{ROOT}/compliance_scans/{owner_uid}").get(shallow=True) or {}
+    if not isinstance(scan_ids, dict):
+        return []
+    index = _reference(f"{ROOT}/scan_index/{owner_uid}").get(shallow=True) or {}
+    if not isinstance(index, dict):
+        index = {}
+    running = []
+    for scan_id in scan_ids:
+        if scan_id in index:
+            continue
+        base = f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}"
+        if _reference(f"{base}/status").get() == "running":
+            running.append((str(_reference(f"{base}/created_at").get() or ""), str(scan_id)))
+    running.sort()
+    return running
+
+
+def running_scan_ids(owner_uid: str) -> list[str]:
+    return [scan_id for _, scan_id in _running_scans(owner_uid)]
 
 
 def get_scan(owner_uid: str, scan_id: str) -> dict | None:

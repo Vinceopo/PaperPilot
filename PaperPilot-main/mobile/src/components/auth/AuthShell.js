@@ -1,5 +1,7 @@
-import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "../../theme";
+import PaperPilotLogo from "../shell/PaperPilotLogo";
 
 const COPY = {
   login: {
@@ -19,61 +21,42 @@ const COPY = {
   },
 };
 
-function BrandMark({ light = false }) {
-  return (
-    <View style={styles.brandRow}>
-      <View style={[styles.logo, light ? styles.logoOnLight : null]}>
-        <Text style={[styles.logoGlyph, light ? styles.logoGlyphOnLight : null]}>✈</Text>
-      </View>
-      <Text style={[styles.brandName, light ? styles.brandNameOnLight : null]}>PaperPilot</Text>
-    </View>
-  );
-}
-
 /**
  * Mobile auth frame: navy brand header + form on authFormBg / pageBg.
  */
-export default function AuthShell({
-  variant = "login",
-  title,
-  subtitle,
-  children,
-  footer,
-  onContinueAsGuest,
-}) {
+export default function AuthShell({ variant = "login", title, subtitle, children, footer }) {
   const copy = COPY[variant] || COPY.login;
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        <View style={styles.header}>
-          <BrandMark />
-          <Text style={styles.headline}>
-            {copy.headlineBefore}
-            <Text style={styles.headlineAccent}>{copy.headlineAccent}</Text>
-          </Text>
-          <Text style={styles.headerSub}>{copy.sub}</Text>
-        </View>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.header}>
+            <PaperPilotLogo tone="dark" align="start" markSize={44} style={styles.brand} />
+            <Text style={styles.headline}>
+              {copy.headlineBefore}
+              <Text style={styles.headlineAccent}>{copy.headlineAccent}</Text>
+            </Text>
+            <Text style={styles.headerSub}>{copy.sub}</Text>
+          </View>
 
-        <View style={styles.formPanel}>
-          <Text style={styles.title}>{title}</Text>
-          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+          <View style={styles.formPanel}>
+            <Text style={styles.title}>{title}</Text>
+            {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
 
-          {children}
+            {children}
 
-          {footer}
-
-          {onContinueAsGuest ? (
-            <TouchableOpacity onPress={onContinueAsGuest} style={styles.guestBtn} accessibilityRole="button">
-              <Text style={styles.guestText}>Continue without signing in</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      </ScrollView>
+            {footer}
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -83,6 +66,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.navy,
   },
+  flex: { flex: 1 },
   scroll: {
     flexGrow: 1,
     backgroundColor: colors.authFormBg || colors.pageBg,
@@ -93,40 +77,7 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 28,
   },
-  brandRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginBottom: 20,
-  },
-  logo: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  logoOnLight: {
-    backgroundColor: colors.accent,
-  },
-  logoGlyph: {
-    fontSize: 16,
-    color: colors.navy,
-    fontWeight: "700",
-  },
-  logoGlyphOnLight: {
-    color: colors.navy,
-  },
-  brandName: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: colors.white,
-    letterSpacing: -0.2,
-  },
-  brandNameOnLight: {
-    color: colors.navy,
-  },
+  brand: { marginBottom: 22 },
   headline: {
     fontSize: 26,
     fontWeight: "700",
@@ -162,14 +113,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.slate,
     lineHeight: 20,
-  },
-  guestBtn: {
-    marginTop: 14,
-    alignItems: "center",
-  },
-  guestText: {
-    fontSize: 14,
-    color: colors.muted,
-    textDecorationLine: "underline",
   },
 });

@@ -124,6 +124,15 @@ function LocationBadge({ page, line }) {
   );
 }
 
+function AiSparkleIcon({ className = "h-4 w-4" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.5 13.6 8.4 18.5 10 13.6 11.6 12 16.5 10.4 11.6 5.5 10 10.4 8.4 12 3.5Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 15.5 18.7 17.3 20.5 18 18.7 18.7 18 20.5 17.3 18.7 15.5 18 17.3 17.3 18 15.5Z" />
+    </svg>
+  );
+}
+
 function SeverityIcon({ severity, className = "h-4 w-4" }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -432,25 +441,22 @@ export default function IssuesDetectedPanel({
                                   >
                                     {entrySeverity.label}
                                   </span>
-                                  <span className="text-[11px] font-semibold text-slate-400">
-                                    {entry.section}
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span className="text-[11px] font-semibold text-slate-400">
+                                      {entry.section}
+                                    </span>
+                                    <span
+                                      className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-slate-400"
+                                      role="img"
+                                      aria-label="AI"
+                                      title="AI-detected severity"
+                                    >
+                                      <AiSparkleIcon className="h-3.5 w-3.5" />
+                                    </span>
                                   </span>
                                 </div>
                                 <p className="mt-1 text-sm font-semibold text-slate-800">{entry.finding}</p>
-                                <p className="mt-2">
-                                  <span
-                                    className="inline-flex h-5 w-5 items-center justify-center text-slate-400"
-                                    role="img"
-                                    aria-label="XAI explanation"
-                                    title="XAI explanation"
-                                  >
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.5 13.6 8.4 18.5 10 13.6 11.6 12 16.5 10.4 11.6 5.5 10 10.4 8.4 12 3.5Z" />
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M18 15.5 18.7 17.3 20.5 18 18.7 18.7 18 20.5 17.3 18.7 15.5 18 17.3 17.3 18 15.5Z" />
-                                    </svg>
-                                  </span>
-                                </p>
-                                <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                                <p className="mt-2 text-sm leading-relaxed text-slate-600">
                                   {entry.explanation}
                                 </p>
                                 {entry.recommendation ? (

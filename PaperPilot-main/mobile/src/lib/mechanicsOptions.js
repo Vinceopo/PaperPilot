@@ -24,11 +24,9 @@ export const WORD_SPACING_OPTIONS = ["One space between words and after periods"
 
 export const LANDSCAPE_OPTIONS = ["Not allowed", "Allowed for tables and figures", "Allowed on any page"];
 
-export const HEADING_LEVELS = [
-  { key: "heading1", label: "Heading 1" },
-  { key: "heading2", label: "Heading 2" },
-  { key: "heading3", label: "Heading 3" },
-];
+/** Word supports Heading 1–9; a format shows as many levels as it defines. */
+export const MAX_HEADING_LEVELS = 9;
+export const DEFAULT_HEADING_LEVELS = 2;
 
 export const HEADING_STYLE_FIELDS = [
   { key: "bold", label: "Weight", options: [{ value: "yes", label: "Bold" }, { value: "no", label: "Not bold" }] },
@@ -40,6 +38,9 @@ export const HEADING_STYLE_FIELDS = [
     options: [{ value: "center", label: "Centered" }, { value: "left", label: "Flush left" }],
   },
 ];
+
+/** Every rule one heading level can carry, in display order. */
+export const HEADING_RULE_FIELDS = [{ key: "size", label: "Size (pt)" }, ...HEADING_STYLE_FIELDS];
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLowerCase();
@@ -127,41 +128,71 @@ export function canonicalLandscapePages(value) {
   return "";
 }
 
-export function emptyHeadingStyles() {
-  return Object.fromEntries(
-    HEADING_LEVELS.map(({ key }) => [key, { bold: "", italic: "", case: "", alignment: "" }])
-  );
+export function headingLabel(index) {
+  return `Heading ${index + 1}`;
 }
 
-/** Rules `font.heading_styles` → form strings ("yes"/"no", "upper"/"title", "center"/"left", "" = not checked). */
-export function headingStylesToForm(raw) {
-  const out = emptyHeadingStyles();
-  if (!raw || typeof raw !== "object") return out;
-  for (const { key } of HEADING_LEVELS) {
-    const item = raw[key];
-    if (!item || typeof item !== "object") continue;
-    for (const flag of ["bold", "italic"]) {
-      if (item[flag] === true) out[key][flag] = "yes";
-      else if (item[flag] === false) out[key][flag] = "no";
-    }
-    if (["upper", "title"].includes(item.case)) out[key].case = item.case;
-    if (["center", "left"].includes(item.alignment)) out[key].alignment = item.alignment;
+/** One heading level in the form; `fields` lists the rules shown for it. */
+export function emptyHeading() {
+  return { size: "", bold: "", italic: "", case: "", alignment: "", fields: [] };
+}
+
+/**
+ * Rules `font` → one form entry per heading level the format defines
+ * ("yes"/"no", "upper"/"title", "center"/"left", "" = not checked).
+ */
+export function headingsFromRules(font = {}) {
+  const styles = font.heading_styles && typeof font.heading_styles === "object" ? font.heading_styles : {};
+  // Older formats stored one "Heading 3 and content size" value for both.
+  const legacyHeading3 = font.body_size == null ? font.heading3_content_size : null;
+  const sizeOf = (n) => {
+    const value = font[`heading${n}_size`] ?? (n === 3 ? legacyHeading3 : null);
+    return value == null ? "" : String(value);
+  };
+  const styleOf = (n) => {
+    const item = styles[`heading${n}`];
+    return item && typeof item === "object" ? item : {};
+  };
+  let count = Math.min(MAX_HEADING_LEVELS, Math.max(0, Math.floor(Number(font.heading_levels) || 0)));
+  for (let n = 1; n <= MAX_HEADING_LEVELS; n += 1) {
+    if (sizeOf(n) || Object.keys(styleOf(n)).length) count = Math.max(count, n);
   }
-  return out;
+  return Array.from({ length: count }, (_, index) => {
+    const item = styleOf(index + 1);
+    const heading = { ...emptyHeading(), size: sizeOf(index + 1) };
+    for (const flag of ["bold", "italic"]) {
+      if (item[flag] === true) heading[flag] = "yes";
+      else if (item[flag] === false) heading[flag] = "no";
+    }
+    if (["upper", "title"].includes(item.case)) heading.case = item.case;
+    if (["center", "left"].includes(item.alignment)) heading.alignment = item.alignment;
+    heading.fields = HEADING_RULE_FIELDS.map((field) => field.key).filter((key) => heading[key] !== "");
+    return heading;
+  });
 }
 
-export function headingStylesToRules(form) {
+/** Form headings → `heading{n}_size`, `heading_styles`, and `heading_levels` for `rules.font`. */
+export function headingsToRules(headings) {
+  const list = (Array.isArray(headings) ? headings : []).slice(0, MAX_HEADING_LEVELS);
   const out = {};
-  for (const { key } of HEADING_LEVELS) {
-    const item = form?.[key] || {};
+  const styles = {};
+  let highest = 0;
+  list.forEach((heading, index) => {
+    const level = index + 1;
+    const size = Number(heading?.size);
+    const hasSize = String(heading?.size ?? "").trim() !== "" && !Number.isNaN(size);
+    if (hasSize) out[`heading${level}_size`] = size;
     const style = {};
     for (const flag of ["bold", "italic"]) {
-      if (item[flag] === "yes") style[flag] = true;
-      else if (item[flag] === "no") style[flag] = false;
+      if (heading?.[flag] === "yes") style[flag] = true;
+      else if (heading?.[flag] === "no") style[flag] = false;
     }
-    if (item.case) style.case = item.case;
-    if (item.alignment) style.alignment = item.alignment;
-    if (Object.keys(style).length) out[key] = style;
-  }
+    if (heading?.case) style.case = heading.case;
+    if (heading?.alignment) style.alignment = heading.alignment;
+    if (Object.keys(style).length) styles[`heading${level}`] = style;
+    if (hasSize || Object.keys(style).length) highest = level;
+  });
+  if (Object.keys(styles).length) out.heading_styles = styles;
+  if (highest) out.heading_levels = highest;
   return out;
 }
