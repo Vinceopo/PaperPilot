@@ -450,17 +450,13 @@ export function runComplianceScan({ manuscriptId, versionId, mechanicsId }) {
   );
 }
 
+/** Finished scans from every device, so My Manuscripts shows the same versions everywhere. */
 export function listScans() {
   return authorizedFetch("/scans");
 }
 
 export function getComplianceScan(scanId) {
   return authorizedFetch(`/scans/${encodeURIComponent(scanId)}`);
-}
-
-/** Finished scans from every device, so My Manuscripts shows the same versions everywhere. */
-export function listScans() {
-  return authorizedFetch("/scans");
 }
 
 /** Poll while ML job runs (gateway proxies Render progress). */

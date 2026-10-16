@@ -142,7 +142,7 @@ def create_checkout_session(
     description = (
         f"{allowance} · APA, MLA & IEEE · version history"
         if period == "monthly"
-        else f"Annual {plan_name} (save 1 month) — {allowance} · APA, MLA & IEEE · version history"
+        else f"Annual {plan_name} (save 8%) — {allowance} · APA, MLA & IEEE · version history"
     )
     methods = [
         m.strip()

@@ -12,7 +12,9 @@ export const PLAN_PRICES = {
 
 export const PLAN_LIMITS = { free: 3, premium: 50, pro: 75 };
 
-export const ANNUAL_SAVINGS_LABEL = "Save 1 month";
+/** Annual = 11 × monthly → 1/12 off ≈ 8%. */
+export const ANNUAL_SAVINGS_PERCENT = Math.round((1 / 12) * 100);
+export const ANNUAL_SAVINGS_LABEL = `Save ${ANNUAL_SAVINGS_PERCENT}%`;
 
 export const FREE_FEATURES = ["3 scans / month", "View current version only", "APA style only"];
 export const PREMIUM_FEATURES = [
@@ -21,7 +23,7 @@ export const PREMIUM_FEATURES = [
   "APA, MLA, & IEEE styles",
 ];
 export const PRO_FEATURES = [
-  "Up to 75 scans / week (resets every 7 days)",
+  "Up to 75 scans / weekly",
   "Unlimited version history",
   "APA, MLA, & IEEE styles",
 ];

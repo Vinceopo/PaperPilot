@@ -371,8 +371,13 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
       </Section>
 
       <Section title="Headings">
+        <p className="mb-2 text-[10px] text-slate-400">
+          Filled from your uploaded format. Edit only if a value does not match your guide.
+        </p>
         {headings.length ? null : (
-          <p className="text-[11px] text-slate-400">No heading rules in this format.</p>
+          <p className="text-[11px] text-slate-400">
+            No heading rules were found in this format yet. Add a level only if your guide defines one.
+          </p>
         )}
         {headings.map((heading, index) => {
           const label = headingLabel(index);
@@ -510,26 +515,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
             />
           </Field>
         </div>
-        <fieldset className="block">
-          <legend className="text-[11px] font-semibold text-slate-600">Chapter starts</legend>
-          <span className="mt-0.5 block text-[10px] text-slate-400">
-            Headings that begin a new chapter page. None selected uses CHAPTER I and Chapter 1 styles.
-          </span>
-          <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
-            {CHAPTER_MARKER_OPTIONS.map((option) => (
-              <label key={option.value} className="flex items-start gap-2 text-xs text-slate-700">
-                <input
-                  type="checkbox"
-                  disabled={disabled}
-                  checked={chapterMarkers.includes(option.value)}
-                  onChange={() => toggleChapterMarker(option.value)}
-                  className="mt-0.5 h-3.5 w-3.5 accent-[#16bfa8]"
-                />
-                {option.label}
-              </label>
-            ))}
-          </div>
-        </fieldset>
       </Section>
 
       <Section title="Page breaks">

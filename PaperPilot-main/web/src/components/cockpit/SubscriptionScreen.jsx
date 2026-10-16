@@ -678,7 +678,7 @@ export default function SubscriptionScreen({
               </div>
               {isPaidTier(selectedPlan) && billingPeriod === "annual" && (
                 <p className="mt-1 text-[11px] font-semibold text-emerald-700">
-                  {ANNUAL_SAVINGS_LABEL} — {peso(planPrice(selectedPlan, "monthly"))} off 12 monthly payments
+                  {ANNUAL_SAVINGS_LABEL} vs paying monthly for a year
                 </p>
               )}
               <div className="mt-3 flex items-end justify-between border-t border-slate-200 pt-3">

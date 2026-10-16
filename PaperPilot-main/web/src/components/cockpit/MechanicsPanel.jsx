@@ -445,8 +445,8 @@ export default function MechanicsPanel({
       <ShowStepsRow step={1} onShowSteps={onShowSteps} />
       <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Format Mechanics</h2>
       <p className="mt-1 text-xs leading-relaxed text-slate-400">
-        Choose a saved format, upload a guide for extraction, or customize fields manually. Format
-        Fields always reflect the rules inside the mechanics you select or upload.
+        Upload or select a format guide — Format Fields are filled from that file. Customize only
+        when a displayed value does not match your mechanics.
       </p>
 
       <div className="mt-4 flex flex-col gap-2 rounded-xl border border-dashed border-[#18bda9]/60 bg-[#f7fcfc] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
