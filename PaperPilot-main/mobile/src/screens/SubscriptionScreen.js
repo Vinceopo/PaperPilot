@@ -530,7 +530,7 @@ export default function SubscriptionScreen({ navigation }) {
                 </View>
                 {isPaidTier(selectedPlan) && billingPeriod === "annual" ? (
                   <Text style={styles.savingsLine}>
-                    {ANNUAL_SAVINGS_LABEL} — {peso(planPrice(selectedPlan, "monthly"))} off 12 monthly payments
+                    {ANNUAL_SAVINGS_LABEL} vs paying monthly for a year
                   </Text>
                 ) : null}
                 <View style={styles.totalRow}>

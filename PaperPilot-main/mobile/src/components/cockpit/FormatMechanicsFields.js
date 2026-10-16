@@ -307,7 +307,14 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Headings">
-          {headings.length ? null : <Text style={styles.hint}>No heading rules in this format.</Text>}
+          <Text style={styles.hint}>
+            Filled from your uploaded format. Edit only if a value does not match your guide.
+          </Text>
+          {headings.length ? null : (
+            <Text style={styles.hint}>
+              No heading rules were found yet. Add a level only if your guide defines one.
+            </Text>
+          )}
           {headings.map((heading, index) => {
             const label = headingLabel(index);
             const shown = HEADING_RULE_FIELDS.filter((field) => heading.fields?.includes(field.key));
