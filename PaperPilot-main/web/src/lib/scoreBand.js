@@ -4,7 +4,19 @@
  */
 
 export function scoreBand(score) {
-  const n = Number(score) || 0;
+  if (score == null || score === "" || !Number.isFinite(Number(score))) {
+    return {
+      key: "not_evaluated",
+      label: "NOT EVALUATED",
+      status: "not_evaluated",
+      color: "slate",
+      barClass: "bg-slate-300",
+      pillClass: "bg-slate-100 text-slate-600 border-slate-200",
+      textClass: "text-slate-500",
+      softClass: "bg-slate-50 text-slate-600",
+    };
+  }
+  const n = Number(score);
   if (n >= 80) {
     return {
       key: "compliant",
@@ -56,7 +68,7 @@ export function latestVersion(manuscript) {
 /** Table-facing fields always derived from the latest version. */
 export function manuscriptSummary(manuscript) {
   const latest = latestVersion(manuscript);
-  const score = Number(latest?.score ?? 0);
+  const score = latest?.score == null ? null : Number(latest.score);
   const band = scoreBand(score);
   const versionCount = Array.isArray(manuscript?.versions) ? manuscript.versions.length : 0;
   return {

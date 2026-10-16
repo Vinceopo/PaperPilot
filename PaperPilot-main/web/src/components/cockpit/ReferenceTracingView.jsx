@@ -17,6 +17,7 @@ function formatLocation(entry) {
 export default function ReferenceTracingView({
   result,
   file = null,
+  documentLoading = false,
   onBack,
   onViewFullResult,
 }) {
@@ -115,6 +116,7 @@ export default function ReferenceTracingView({
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1] p-3 shadow-sm">
           <DocumentPagePreview
             file={file}
+            loading={documentLoading}
             documentUrl={result?.cloudinaryUrl || ""}
             documentName={result?.documentName || ""}
             preview={result?.documentPreview}

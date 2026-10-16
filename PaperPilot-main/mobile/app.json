@@ -2,6 +2,7 @@
   "expo": {
     "name": "PaperPilot",
     "slug": "paperpilot",
+    "owner": "paperpilot",
     "version": "0.1.0",
     "scheme": "paperpilot",
     "orientation": "portrait",
@@ -12,7 +13,8 @@
       "bundleIdentifier": "com.paperpilot.app"
     },
     "android": {
-      "package": "com.paperpilot.app"
+      "package": "com.paperpilot.app",
+      "runtimeVersion": "1.0.0"
     },
     "extra": {
       "apiUrl": "http://192.168.68.55:8001",
@@ -29,6 +31,9 @@
         "storageBucket": "paperpilotv6.firebasestorage.app",
         "messagingSenderId": "269305680269",
         "appId": "1:269305680269:web:fff0a7562083510b3badc4"
+      },
+      "eas": {
+        "projectId": "45e1cf04-e601-4357-aba5-09c75e874a04"
       }
     },
     "plugins": [
@@ -37,10 +42,16 @@
       [
         "expo-splash-screen",
         {
+          "image": "./assets/icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
           "backgroundColor": "#f3f5f7"
         }
       ],
       "expo-image"
-    ]
+    ],
+    "updates": {
+      "url": "https://u.expo.dev/45e1cf04-e601-4357-aba5-09c75e874a04"
+    }
   }
 }

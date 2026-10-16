@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -10,10 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pypdf import PdfReader
 
-from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes
+from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes, signed_download_url
 from app.config import document_byte_limit, settings
 from app.compliance import run_compliance_scan
 from app.compliance_db import (
+    SCAN_RESULT_FIELDS,
     MechanicsInUse,
     MechanicsNameConflict,
     UpgradeRequired,
@@ -25,6 +27,9 @@ from app.compliance_db import (
     create_version,
     delete_mechanics,
     delete_manuscript,
+    delete_version,
+    deleted_scan_ids,
+    VersionScanRunning,
     get_mechanics,
     get_pending_checkout,
     get_scan,
@@ -33,12 +38,15 @@ from app.compliance_db import (
     get_version_full,
     init_db as init_compliance_db,
     is_current_version,
+    is_paid_tier,
     latest_pending_checkout_id,
     list_manuscripts,
     list_mechanics,
+    list_scan_summaries,
     list_versions,
     persist_scan,
     require_premium,
+    running_scan_ids,
     save_pending_checkout,
     subscription_snapshot,
     update_mechanics,
@@ -56,12 +64,13 @@ from app.paymongo import (
 from app.paymongo_events import fulfill_checkout_paid, handle_paymongo_event
 from app.documents import (
     DocumentError,
+    build_sample_mechanics_docx,
     derive_mechanics_rules,
     normalize_mechanics_rules,
     parse_document,
     validate_document,
 )
-from app.emailer import send_otp_email
+from app.emailer import email_delivery_configured, send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
 from app.otp import (
@@ -74,7 +83,18 @@ from app.otp import (
     store_otp,
     verify_otp,
 )
-from app.profiles import release_username, reserve_username, save_profile, username_taken
+from app.profiles import (
+    claim_phone,
+    get_email_by_username,
+    get_profile,
+    phone_in_use,
+    release_phone,
+    release_username,
+    reserve_username,
+    save_profile,
+    update_profile,
+    username_taken,
+)
 from app.rules import evaluate_manuscript
 from app.schemas import (
     AnalyzeRequest,
@@ -87,14 +107,18 @@ from app.schemas import (
     RegisterCheckRequest,
     RegisterRequest,
     ResetPasswordRequest,
+    ResolveEmailRequest,
     RuleResult,
+    UpdateProfileRequest,
     ComplianceScanRequest,
     ManuscriptVersionCloudinaryRequest,
     MechanicsSaveRequest,
     MechanicsUpdateRequest,
     SubscribeRequest,
 )
-from app.validators import email_error, name_error, normalize_email, password_error, username_error
+from app.validators import email_error, name_error, normalize_email, password_error, phone_error, username_error
+
+log = logging.getLogger("paperpilot.api")
 
 app = FastAPI(title="PaperPilot API", version="0.1.0")  # reload settings after .env
 init_db()
@@ -152,7 +176,8 @@ def chrome_devtools_probe():
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
-def analyze(body: AnalyzeRequest):
+def analyze(body: AnalyzeRequest, authorization: str | None = Header(default=None)):
+    authenticated_uid(authorization)
     try:
         ai = analyze_with_gemini(body.title, body.abstract, body.text)
         rules = evaluate_manuscript(body.title, body.abstract, body.text)
@@ -169,7 +194,8 @@ def analyze(body: AnalyzeRequest):
 
 
 @app.post("/extract-pdf")
-async def extract_pdf(body: CloudinaryDocumentRequest):
+async def extract_pdf(body: CloudinaryDocumentRequest, authorization: str | None = Header(default=None)):
+    authenticated_uid(authorization)
     try:
         data, hint = fetch_cloudinary_bytes(body.cloudinary_url)
     except CloudinaryFetchError as exc:
@@ -276,6 +302,20 @@ def _raise_upgrade(exc: UpgradeRequired) -> None:
     raise HTTPException(status_code=403, detail=exc.detail) from None
 
 
+def _feature_tier(tier: str) -> str:
+    """Pro has every Premium analysis feature; the ML service only knows free/premium."""
+    return "premium" if is_paid_tier(tier) else "free"
+
+
+def _scan_rules(rules: dict) -> dict:
+    """Profiles saved before Chicago was removed are checked as APA (the default style)."""
+    out = dict(rules or {})
+    style = str(out.get("citation_style") or "").strip().upper()
+    if style == "CHICAGO":
+        out["citation_style"] = "APA"
+    return out
+
+
 @app.get("/mechanics")
 def mechanics_list(uid: str = Depends(authenticated_uid)):
     return {"items": list_mechanics(uid)}
@@ -353,47 +393,9 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
 @app.get("/mechanics/sample")
 def mechanics_sample():
     """Downloadable sample format-mechanics guide (DOCX) for users who need a starting point."""
-    from docx import Document
     from fastapi.responses import StreamingResponse
 
-    doc = Document()
-    doc.add_heading("Sample Format Mechanics Guide", level=0)
-    doc.add_paragraph(
-        "Use this guide as a starting point. Upload it in PaperPilot, review the "
-        "extracted Format Fields, then edit any value to match your school or style."
-    )
-    doc.add_heading("Paper", level=1)
-    doc.add_paragraph("Paper size: 8.5 x 11 (Letter)")
-    doc.add_paragraph("Orientation: Portrait")
-    doc.add_paragraph("Paper substance / weight: 20")
-    doc.add_paragraph("Line spacing: 1.5")
-    doc.add_paragraph("First-line indentation: 0.5 inch")
-    doc.add_heading("Margins (inches)", level=1)
-    doc.add_paragraph("Top: 1 · Bottom: 1 · Left: 1 · Right: 1")
-    doc.add_paragraph("Gutter: 0 · Header: 0.5 · Footer: 0.5")
-    doc.add_heading("Font", level=1)
-    doc.add_paragraph("Font type: Times New Roman")
-    doc.add_paragraph("Font color: Black/Automatic")
-    doc.add_paragraph("Heading 1 size: 16 pt")
-    doc.add_paragraph("Heading 2 size: 14 pt")
-    doc.add_paragraph("Heading 3 and body content size: 12 pt")
-    doc.add_heading("Pagination", level=1)
-    doc.add_paragraph("Page number position: Top right")
-    doc.add_paragraph("First page of each chapter: No page number shown")
-    doc.add_heading("Page breaks", level=1)
-    doc.add_paragraph("Insert a page break only when starting a new chapter.")
-    doc.add_heading("Tables", level=1)
-    doc.add_paragraph('Table naming: Table <name> above a "TABLE TITLE" caption.')
-    doc.add_heading("Figures", level=1)
-    doc.add_paragraph(
-        "Figure naming: Figure <number>: Figure Title in bold/underlined below the figure."
-    )
-    doc.add_heading("Citation format", level=1)
-    doc.add_paragraph("Citation style: APA 7th Edition")
-
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
+    buffer = io.BytesIO(build_sample_mechanics_docx())
     headers = {
         "Content-Disposition": 'attachment; filename="Sample_Format_Mechanics.docx"'
     }
@@ -537,6 +539,7 @@ async def manuscript_version_create(
             parsed,
             manuscript_id,
             cloudinary_url=body.cloudinary_url,
+            client_request_id=body.client_request_id,
         )
         return {"created_manuscript": created_parent, "version": version}
     except CloudinaryFetchError as exc:
@@ -564,6 +567,20 @@ def manuscript_delete(
 ):
     """Permanently remove this manuscript, its versions, and its scans."""
     deleted = delete_manuscript(uid, manuscript_id, title)
+    return {"deleted": deleted}
+
+
+@app.delete("/manuscripts/{manuscript_id}/versions/{version_id}")
+def manuscript_version_delete(
+    manuscript_id: str,
+    version_id: str,
+    uid: str = Depends(authenticated_uid),
+):
+    """Permanently remove one version and its scans on every device."""
+    try:
+        deleted = delete_version(uid, manuscript_id, version_id)
+    except VersionScanRunning as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return {"deleted": deleted}
 
 
@@ -618,7 +635,12 @@ def compliance_scan_create(
     if not version or not mechanics:
         raise HTTPException(status_code=404, detail="Manuscript version or mechanics not found.")
     try:
-        subscription = check_scan_eligibility(uid, manuscript_id, version_id)
+        subscription = check_scan_eligibility(
+            uid,
+            manuscript_id,
+            version_id,
+            citation_style=_scan_rules(mechanics.get("rules") or {}).get("citation_style"),
+        )
     except UpgradeRequired as exc:
         _raise_upgrade(exc)
     except LookupError:
@@ -641,10 +663,13 @@ def compliance_scan_create(
             raw_bytes, _hint = fetch_cloudinary_bytes(document_url)
         except CloudinaryFetchError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        except Exception as exc:
+        except Exception:
             raise HTTPException(
                 status_code=502,
-                detail=f"Could not download the document for analysis: {exc}",
+                detail=(
+                    "Your saved document could not be downloaded for analysis. "
+                    "No scan was used. Try again in a minute, or upload the file again."
+                ),
             ) from None
         scan_id = str(uuid.uuid4())
         try:
@@ -653,8 +678,8 @@ def compliance_scan_create(
                 document_url=None,
                 document_base64=base64.b64encode(raw_bytes).decode("ascii"),
                 filename=version.get("source_filename") or "document.pdf",
-                mechanics_rules=mechanics["rules"],
-                tier=subscription["tier"],
+                mechanics_rules=_scan_rules(mechanics["rules"]),
+                tier=_feature_tier(subscription["tier"]),
             )
         except MLServiceError as exc:
             status = exc.status_code if exc.status_code and exc.status_code < 500 else 502
@@ -674,13 +699,13 @@ def compliance_scan_create(
             raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
 
     result = run_compliance_scan(
-        version["parsed_data"], mechanics["rules"], subscription["tier"]
+        version["parsed_data"], _scan_rules(mechanics["rules"]), _feature_tier(subscription["tier"])
     )
     extra = {
         "page_count": result.get("page_count") or 0,
         "pagination": result.get("pagination") or {},
     }
-    for key in ("right_pct", "wrong_pct", "category_wrong_pct", "severity_pct", "units_checked", "units_failed"):
+    for key in SCAN_RESULT_FIELDS:
         if key in result:
             extra[key] = result[key]
     try:
@@ -701,6 +726,18 @@ def compliance_scan_create(
     scan["page_count"] = result.get("page_count") or 0
     scan["pagination"] = result.get("pagination") or {}
     return scan
+
+
+@app.get("/scans")
+def compliance_scans_list(uid: str = Depends(authenticated_uid)):
+    """Finished scans (summary only) so My Manuscripts can be rebuilt on any device."""
+    # Scans whose client stopped polling (page reload, app closed) are finished here.
+    for scan_id in running_scan_ids(uid)[:3]:
+        try:
+            hydrate_scan_from_ml(uid, scan_id)
+        except Exception:
+            continue
+    return {"items": list_scan_summaries(uid), "deleted": deleted_scan_ids(uid)}
 
 
 @app.get("/scans/{scan_id}/progress")
@@ -726,11 +763,18 @@ def compliance_scan_document(scan_id: str, uid: str = Depends(authenticated_uid)
     version_id = scan.get("manuscript_version_id") or ""
     version = get_version(uid, manuscript_id, version_id) if manuscript_id and version_id else None
     url = get_version_document_url(uid, manuscript_id, version_id) if version else None
+    download_url = ""
+    if url:
+        try:
+            download_url = signed_download_url(url)
+        except CloudinaryFetchError:
+            download_url = ""
     return {
         "scan_id": scan_id,
         "manuscript_id": manuscript_id,
         "manuscript_version_id": version_id,
         "cloudinary_url": url or "",
+        "download_url": download_url,
         "source_filename": (version or {}).get("source_filename") or "",
     }
 
@@ -768,10 +812,13 @@ def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authentica
     billing_period = (body.billing_period or "monthly").lower()
     if billing_period not in ("monthly", "annual"):
         billing_period = "monthly"
+    tier = "pro" if plan == "pro" else "premium"
 
     base = (settings.app_public_url or "https://paperpilotph.vercel.app").rstrip("/")
-    success_url = f"{base}/?billing=success"
-    cancel_url = f"{base}/?billing=canceled"
+    # Mobile checkouts land on a web page that hands control back to the app.
+    app_return = "&app=1" if body.return_to == "app" else ""
+    success_url = f"{base}/?billing=success{app_return}"
+    cancel_url = f"{base}/?billing=canceled{app_return}"
     reference = f"pp-{uid[:8]}-{uuid.uuid4().hex[:12]}"
 
     customer_email = None
@@ -794,31 +841,38 @@ def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authentica
             customer_email=customer_email,
             customer_name=customer_name,
             reference_number=reference,
+            tier=tier,
         )
     except PayMongoError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
+    checkout_error = (
+        "The payment page could not be opened because PayMongo sent an incomplete reply. "
+        "You were not charged. Try again in a minute."
+    )
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
-        raise HTTPException(status_code=502, detail="PayMongo returned an unexpected response.")
+        raise HTTPException(status_code=502, detail=checkout_error)
     attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
     checkout_url = attrs.get("checkout_url")
     session_id = data.get("id")
     if not checkout_url or not session_id:
-        raise HTTPException(status_code=502, detail="PayMongo checkout URL missing.")
+        raise HTTPException(status_code=502, detail=checkout_error)
 
     save_pending_checkout(
         uid,
         checkout_session_id=str(session_id),
         billing_period=billing_period,
         reference_number=reference,
-        amount_pesos=plan_amount_pesos(billing_period),
+        amount_pesos=plan_amount_pesos(billing_period, tier),
+        tier=tier,
     )
     return {
         "checkout_url": checkout_url,
         "checkout_session_id": session_id,
+        "plan": tier,
         "billing_period": billing_period,
-        "amount": plan_amount_pesos(billing_period),
+        "amount": plan_amount_pesos(billing_period, tier),
         "currency": "PHP",
         "provider": "paymongo",
     }
@@ -839,11 +893,14 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
     session_id = (body.checkout_session_id or "").strip() or latest_pending_checkout_id(uid)
     if not session_id:
         snap = subscription_snapshot(uid)
-        if str(snap.get("tier") or "").lower() == "premium":
+        if is_paid_tier(snap.get("tier")):
             return {**snap, "confirmed": True, "already_premium": True}
         raise HTTPException(
             status_code=404,
-            detail="No pending PayMongo checkout found for this account.",
+            detail=(
+                "No pending payment was found for this account. "
+                "If you were charged, wait a minute and refresh; otherwise choose a plan again."
+            ),
         )
 
     pending = get_pending_checkout(session_id)
@@ -857,7 +914,7 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
     if already_applied:
         return {
             **current,
-            "confirmed": str(current.get("tier") or "").lower() == "premium",
+            "confirmed": is_paid_tier(current.get("tier")),
             "already_applied": True,
             "checkout_session_id": session_id,
         }
@@ -915,6 +972,7 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
             checkout_session_id=session_id,
             payment_id=str(payment_id) if payment_id else None,
             reference_number=str(attrs.get("reference_number") or "") or None,
+            tier="pro" if str((pending or {}).get("tier") or meta.get("tier") or "").lower() == "pro" else "premium",
         )
 
     return {
@@ -954,7 +1012,7 @@ async def paymongo_webhook(
 
     # Respond quickly after verify; handler is sync/RTDB and should stay short.
     result = handle_paymongo_event(payload if isinstance(payload, dict) else {})
-    return JSONResponse(result, status_code=200)
+    return JSONResponse(result, status_code=200 if result.get("ok", True) else 500)
 
 
 def _require(error: str | None) -> None:
@@ -989,6 +1047,192 @@ def auth_register_check(body: RegisterCheckRequest):
     return {"ok": True}
 
 
+@app.post("/auth/resolve-email")
+def auth_resolve_email(body: ResolveEmailRequest):
+    """Map a sign-in username to its account email so the client can sign in with Firebase."""
+    identifier = body.identifier.strip()
+    if "@" in identifier:
+        email = normalize_email(identifier)
+        _require(email_error(email))
+        return {"email": email}
+    taken = username_taken(identifier)
+    if taken is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "username_lookup_unavailable",
+                "message": "Signing in with a username isn't available right now. Use your email address instead.",
+            },
+        )
+    email = get_email_by_username(identifier) if taken else None
+    if not email:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "username_not_found", "message": "No account uses that username."},
+        )
+    return {"email": email}
+
+
+# ── Profile ──────────────────────────────────────────────────────────────────
+
+@app.get("/profile")
+def get_user_profile(uid: str = Depends(authenticated_uid)):
+    """Return the user's profile, creating the database record from Firebase Auth if it is missing."""
+    data = get_profile(uid)
+    if data is None:
+        fb = admin_auth()
+        if fb:
+            try:
+                u = fb.get_user(uid)
+            except Exception as exc:
+                log.warning("Firebase Auth user lookup failed: %s", exc)
+                u = None
+            if u is not None:
+                parts = (u.display_name or "").split()
+                first = parts[0] if parts else ""
+                last = parts[-1] if len(parts) > 1 else ""
+                middle = " ".join(parts[1:-1]) if len(parts) > 2 else ""
+                save_profile(
+                    uid,
+                    email=u.email or "",
+                    username="",
+                    first_name=first,
+                    middle_name=middle,
+                    last_name=last,
+                )
+                if u.photo_url:
+                    update_profile(uid, photo_url=u.photo_url)
+                data = get_profile(uid) or {
+                    "email": u.email or "",
+                    "username": "",
+                    "firstName": first,
+                    "middleName": middle,
+                    "lastName": last,
+                    "contactNumber": "",
+                    "photoURL": u.photo_url or "",
+                    "emailVerified": u.email_verified,
+                }
+    if data is None:
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    return {**data, "uid": uid}
+
+
+@app.patch("/profile")
+def patch_user_profile(body: UpdateProfileRequest, uid: str = Depends(authenticated_uid)):
+    """Update mutable profile fields (name, username, contact, photo)."""
+    if body.first_name is not None:
+        _require(name_error(body.first_name.strip(), "First name"))
+    if body.last_name is not None:
+        _require(name_error(body.last_name.strip(), "Last name"))
+    if body.middle_name is not None:
+        _require(name_error(body.middle_name.strip(), "Middle name", required=False))
+    if body.contact_number is not None:
+        _require(phone_error(body.contact_number.strip(), required=False))
+    if body.username is not None:
+        if not body.username.strip():
+            raise HTTPException(status_code=400, detail="Username cannot be blank.")
+        _require(username_error(body.username.strip()))
+
+    current = get_profile(uid) or {}
+    if not current.get("email"):
+        fb = admin_auth()
+        if fb:
+            try:
+                current["email"] = fb.get_user(uid).email or ""
+            except Exception:
+                pass
+    old_phone = str(current.get("contactNumber") or "").strip()
+    new_phone = None if body.contact_number is None else body.contact_number.strip()
+    old_username = str(current.get("username") or "").strip()
+    new_username = None if body.username is None else body.username.strip()
+
+    if new_username is not None:
+        claimed = reserve_username(new_username, uid)
+        if claimed is False:
+            raise HTTPException(status_code=409, detail="That username is already taken.")
+        if claimed is None:
+            raise HTTPException(status_code=503, detail="Could not verify username. Please try again.")
+
+    if new_phone:
+        taken = phone_in_use(new_phone, uid)
+        if taken is True:
+            raise HTTPException(status_code=409, detail="Number is already in use")
+        claimed = claim_phone(new_phone, uid)
+        if claimed is False:
+            raise HTTPException(status_code=409, detail="Number is already in use")
+        if claimed is None:
+            raise HTTPException(status_code=503, detail="Could not verify mobile number. Please try again.")
+
+    ok = update_profile(
+        uid,
+        first_name=body.first_name,
+        middle_name=body.middle_name,
+        last_name=body.last_name,
+        contact_number=body.contact_number,
+        username=body.username,
+        email=(current.get("email") or None),
+        photo_url=body.photo_url,
+        remove_photo=body.remove_photo,
+    )
+
+    if new_username is not None:
+        old_key = old_username.strip().lower()
+        new_key = new_username.strip().lower()
+        if old_key and old_key != new_key:
+            release_username(old_username)
+
+    if new_phone is not None:
+        old_digits = "".join(ch for ch in old_phone if ch.isdigit())
+        new_digits = "".join(ch for ch in new_phone if ch.isdigit())
+        if old_digits and old_digits != new_digits:
+            release_phone(old_phone, uid)
+
+    fb = admin_auth()
+    if fb:
+        try:
+            profile = get_profile(uid) or current
+            parts = [
+                body.first_name if body.first_name is not None else profile.get("firstName", ""),
+                body.middle_name if body.middle_name is not None else profile.get("middleName", ""),
+                body.last_name if body.last_name is not None else profile.get("lastName", ""),
+            ]
+            display = " ".join(p.strip() for p in parts if p and str(p).strip())
+            kwargs: dict = {}
+            if display:
+                kwargs["display_name"] = display
+            if body.remove_photo:
+                kwargs["photo_url"] = None
+            elif body.photo_url is not None:
+                kwargs["photo_url"] = body.photo_url
+            if kwargs:
+                fb.update_user(uid, **kwargs)
+        except Exception as exc:
+            log.warning("Firebase Auth profile sync failed: %s", exc)
+
+    if not ok:
+        raise HTTPException(status_code=503, detail="Profile update failed. Please try again.")
+    updated = get_profile(uid) or {}
+    return {"ok": True, **updated, "uid": uid}
+
+
+@app.post("/account/deactivate")
+def deactivate_account(uid: str = Depends(authenticated_uid)):
+    """Disable sign-in for this account. Its records stay in the database; only an admin deletes them."""
+    fb = admin_auth()
+    if not fb:
+        raise HTTPException(status_code=503, detail="Account management is temporarily unavailable.")
+    try:
+        fb.update_user(uid, disabled=True)
+    except Exception as exc:
+        log.warning("Account deactivation failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Could not deactivate the account. Please try again.") from exc
+    return {"ok": True}
+
+
+def _otp_bypassed(purpose: str) -> bool:
+    return not settings.otp_enabled and purpose != "reset_password"
+
+
 @app.post("/auth/otp/send")
 def auth_otp_send(body: OtpSendRequest):
     email = normalize_email(body.email)
@@ -1003,7 +1247,8 @@ def auth_otp_send(body: OtpSendRequest):
         raise HTTPException(status_code=404, detail="No account found for this email.")
 
     # Local/dev bypass: skip email and return a challenge token immediately.
-    if not settings.otp_enabled:
+    # Password resets always require a real emailed code.
+    if _otp_bypassed(body.purpose):
         token = issue_challenge(email, body.purpose)
         key = "signup_token" if body.purpose == "verify_email" else "reset_token"
         return {
@@ -1025,15 +1270,27 @@ def auth_otp_send(body: OtpSendRequest):
     try:
         send_otp_email(email, code, body.purpose)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Could not send email: {exc}") from exc
+        log.error("OTP email to %s failed: %s", email, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "We couldn't send the verification email right now. "
+                "Please try again in a few minutes."
+            ),
+        ) from exc
+    minutes = max(1, ttl // 60)
     payload = {
         "ok": True,
         "expires_in": ttl,
-        "resend_in": settings.otp_resend_seconds,
+        "resend_in": (
+            settings.otp_reset_resend_seconds
+            if body.purpose == "reset_password"
+            else settings.otp_resend_seconds
+        ),
         "max_attempts": settings.otp_max_attempts,
-        "message": "A 6-digit code was sent to your email. It expires in 10 minutes.",
+        "message": f"A 6-digit code was sent to your email. It expires in {minutes} minute(s).",
     }
-    if settings.otp_echo_in_response or not settings.smtp_host:
+    if settings.otp_echo_in_response or not email_delivery_configured():
         payload["dev_code"] = code
     return payload
 
@@ -1041,7 +1298,10 @@ def auth_otp_send(body: OtpSendRequest):
 @app.post("/auth/otp/verify")
 def auth_otp_verify(body: OtpVerifyRequest):
     email = normalize_email(body.email)
-    if not settings.otp_enabled:
+    if body.purpose not in PURPOSES:
+        raise HTTPException(status_code=400, detail="Invalid OTP purpose.")
+    bypassed = _otp_bypassed(body.purpose)
+    if bypassed:
         token = issue_challenge(email, body.purpose)
     else:
         try:
@@ -1049,7 +1309,7 @@ def auth_otp_verify(body: OtpVerifyRequest):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     key = "signup_token" if body.purpose == "verify_email" else "reset_token"
-    return {"ok": True, "otp_bypassed": not settings.otp_enabled, key: token, "expires_in": settings.otp_ttl_seconds}
+    return {"ok": True, "otp_bypassed": bypassed, key: token, "expires_in": settings.otp_ttl_seconds}
 
 
 @app.post("/auth/register")
@@ -1080,6 +1340,9 @@ def auth_register(body: RegisterRequest):
 
     from firebase_admin.auth import EmailAlreadyExistsError
 
+    if username_taken(username) is True:
+        raise HTTPException(status_code=409, detail="That username is already taken.")
+
     display = " ".join(p for p in [first, middle, last] if p)
     try:
         user = fb.create_user(
@@ -1094,7 +1357,8 @@ def auth_register(body: RegisterRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if reserve_username(username, user.uid) is False:
-        # Lost a race for the username: roll back so the email stays available.
+        # Lost a same-instant race for the username. Nothing has been saved for this
+        # account yet, so roll back the bare login and keep the email available.
         fb.delete_user(user.uid)
         raise HTTPException(status_code=409, detail="That username is already taken.")
 
@@ -1107,7 +1371,7 @@ def auth_register(body: RegisterRequest):
         last_name=last,
     )
     if not profile_saved:
-        release_username(username)
+        log.warning("Profile save failed for new account %s; the client will retry.", user.uid)
     return {"ok": True, "uid": user.uid, "client_signup": False, "profile_saved": profile_saved}
 
 

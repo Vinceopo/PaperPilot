@@ -90,8 +90,10 @@ DETERMINISTIC GROUPED ISSUES:
                 continue
             original = issue["severity"]
             proposed = update["severity"]
-            if abs(severity_rank[proposed] - severity_rank.get(original, 1)) <= 1:
+            if proposed != original and abs(severity_rank[proposed] - severity_rank.get(original, 1)) <= 1:
+                issue.setdefault("rule_severity", original)
                 issue["severity"] = proposed
+                issue["severity_source"] = "gemini"
             issue["explanation"] = update["explanation"][:1000]
             recommendation = update.get("recommendation")
             if isinstance(recommendation, str) and recommendation.strip():

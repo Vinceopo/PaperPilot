@@ -54,9 +54,16 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
   const started = await runComplianceScan({ manuscriptId, versionId, mechanicsId });
 
   let scan = started;
+  if (String(started?.status || started?.stage || "").toLowerCase() === "failed") {
+    throw new Error(started?.error || "The analysis could not finish. No scan was used. Run the scan again.");
+  }
   if (scanNeedsPolling(started)) {
     scan = await waitForScanResult(started.id, (payload) => {
-      const serverPct = Math.min(100, Math.max(0, Number(payload?.percent) || 0));
+      if (payload?.percent == null) {
+        report(null, payload?.stage, payload?.message);
+        return;
+      }
+      const serverPct = Math.min(100, Math.max(0, Number(payload.percent) || 0));
       const done = payload?.stage === "done";
       report(done ? 100 : 15 + serverPct * 0.85, payload?.stage, payload?.message);
     });

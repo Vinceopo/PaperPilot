@@ -1,18 +1,36 @@
 import { useEffect, useRef, useState } from "react";
+import { TriangleAlert } from "lucide-react";
 import { normalizeTitle } from "../../lib/scannedLibrary.js";
-import { MAX_FILE_BYTES } from "../../lib/mockAnalysis.js";
-import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
+import {
+  ACCEPT_ATTRIBUTE,
+  ACCEPTED_EXTENSIONS,
+  MAX_FILE_SIZE_BYTES,
+  getFileRejection,
+} from "../../lib/uploadLimits.js";
+import { formatFileSize } from "../../lib/formatFileSize.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
+import DocumentLoader from "../DocumentLoader.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
 function validateFile(file) {
   if (!file) return "Choose a manuscript.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
-  if (![".pdf", ".docx"].includes(ext)) return "Manuscript must be a PDF or DOCX file.";
-  if (file.size > MAX_FILE_BYTES) return "oversize";
+  if (!ACCEPTED_EXTENSIONS.includes(ext)) return "type";
+  if (file.size > MAX_FILE_SIZE_BYTES) return "size";
   return "";
+}
+
+function rejectionMessage(rejection) {
+  if (!rejection) return "";
+  if (rejection.kind === "type") {
+    return `'${rejection.name}' isn't a supported file type. Please upload a PDF or Word document (${ACCEPTED_EXTENSIONS.join(", ")}).`;
+  }
+  const max = formatFileSize(MAX_FILE_SIZE_BYTES);
+  let actual = formatFileSize(rejection.size);
+  if (actual === max) actual = formatFileSize(rejection.size, { roundUp: true });
+  return `Your file '${rejection.name}' is ${actual}, but we can only accept files up to ${max}. Please choose a smaller file and try again.`;
 }
 
 /**
@@ -26,6 +44,7 @@ export default function ManuscriptPanel({
   onFilePick,
   onPreview,
   uploadCancelKey = 0,
+  onCancel,
   onShowSteps,
   busy,
 }) {
@@ -33,6 +52,7 @@ export default function ManuscriptPanel({
   const dropRef = useRef(null);
   const pulseTimer = useRef(0);
   const previewRequest = useRef(0);
+  const pickRequest = useRef(0);
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState("");
   const [manuscriptId, setManuscriptId] = useState("");
@@ -48,8 +68,9 @@ export default function ManuscriptPanel({
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [pendingUpload, setPendingUpload] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const [oversizeBytes, setOversizeBytes] = useState(null);
+  const [rejection, setRejection] = useState(null);
   const [dropPulse, setDropPulse] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
 
   useEffect(() => {
     if (!uploadCancelKey) return;
@@ -87,8 +108,8 @@ export default function ManuscriptPanel({
   function requestUpload(e) {
     e.preventDefault();
     const issue = validateFile(file);
-    if (issue === "oversize" && file) {
-      rejectOversize(file);
+    if ((issue === "type" || issue === "size") && file) {
+      rejectFile(file, issue);
       return;
     }
     setError(issue);
@@ -182,14 +203,14 @@ export default function ManuscriptPanel({
   const previewPreparing = Boolean(previewBusy && file && !previewUploading);
   const canPickFile = Boolean(mechanicsSelected && !panelBusy);
 
-  function rejectOversize(next) {
+  function rejectFile(next, kind) {
     setFile(null);
     setPreview(null);
     setError("");
     setSuccess("");
     onFilePick?.(null);
     if (inputRef.current) inputRef.current.value = "";
-    setOversizeBytes(next.size);
+    setRejection({ kind, name: next.name, size: next.size });
     setDropPulse(true);
     window.clearTimeout(pulseTimer.current);
     pulseTimer.current = window.setTimeout(() => setDropPulse(false), 1600);
@@ -197,20 +218,27 @@ export default function ManuscriptPanel({
     dropRef.current?.focus();
   }
 
-  function applyFile(next) {
+  async function applyFile(next) {
     if (!canPickFile && next) return;
     if (inputRef.current) inputRef.current.value = "";
-    if (next && next.size > MAX_FILE_BYTES) {
-      rejectOversize(next);
+    const pickId = ++pickRequest.current;
+    const issue = next ? await getFileRejection(next) : "";
+    if (pickRequest.current !== pickId) return;
+    if (issue) {
+      rejectFile(next, issue);
       return;
     }
-    const issue = next ? validateFile(next) : "";
     setFile(next);
-    setError(issue === "oversize" ? "" : issue);
+    setError("");
     setSuccess("");
     onFilePick?.(next);
-    if (!issue && next) void loadPreview(next);
+    if (next) void loadPreview(next);
     else setPreview(null);
+  }
+
+  function chooseAnotherFile() {
+    setRejection(null);
+    if (canPickFile) inputRef.current?.click();
   }
 
   function onDropZoneDragOver(e) {
@@ -233,7 +261,7 @@ export default function ManuscriptPanel({
     if (!canPickFile) return;
     const next = e.dataTransfer?.files?.[0] || null;
     if (!next) return;
-    applyFile(next);
+    void applyFile(next);
   }
 
   return (
@@ -290,7 +318,7 @@ export default function ManuscriptPanel({
                     : previewUploading
                       ? `${formatFileSize(file.size)} · Uploading — see progress beside this panel`
                       : `${formatFileSize(file.size)} · Preview appears beside this panel — confirm Upload when ready`
-                  : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_BYTES)}`}
+                  : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
               </p>
               <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                 Browse files
@@ -300,11 +328,11 @@ export default function ManuscriptPanel({
               ref={inputRef}
               type="file"
               disabled={!canPickFile}
-              accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept={ACCEPT_ATTRIBUTE}
               className="sr-only"
               onChange={(e) => {
                 const next = e.target.files?.[0] || null;
-                applyFile(next);
+                void applyFile(next);
               }}
             />
           </label>
@@ -355,7 +383,7 @@ export default function ManuscriptPanel({
                     role="status"
                     aria-live="polite"
                   >
-                    <Spinner className="h-12 w-12 border-[3px] text-[#16bfa8]" />
+                    <DocumentLoader className="h-28 w-28" />
                     <p className="text-sm font-bold text-slate-800">
                       {previewUploading ? "Uploading manuscript…" : "Opening manuscript preview…"}
                     </p>
@@ -378,30 +406,52 @@ export default function ManuscriptPanel({
           )}
         </div>
 
-        {error && <p className="text-xs text-rose-500">{error}</p>}
+        <ConfirmDialog
+          open={Boolean(error)}
+          title="Something went wrong"
+          message={error}
+          confirmLabel="OK"
+          cancelLabel={null}
+          tone="danger"
+          onConfirm={() => setError("")}
+          onCancel={() => setError("")}
+        />
         {success && !error && (
           <p className="text-xs font-semibold text-emerald-600" role="status">
             {success}
           </p>
         )}
 
-        <button
-          type="submit"
-          disabled={!mechanicsSelected || !file || panelBusy}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-2.5 text-xs font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {previewUploading ? (
-            <>
-              <Spinner /> Uploading…
-            </>
-          ) : previewPreparing ? (
-            <>
-              <Spinner /> Preparing preview…
-            </>
-          ) : (
-            "Upload manuscript"
-          )}
-        </button>
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              if (file) setCancelOpen(true);
+              else onCancel?.();
+            }}
+            disabled={previewUploading}
+            className="rounded-lg border border-slate-200 bg-white px-7 py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!mechanicsSelected || !file || panelBusy}
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-2.5 text-xs font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {previewUploading ? (
+              <>
+                <Spinner /> Uploading…
+              </>
+            ) : previewPreparing ? (
+              <>
+                <Spinner /> Preparing preview…
+              </>
+            ) : (
+              "Upload manuscript"
+            )}
+          </button>
+        </div>
       </form>
 
       {titleOpen && (
@@ -522,13 +572,32 @@ export default function ManuscriptPanel({
         onConfirm={() => void confirmUpload()}
       />
       <ConfirmDialog
-        open={oversizeBytes != null}
-        title="File Too Large"
-        message={oversizeFileMessage(oversizeBytes, MAX_FILE_BYTES)}
-        confirmLabel="OK"
+        open={cancelOpen}
+        title="Go back to the previous step?"
+        message="Your selected manuscript will be discarded and you will return to Step 1. Your chosen format stays selected."
+        confirmLabel="Cancel and go back"
+        cancelLabel="Stay here"
+        tone="danger"
+        onCancel={() => setCancelOpen(false)}
+        onConfirm={() => {
+          setCancelOpen(false);
+          previewRequest.current += 1;
+          onCancel?.();
+        }}
+      />
+      <ConfirmDialog
+        open={rejection != null}
+        icon={
+          <span className="grid h-11 w-11 place-items-center rounded-full bg-amber-50 text-amber-500">
+            <TriangleAlert className="h-6 w-6" aria-hidden="true" />
+          </span>
+        }
+        title={rejection?.kind === "type" ? "Unsupported File Type" : "File Too Large"}
+        message={rejectionMessage(rejection)}
+        confirmLabel="Choose Another File"
         cancelLabel=""
-        onCancel={() => setOversizeBytes(null)}
-        onConfirm={() => setOversizeBytes(null)}
+        onCancel={() => setRejection(null)}
+        onConfirm={chooseAnotherFile}
       />
     </section>
   );

@@ -3,16 +3,45 @@
  * Used by Customize, Upload (extracted), and Saved (loaded) Format Fields.
  */
 
-/** Real editable starter values (not empty placeholders). */
-export function sampleMechanicsForm(name = "Sample Capstone Format") {
+import {
+  canonicalBodyNumbering,
+  canonicalChapterFirstPage,
+  canonicalChapterMarkers,
+  canonicalLandscapePages,
+  canonicalPagePosition,
+  canonicalPreliminaryStyle,
+  canonicalTitlePage,
+  canonicalWordSpacing,
+  HEADING_RULE_FIELDS,
+  emptyHeading,
+  headingsFromRules,
+  headingsToRules,
+} from "./mechanicsOptions";
+
+function starterHeading(values) {
+  return { ...emptyHeading(), ...values, fields: HEADING_RULE_FIELDS.map((field) => field.key) };
+}
+
+export const CITATION_STYLES = ["APA", "MLA", "IEEE"];
+
+/** Profiles saved with a style that is no longer offered (e.g. Chicago) fall back to APA. */
+export function supportedCitationStyle(value) {
+  const style = String(value || "").trim().toUpperCase();
+  return CITATION_STYLES.includes(style) ? style : "APA";
+}
+
+/** APA 7th edition starter values. */
+export function sampleMechanicsForm(name = "APA 7th Edition Format") {
   return {
-    name: name || "Sample Capstone Format",
+    name: name || "APA 7th Edition Format",
     paperSize: "8.5 x 11",
     paperOrientation: "Portrait",
     paperSubstance: "20",
-    spacing: "1.5",
+    paperLandscapePages: "Allowed for tables and figures",
+    spacing: "Double",
+    wordSpacing: "One space between words and after periods",
     indention: "0.5 inch",
-    alignment: "Justified",
+    alignment: "Left",
     marginTop: "1",
     marginLeft: "1",
     marginBottom: "1",
@@ -20,16 +49,24 @@ export function sampleMechanicsForm(name = "Sample Capstone Format") {
     marginGutter: "0",
     marginHeader: "0.5",
     marginFooter: "0.5",
-    fontHeading1Size: "16",
-    fontHeading2Size: "14",
-    fontHeading3Size: "12",
+    bodySize: "12",
     fontType: "Times New Roman",
     fontColor: "Black/Automatic",
+    headings: [
+      starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "center" }),
+      starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "left" }),
+    ],
     paginationPosition: "Top right",
-    paginationFirstPageRule: "No page number shown",
-    pageBreaks: "Only when starting a new chapter",
-    tableLayout: 'Table <name> above a "TABLE TITLE" caption',
-    figureLayout: "Figure <number>: Figure Title in bold/underlined below the figure",
+    paginationTitlePage: "Number shown",
+    paginationFirstPageRule: "Same position as other pages",
+    paginationPreliminaryStyle: "",
+    paginationBodyNumbering: "Arabic, continuous",
+    paginationChapterMarkers: ["chapter_roman", "chapter_arabic"],
+    pageBreaks: "Only to start each new chapter and the reference list",
+    tableLayout:
+      "Table number in bold, with the title in italic title case on the next line, both placed above it",
+    figureLayout:
+      "Figure number in bold, with the title in italic title case on the next line, both placed above the image",
     citationFormat: "APA",
   };
 }
@@ -41,7 +78,9 @@ export function emptyMechanicsForm(name = "") {
     paperSize: "",
     paperOrientation: "Portrait",
     paperSubstance: "",
+    paperLandscapePages: "",
     spacing: "",
+    wordSpacing: "",
     indention: "",
     alignment: "",
     marginTop: "",
@@ -51,13 +90,16 @@ export function emptyMechanicsForm(name = "") {
     marginGutter: "",
     marginHeader: "",
     marginFooter: "",
-    fontHeading1Size: "",
-    fontHeading2Size: "",
-    fontHeading3Size: "",
+    bodySize: "",
     fontType: "",
     fontColor: "Black/Automatic",
+    headings: [],
     paginationPosition: "",
+    paginationTitlePage: "",
     paginationFirstPageRule: "",
+    paginationPreliminaryStyle: "",
+    paginationBodyNumbering: "",
+    paginationChapterMarkers: [],
     pageBreaks: "",
     tableLayout: "",
     figureLayout: "",
@@ -157,12 +199,7 @@ export function rulesToForm(rules = {}, name = "") {
   const paper = rules.paper || {};
   const pagination = rules.pagination || {};
 
-  const contentSize =
-    font.heading3_content_size != null
-      ? String(font.heading3_content_size)
-      : sizes[0] != null
-        ? String(sizes[0])
-        : "";
+  const bodySize = font.body_size ?? font.heading3_content_size ?? sizes[0];
 
   const spacing =
     rules.spacing != null
@@ -183,7 +220,9 @@ export function rulesToForm(rules = {}, name = "") {
     paperSize: paperSizeLabel(rules),
     paperOrientation: String(paper.orientation || rules.orientation || "Portrait"),
     paperSubstance: String(paper.substance || rules.substance || ""),
+    paperLandscapePages: canonicalLandscapePages(paper.landscape_pages),
     spacing,
+    wordSpacing: canonicalWordSpacing(rules.word_spacing),
     indention,
     alignment: ALIGNMENT_LABELS[alignmentKey(rules.alignment)] || "",
     marginTop: margins.top != null ? String(margins.top) : "",
@@ -193,19 +232,20 @@ export function rulesToForm(rules = {}, name = "") {
     marginGutter: margins.gutter != null ? String(margins.gutter) : "",
     marginHeader: margins.header != null ? String(margins.header) : "",
     marginFooter: margins.footer != null ? String(margins.footer) : "",
-    fontHeading1Size:
-      font.heading1_size != null ? String(font.heading1_size) : sizes[2] != null ? String(sizes[2]) : "",
-    fontHeading2Size:
-      font.heading2_size != null ? String(font.heading2_size) : sizes[1] != null ? String(sizes[1]) : "",
-    fontHeading3Size: contentSize,
+    bodySize: bodySize != null ? String(bodySize) : "",
     fontType: String(font.type || families[0] || ""),
     fontColor: String(font.color || "Black/Automatic"),
-    paginationPosition: String(
+    headings: headingsFromRules(font),
+    paginationPosition: canonicalPagePosition(
       pagination.position || rules.pagination_position || asText(rules.pagination_requirements)
     ),
-    paginationFirstPageRule: String(
+    paginationTitlePage: canonicalTitlePage(pagination.title_page),
+    paginationFirstPageRule: canonicalChapterFirstPage(
       pagination.first_page_of_chapter || rules.pagination_first_page_rule || ""
     ),
+    paginationPreliminaryStyle: canonicalPreliminaryStyle(pagination.preliminary_style),
+    paginationBodyNumbering: canonicalBodyNumbering(pagination.body_numbering),
+    paginationChapterMarkers: canonicalChapterMarkers(pagination.chapter_markers),
     pageBreaks: asText(rules.page_break_requirements || rules.page_breaks)
       .split(/\n/)
       .map((part) => part.trim())
@@ -213,7 +253,7 @@ export function rulesToForm(rules = {}, name = "") {
       .join("\n"),
     tableLayout: asText(rules.table_layout_requirements || rules.table_layout),
     figureLayout: asText(rules.figure_layout_requirements || rules.figure_layout),
-    citationFormat: String(rules.citation_style || "APA").toUpperCase(),
+    citationFormat: supportedCitationStyle(rules.citation_style),
   };
 }
 
@@ -237,6 +277,8 @@ export function formToRules(form) {
   if (orientation) paper.orientation = orientation;
   const substance = String(form.paperSubstance || "").trim();
   if (substance) paper.substance = substance;
+  const landscapePages = String(form.paperLandscapePages || "").trim();
+  if (landscapePages) paper.landscape_pages = landscapePages;
   if (Object.keys(paper).length) rules.paper = paper;
 
   const paperName = inferPaperName(sizeText);
@@ -258,6 +300,8 @@ export function formToRules(form) {
     const spacingNum = parseLineSpacing(spacingText);
     if (spacingNum != null) rules.line_spacing = spacingNum;
   }
+  const wordSpacing = String(form.wordSpacing || "").trim();
+  if (wordSpacing) rules.word_spacing = wordSpacing;
 
   const indentionText = String(form.indention || "").trim();
   if (indentionText) {
@@ -296,28 +340,35 @@ export function formToRules(form) {
   if (fontColor) font.color = fontColor;
 
   const sizes = [];
-  for (const [field, key] of [
-    ["fontHeading1Size", "heading1_size"],
-    ["fontHeading2Size", "heading2_size"],
-    ["fontHeading3Size", "heading3_content_size"],
-  ]) {
-    const number = Number(form[field]);
-    if (!Number.isNaN(number) && String(form[field] || "").trim() !== "") {
-      font[key] = number;
-      sizes.push(number);
-    }
+  const bodySize = Number(form.bodySize);
+  if (!Number.isNaN(bodySize) && String(form.bodySize || "").trim() !== "") {
+    font.body_size = bodySize;
+    sizes.push(bodySize);
+  }
+  const headingRules = headingsToRules(form.headings);
+  Object.assign(font, headingRules);
+  for (const [key, value] of Object.entries(headingRules)) {
+    if (/^heading\d+_size$/.test(key)) sizes.push(value);
   }
   if (sizes.length) font.sizes_points = [...new Set(sizes)];
   if (Object.keys(font).length) rules.font = font;
 
   const pagination = {};
-  const position = String(form.paginationPosition || "").trim();
-  if (position) pagination.position = position;
-  const firstPage = String(form.paginationFirstPageRule || "").trim();
-  if (firstPage) pagination.first_page_of_chapter = firstPage;
+  for (const [field, key] of [
+    ["paginationPosition", "position"],
+    ["paginationFirstPageRule", "first_page_of_chapter"],
+    ["paginationTitlePage", "title_page"],
+    ["paginationPreliminaryStyle", "preliminary_style"],
+    ["paginationBodyNumbering", "body_numbering"],
+  ]) {
+    const value = String(form[field] || "").trim();
+    if (value) pagination[key] = value;
+  }
+  const markers = canonicalChapterMarkers(form.paginationChapterMarkers);
+  if (markers.length) pagination.chapter_markers = markers;
   if (Object.keys(pagination).length) {
     rules.pagination = pagination;
-    rules.pagination_requirements = Object.values(pagination);
+    rules.pagination_requirements = Object.values(pagination).filter((value) => typeof value === "string");
   }
 
   const split = (text) =>
@@ -334,7 +385,7 @@ export function formToRules(form) {
   if (figureLayout.length) rules.figure_layout_requirements = figureLayout;
 
   const citation = String(form.citationFormat || "").trim().toUpperCase();
-  if (["APA", "MLA", "IEEE", "CHICAGO"].includes(citation)) {
+  if (CITATION_STYLES.includes(citation)) {
     rules.citation_style = citation;
   }
 

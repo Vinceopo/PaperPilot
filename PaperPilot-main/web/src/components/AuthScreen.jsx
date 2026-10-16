@@ -13,7 +13,7 @@ import {
  * Chooses between the login, register, and password-reset screens. Each screen
  * owns its own form state, so switching modes starts from a clean slate.
  */
-export default function AuthScreen({ onContinueAsGuest }) {
+export default function AuthScreen() {
   const [mode, setMode] = useState(() => (hasPasswordChangedNotice() ? "passwordDone" : "login"));
   const [slideDir, setSlideDir] = useState("left");
   const [notice, setNotice] = useState("");
@@ -41,7 +41,6 @@ export default function AuthScreen({ onContinueAsGuest }) {
       <RegisterScreen
         slideDir={slideDir}
         onGoToLogin={() => go("login", "right")}
-        onContinueAsGuest={onContinueAsGuest}
       />
     );
   }
@@ -70,7 +69,6 @@ export default function AuthScreen({ onContinueAsGuest }) {
         setResetEmail(email);
         go("forgot", "left");
       }}
-      onContinueAsGuest={onContinueAsGuest}
     />
   );
 }

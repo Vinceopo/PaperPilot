@@ -33,6 +33,7 @@ import {
   formToRules,
   rulesToForm,
   sampleMechanicsForm,
+  supportedCitationStyle,
 } from "../lib/formatMechanicsForm";
 import { formatFileSize, oversizeFileMessage } from "../lib/formatFileSize";
 import {
@@ -44,6 +45,7 @@ import {
 } from "../lib/uploadLimits";
 import { isScanReady } from "../lib/scanMapper";
 import { normalizeTitle } from "../lib/scannedLibrary";
+import { isPaidTier, planName, resetWindow } from "../lib/plans";
 import AnalyzeProgressBar from "../components/cockpit/AnalyzeProgressBar";
 import ScanSummaryModal from "../components/cockpit/ScanSummaryModal";
 import { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
@@ -122,6 +124,7 @@ export default function UploadScreen({ navigation }) {
     tier,
     remaining,
     limit,
+    subscription,
     uploadWizardStep,
     advanceUploadWizard,
     goToUploadWizardStep,
@@ -675,9 +678,19 @@ export default function UploadScreen({ navigation }) {
 
   function onAnalyse() {
     if (!scanReady || !selectedMechanicsId) return;
+    const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
+    if (!isPaidTier(tier) && scanStyle !== "APA") {
+      setUpgradeMessage(
+        `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
+      );
+      return;
+    }
     if (remaining <= 0) {
       setUpgradeMessage(
-        `You have used all ${limit} scans included in your ${tier} plan this month.`
+        `You have used all ${limit} scans included in your ${planName(tier)} plan this ${resetWindow(tier)}.` +
+          (subscription?.reset_at
+            ? ` Your scans reset on ${new Date(subscription.reset_at).toLocaleDateString()}.`
+            : "")
       );
       return;
     }
@@ -740,14 +753,16 @@ export default function UploadScreen({ navigation }) {
         keyboardShouldPersistTaps="handled"
         automaticallyAdjustKeyboardInsets
       >
-        {error ? (
-          <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>{error}</Text>
-            <Pressable onPress={() => setError("")} hitSlop={8}>
-              <Text style={styles.dismiss}>✕</Text>
-            </Pressable>
-          </View>
-        ) : null}
+        <ConfirmDialog
+          open={Boolean(error)}
+          title="Something went wrong"
+          message={error}
+          confirmLabel="OK"
+          cancelLabel={null}
+          tone="danger"
+          onConfirm={() => setError("")}
+          onCancel={() => setError("")}
+        />
 
         {loading ? (
           <View style={styles.loadingBox}>
@@ -1272,6 +1287,7 @@ export default function UploadScreen({ navigation }) {
 
       <UpgradePrompt
         message={upgradeMessage}
+        tier={tier}
         onClose={() => setUpgradeMessage("")}
         onUpgrade={() => {
           setUpgradeMessage("");

@@ -17,6 +17,7 @@ import { getProfile, otpBypassToken, resetPasswordWithOtp, sendOtp, updateUserPr
 import { signOutUser } from "../services/auth";
 import { loadNotifications, pushNotification, saveNotifications } from "../lib/notifications";
 import { nameError, phoneError, usernameError } from "../lib/validation";
+import { isPaidTier, planName } from "../lib/plans";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import OtpStep from "../components/auth/OtpStep";
@@ -79,11 +80,11 @@ function Avatar({ photoURL, first, last }) {
 }
 
 function PlanBadge({ tier }) {
-  const isPremium = String(tier).toLowerCase() === "premium";
+  const isPremium = isPaidTier(tier);
   return (
     <View style={[styles.planBadge, isPremium ? styles.planBadgePremium : styles.planBadgeFree]}>
       <Text style={[styles.planBadgeText, isPremium ? styles.planBadgeTextPremium : styles.planBadgeTextFree]}>
-        {isPremium ? "★ Premium plan" : "Free plan"}
+        {isPremium ? `★ ${planName(tier)} plan` : "Free plan"}
         </Text>
     </View>
   );

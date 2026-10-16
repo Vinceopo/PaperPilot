@@ -91,5 +91,7 @@ def analyze_result(job_id: str) -> AnalyzeResultResponse:
         page_count=data.get("page_count"),
         pagination=data.get("pagination"),
         units_checked=data.get("units_checked"),
+        units_passed=data.get("units_passed"),
         units_failed=data.get("units_failed"),
+        scoring=data.get("scoring"),
     )

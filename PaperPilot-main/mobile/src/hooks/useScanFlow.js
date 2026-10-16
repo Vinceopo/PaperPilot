@@ -54,7 +54,10 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const [downloadError, setDownloadError] = useState("");
   const [analyzeProgress, setAnalyzeProgress] = useState(INITIAL_PROGRESS);
   const [traceHighlight, setTraceHighlight] = useState(null);
+  const [persistScan, setPersistScan] = useState(false);
   const resultRef = useRef(null);
+  // Bumped whenever the user leaves a scan, so a late result cannot reopen it.
+  const runRef = useRef(0);
 
   const selectFile = useCallback((f) => {
     const err = f ? validateFile(f) : "";
@@ -67,9 +70,11 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
 
   const analyze = useCallback(async () => {
     if ((!file && !getScanTarget) || fileError || step === "analyzing") return;
+    const run = ++runRef.current;
     setStep("analyzing");
     resultRef.current = null;
     setResult(null);
+    setPersistScan(false);
     setError("");
     setTraceHighlight(null);
     setAnalyzeProgress({ percent: 0, stage: "queued", message: "Starting analysis…" });
@@ -100,24 +105,33 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
         documentPreview: target.documentPreview,
         documentName: file?.name || target.sourceFilename,
         onProgress: (payload) => {
-          setAnalyzeProgress({
-            percent: Number(payload?.percent ?? 0),
+          if (run !== runRef.current) return;
+          setAnalyzeProgress((prev) => ({
+            percent: payload?.percent == null ? prev.percent : Number(payload.percent),
             stage: String(payload?.stage || "queued"),
             message: String(payload?.message || ""),
-          });
+          }));
         },
       });
+      if (run !== runRef.current) return;
       if (title) scanResult.documentTitle = title;
       if (reuseId) scanResult.documentId = reuseId;
       if (isServerId(target.manuscriptId)) scanResult.documentId = target.manuscriptId;
 
+      const serverVersion = Number(target.versionNumber) || 0;
+      scanResult.versionNumber = serverVersion > 0 ? serverVersion : nextVersion;
+
       setDocumentId(scanResult.documentId);
-      setVersionNumber(Number(target.versionNumber) || nextVersion);
+      setVersionNumber(scanResult.versionNumber);
       resultRef.current = scanResult;
+      setPersistScan(true);
       setResult(scanResult);
       setAnalyzeProgress({ percent: 100, stage: "done", message: "Analysis complete" });
     } catch (err) {
-      setError(err?.message ?? "Analysis failed. Please try again.");
+      if (run !== runRef.current) return;
+      setError(
+        err?.message || "The analysis could not finish. No scan was used. Check your connection, then run the scan again."
+      );
       setStep("error");
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
@@ -158,7 +172,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     try {
       return await downloadReportFn(result, { versionNumber });
     } catch (err) {
-      setDownloadError(err?.message ?? "Download failed. Please try again.");
+      setDownloadError(err?.message || "The report could not be downloaded. Try again in a moment.");
       return null;
     } finally {
       setDownloadBusy(false);
@@ -166,17 +180,24 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   }, [downloadBusy, result, versionNumber]);
 
   const uploadNewVersion = useCallback(() => {
+    runRef.current += 1;
     setFileInner(null);
     setFileError("");
     setError("");
     resultRef.current = null;
     setResult(null);
+    setPersistScan(false);
     setTraceHighlight(null);
     setAnalyzeProgress(INITIAL_PROGRESS);
     setStep("idle");
   }, []);
 
   const showSavedResult = useCallback((saved, version) => {
+    runRef.current += 1;
+    // The previewer prefers a local file, which belongs to the last upload, not this result.
+    setFileInner(null);
+    setFileError("");
+    setPersistScan(false);
     const nextResult = saved && typeof saved === "object" ? saved : null;
     resultRef.current = nextResult;
     setResult(nextResult);
@@ -202,10 +223,12 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   }, [result]);
 
   const backToDashboard = useCallback(() => {
+    runRef.current += 1;
     setFileInner(null);
     setFileError("");
     resultRef.current = null;
     setResult(null);
+    setPersistScan(false);
     setError("");
     setDownloadError("");
     setTraceHighlight(null);
@@ -221,6 +244,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     error,
     documentId,
     versionNumber,
+    persistScan,
     downloadBusy,
     downloadError,
     analyzeProgress,

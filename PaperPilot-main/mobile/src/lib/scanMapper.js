@@ -201,7 +201,6 @@ export function mapComplianceScanToResult(scan, meta = {}) {
       issue_type: issue.issue_type,
       count: issue.count == null ? null : Number(issue.count),
       section: locations[0]?.section || issue.section || "",
-      section: locations[0]?.section || issue.section || "",
     };
   });
 

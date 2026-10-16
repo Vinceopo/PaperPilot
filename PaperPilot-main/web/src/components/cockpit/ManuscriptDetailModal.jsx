@@ -8,8 +8,11 @@ import {
 } from "lucide-react";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import { scoreBand } from "../../lib/scoreBand.js";
+import { CATEGORY_STATUS_LABEL, formatCount, formatScore, hasValue, plural } from "../../lib/scoreFormat.js";
 import { downloadReport } from "../../lib/mockAnalysis.js";
 import { versionToScanResult } from "../../lib/scannedLibrary.js";
+import { isPaidTier } from "../../lib/plans.js";
+import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
 const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 
@@ -20,10 +23,25 @@ function formatDate(iso) {
       year: "numeric",
       month: "short",
       day: "numeric",
+      timeZone: APP_TIME_ZONE,
     });
   } catch {
     return iso;
   }
+}
+
+/** Date and time of a scan; older entries only stored the day. */
+function formatDateTime(iso) {
+  if (!iso || iso.length <= 10) return formatDate(iso);
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return formatDate(iso);
+  return d.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function severityClass(severity) {
@@ -50,9 +68,10 @@ export default function ManuscriptDetailModal({
   onUpgrade,
   onDeleteVersion,
   onOpenResult,
+  resolveResult,
   onClose,
 }) {
-  const isPremium = String(tier || "free").toLowerCase() === "premium";
+  const isPremium = isPaidTier(tier);
 
   const versionsDesc = useMemo(() => {
     const list = [...(manuscript?.versions || [])];
@@ -66,6 +85,8 @@ export default function ManuscriptDetailModal({
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
     setSelectedId(latestId);
@@ -105,10 +126,13 @@ export default function ManuscriptDetailModal({
     setDownloadBusy(true);
     setDownloadError("");
     try {
-      const payload = versionToScanResult(manuscript, selected);
+      const payload = resolveResult
+        ? await resolveResult(manuscript, selected)
+        : versionToScanResult(manuscript, selected);
+      if (!payload) throw new Error("This version's report could not be loaded. Check your connection, then try again.");
       await downloadReport(payload, { versionNumber: selected.versionNumber });
     } catch (err) {
-      setDownloadError(err?.message || "Download failed.");
+      setDownloadError(err?.message || "The report could not be downloaded. Try again in a moment.");
     } finally {
       setDownloadBusy(false);
     }
@@ -138,7 +162,7 @@ export default function ManuscriptDetailModal({
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${band.pillClass}`}>
-                {selected?.score ?? "—"} · {band.label}
+                {formatScore(selected?.score, 0)} · {band.label}
               </span>
               <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] font-bold text-slate-600">
                 {versionLabel}
@@ -197,10 +221,10 @@ export default function ManuscriptDetailModal({
                         ) : null}
                       </div>
                       <p className={`mt-0.5 text-[11px] ${active ? "text-slate-300" : "text-slate-400"}`}>
-                        {formatDate(ver.scannedDate)}
+                        {formatDateTime(ver.scannedAt || ver.scannedDate)}
                       </p>
                       <p className={`mt-1 text-[10px] font-semibold ${active ? "text-[#16bfa8]" : locked ? "text-slate-400" : vb.textClass}`}>
-                        {locked ? "Premium only" : `Score ${ver.score}`}
+                        {locked ? "Premium only" : `Score ${formatScore(ver.score, 0)}`}
                       </p>
                     </button>
                     {onDeleteVersion ? (
@@ -234,17 +258,23 @@ export default function ManuscriptDetailModal({
                   <div>
                     <p className="text-xs font-semibold text-slate-500">Selected version</p>
                     <p className="text-sm font-medium text-slate-400">
-                      {versionLabel} · {formatDate(selected.scannedDate)}
+                      {versionLabel} · {formatDateTime(selected.scannedAt || selected.scannedDate)}
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className={`text-3xl font-bold tabular-nums ${band.textClass}`}>{selected.score}</p>
+                    <p className={`text-3xl font-bold tabular-nums ${band.textClass}`}>{formatScore(selected.score, 0)}</p>
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Overall score</p>
                   </div>
                 </div>
 
                 <section className="mt-6">
                   <h3 className="text-sm font-bold text-[#0F1729]">Score breakdown</h3>
+                  {(selected.breakdown || []).length > 0 &&
+                  (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Unit counts were not stored with this scan. Re-analyse the manuscript to generate the full scoring breakdown.
+                    </p>
+                  ) : null}
                   <ul className="mt-3 space-y-3">
                     {(selected.breakdown || []).map((row) => {
                       const rb = scoreBand(row.score);
@@ -252,14 +282,30 @@ export default function ManuscriptDetailModal({
                         <li key={row.section}>
                           <div className="mb-1 flex items-center justify-between text-xs">
                             <span className="font-medium text-slate-600">{row.section}</span>
-                            <span className={`font-bold tabular-nums ${rb.textClass}`}>{row.score}</span>
+                            <span className={`font-bold tabular-nums ${rb.textClass}`}>
+                              {row.score == null
+                                ? CATEGORY_STATUS_LABEL[row.status] || "Not evaluated"
+                                : formatScore(row.score)}
+                            </span>
                           </div>
                           <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                             <div
                               className={`h-full rounded-full transition-all ${rb.barClass}`}
-                              style={{ width: `${Math.min(100, Math.max(0, row.score))}%` }}
+                              style={{ width: `${Math.min(100, Math.max(0, Number(row.score) || 0))}%` }}
                             />
                           </div>
+                          {hasValue(row.unitsChecked) ? (
+                            <p className="mt-1 text-[10px] text-slate-400">
+                              Checked {formatCount(row.unitsChecked)}
+                              {hasValue(row.unitsPassed) ? ` · passed ${formatCount(row.unitsPassed)}` : ""}
+                              {hasValue(row.unitsFailed) ? ` · failed ${formatCount(row.unitsFailed)}` : ""}
+                            </p>
+                          ) : null}
+                          {hasValue(row.issueCount) && Number(row.issueCount) > 0 ? (
+                            <p className="text-[10px] text-slate-400">
+                              {formatCount(row.issueCount)} {plural(row.issueCount, "issue")} found in this category
+                            </p>
+                          ) : null}
                         </li>
                       );
                     })}
@@ -279,7 +325,18 @@ export default function ManuscriptDetailModal({
                     </div>
                   </div>
 
-                  {issues.length === 0 ? (
+                  {issues.length === 0 && selected.trimmed && onOpenResult ? (
+                    <div className="mt-3 text-sm text-slate-500">
+                      <p>This version was scanned on another device. Open it to load its issues.</p>
+                      <button
+                        type="button"
+                        onClick={() => selectVersion(selected)}
+                        className="mt-2 rounded-lg bg-[#16bfa8] px-4 py-2 text-xs font-bold text-white hover:bg-[#12ae99]"
+                      >
+                        View full results
+                      </button>
+                    </div>
+                  ) : issues.length === 0 ? (
                     <p className="mt-3 text-sm text-slate-400">No issues recorded for this version.</p>
                   ) : (
                     <ul className="mt-4 space-y-3">
@@ -372,15 +429,34 @@ export default function ManuscriptDetailModal({
       <ConfirmDialog
         open={Boolean(pendingDeleteId)}
         title="Delete this version?"
-        message="The version label will update to match the versions that are still saved."
+        message="It will be removed on web and mobile. The other versions keep their numbers."
         confirmLabel="Delete version"
         tone="danger"
+        busy={deleteBusy}
         onCancel={() => setPendingDeleteId(null)}
-        onConfirm={() => {
+        onConfirm={async () => {
           const id = pendingDeleteId;
-          setPendingDeleteId(null);
-          if (id) onDeleteVersion?.(manuscript.id, id);
+          if (!id) return;
+          setDeleteBusy(true);
+          try {
+            await onDeleteVersion?.(manuscript.id, id);
+          } catch (err) {
+            setDeleteError(err?.message || "Could not delete this version.");
+          } finally {
+            setDeleteBusy(false);
+            setPendingDeleteId(null);
+          }
         }}
+      />
+      <ConfirmDialog
+        open={Boolean(deleteError)}
+        title="Something went wrong"
+        message={deleteError}
+        confirmLabel="OK"
+        cancelLabel={null}
+        tone="danger"
+        onConfirm={() => setDeleteError("")}
+        onCancel={() => setDeleteError("")}
       />
     </div>
   );

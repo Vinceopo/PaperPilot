@@ -8,7 +8,11 @@ import {
   listManuscripts,
   listMechanics,
   deleteManuscript as deleteManuscriptRequest,
+  getComplianceScan,
+  getProfile,
   getScanDocument,
+  downloadScanDocumentFile,
+  listScans,
   previewManuscript,
   renameMechanics as renameMechanicsRequest,
   saveMechanicsProfile,
@@ -23,6 +27,8 @@ import MechanicsPanel from "./components/cockpit/MechanicsPanel.jsx";
 import ManuscriptPanel from "./components/cockpit/ManuscriptPanel.jsx";
 import ScanResultsScreen from "./components/cockpit/ScanResultsScreen.jsx";
 import ScanSummaryModal from "./components/cockpit/ScanSummaryModal.jsx";
+import AnalysisProgress from "./components/cockpit/AnalysisProgress.jsx";
+import PaperCarryAway, { PAPER_CARRY_HOLD_MS } from "./components/cockpit/PaperCarryAway.jsx";
 import ReferenceTracingView from "./components/cockpit/ReferenceTracingView.jsx";
 import AccountSettingsScreen from "./components/cockpit/AccountSettingsScreen.jsx";
 import MyManuscriptsScreen from "./components/cockpit/MyManuscriptsScreen.jsx";
@@ -35,19 +41,27 @@ import UploadJourneyModal, {
   markUploadJourneySeen,
   uploadJourneySeen,
 } from "./components/cockpit/UploadJourneyModal.jsx";
-import Spinner from "./components/Spinner.jsx";
+import PaperRollAnimation from "./components/PaperRollAnimation.jsx";
+import PaperPlaneLoader from "./components/PaperPlaneLoader.jsx";
 import FileTypeIcon from "./components/FileTypeIcon.jsx";
 import { useScanFlow } from "./hooks/useScanFlow.js";
-import { isScanReady, isServerId, scanTargetIds } from "./lib/scanMapper.js";
+import { isScanReady, isServerId, mapComplianceScanToResult, scanTargetIds } from "./lib/scanMapper.js";
 import {
+  attachScanResult,
+  dismissScanIds,
+  loadDismissedScanIds,
   loadScannedManuscripts,
+  mergeServerScans,
   normalizeTitle,
   saveScannedManuscripts,
   upsertFromScanResult,
+  versionScanId,
   versionToScanResult,
 } from "./lib/scannedLibrary.js";
 import { latestVersion } from "./lib/scoreBand.js";
 import { formatFileSize } from "./lib/formatFileSize.js";
+import { supportedCitationStyle } from "./lib/formatMechanicsForm.js";
+import { isPaidTier, planLimit, planName, resetWindow } from "./lib/plans.js";
 import {
   loadNotifications,
   saveNotifications,
@@ -106,7 +120,6 @@ function pendingRegistration(user) {
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [guest, setGuest] = useState(false);
   const [authReady, setAuthReady] = useState(!firebaseReady);
   const [mechanics, setMechanics] = useState([]);
   const [selectedMechanicsId, setSelectedMechanicsId] = useState("");
@@ -122,11 +135,36 @@ export default function App() {
   const [upgradeMessage, setUpgradeMessage] = useState("");
   const [registrationSuccess, setRegistrationSuccess] = useState(() => pendingRegistration());
   const [activePage, setActivePage] = useState("upload"); // "upload" | "manuscripts" | "account" | "subscription" | "notifications"
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window === "undefined" || window.innerWidth >= 768
+  );
   const [scannedLibrary, setScannedLibrary] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const lastSavedScanKey = useRef("");
   const scannedLibraryRef = useRef([]);
+  // A dashboard load started before a delete can finish after it; never show deleted formats again.
+  const deletedMechanicsRef = useRef(new Set());
+  // Bumped on every local save/rename/edit/delete so an older dashboard load can't overwrite it.
+  const mechanicsChangeRef = useRef(0);
+  const silentLoadRef = useRef(null);
+  const withoutDeletedMechanics = useCallback(
+    (items) => items.filter((item) => !deletedMechanicsRef.current.has(item.id)),
+    []
+  );
+  // Plan replies can arrive out of order (a slow dashboard load finishing after a
+  // checkout confirm), so a reply requested before the latest plan update is dropped.
+  const subscriptionTicketRef = useRef(0);
+  const subscriptionAppliedRef = useRef(0);
+  const nextSubscriptionTicket = useCallback(() => ++subscriptionTicketRef.current, []);
+  const storeSubscription = useCallback((next, ticket) => {
+    if (!next || typeof next !== "object") return false;
+    const order = ticket ?? ++subscriptionTicketRef.current;
+    if (order < subscriptionAppliedRef.current) return false;
+    subscriptionAppliedRef.current = order;
+    setSubscription(next);
+    writeCachedSubscription(auth?.currentUser?.uid, next);
+    return true;
+  }, []);
   const notificationsRef = useRef([]);
   const notificationsRootRef = useRef(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -141,7 +179,7 @@ export default function App() {
   const [fileDetailsConfirm, setFileDetailsConfirm] = useState(null); // "cancel" | "analyse" | null
   const [fileDetailsConfirmBusy, setFileDetailsConfirmBusy] = useState(false);
   const uploadSessionRef = useRef(0);
-  const signedIn = Boolean(user) && !guest;
+  const signedIn = Boolean(user);
 
   function handleBackToDashboard() {
     setManuscriptReady(false);
@@ -249,7 +287,7 @@ export default function App() {
     }
     const mechanicsId = selectedMechanicsIdRef.current;
     const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
-    const citationStyle = String(profile?.rules?.citation_style || "APA").toUpperCase();
+    const citationStyle = supportedCitationStyle(profile?.rules?.citation_style);
     return {
       manuscriptId,
       versionId,
@@ -263,6 +301,18 @@ export default function App() {
   }, []);
 
   const [analysisShown, setAnalysisShown] = useState(0);
+  const [departPhase, setDepartPhase] = useState("progress");
+  const revealSummaryRef = useRef(null);
+  const resultReadyRef = useRef(false);
+  const flightFinishedRef = useRef(false);
+  const [pageHidden, setPageHidden] = useState(() => document.visibilityState === "hidden");
+  const titleBeforeDoneRef = useRef(null);
+
+  useEffect(() => {
+    const onVisibility = () => setPageHidden(document.visibilityState === "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   const scanFlow = useScanFlow({
     mechanicsId: selectedMechanicsId,
@@ -270,6 +320,9 @@ export default function App() {
     getActiveManuscript,
     getScanTarget,
   });
+
+  revealSummaryRef.current = scanFlow.revealSummary;
+  resultReadyRef.current = Boolean(scanFlow.result);
 
   useEffect(() => {
     if (!notificationsOpen) return undefined;
@@ -311,19 +364,61 @@ export default function App() {
   }, [scanFlow.step, scanFlow.scanProgress.percent]);
 
   useEffect(() => {
+    if (scanFlow.step !== "analyzing") {
+      setDepartPhase("progress");
+      flightFinishedRef.current = false;
+      return undefined;
+    }
+    const stage = String(scanFlow.scanProgress.stage || "").toLowerCase();
+    if (stage !== "done" || analysisShown < 99.5 || departPhase !== "progress") return undefined;
+    const timer = window.setTimeout(() => setDepartPhase("fly"), PAPER_CARRY_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [scanFlow.step, scanFlow.scanProgress.stage, analysisShown, departPhase]);
+
+  useEffect(() => {
+    if (scanFlow.step !== "analyzing" || !flightFinishedRef.current || !scanFlow.result) return undefined;
+    flightFinishedRef.current = false;
+    revealSummaryRef.current?.();
+    return undefined;
+  }, [scanFlow.step, scanFlow.result]);
+
+  // Browsers pause requestAnimationFrame in background tabs, so the animated bar (and the
+  // plane after it) would hold a finished scan back until the tab is shown again.
+  useEffect(() => {
+    if (!pageHidden || scanFlow.step !== "analyzing" || !scanFlow.result) return;
+    if (String(scanFlow.scanProgress.stage || "").toLowerCase() !== "done") return;
+    if (titleBeforeDoneRef.current == null) {
+      titleBeforeDoneRef.current = document.title;
+      document.title = `✓ Analysis complete · ${document.title}`;
+    }
+    revealSummaryRef.current?.();
+  }, [pageHidden, scanFlow.step, scanFlow.result, scanFlow.scanProgress.stage]);
+
+  useEffect(() => {
+    if (pageHidden) return;
+    if (titleBeforeDoneRef.current != null) {
+      document.title = titleBeforeDoneRef.current;
+      titleBeforeDoneRef.current = null;
+    }
+    if (scanFlow.step === "analyzing") {
+      const target = Math.min(100, Math.max(0, Number(scanFlow.scanProgress.percent) || 0));
+      setAnalysisShown((current) => Math.max(current, target));
+    }
+  }, [pageHidden]);
+
+  useEffect(() => {
     if (!user || (scanFlow.step !== "summary" && scanFlow.step !== "results")) return undefined;
     let cancelled = false;
+    const ticket = nextSubscriptionTicket();
     getSubscription()
       .then((next) => {
-        if (cancelled || !next) return;
-        setSubscription(next);
-        writeCachedSubscription(user.uid, next);
+        if (!cancelled) storeSubscription(next, ticket);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [scanFlow.step, user]);
+  }, [scanFlow.step, user, nextSubscriptionTicket, storeSubscription]);
 
   useEffect(() => {
     if (!fileDetailsFocusKey || !manuscriptReady) return;
@@ -356,6 +451,30 @@ export default function App() {
     if (loaded.length) saveScannedManuscripts(loaded, user?.uid);
     lastSavedScanKey.current = "";
     setNotifications(loadNotifications(user?.uid));
+  }, [user?.uid]);
+
+  // Signing out (or into another account) must not leave the previous user's session on screen.
+  const sessionUidRef = useRef(user?.uid || "");
+  useEffect(() => {
+    const uid = user?.uid || "";
+    const previous = sessionUidRef.current;
+    sessionUidRef.current = uid;
+    if (!previous || previous === uid) return;
+    setMechanics([]);
+    setSelectedMechanicsId("");
+    setManuscripts([]);
+    setCurrentManuscript(null);
+    setCurrentVersion(null);
+    subscriptionAppliedRef.current = ++subscriptionTicketRef.current;
+    setSubscription(uid ? readCachedSubscription(uid) : null);
+    setBillingReturn(null);
+    setUpgradeMessage("");
+    setError("");
+    setActivePage("upload");
+    setManuscriptReady(false);
+    setFileDetailsNotice("");
+    resetUploadWizard(1);
+    scanFlow.backToDashboard();
   }, [user?.uid]);
 
   useEffect(() => {
@@ -405,9 +524,81 @@ export default function App() {
   const scanFlowRef = useRef(null);
   scanFlowRef.current = scanFlow;
 
+  const [savedDocument, setSavedDocument] = useState(null);
+  const savedDocumentRef = useRef(null);
+  savedDocumentRef.current = savedDocument;
+  const savedResultScanId = scanFlow.file ? "" : String(scanFlow.result?.scanId || "");
+
+  useEffect(() => {
+    if (!isServerId(savedResultScanId)) return undefined;
+    const known = savedDocumentRef.current;
+    if (known?.scanId === savedResultScanId && known.file) return undefined;
+    let cancelled = false;
+    setSavedDocument((current) =>
+      current?.scanId === savedResultScanId ? current : { scanId: savedResultScanId, file: null, loading: true }
+    );
+    const settle = (file) => {
+      if (cancelled) return;
+      setSavedDocument((current) =>
+        current?.scanId === savedResultScanId && current.loading
+          ? { scanId: savedResultScanId, file, loading: false }
+          : current
+      );
+    };
+    getScanDocument(savedResultScanId)
+      .then(downloadScanDocumentFile)
+      .then(settle)
+      .catch(() => settle(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [savedResultScanId]);
+
+  const savedDocumentForResult =
+    !scanFlow.file && savedDocument && savedDocument.scanId === scanFlow.result?.scanId ? savedDocument : null;
+  const resultFile = scanFlow.file || savedDocumentForResult?.file || null;
+  const resultDocumentLoading = Boolean(savedDocumentForResult?.loading);
+
+  // Stored versions can be trimmed (browser quota) or server-only; fetch the full scan when opened.
+  async function resolveSavedResult(manuscript, version) {
+    if (!version) return null;
+    const scanId = versionScanId(version);
+    if ((version.scanResult && !version.trimmed) || !isServerId(scanId)) {
+      return versionToScanResult(manuscript, version);
+    }
+    try {
+      const scan = await getComplianceScan(scanId);
+      const full = mapComplianceScanToResult(scan, {
+        documentId: manuscript?.id,
+        documentTitle: manuscript?.title,
+        citationStyle: manuscript?.citationStyle,
+        versionId: version.versionId || version.scanResult?.versionId,
+        documentName: version.scanResult?.documentName,
+        cloudinaryUrl: version.scanResult?.cloudinaryUrl,
+      });
+      const next = attachScanResult(scannedLibraryRef.current, manuscript.id, version.id, full);
+      scannedLibraryRef.current = next;
+      setScannedLibrary(next);
+      saveScannedManuscripts(next, user?.uid);
+      const updated = next.find((m) => m.id === manuscript.id);
+      const updatedVersion = updated?.versions?.find((v) => v.id === version.id);
+      return versionToScanResult(updated || manuscript, updatedVersion || version);
+    } catch {
+      return versionToScanResult(manuscript, version);
+    }
+  }
+
   const updateScannedLibrary = useCallback(
     (next) => {
       const previous = scannedLibraryRef.current;
+      const kept = new Set(next.flatMap((m) => (m.versions || []).map(versionScanId)));
+      dismissScanIds(
+        previous
+          .flatMap((m) => (m.versions || []).map(versionScanId))
+          .filter((id) => id && !kept.has(id)),
+        user?.uid
+      );
+      scannedLibraryRef.current = next;
       setScannedLibrary(next);
       saveScannedManuscripts(next, user?.uid);
       const current = currentManuscriptRef.current;
@@ -430,6 +621,8 @@ export default function App() {
           setCurrentVersion(null);
           setManuscriptReady(false);
           setFileDetailsNotice("");
+          setUploadWizardStep(1);
+          setWizardMaxStep(1);
           if (viewingThis && onVersionScreen) flow.backToDashboard();
         } else {
           setCurrentVersion((ver) => (ver ? { ...ver, version_number: latest.versionNumber } : ver));
@@ -445,6 +638,8 @@ export default function App() {
           setCurrentVersion(null);
           setManuscriptReady(false);
           setFileDetailsNotice("");
+          setUploadWizardStep(1);
+          setWizardMaxStep(1);
           return null;
         }
         return open;
@@ -459,15 +654,14 @@ export default function App() {
       return undefined;
     }
 
-    // Restore the cached Firebase session (localPersistence when "Remember me"
+    // Restore the cached Firebase session (IndexedDB when "Remember me"
     // was checked). Only sign out when the user chooses to, or when tokens are revoked.
     const unsub = onAuthStateChanged(auth, (next) => {
       setUser(next);
       if (next) {
-        setGuest(false);
         setRegistrationSuccess(pendingRegistration(next));
         const cached = readCachedSubscription(next.uid);
-        if (cached) setSubscription(cached);
+        if (cached) setSubscription((current) => current || cached);
       }
       setAuthReady(true);
     });
@@ -497,30 +691,65 @@ export default function App() {
     };
   }, []);
 
-  const loadDashboard = useCallback(async () => {
+  // Accounts created with Google never pass through /auth/register, so the API
+  // creates their database profile the first time it is requested.
+  useEffect(() => {
+    if (!user?.uid) return;
+    getProfile().catch(() => {});
+  }, [user?.uid]);
+
+  const loadDashboard = useCallback(async (opts) => {
     if (!auth?.currentUser) return;
-    setLoading(true);
-    setError("");
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       // Vercel Python cold-starts install deps on first request — warm first so
       // the three parallel dashboard calls don't all race a 60s install.
-      await warmApi();
+      if (!silent) await warmApi();
 
       // Load each resource independently — a 503 on manuscripts/subscription
       // must not wipe a successful mechanics list (that caused "already exists"
       // saves while Use a Saved Format looked empty).
-      const [mechanicsResult, manuscriptsResult, subscriptionResult] = await Promise.allSettled([
+      const subscriptionTicket = nextSubscriptionTicket();
+      const mechanicsChange = mechanicsChangeRef.current;
+      const [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] = await Promise.allSettled([
         listMechanics(),
         listManuscripts(),
         getSubscription(),
+        listScans(),
       ]);
 
+      // Scans made on another device (e.g. mobile) join the local library as versions.
+      if (scansResult.status === "fulfilled") {
+        const uid = auth.currentUser?.uid;
+        const { items, changed } = mergeServerScans(
+          scannedLibraryRef.current,
+          itemsFrom(scansResult.value, "items"),
+          loadDismissedScanIds(uid),
+          scansResult.value?.deleted
+        );
+        if (changed) {
+          scannedLibraryRef.current = items;
+          setScannedLibrary(items);
+          saveScannedManuscripts(items, uid);
+        }
+      }
+
       const failures = [];
-      if (mechanicsResult.status === "fulfilled") {
-        const nextMechanics = itemsFrom(mechanicsResult.value, "mechanics");
+      // Formats changed on screen while this load was in flight; the on-screen list is newer.
+      const mechanicsStale = mechanicsChange !== mechanicsChangeRef.current;
+      if (mechanicsResult.status === "fulfilled" && !mechanicsStale) {
+        const nextMechanics = withoutDeletedMechanics(itemsFrom(mechanicsResult.value, "mechanics"));
         setMechanics(nextMechanics);
-        setSelectedMechanicsId((current) => current || nextMechanics[0]?.id || "");
-      } else {
+        setSelectedMechanicsId((current) =>
+          current && nextMechanics.some((item) => item.id === current)
+            ? current
+            : nextMechanics[0]?.id || ""
+        );
+      } else if (mechanicsResult.status === "rejected") {
         failures.push(mechanicsResult.reason?.message || "Could not load format mechanics.");
       }
       if (manuscriptsResult.status === "fulfilled") {
@@ -529,24 +758,83 @@ export default function App() {
         failures.push(manuscriptsResult.reason?.message || "Could not load manuscripts.");
       }
       if (subscriptionResult.status === "fulfilled") {
-        setSubscription(subscriptionResult.value);
-        writeCachedSubscription(auth.currentUser?.uid, subscriptionResult.value);
+        storeSubscription(subscriptionResult.value, subscriptionTicket);
       } else {
         failures.push(subscriptionResult.reason?.message || "Could not load subscription.");
       }
-      if (failures.length) {
+      if (failures.length && !silent) {
         setError(failures[0]);
       }
     } catch (err) {
-      setError(err.message);
+      if (!silent) setError(err.message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, []);
+  }, [nextSubscriptionTicket, storeSubscription, withoutDeletedMechanics]);
 
   useEffect(() => {
     if (signedIn) loadDashboard();
   }, [signedIn, loadDashboard]);
+
+  // Changes made on another device (formats, versions, scans, plan) show up without a manual refresh:
+  // on returning to the tab and every 30 seconds while it is visible.
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    let last = Date.now();
+    const refresh = (minGap) => {
+      if (document.visibilityState !== "visible" || Date.now() - last < minGap) return;
+      if (silentLoadRef.current) return;
+      last = Date.now();
+      silentLoadRef.current = loadDashboard({ silent: true }).finally(() => {
+        silentLoadRef.current = null;
+      });
+    };
+    const onReturn = () => refresh(3000);
+    const timer = window.setInterval(() => refresh(25000), 30000);
+    document.addEventListener("visibilitychange", onReturn);
+    window.addEventListener("focus", onReturn);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onReturn);
+      window.removeEventListener("focus", onReturn);
+    };
+  }, [signedIn, loadDashboard]);
+
+  useEffect(() => {
+    if (signedIn && activePage === "manuscripts") void loadDashboard({ silent: true });
+  }, [signedIn, activePage, loadDashboard]);
+
+  // Stored versions can be server summaries only; fetch the full scan when opened.
+  async function resolveSavedResult(manuscript, version) {
+    if (!version) return null;
+    const scanId = versionScanId(version);
+    if ((version.scanResult && !version.trimmed) || !isServerId(scanId)) {
+      return versionToScanResult(manuscript, version);
+    }
+    try {
+      const scan = await getComplianceScan(scanId);
+      const full = mapComplianceScanToResult(scan, {
+        documentId: manuscript?.id,
+        documentTitle: manuscript?.title,
+        citationStyle: manuscript?.citationStyle,
+        versionId: version.versionId,
+      });
+      const next = attachScanResult(scannedLibraryRef.current, manuscript.id, version.id, full);
+      scannedLibraryRef.current = next;
+      setScannedLibrary(next);
+      saveScannedManuscripts(next, user?.uid);
+      const updated = next.find((m) => m.id === manuscript.id);
+      const updatedVersion = updated?.versions?.find((v) => v.id === version.id);
+      return versionToScanResult(updated || manuscript, updatedVersion || version);
+    } catch (err) {
+      setError(
+        err?.message
+          ? `This version could not be loaded: ${err.message}`
+          : "This version could not be loaded. Check your connection, then open it again."
+      );
+      return null;
+    }
+  }
 
   useEffect(() => {
     const wizard =
@@ -581,10 +869,21 @@ export default function App() {
         fileType: payload.file_type,
         extractedText: payload.extracted_text,
       });
-      const data = await listMechanics();
-      const next = itemsFrom(data, "mechanics");
-      setMechanics(next);
-      setSelectedMechanicsId(created.id || next[0]?.id || "");
+      mechanicsChangeRef.current += 1;
+      if (created?.id) {
+        setMechanics((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setSelectedMechanicsId(created.id);
+      }
+      try {
+        const data = await listMechanics();
+        const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
+        if (!created?.id || next.some((item) => item.id === created.id)) {
+          setMechanics(next);
+          setSelectedMechanicsId(created?.id || next[0]?.id || "");
+        }
+      } catch {
+        // The saved format is already on screen; the next refresh brings the full list.
+      }
       return true;
     } catch (err) {
       // Name conflict usually means the profile is already in SQLite — refresh the
@@ -592,7 +891,7 @@ export default function App() {
       if (err?.status === 409 || /already exists/i.test(err?.message || "")) {
         try {
           const data = await listMechanics();
-          const next = itemsFrom(data, "mechanics");
+          const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
           setMechanics(next);
           const match = next.find(
             (item) => item.name.toLowerCase() === String(payload.name || "").trim().toLowerCase()
@@ -621,6 +920,7 @@ export default function App() {
         name: payload.name,
         rules: payload.rules,
       });
+      mechanicsChangeRef.current += 1;
       setMechanics((current) =>
         current.map((item) => (item.id === mechanicsId ? { ...item, ...updated } : item))
       );
@@ -638,6 +938,7 @@ export default function App() {
     setError("");
     try {
       const updated = await renameMechanicsRequest(mechanicsId, name);
+      mechanicsChangeRef.current += 1;
       setMechanics((current) =>
         current.map((item) => (item.id === mechanicsId ? updated : item))
       );
@@ -654,9 +955,16 @@ export default function App() {
     setMechanicsBusy(true);
     setError("");
     try {
-      await deleteMechanicsRequest(mechanicsId);
+      try {
+        await deleteMechanicsRequest(mechanicsId);
+      } catch (err) {
+        // 404 means it is already gone on the server (e.g. deleted on another device).
+        if (err?.status !== 404) throw err;
+      }
+      deletedMechanicsRef.current.add(mechanicsId);
+      mechanicsChangeRef.current += 1;
       const remainingItems = mechanics.filter((item) => item.id !== mechanicsId);
-      setMechanics(remainingItems);
+      setMechanics((current) => current.filter((item) => item.id !== mechanicsId));
       if (selectedMechanicsId === mechanicsId) {
         setSelectedMechanicsId(remainingItems[0]?.id || "");
         setCurrentVersion(null);
@@ -815,25 +1123,8 @@ export default function App() {
     return <div className="grid min-h-screen place-items-center bg-navy text-sm text-slate-400">Loading…</div>;
   }
 
-  if (!signedIn && !guest) {
-    return <AuthScreen onContinueAsGuest={() => setGuest(true)} />;
-  }
-
-  if (guest) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-slate-950 p-6 text-slate-100">
-        <div className="max-w-md rounded-2xl border border-slate-800 bg-slate-900 p-7 text-center">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">PaperPilot</p>
-          <h1 className="mt-3 text-2xl font-semibold">Sign in to scan manuscripts</h1>
-          <p className="mt-2 text-sm leading-relaxed text-slate-400">
-            Mechanics, versions, scan allowances, and saved results are tied to your account.
-          </p>
-          <button onClick={() => setGuest(false)} className="mt-6 w-full rounded-xl bg-emerald-400 py-3 font-semibold text-slate-950">
-            Go to sign in
-          </button>
-        </div>
-      </div>
-    );
+  if (!signedIn) {
+    return <AuthScreen />;
   }
 
   if (registrationSuccess) {
@@ -850,7 +1141,7 @@ export default function App() {
 
   const tier = String(subscription?.tier || "free").toLowerCase();
   const used = Number(subscription?.used ?? subscription?.scans_used ?? 0);
-  const limit = tier === "premium" ? 50 : 3;
+  const limit = Number(subscription?.limit) || planLimit(tier);
   const remaining = Math.max(limit - Math.max(0, used), 0);
   const selectedMechanics = mechanics.find((item) => item.id === selectedMechanicsId);
   const scanReady = isScanReady(currentVersion, currentManuscript);
@@ -902,17 +1193,14 @@ export default function App() {
 
   function openUploadMechanics() {
     setActivePage("upload");
-    handleBackToDashboard();
-  }
-
-  function openUploadManuscript() {
-    setActivePage("upload");
-    setManuscriptReady(false);
-    setFileDetailsNotice("");
-    setCurrentVersion(null);
-    scanFlow.backToDashboard();
-    setUploadWizardStep(2);
-    setWizardMaxStep((max) => Math.max(max, 2));
+    // Leave results and analysis, and don't resume File details after the manuscript is gone.
+    if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
+      handleBackToDashboard();
+      return;
+    }
+    if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file))) {
+      resetUploadWizard(1);
+    }
   }
 
   const showingUploadFace =
@@ -925,20 +1213,24 @@ export default function App() {
         className={`fixed inset-y-0 left-0 z-40 w-80 flex-col bg-[#101a30] px-5 py-6 text-white transition-transform duration-300 md:flex ${
           sidebarOpen ? "flex translate-x-0" : "hidden -translate-x-full md:hidden"
         }`}
+        onClick={(e) => {
+          // On phones the sidebar covers the page, so close it after navigating.
+          if (window.innerWidth < 768 && e.target.closest?.("nav button")) setSidebarOpen(false);
+        }}
       >
-        <div className="relative flex items-center gap-2.5 px-2">
+        <div className="relative px-2">
           <button
             type="button"
             onClick={openUploadMechanics}
-            className="flex min-w-0 flex-1 items-center rounded-xl px-1 py-1 text-left transition hover:bg-white/5"
+            className="flex w-full justify-center rounded-xl px-1 pb-2 pt-1 transition hover:bg-white/5"
             aria-label="PaperPilot, go to upload mechanics"
           >
-            <PaperPilotLogo tone="dark" markClassName="h-11 w-11" wordClassName="text-[15px]" />
+            <PaperPilotLogo tone="dark" />
           </button>
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-slate-600/60 bg-[#1a2943] text-slate-300 transition hover:bg-[#243552] hover:text-white"
+            className="absolute right-0 top-0 grid h-8 w-8 place-items-center rounded-lg border border-slate-600/60 bg-[#1a2943] text-slate-300 transition hover:bg-[#243552] hover:text-white"
             aria-label="Hide sidebar"
             title="Hide sidebar"
           >
@@ -953,22 +1245,12 @@ export default function App() {
           <button
             onClick={openUploadMechanics}
             className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm font-semibold transition ${
-              showingUploadFace && uploadWizardStep === 1
+              activePage === "upload"
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            <span className="text-[#22c9b4]">↑</span> Upload Mechanics
-          </button>
-          <button
-            onClick={openUploadManuscript}
-            className={`mt-1 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm font-semibold transition ${
-              showingUploadFace && uploadWizardStep === 2
-                ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
-                : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <span className="text-[#22c9b4]">↑</span> Upload Manuscript
+            <span className="text-[#22c9b4]">↑</span> Upload &amp; Analyze
           </button>
           <button
             onClick={() => setActivePage("manuscripts")}
@@ -1029,10 +1311,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleBackToDashboard}
-                    className="mt-1 inline-flex items-center text-xs font-semibold text-slate-500 transition hover:text-[#172033]"
+                    className="group mt-2 inline-flex items-center gap-1.5 rounded-full border border-[#bfeee5] bg-[#f0fbf9] py-1.5 pl-2.5 pr-3.5 text-xs font-bold text-[#109b89] shadow-sm transition hover:border-[#16bfa8] hover:bg-[#dcf7f2] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8]/40"
                   >
-                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
                     </svg>
                     Back to Dashboard
                   </button>
@@ -1053,14 +1335,16 @@ export default function App() {
             <>
               <div className="hidden text-right lg:block">
                 <p className="text-xs font-semibold capitalize text-slate-700">{tier} plan</p>
-                <p className="text-[10px] text-slate-400">{remaining} of {limit} scans remaining</p>
+                <p className="text-[10px] text-slate-400">
+                  {remaining} of {limit} scans remaining this {resetWindow(tier)}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => setActivePage("subscription")}
                 className="rounded-md bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-[#092823] shadow-sm hover:bg-[#12ae99]"
               >
-                {tier === "premium" ? "Manage subscription" : "Subscribe to Premium"}
+                {isPaidTier(tier) ? "Manage subscription" : "Subscribe to Premium"}
               </button>
             </>
           )}
@@ -1113,13 +1397,17 @@ export default function App() {
 
       <main className="w-full p-5 md:p-8">
 
-        {/* ── Global API error banner ─────────────────────────────────────── */}
-        {error && (
-          <div className="mb-5 flex items-start justify-between gap-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700" role="alert">
-            <span>{error}</span>
-            <button onClick={() => setError("")} aria-label="Dismiss error">✕</button>
-          </div>
-        )}
+        {/* ── Global API error dialog ─────────────────────────────────────── */}
+        <ConfirmDialog
+          open={Boolean(error)}
+          title="Something went wrong"
+          message={error}
+          confirmLabel="OK"
+          cancelLabel={null}
+          tone="danger"
+          onConfirm={() => setError("")}
+          onCancel={() => setError("")}
+        />
 
         {/* ══════════════════════════════════════════════════════════════════
             ACCOUNT SETTINGS PAGE
@@ -1139,8 +1427,7 @@ export default function App() {
             billingReturn={billingReturn}
             onBillingSettled={() => setBillingReturn(null)}
             onSubscriptionChange={(next) => {
-              setSubscription(next);
-              writeCachedSubscription(user?.uid, next);
+              storeSubscription(next);
               const note = notificationFromSubscription(next);
               if (note) appendNotifications(note);
             }}
@@ -1164,8 +1451,9 @@ export default function App() {
               resetUploadWizard(1);
               setActivePage("upload");
             }}
-            onOpenSavedResult={(manuscript, version) => {
-              const saved = versionToScanResult(manuscript, version);
+            resolveSavedResult={resolveSavedResult}
+            onOpenSavedResult={async (manuscript, version) => {
+              const saved = await resolveSavedResult(manuscript, version);
               if (!saved) return;
               setActivePage("upload");
               scanFlow.showSavedResult(saved, version?.versionNumber);
@@ -1224,11 +1512,12 @@ export default function App() {
         {/* ══════════════════════════════════════════════════════════════════
             SCAN FLOW — takes over the main area; sidebar + header stay visible
         ═══════════════════════════════════════════════════════════════════ */}
-        {activePage === "upload" && (<>
+        {/* Kept mounted while on other pages so an in-progress upload (step, picked file, title) survives. */}
+        <div hidden={activePage !== "upload"}>
 
         {/* ── Results screen ─────────────────────────────────────────────── */}
         <ScanSummaryModal
-          open={scanFlow.step === "summary"}
+          open={activePage === "upload" && scanFlow.step === "summary"}
           result={scanFlow.result}
           onViewDocument={scanFlow.openReferenceTracing}
           onViewFullResult={scanFlow.openFullResults}
@@ -1237,7 +1526,8 @@ export default function App() {
         {scanFlow.step === "tracing" && scanFlow.result && (
           <ReferenceTracingView
             result={scanFlow.result}
-            file={scanFlow.file}
+            file={resultFile}
+            documentLoading={resultDocumentLoading}
             onBack={scanFlow.backToSummary}
             onViewFullResult={scanFlow.openFullResults}
           />
@@ -1247,7 +1537,8 @@ export default function App() {
           <ScanResultsScreen
             result={scanFlow.result}
             versionNumber={scanFlow.versionNumber}
-            file={scanFlow.file}
+            file={resultFile}
+            documentLoading={resultDocumentLoading}
             downloadBusy={scanFlow.downloadBusy}
             downloadError={scanFlow.downloadError}
             onDownload={scanFlow.downloadReport}
@@ -1270,27 +1561,29 @@ export default function App() {
 
         {/* ── Analysing state ────────────────────────────────────────────── */}
         {scanFlow.step === "analyzing" && (
-          <div className="grid min-h-[60vh] place-items-center rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
-            <div className="flex w-full max-w-md flex-col items-center gap-5 text-center">
-              <p className="text-base font-bold text-slate-800">Analysing your document…</p>
-              <div className="w-full">
-                <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
-                  <span className="capitalize">
-                    {String(scanFlow.scanProgress.stage || "queued").replace(/_/g, " ")}
-                  </span>
-                  <span>{Math.round(analysisShown)}%</span>
-                </div>
-                <div className="mt-2 h-3 overflow-hidden rounded-full bg-slate-100">
-                  <div
-                    className="h-full rounded-full bg-[#16bfa8]"
-                    style={{ width: `${Math.min(100, Math.max(0, analysisShown))}%` }}
-                  />
-                </div>
-                {scanFlow.scanProgress.message ? (
-                  <p className="mt-2 text-xs text-slate-400">{scanFlow.scanProgress.message}</p>
-                ) : null}
-              </div>
+          <div className="relative flex min-h-[60vh] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-10 shadow-sm">
+            <div
+              aria-hidden={departPhase === "fly"}
+              className={`flex w-full max-w-md flex-col items-center gap-5 text-center transition-opacity duration-200 ${
+                departPhase === "fly" ? "pointer-events-none opacity-0" : "opacity-100"
+              }`}
+            >
+              <PaperRollAnimation className="h-44 w-44" />
+              <p className="text-base font-bold text-slate-800">
+                {String(scanFlow.scanProgress.stage || "").toLowerCase() === "done"
+                  ? "Analysis complete"
+                  : "Analysing your document…"}
+              </p>
+              <AnalysisProgress progress={scanFlow.scanProgress} percent={analysisShown} />
             </div>
+            {departPhase === "fly" ? (
+              <PaperCarryAway
+                onDone={() => {
+                  flightFinishedRef.current = true;
+                  if (resultReadyRef.current) revealSummaryRef.current?.();
+                }}
+              />
+            ) : null}
           </div>
         )}
 
@@ -1315,7 +1608,7 @@ export default function App() {
             {loading ? (
               <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
                 <div className="flex flex-col items-center gap-3">
-                  <Spinner className="h-8 w-8 border-[3px] text-[#16bfa8]" />
+                  <PaperPlaneLoader className="h-32 w-56" />
                   Loading your compliance workspace…
                 </div>
               </div>
@@ -1348,6 +1641,10 @@ export default function App() {
                     onUpload={onManuscriptUpload}
                     onPreview={previewManuscript}
                     uploadCancelKey={uploadCancelKey}
+                    onCancel={() => {
+                      cancelManuscriptUpload();
+                      setUploadWizardStep(1);
+                    }}
                     onFilePick={() => {
                       // Picking a file alone must not open File details.
                       setManuscriptReady(false);
@@ -1480,8 +1777,20 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
+                      const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
+                      if (!isPaidTier(tier) && scanStyle !== "APA") {
+                        setUpgradeMessage(
+                          `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
+                        );
+                        return;
+                      }
                       if (remaining <= 0) {
-                        setUpgradeMessage(`You have used all ${limit} scans included in your ${tier} plan this month.`);
+                        setUpgradeMessage(
+                          `You have used all ${limit} scans included in your ${planName(tier)} plan this ${resetWindow(tier)}.` +
+                            (subscription?.reset_at
+                              ? ` Your scans reset on ${new Date(subscription.reset_at).toLocaleDateString()}.`
+                              : "")
+                        );
                         return;
                       }
                       setFileDetailsConfirm("analyse");
@@ -1517,8 +1826,7 @@ export default function App() {
             )}
           </>
         )}
-        {/* close activePage === "upload" wrapper */}
-        </>)}
+        </div>{/* close upload wrapper */}
       </main>
 
       <ConfirmDialog
@@ -1567,6 +1875,7 @@ export default function App() {
 
       <UpgradePrompt
         message={upgradeMessage}
+        tier={tier}
         onClose={() => setUpgradeMessage("")}
         onUpgrade={() => {
           setUpgradeMessage("");

@@ -37,17 +37,14 @@ function unreachableMessage(status) {
   // Common causes: Python cold-start, brief network blip, or tab sleep mid-request.
   if (import.meta.env.PROD) {
     if (status === 502 || status === 503 || status === 504) {
-      return (
-        `PaperPilot API returned ${status} (cold start or overload). ` +
-        "Wait a few seconds and try again."
-      );
+      return "PaperPilot's server is starting up or busy. Wait a few seconds, then try again.";
     }
     if (status) {
-      return `PaperPilot API returned ${status}. Try again in a moment.`;
+      return "PaperPilot's server could not finish the request. Try again in a moment.";
     }
     return (
-      "Could not complete the API request (network interruption or cold start). " +
-      "Wait a few seconds and retry — /api is deployed on this site."
+      "Could not reach PaperPilot. Your connection may have dropped — " +
+      "check your internet connection, then try again."
     );
   }
   if (API.startsWith("/")) {
@@ -79,13 +76,21 @@ export class ApiError extends Error {
   }
 }
 
+function statusMessage(status) {
+  if (status === 401) return "Your session has expired. Sign in again, then retry.";
+  if (status === 403) return "Your account can't do this yet. Check your plan on the Subscription page.";
+  if (status === 404) {
+    return "That item was not found. It may have been deleted on another device — refresh and try again.";
+  }
+  if (status === 413) return "This file is too large to upload. Use a file under 10 MB.";
+  if (status === 429) return "Too many requests in a short time. Wait a minute, then try again.";
+  return unreachableMessage(status);
+}
+
 async function responseData(res) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const fallback =
-      res.status === 502 || res.status === 503
-        ? unreachableMessage(res.status)
-        : res.statusText || "Request failed.";
+    const fallback = statusMessage(res.status);
     const retryHeader = res.headers.get("Retry-After");
     const retryAfter =
       (data?.detail && typeof data.detail === "object" && data.detail.retry_after) ||
@@ -340,6 +345,13 @@ export function deleteManuscript({ manuscriptId, title } = {}) {
   );
 }
 
+export function deleteManuscriptVersion({ manuscriptId, versionId } = {}) {
+  return authorizedFetch(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/versions/${encodeURIComponent(versionId)}`,
+    { method: "DELETE" }
+  );
+}
+
 export async function previewManuscript(file) {
   const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
   return authorizedFetch("/manuscripts/preview", {
@@ -351,18 +363,46 @@ export async function previewManuscript(file) {
   });
 }
 
+function newRequestId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** Network drops and cold starts are worth retrying; validation errors are not. */
+function isTransientError(err) {
+  return err?.status === 0 || err?.status === 502 || err?.status === 503 || err?.status === 504;
+}
+
+async function withRetry(send, attempts = 3) {
+  let lastError;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await send();
+    } catch (err) {
+      lastError = err;
+      if (!isTransientError(err) || i === attempts - 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 1500 * (i + 1)));
+    }
+  }
+  throw lastError;
+}
+
 export async function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
   const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
-  const created = await authorizedFetch("/manuscripts/versions", {
-    method: "POST",
-    body: JSON.stringify({
-      cloudinary_url: uploaded.url,
-      filename: file.name || uploaded.originalFilename,
-      mechanics_id: mechanicsId,
-      title: title.trim(),
-      manuscript_id: manuscriptId || undefined,
-    }),
-  });
+  // Same id on every retry, so a save whose reply was lost is not stored twice.
+  const clientRequestId = newRequestId();
+  const created = await withRetry(() =>
+    authorizedFetch("/manuscripts/versions", {
+      method: "POST",
+      body: JSON.stringify({
+        cloudinary_url: uploaded.url,
+        filename: file.name || uploaded.originalFilename,
+        mechanics_id: mechanicsId,
+        title: title.trim(),
+        manuscript_id: manuscriptId || undefined,
+        client_request_id: clientRequestId,
+      }),
+    })
+  );
   if (created?.version && !created.version.cloudinary_url) {
     created.version.cloudinary_url = uploaded.url;
   }
@@ -371,6 +411,25 @@ export async function uploadManuscriptVersion({ file, mechanicsId, title, manusc
 
 export function getScanDocument(scanId) {
   return authorizedFetch(`/scans/${encodeURIComponent(scanId)}/document`);
+}
+
+/**
+ * Downloads the original upload behind a saved scan through its signed link,
+ * since Cloudinary refuses public delivery of PDFs on this account.
+ * @param {{ download_url?: string, source_filename?: string }} doc from getScanDocument
+ * @returns {Promise<File|null>}
+ */
+export async function downloadScanDocumentFile(doc) {
+  const url = String(doc?.download_url || "").trim();
+  if (!url) return null;
+  const res = await fetch(url);
+  if (!res.ok) throw new ApiError("Could not download the saved document.", res.status);
+  const blob = await res.blob();
+  const name = String(doc?.source_filename || "").trim() || "document.pdf";
+  const type = name.toLowerCase().endsWith(".docx")
+    ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    : "application/pdf";
+  return new File([blob], name, { type });
 }
 
 export function listManuscriptVersions(manuscriptId, includeHistory = true) {
@@ -393,6 +452,11 @@ export function runComplianceScan({ manuscriptId, versionId, mechanicsId }) {
 
 export function getComplianceScan(scanId) {
   return authorizedFetch(`/scans/${encodeURIComponent(scanId)}`);
+}
+
+/** Finished scans from every device, so My Manuscripts shows the same versions everywhere. */
+export function listScans() {
+  return authorizedFetch("/scans");
 }
 
 /** Poll while ML job runs (gateway proxies Render progress). */
@@ -433,12 +497,12 @@ export function cancelSubscription({ immediate = true } = {}) {
 }
 
 
-/** Explicit checkout alias (same as subscribeToPlan for premium). */
-export function createSubscriptionCheckout({ billingPeriod } = {}) {
+/** Explicit checkout alias (same as subscribeToPlan for Premium or Pro). */
+export function createSubscriptionCheckout({ plan = "premium", billingPeriod } = {}) {
   return authorizedFetch("/subscription/create-checkout", {
     method: "POST",
     body: JSON.stringify({
-      plan: "premium",
+      plan,
       billing_period: billingPeriod || "monthly",
     }),
   });

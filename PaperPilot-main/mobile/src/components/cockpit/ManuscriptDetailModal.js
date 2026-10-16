@@ -7,6 +7,7 @@ import { downloadReport } from "../../lib/mockAnalysis";
 import { versionToScanResult } from "../../lib/scannedLibrary";
 import { CATEGORY_STATUS_LABEL, formatCount, formatScore, hasValue, plural } from "../../lib/scoreFormat";
 import { APP_TIME_ZONE } from "../../lib/timeZone";
+import { isPaidTier } from "../../lib/plans";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import UpgradePrompt from "../ui/UpgradePrompt";
 import { ClockIcon, CloseIcon, DownloadIcon, LockIcon, TrashIcon } from "../shell/icons";
@@ -25,6 +26,25 @@ function formatDate(iso) {
     });
   } catch {
     return iso;
+  }
+}
+
+/** Date and time of a scan; older entries only stored the day. */
+function formatDateTime(iso) {
+  if (!iso || iso.length <= 10) return formatDate(iso);
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return formatDate(iso);
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: APP_TIME_ZONE,
+    });
+  } catch {
+    return formatDate(iso);
   }
 }
 
@@ -114,7 +134,7 @@ export default function ManuscriptDetailModal({
   onClose,
 }) {
   const insets = useSafeAreaInsets();
-  const isPremium = String(tier || "free").toLowerCase() === "premium";
+  const isPremium = isPaidTier(tier);
 
   const versionsDesc = useMemo(() => {
     const list = [...(manuscript?.versions || [])];
@@ -128,6 +148,8 @@ export default function ManuscriptDetailModal({
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [upgradeMessage, setUpgradeMessage] = useState("");
 
   useEffect(() => {
@@ -237,7 +259,7 @@ export default function ManuscriptDetailModal({
                       ) : null}
                     </View>
                     <Text style={[styles.versionDate, active && styles.versionMutedActive]}>
-                      {formatDate(ver.scannedDate)}
+                      {formatDateTime(ver.scannedAt || ver.scannedDate)}
                     </Text>
                     <Text
                       style={[
@@ -278,7 +300,7 @@ export default function ManuscriptDetailModal({
                 <View>
                   <Text style={styles.selectedLabel}>Selected version</Text>
                   <Text style={styles.selectedMeta}>
-                    {versionLabel} · {formatDate(selected.scannedDate)}
+                    {versionLabel} · {formatDateTime(selected.scannedAt || selected.scannedDate)}
                   </Text>
                 </View>
                 <View style={styles.scoreBlock}>
@@ -343,7 +365,23 @@ export default function ManuscriptDetailModal({
                 Each card is one rule finding — expand locations to see every page/line hit.
               </Text>
 
-              {issues.length === 0 ? (
+              {issues.length === 0 && selected.trimmed && onOpenResult ? (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={styles.emptyText}>
+                    This version was scanned on another device. Open it to load its issues.
+                  </Text>
+                  <Pressable
+                    onPress={() => selectVersion(selected)}
+                    style={({ pressed }) => [
+                      styles.downloadBtn,
+                      { marginTop: 10 },
+                      pressed && styles.downloadBtnPressed,
+                    ]}
+                  >
+                    <Text style={styles.downloadText}>View full results</Text>
+                  </Pressable>
+                </View>
+              ) : issues.length === 0 ? (
                 <Text style={[styles.emptyText, { marginTop: 12 }]}>No issues recorded for this version.</Text>
               ) : (
                 <View style={styles.issueList}>
@@ -377,15 +415,34 @@ export default function ManuscriptDetailModal({
         <ConfirmDialog
           open={Boolean(pendingDeleteId)}
           title="Delete this version?"
-          message="The version label will update to match the versions that are still saved."
+          message="It will be removed on web and mobile. The other versions keep their numbers."
           confirmLabel="Delete version"
           tone="danger"
+          busy={deleteBusy}
           onCancel={() => setPendingDeleteId(null)}
-          onConfirm={() => {
+          onConfirm={async () => {
             const id = pendingDeleteId;
-            setPendingDeleteId(null);
-            if (id) onDeleteVersion?.(manuscript.id, id);
+            if (!id) return;
+            setDeleteBusy(true);
+            try {
+              await onDeleteVersion?.(manuscript.id, id);
+            } catch (err) {
+              setDeleteError(err?.message || "Could not delete this version.");
+            } finally {
+              setDeleteBusy(false);
+              setPendingDeleteId(null);
+            }
           }}
+        />
+        <ConfirmDialog
+          open={Boolean(deleteError)}
+          title="Something went wrong"
+          message={deleteError}
+          confirmLabel="OK"
+          cancelLabel={null}
+          tone="danger"
+          onConfirm={() => setDeleteError("")}
+          onCancel={() => setDeleteError("")}
         />
         <UpgradePrompt
           message={upgradeMessage}

@@ -53,4 +53,9 @@ def enrich_mechanics_rules(text: str, rules: dict) -> dict:
         predicted = extract_mechanics_with_ml(text)
     except Exception:
         return rules
-    return _merge_fill(rules, predicted)
+    merged = _merge_fill(rules, predicted)
+    font = merged.get("font")
+    # The model's "content size" is body text, not a Heading 3 the guide never defined.
+    if isinstance(font, dict) and "heading3_content_size" in font and "body_size" not in font:
+        font["body_size"] = font["heading3_content_size"]
+    return merged

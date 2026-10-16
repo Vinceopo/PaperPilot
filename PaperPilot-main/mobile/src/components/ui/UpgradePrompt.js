@@ -1,26 +1,38 @@
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
 import PrimaryButton from "./PrimaryButton";
+import { normalizeTier } from "../../lib/plans";
 
-export default function UpgradePrompt({ message, onClose, onUpgrade }) {
+export default function UpgradePrompt({ message, tier, onClose, onUpgrade }) {
   if (!message) return null;
+  const current = normalizeTier(tier);
+  const target = current === "free" ? "premium" : "pro";
+  const atTop = current === "pro";
   return (
     <Modal transparent animationType="fade" visible onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          <Text style={styles.badge}>Premium</Text>
-          <Text style={styles.title}>Upgrade to Premium</Text>
+          <Text style={styles.badge}>{target === "pro" ? "Pro" : "Premium"}</Text>
+          <Text style={styles.title}>
+            {atTop ? "Scan limit reached" : target === "pro" ? "Upgrade to Pro" : "Upgrade to Premium"}
+          </Text>
           <Text style={styles.body}>{message}</Text>
-          <Text style={styles.bullet}>✓ Up to 50 compliance scans each month</Text>
-          <Text style={styles.bullet}>✓ Complete manuscript version history</Text>
-          <Text style={styles.bullet}>✓ Deeper AI explanations and recommendations</Text>
+          {atTop ? null : target === "pro" ? (
+            <Text style={styles.bullet}>✓ Up to 75 compliance scans every week</Text>
+          ) : (
+            <>
+              <Text style={styles.bullet}>✓ Up to 50 compliance scans each month</Text>
+              <Text style={styles.bullet}>✓ Complete manuscript version history</Text>
+              <Text style={styles.bullet}>✓ Deeper AI explanations and recommendations</Text>
+            </>
+          )}
           <View style={styles.row}>
             <Pressable style={styles.secondary} onPress={onClose}>
               <Text style={styles.secondaryText}>Not now</Text>
             </Pressable>
             <View style={styles.flex}>
               <PrimaryButton
-                title="Upgrade with PayMongo"
+                title={atTop ? "View plans" : "Upgrade with PayMongo"}
                 onPress={() => {
                   onClose?.();
                   onUpgrade?.();

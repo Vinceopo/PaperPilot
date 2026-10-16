@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../firebase";
@@ -30,6 +31,8 @@ import {
   uploadManuscriptVersion,
 } from "../api";
 import { isServerId, mapComplianceScanToResult, scanTargetIds } from "../lib/scanMapper";
+import { supportedCitationStyle } from "../lib/formatMechanicsForm";
+import { planLimit } from "../lib/plans";
 import { useScanFlow } from "../hooks/useScanFlow";
 import { latestVersion } from "../lib/scoreBand";
 import {
@@ -108,8 +111,32 @@ export function AppDataProvider({ children }) {
 
   const lastSavedScanKey = useRef("");
   const subscriptionLoadedRef = useRef("");
+  // Plan replies can arrive out of order (a refresh on returning from PayMongo finishing
+  // after the checkout confirm), so a reply requested before the latest plan update is dropped.
+  const subscriptionTicketRef = useRef(0);
+  const subscriptionAppliedRef = useRef(0);
+  const nextSubscriptionTicket = useCallback(() => ++subscriptionTicketRef.current, []);
+  const storeSubscription = useCallback((next, ticket) => {
+    if (!next || typeof next !== "object") return false;
+    const order = ticket ?? ++subscriptionTicketRef.current;
+    if (order < subscriptionAppliedRef.current) return false;
+    subscriptionAppliedRef.current = order;
+    setSubscription(next);
+    subscriptionLoadedRef.current = auth?.currentUser?.uid || "";
+    void writeCachedSubscription(auth?.currentUser?.uid, next);
+    return true;
+  }, []);
   const authUidRef = useRef("");
   const scannedLibraryRef = useRef([]);
+  // A dashboard load started before a delete can finish after it; never show deleted formats again.
+  const deletedMechanicsRef = useRef(new Set());
+  // Bumped on every local save/rename/edit/delete so an older dashboard load can't overwrite it.
+  const mechanicsChangeRef = useRef(0);
+  const silentLoadRef = useRef(null);
+  const withoutDeletedMechanics = useCallback(
+    (items) => items.filter((item) => !deletedMechanicsRef.current.has(item.id)),
+    []
+  );
   const notificationsRef = useRef([]);
   const uploadSessionRef = useRef(0);
   const currentManuscriptRef = useRef(null);
@@ -166,7 +193,7 @@ export function AppDataProvider({ children }) {
     }
     const mechanicsId = selectedMechanicsIdRef.current;
     const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
-    const citationStyle = String(profile?.rules?.citation_style || "APA").toUpperCase();
+    const citationStyle = supportedCitationStyle(profile?.rules?.citation_style);
     return {
       manuscriptId,
       versionId,
@@ -287,6 +314,10 @@ export function AppDataProvider({ children }) {
   }, [user?.uid]);
 
   useEffect(() => {
+    // Only a fresh scan is saved; reopening a stored result must not add a version.
+    if (!scanFlow.persistScan) return;
+    // Saving before the stored library loads would overwrite it with this scan alone.
+    if (libraryUid !== (user?.uid || "")) return;
     if (!scanFlow.result || !["summary", "results"].includes(scanFlow.step)) return;
     const key = `${scanFlow.result.documentId}|${scanFlow.versionNumber}|${scanFlow.result.scannedAt || ""}`;
     if (lastSavedScanKey.current === key) return;
@@ -297,14 +328,11 @@ export function AppDataProvider({ children }) {
       return next;
     });
     appendNotifications(notificationFromScan(scanFlow.result, scanFlow.versionNumber));
+    const ticket = nextSubscriptionTicket();
     void getSubscription()
-      .then((data) => {
-        if (!data) return;
-        setSubscription(data);
-        void writeCachedSubscription(user?.uid, data);
-      })
+      .then((data) => storeSubscription(data, ticket))
       .catch(() => {});
-  }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, user?.uid]);
+  }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, scanFlow.persistScan, user?.uid, libraryUid]);
 
   // Accounts created with Google never pass through /auth/register, so the API
   // creates their database profile the first time it is requested.
@@ -313,23 +341,29 @@ export function AppDataProvider({ children }) {
     getProfile().catch(() => {});
   }, [user?.uid]);
 
-  const loadDashboard = useCallback(async () => {
+  const loadDashboard = useCallback(async (opts) => {
     if (!auth?.currentUser) return;
-    setLoading(true);
-    setError("");
+    const silent = opts?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       // A failure on one resource must not wipe the others that loaded.
+      const subscriptionTicket = nextSubscriptionTicket();
+      const mechanicsChange = mechanicsChangeRef.current;
       const [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] =
         await Promise.allSettled([listMechanics(), listManuscripts(), getSubscription(), listScans()]);
       if (scansResult.status === "fulfilled") {
         const uid = auth.currentUser?.uid;
         const dismissed = await loadDismissedScanIds(uid);
-        const { items, added } = mergeServerScans(
+        const { items, changed } = mergeServerScans(
           scannedLibraryRef.current,
           itemsFrom(scansResult.value, "items"),
-          dismissed
+          dismissed,
+          scansResult.value?.deleted
         );
-        if (added) {
+        if (changed) {
           scannedLibraryRef.current = items;
           setScannedLibrary(items);
           void saveScannedManuscripts(items, uid);
@@ -337,11 +371,17 @@ export function AppDataProvider({ children }) {
       }
 
       const failures = [];
-      if (mechanicsResult.status === "fulfilled") {
-        const nextMechanics = itemsFrom(mechanicsResult.value, "mechanics");
+      // Formats changed on screen while this load was in flight; the on-screen list is newer.
+      const mechanicsStale = mechanicsChange !== mechanicsChangeRef.current;
+      if (mechanicsResult.status === "fulfilled" && !mechanicsStale) {
+        const nextMechanics = withoutDeletedMechanics(itemsFrom(mechanicsResult.value, "mechanics"));
         setMechanics(nextMechanics);
-        setSelectedMechanicsId((current) => current || nextMechanics[0]?.id || "");
-      } else {
+        setSelectedMechanicsId((current) =>
+          current && nextMechanics.some((item) => item.id === current)
+            ? current
+            : nextMechanics[0]?.id || ""
+        );
+      } else if (mechanicsResult.status === "rejected") {
         failures.push(mechanicsResult.reason?.message || "Could not load format mechanics.");
       }
       if (manuscriptsResult.status === "fulfilled") {
@@ -350,37 +390,31 @@ export function AppDataProvider({ children }) {
         failures.push(manuscriptsResult.reason?.message || "Could not load manuscripts.");
       }
       if (subscriptionResult.status === "fulfilled") {
-        setSubscription(subscriptionResult.value);
-        subscriptionLoadedRef.current = auth.currentUser?.uid || "";
-        void writeCachedSubscription(auth.currentUser?.uid, subscriptionResult.value);
+        storeSubscription(subscriptionResult.value, subscriptionTicket);
       } else {
         failures.push(subscriptionResult.reason?.message || "Could not load subscription.");
       }
-      if (failures.length) setError(failures[0]);
+      if (failures.length && !silent) setError(failures[0]);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, []);
+  }, [nextSubscriptionTicket, storeSubscription, withoutDeletedMechanics]);
 
   const refreshSubscription = useCallback(async () => {
     if (!auth?.currentUser) return null;
     try {
+      const ticket = nextSubscriptionTicket();
       const data = await getSubscription();
-      setSubscription(data);
-      subscriptionLoadedRef.current = auth.currentUser?.uid || "";
-      void writeCachedSubscription(auth.currentUser?.uid, data);
+      storeSubscription(data, ticket);
       return data;
     } catch {
       return null;
     }
-  }, []);
+  }, [nextSubscriptionTicket, storeSubscription]);
 
   /** Use a subscription snapshot returned by the API (cancel, confirm, switch) right away. */
   function applySubscription(next) {
-    if (!next || typeof next !== "object") return;
-    setSubscription(next);
-    subscriptionLoadedRef.current = auth?.currentUser?.uid || "";
-    void writeCachedSubscription(auth?.currentUser?.uid, next);
+    if (!storeSubscription(next)) return;
     const note = notificationFromSubscription(next);
     if (note) appendNotifications(note);
   }
@@ -391,6 +425,7 @@ export function AppDataProvider({ children }) {
       if (libraryUid === user.uid) loadDashboard();
     } else {
       subscriptionLoadedRef.current = "";
+      subscriptionAppliedRef.current = ++subscriptionTicketRef.current;
       setMechanics([]);
       setManuscripts([]);
       setSubscription(null);
@@ -401,9 +436,34 @@ export function AppDataProvider({ children }) {
       setNotifications([]);
       setManuscriptReady(false);
       setFileDetailsNotice("");
+      setUpgradeMessage("");
       resetUploadWizard(1);
+      // The next account on this device must not inherit (or save) this user's scan.
+      scanFlow.backToDashboard();
     }
   }, [user, libraryUid, loadDashboard]);
+
+  // Pick up formats, versions, scan counts and plan changes made on another device:
+  // on returning to the app and every 30 seconds while it is open.
+  useEffect(() => {
+    if (!user?.uid || libraryUid !== user.uid) return undefined;
+    const refresh = () => {
+      if (AppState.currentState !== "active" || silentLoadRef.current) return;
+      silentLoadRef.current = loadDashboard({ silent: true })
+        .catch(() => {})
+        .finally(() => {
+          silentLoadRef.current = null;
+        });
+    };
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state === "active") refresh();
+    });
+    const timer = setInterval(refresh, 30000);
+    return () => {
+      clearInterval(timer);
+      listener.remove();
+    };
+  }, [user?.uid, libraryUid, loadDashboard]);
 
   function handleGateError(err) {
     if (err?.code === "upgrade_required" || err?.detail?.code === "upgrade_required") {
@@ -433,10 +493,21 @@ export function AppDataProvider({ children }) {
         fileType: payload.file_type || payload.fileType,
         extractedText: payload.extracted_text || payload.extractedText,
       });
-      const data = await listMechanics();
-      const next = itemsFrom(data, "mechanics");
-      setMechanics(next);
-      setSelectedMechanicsId(created.id || next[0]?.id || "");
+      mechanicsChangeRef.current += 1;
+      if (created?.id) {
+        setMechanics((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setSelectedMechanicsId(created.id);
+      }
+      try {
+        const data = await listMechanics();
+        const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
+        if (!created?.id || next.some((item) => item.id === created.id)) {
+          setMechanics(next);
+          setSelectedMechanicsId(created?.id || next[0]?.id || "");
+        }
+      } catch {
+        // The saved format is already on screen; the next refresh brings the full list.
+      }
       return true;
     } catch (err) {
       throw err;
@@ -462,6 +533,7 @@ export function AppDataProvider({ children }) {
         name: payload.name,
         rules: payload.rules,
       });
+      mechanicsChangeRef.current += 1;
       setMechanics((current) =>
         current.map((item) => (item.id === mechanicsId ? { ...item, ...updated } : item))
       );
@@ -477,6 +549,7 @@ export function AppDataProvider({ children }) {
     setError("");
     try {
       const updated = await renameMechanicsRequest(mechanicsId, name);
+      mechanicsChangeRef.current += 1;
       setMechanics((current) =>
         current.map((item) => (item.id === mechanicsId ? updated : item))
       );
@@ -493,9 +566,16 @@ export function AppDataProvider({ children }) {
     setMechanicsBusy(true);
     setError("");
     try {
-      await deleteMechanicsRequest(mechanicsId);
+      try {
+        await deleteMechanicsRequest(mechanicsId);
+      } catch (err) {
+        // 404 means it is already gone on the server (e.g. deleted on another device).
+        if (err?.status !== 404) throw err;
+      }
+      deletedMechanicsRef.current.add(mechanicsId);
+      mechanicsChangeRef.current += 1;
       const remainingItems = mechanics.filter((item) => item.id !== mechanicsId);
-      setMechanics(remainingItems);
+      setMechanics((current) => current.filter((item) => item.id !== mechanicsId));
       if (selectedMechanicsId === mechanicsId) {
         setSelectedMechanicsId(remainingItems[0]?.id || "");
         setCurrentVersion(null);
@@ -823,7 +903,7 @@ export function AppDataProvider({ children }) {
 
   const tier = String(subscription?.tier || "free").toLowerCase();
   const used = Number(subscription?.used ?? subscription?.scans_used ?? 0);
-  const limit = tier === "premium" ? 50 : 3;
+  const limit = Number(subscription?.limit) || planLimit(tier);
   const remaining = Math.max(limit - Math.max(0, used), 0);
   const notificationUnread = useMemo(() => unreadCount(notifications), [notifications]);
 

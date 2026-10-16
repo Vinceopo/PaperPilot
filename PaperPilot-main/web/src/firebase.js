@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { browserLocalPersistence, getAuth, setPersistence } from "firebase/auth";
+import { getAuth } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 import { getStorage } from "firebase/storage";
 
@@ -23,8 +23,6 @@ export const auth = app ? getAuth(app) : null;
 export const db = app ? getDatabase(app) : null;
 export const storage = app ? getStorage(app) : null;
 
-// Keep signed-in users across refreshes and browser restarts by default.
-// Login/register can still switch to session-only when "Remember me" is off.
-if (auth) {
-  setPersistence(auth, browserLocalPersistence).catch(() => {});
-}
+// getAuth already keeps signed-in users across refreshes (IndexedDB). Do not call
+// setPersistence here: it moves the saved session on every page load, which other
+// open tabs see as a sign-out followed by a sign-in.

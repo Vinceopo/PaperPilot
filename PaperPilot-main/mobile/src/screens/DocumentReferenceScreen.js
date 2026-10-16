@@ -138,6 +138,7 @@ export default function DocumentReferenceScreen({ navigation }) {
 
       <View style={styles.docFrame}>
         <TraceDocumentViewer
+          key={scanFlow.file?.uri || result.cloudinaryUrl || "empty"}
           file={scanFlow.file}
           documentUrl={result.cloudinaryUrl || ""}
           documentName={result.documentName || scanFlow.file?.name || ""}

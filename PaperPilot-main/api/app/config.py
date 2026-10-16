@@ -31,12 +31,12 @@ class Settings(BaseSettings):
     # When false, register / reset skip email codes (local/dev). Never disable in production.
     otp_enabled: bool = True
     otp_ttl_seconds: int = 300
-    otp_resend_seconds: int = 60
+    otp_resend_seconds: int = 30
     otp_rate_window_seconds: int = 3600  # window for otp_max_sends_per_hour
     otp_max_sends_per_hour: int = 5
     # Stricter limits for forgot / change password (purpose=reset_password).
-    otp_reset_resend_seconds: int = 60
-    otp_reset_window_seconds: int = 1800  # 30 minutes
+    otp_reset_resend_seconds: int = 30
+    otp_reset_window_seconds: int = 3600  # 1 hour
     otp_reset_max_sends: int = 10
     otp_max_attempts: int = 5
     otp_echo_in_response: bool = False
@@ -47,8 +47,10 @@ class Settings(BaseSettings):
     firebase_database_url: str = ""
     free_scan_limit: int = 3
     premium_scan_limit: int = 50
-    # Each successful scan uses one credit. Free is always 3/month, Premium is always 50/month.
-    # Kept for older env files. The API enforces 3 and 50 even if this is set higher.
+    pro_scan_limit: int = 75
+    # Each successful scan uses one credit. Free is always 3/month, Premium is always 50/month,
+    # Pro is always 75/week.
+    # Kept for older env files. The API enforces 3, 50 and 75 even if this is set higher.
     disable_scan_limit: bool = False
     # Documents are uploaded with Cloudinary upload_large (20MB chunks).
     # 100MB matches the client ceiling. A lower env value must not reject those files.

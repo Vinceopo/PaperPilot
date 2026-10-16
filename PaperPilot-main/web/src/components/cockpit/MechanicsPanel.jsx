@@ -3,6 +3,7 @@ import FormatMechanicsFields from "./FormatMechanicsFields.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
+import DocumentLoader from "../DocumentLoader.jsx";
 import {
   emptyMechanicsForm,
   formHasAnyRule,
@@ -11,7 +12,7 @@ import {
   sampleMechanicsForm,
 } from "../../lib/formatMechanicsForm.js";
 import { downloadSampleMechanics } from "../../api.js";
-import { MAX_FILE_BYTES } from "../../lib/mockAnalysis.js";
+import { MAX_FILE_SIZE_BYTES } from "../../lib/uploadLimits.js";
 import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
 import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
@@ -26,7 +27,7 @@ function validateFile(file) {
   if (!file) return "Choose a mechanics document.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
   if (!ACCEPTED.includes(ext)) return "Mechanics must be a PDF or DOCX file.";
-  if (file.size > MAX_FILE_BYTES) return "oversize";
+  if (file.size > MAX_FILE_SIZE_BYTES) return "oversize";
   return "";
 }
 
@@ -261,7 +262,7 @@ export default function MechanicsPanel({
       id: "save",
       title: "Save format mechanics?",
       message: `Save “${payload.name}” to Saved Mechanics and continue to Upload Manuscript?`,
-      confirmLabel: "Save & continue",
+      confirmLabel: "Save and Continue",
       tone: "primary",
       payload,
     });
@@ -275,9 +276,9 @@ export default function MechanicsPanel({
     if (!payload) return;
     setConfirmAction({
       id: "update-saved",
-      title: "Save changes to this format?",
-      message: `Update “${payload.name}” with the Format Fields shown, then continue to Upload Manuscript?`,
-      confirmLabel: "Save & continue",
+      title: "Use this format?",
+      message: `Select “${payload.name}” and continue to Upload Manuscript? Any edits to the Format Fields will be saved to this format.`,
+      confirmLabel: "Select and Continue",
       tone: "primary",
       payload,
     });
@@ -433,7 +434,7 @@ export default function MechanicsPanel({
       {(busy) && !confirmBusy && (
         <div className="absolute inset-0 z-10 grid place-items-center rounded-xl bg-white/70 backdrop-blur-[1px]">
           <div className="flex flex-col items-center gap-3 text-[#16bfa8]">
-            <Spinner className="h-10 w-10 border-[3px]" />
+            <DocumentLoader className="h-28 w-28" />
             <p className="text-sm font-bold text-slate-700">
               Processing…
             </p>
@@ -607,7 +608,7 @@ export default function MechanicsPanel({
                       <Spinner /> Saving…
                     </>
                   ) : (
-                    "Save changes & continue"
+                    "Select and Continue"
                   )}
                 </button>
               </div>
@@ -638,7 +639,7 @@ export default function MechanicsPanel({
             >
               {extracting ? (
                 <span className="flex flex-col items-center gap-3 text-[#16bfa8]">
-                  <Spinner className="h-10 w-10 border-[3px]" />
+                  <DocumentLoader className="h-24 w-24" />
                   <span className="text-sm font-bold text-slate-700">Extracting format fields…</span>
                 </span>
               ) : (
@@ -656,7 +657,7 @@ export default function MechanicsPanel({
                   <span className="mt-1 text-[11px] text-slate-400">
                     {file
                       ? `${formatFileSize(file.size)} · Confirm extraction to fill Format Fields beside this panel`
-                      : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_BYTES)}`}
+                      : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
                   </span>
                   <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                     Browse files
@@ -730,7 +731,7 @@ export default function MechanicsPanel({
                       <Spinner /> Saving…
                     </>
                   ) : (
-                    "Save & continue"
+                    "Save and Continue"
                   )}
                 </button>
                 <button
@@ -780,7 +781,16 @@ export default function MechanicsPanel({
         </div>
       )}
 
-      {error && <p className="mt-3 text-xs text-rose-500">{error}</p>}
+      <ConfirmDialog
+        open={Boolean(error)}
+        title="Something went wrong"
+        message={error}
+        confirmLabel="OK"
+        cancelLabel={null}
+        tone="danger"
+        onConfirm={() => setError("")}
+        onCancel={() => setError("")}
+      />
       {success && !error && (
         <p className="mt-3 text-xs font-semibold text-emerald-600" role="status">
           {success}
@@ -803,7 +813,7 @@ export default function MechanicsPanel({
       <ConfirmDialog
         open={oversizeBytes != null}
         title="File Too Large"
-        message={oversizeFileMessage(oversizeBytes, MAX_FILE_BYTES)}
+        message={oversizeFileMessage(oversizeBytes, MAX_FILE_SIZE_BYTES)}
         confirmLabel="OK"
         cancelLabel=""
         onCancel={() => setOversizeBytes(null)}

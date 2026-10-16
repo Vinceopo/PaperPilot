@@ -34,7 +34,55 @@ function detailMessage(data, fallback) {
   if (typeof detail === "string") return detail;
   if (detail && typeof detail.message === "string") return detail.message;
   if (Array.isArray(detail) && detail[0]?.msg) return detail[0].msg;
-  return fallback || "Request failed.";
+  return fallback || statusMessage(0);
+}
+
+function statusMessage(status) {
+  if (status === 401) return "Your session has expired. Sign in again, then retry.";
+  if (status === 403) return "Your account can't do this yet. Check your plan on the Subscription page.";
+  if (status === 404) {
+    return "That item was not found. It may have been deleted on another device — refresh and try again.";
+  }
+  if (status === 413) return "This file is too large to upload. Use a file under 10 MB.";
+  if (status === 429) return "Too many requests in a short time. Wait a minute, then try again.";
+  if (status === 502 || status === 503 || status === 504) {
+    return "PaperPilot's server is starting up or busy. Wait a few seconds, then try again.";
+  }
+  if (status) return "PaperPilot's server could not finish the request. Try again in a moment.";
+  return "Could not reach PaperPilot. Check your internet connection, then try again.";
+}
+
+/** fetch() rejects with a bare TypeError ("Network request failed") when the connection drops. */
+function networkError(err) {
+  if (err instanceof ApiError) return err;
+  const msg = String(err?.message || "");
+  if (err?.name === "TypeError" || /network request failed|failed to fetch|timed? ?out/i.test(msg)) {
+    return new ApiError(statusMessage(0), 0);
+  }
+  return err;
+}
+
+function newRequestId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** Network drops and cold starts are worth retrying; validation errors are not. */
+function isTransientError(err) {
+  return err?.status === 0 || err?.status === 502 || err?.status === 503 || err?.status === 504;
+}
+
+async function withRetry(send, attempts = 3) {
+  let lastError;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await send();
+    } catch (err) {
+      lastError = err;
+      if (!isTransientError(err) || i === attempts - 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 1500 * (i + 1)));
+    }
+  }
+  throw lastError;
 }
 
 function parseBody(body) {
@@ -49,17 +97,21 @@ function parseBody(body) {
 
 async function responseData(res) {
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(detailMessage(data, res.statusText || "Request failed."), res.status, data.detail);
+  if (!res.ok) throw new ApiError(detailMessage(data, statusMessage(res.status)), res.status, data.detail);
   return data;
 }
 
 async function postJson(path, body) {
-  const res = await fetch(`${API}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return responseData(res);
+  try {
+    const res = await fetch(`${API}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return await responseData(res);
+  } catch (err) {
+    throw networkError(err);
+  }
 }
 
 async function authorizedFetch(path, options = {}) {
@@ -76,9 +128,13 @@ async function authorizedFetch(path, options = {}) {
     }
     return fetch(`${API}${path}`, { ...options, headers });
   };
-  let res = await send(false);
-  if (res.status === 401) res = await send(true);
-  return responseData(res);
+  try {
+    let res = await send(false);
+    if (res.status === 401) res = await send(true);
+    return await responseData(res);
+  } catch (err) {
+    throw networkError(err);
+  }
 }
 
 function guessMime(name = "", mimeType = "") {
@@ -130,7 +186,10 @@ function cleanFilename(name = "upload.bin", mimeType = "") {
 function uploadToCloudinary({ uri, name, mimeType }) {
   if (!CLOUDINARY_CLOUD) {
     return Promise.reject(
-      new ApiError("Cloudinary is not configured. Set extra.cloudinaryCloudName in app.json.", 0)
+      new ApiError(
+        "File uploads are not set up in this build of the app. Update the app or contact support.",
+        0
+      )
     );
   }
   if (!uri) {
@@ -153,12 +212,22 @@ function uploadToCloudinary({ uri, name, mimeType }) {
         return;
       }
       reject(
-        new ApiError(data.error?.message || `Cloudinary upload failed (${xhr.status}).`, xhr.status)
+        new ApiError(
+          data.error?.message ||
+            "The file could not be uploaded. Check that it is a PDF or DOCX under 10 MB, then try again.",
+          xhr.status
+        )
       );
     };
     xhr.onerror = () =>
       reject(new ApiError("Upload failed. Check your internet connection and try again.", 0));
-    xhr.ontimeout = () => reject(new ApiError("Upload timed out. Try a smaller file.", 0));
+    xhr.ontimeout = () =>
+      reject(
+        new ApiError(
+          "The upload took too long. Check your connection or try a smaller file, then upload again.",
+          0
+        )
+      );
     xhr.send(form);
   });
 }
@@ -300,6 +369,13 @@ export function deleteManuscript({ manuscriptId, title } = {}) {
   );
 }
 
+export function deleteManuscriptVersion({ manuscriptId, versionId } = {}) {
+  return authorizedFetch(
+    `/manuscripts/${encodeURIComponent(manuscriptId)}/versions/${encodeURIComponent(versionId)}`,
+    { method: "DELETE" }
+  );
+}
+
 export function previewManuscript({ uri, name, mimeType }) {
   return postCloudinaryDocument("/manuscripts/preview", { uri, name, mimeType }, "manuscript.pdf");
 }
@@ -313,16 +389,21 @@ export async function uploadManuscriptVersion({ file, mechanicsId, title, manusc
   if (!mechanicsId) throw new ApiError("Select a format mechanics document first.", 400);
 
   const uploaded = await uploadToCloudinary({ uri, name, mimeType });
-  const created = await authorizedFetch("/manuscripts/versions", {
-    method: "POST",
-    body: JSON.stringify({
-      cloudinary_url: uploaded.url,
-      filename: displayFilename(name, mimeType, "manuscript.pdf"),
-      mechanics_id: String(mechanicsId),
-      title: trimmedTitle.slice(0, 300),
-      manuscript_id: manuscriptId ? String(manuscriptId) : undefined,
-    }),
-  });
+  // Same id on every retry, so a save whose reply was lost is not stored twice.
+  const clientRequestId = newRequestId();
+  const created = await withRetry(() =>
+    authorizedFetch("/manuscripts/versions", {
+      method: "POST",
+      body: JSON.stringify({
+        cloudinary_url: uploaded.url,
+        filename: displayFilename(name, mimeType, "manuscript.pdf"),
+        mechanics_id: String(mechanicsId),
+        title: trimmedTitle.slice(0, 300),
+        manuscript_id: manuscriptId ? String(manuscriptId) : undefined,
+        client_request_id: clientRequestId,
+      }),
+    })
+  );
   if (created?.version && !created.version.cloudinary_url) {
     created.version.cloudinary_url = uploaded.url;
   }
@@ -367,22 +448,23 @@ export function getSubscription() {
   return authorizedFetch("/subscription");
 }
 
-/** Create PayMongo Hosted Checkout for Premium (never send card data to our API). */
+/** Create PayMongo Hosted Checkout for Premium or Pro (never send card data to our API). */
 export function subscribeToPlan({ plan = "premium", billingPeriod = "monthly" } = {}) {
   return authorizedFetch("/subscription/subscribe", {
     method: "POST",
     body: JSON.stringify({
       plan,
       billing_period: billingPeriod,
+      return_to: plan === "free" ? undefined : "app",
     }),
   });
 }
 
-export function createSubscriptionCheckout({ billingPeriod = "monthly" } = {}) {
+export function createSubscriptionCheckout({ plan = "premium", billingPeriod = "monthly" } = {}) {
   return authorizedFetch("/subscription/create-checkout", {
     method: "POST",
     body: JSON.stringify({
-      plan: "premium",
+      plan,
       billing_period: billingPeriod,
     }),
   });

@@ -6,6 +6,7 @@ import FloatingLabelInput from "../FloatingLabelInput.jsx";
 import AuthShell from "./AuthShell.jsx";
 import GoogleButton from "./GoogleButton.jsx";
 import OtpStep from "./OtpStep.jsx";
+import TermsModal from "./TermsModal.jsx";
 import { FIREBASE_MISSING, authMessage } from "./messages.js";
 import { passwordChecks, registerErrors, registerFieldError } from "./validation.js";
 
@@ -20,6 +21,7 @@ const EMPTY = {
 };
 
 const REGISTRATION_SUCCESS_KEY = "paperpilot.registrationSuccess";
+const TERMS_REQUIRED = "You must agree to the Terms and Conditions to create an account.";
 
 function rememberRegistrationSuccess(profile) {
   sessionStorage.setItem(
@@ -28,7 +30,7 @@ function rememberRegistrationSuccess(profile) {
   );
 }
 
-export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGuest }) {
+export default function RegisterScreen({ slideDir, onGoToLogin }) {
   const [step, setStep] = useState("form");
   const [values, setValues] = useState(EMPTY);
   const [errors, setErrors] = useState({});
@@ -36,6 +38,14 @@ export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGues
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
   const [otpMeta, setOtpMeta] = useState(null);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [termsError, setTermsError] = useState("");
+  const [termsOpen, setTermsOpen] = useState(false);
+
+  function setAgreed(value) {
+    setAgreedToTerms(value);
+    if (value) setTermsError("");
+  }
 
   function setField(field, value) {
     const nextValues = { ...values, [field]: value };
@@ -76,7 +86,8 @@ export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGues
     const next = registerErrors(values);
     setErrors(next);
     setTouched(Object.keys(EMPTY).reduce((acc, key) => ({ ...acc, [key]: true }), {}));
-    if (Object.keys(next).length > 0) return;
+    setTermsError(agreedToTerms ? "" : TERMS_REQUIRED);
+    if (Object.keys(next).length > 0 || !agreedToTerms) return;
     if (!firebaseReady || !auth) {
       setFormError(FIREBASE_MISSING);
       return;
@@ -152,6 +163,10 @@ export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGues
 
   async function onGoogle() {
     setFormError("");
+    if (!agreedToTerms) {
+      setTermsError(TERMS_REQUIRED);
+      return;
+    }
     if (!firebaseReady || !auth) {
       setFormError("Add Firebase keys to web/.env to enable Google sign-up.");
       return;
@@ -212,7 +227,6 @@ export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGues
       panelKey="register-form"
       title="Create your account"
       subtitle="Join PaperPilot to save scores and reports."
-      onContinueAsGuest={onContinueAsGuest}
       footer={loginFooter}
     >
       <form className="mt-7 space-y-4" onSubmit={onSubmit} noValidate>
@@ -268,6 +282,39 @@ export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGues
           })}
         />
 
+        <div>
+          <label htmlFor="register-terms" className="flex cursor-pointer items-start gap-2.5 text-sm text-slate-600">
+            <input
+              id="register-terms"
+              type="checkbox"
+              checked={agreedToTerms}
+              onChange={(e) => setAgreed(e.target.checked)}
+              disabled={busy}
+              aria-invalid={Boolean(termsError)}
+              aria-describedby={termsError ? "register-terms-error" : undefined}
+              className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 accent-[#1bc9a0]"
+            />
+            <span>
+              I agree to the{" "}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setTermsOpen(true);
+                }}
+                className="font-semibold text-accent underline-offset-2 hover:text-accent-hover hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-sm"
+              >
+                Terms and Conditions
+              </button>
+            </span>
+          </label>
+          {termsError ? (
+            <p id="register-terms-error" className="mt-1.5 text-[12.5px] text-rose-500" role="alert">
+              {termsError}
+            </p>
+          ) : null}
+        </div>
+
         {formError && (
           <p className="text-sm text-rose-500" role="alert">
             {formError}
@@ -284,6 +331,14 @@ export default function RegisterScreen({ slideDir, onGoToLogin, onContinueAsGues
       </form>
 
       <GoogleButton label="Sign up with Google" onClick={onGoogle} disabled={busy} />
+      <TermsModal
+        open={termsOpen}
+        onClose={() => setTermsOpen(false)}
+        onAgree={() => {
+          setAgreed(true);
+          setTermsOpen(false);
+        }}
+      />
     </AuthShell>
   );
 }

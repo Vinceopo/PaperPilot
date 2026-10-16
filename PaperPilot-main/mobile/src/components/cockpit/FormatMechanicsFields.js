@@ -7,19 +7,20 @@ import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors } from "../../theme";
 import SelectField from "../ui/SelectField";
-import { ChevronDownIcon } from "../shell/icons";
+import { ChevronDownIcon, CloseIcon, TrashIcon } from "../shell/icons";
+import { supportedCitationStyle } from "../../lib/formatMechanicsForm";
 import {
   BODY_NUMBERING_OPTIONS,
   CHAPTER_FIRST_PAGE_OPTIONS,
-  CHAPTER_MARKER_OPTIONS,
-  HEADING_LEVELS,
-  HEADING_STYLE_FIELDS,
+  HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
+  MAX_HEADING_LEVELS,
   PAGE_POSITIONS,
   PRELIMINARY_STYLE_OPTIONS,
   TITLE_PAGE_OPTIONS,
   WORD_SPACING_OPTIONS,
-  emptyHeadingStyles,
+  emptyHeading,
+  headingLabel,
 } from "../../lib/mechanicsOptions";
 
 const ORIENTATION_OPTIONS = [
@@ -37,7 +38,6 @@ const CITATION_OPTIONS = [
   { value: "APA", label: "APA" },
   { value: "MLA", label: "MLA" },
   { value: "IEEE", label: "IEEE" },
-  { value: "CHICAGO", label: "Chicago" },
 ];
 const LINE_SPACING_OPTIONS = [
   { value: "1", label: "1 (Single)" },
@@ -155,23 +155,6 @@ function ChoiceSelect({ value, onChange, options, disabled, title, emptyLabel = 
   );
 }
 
-function CheckBox({ checked, label, onToggle, disabled }) {
-  return (
-    <Pressable
-      style={[styles.checkRow, disabled && { opacity: 0.6 }]}
-      onPress={onToggle}
-      disabled={disabled}
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked, disabled }}
-    >
-      <View style={[styles.checkBox, checked && styles.checkBoxOn]}>
-        {checked ? <Text style={styles.checkMark}>✓</Text> : null}
-      </View>
-      <Text style={styles.checkLabel}>{label}</Text>
-    </Pressable>
-  );
-}
-
 export default function FormatMechanicsFields({
   form,
   onChange,
@@ -183,18 +166,26 @@ export default function FormatMechanicsFields({
   function set(key, value) {
     onChange?.({ ...form, [key]: value });
   }
-  const headingStyles = form.headingStyles || emptyHeadingStyles();
-  function setHeadingStyle(level, key, value) {
-    set("headingStyles", { ...headingStyles, [level]: { ...headingStyles[level], [key]: value } });
-  }
-  const chapterMarkers = Array.isArray(form.paginationChapterMarkers) ? form.paginationChapterMarkers : [];
-  function toggleChapterMarker(key) {
+  const headings = Array.isArray(form.headings) ? form.headings : [];
+  function updateHeading(index, update) {
     set(
-      "paginationChapterMarkers",
-      chapterMarkers.includes(key) ? chapterMarkers.filter((item) => item !== key) : [...chapterMarkers, key]
+      "headings",
+      headings.map((heading, i) => (i === index ? update(heading) : heading))
     );
   }
-
+  function setHeadingValue(index, key, value) {
+    updateHeading(index, (heading) => ({ ...heading, [key]: value }));
+  }
+  function addHeadingRule(index, key) {
+    updateHeading(index, (heading) => ({ ...heading, fields: [...(heading.fields || []), key] }));
+  }
+  function removeHeadingRule(index, key) {
+    updateHeading(index, (heading) => ({
+      ...heading,
+      [key]: "",
+      fields: (heading.fields || []).filter((field) => field !== key),
+    }));
+  }
   function input(key, extra = {}) {
     return (
       <TextInput
@@ -294,10 +285,8 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Font">
-          <Field label="Heading 1 size">{input("fontHeading1Size", { keyboardType: "decimal-pad" })}</Field>
-          <Field label="Heading 2 size">{input("fontHeading2Size", { keyboardType: "decimal-pad" })}</Field>
-          <Field label="Heading 3 and Content size">
-            {input("fontHeading3Size", { keyboardType: "decimal-pad" })}
+          <Field label="Body text size" hint="Paragraph text, in points">
+            {input("bodySize", { keyboardType: "decimal-pad" })}
           </Field>
           <Field label="Type" hint="Font family">
             <ComboInput
@@ -317,25 +306,96 @@ export default function FormatMechanicsFields({
           </Field>
         </Section>
 
-        <Section title="Heading styles">
-          {HEADING_LEVELS.map(({ key: level, label }) => (
-            <View key={level}>
-              <Text style={styles.label}>{label}</Text>
-              <View style={styles.grid}>
-                {HEADING_STYLE_FIELDS.map((field) => (
-                  <Field key={field.key} label={field.label} style={styles.gridCell} labelStyle={styles.subLabel}>
-                    <ChoiceSelect
-                      title={`${label} · ${field.label}`}
-                      disabled={disabled}
-                      value={headingStyles[level]?.[field.key]}
-                      onChange={(v) => setHeadingStyle(level, field.key, v)}
-                      options={field.options}
-                    />
-                  </Field>
-                ))}
+        <Section title="Headings">
+          {headings.length ? null : <Text style={styles.hint}>No heading rules in this format.</Text>}
+          {headings.map((heading, index) => {
+            const label = headingLabel(index);
+            const shown = HEADING_RULE_FIELDS.filter((field) => heading.fields?.includes(field.key));
+            const missing = HEADING_RULE_FIELDS.filter((field) => !heading.fields?.includes(field.key));
+            return (
+              <View key={index} style={styles.headingCard}>
+                <View style={styles.headingTop}>
+                  <Text style={styles.label}>{label}</Text>
+                  {disabled ? null : (
+                    <Pressable
+                      onPress={() => set("headings", headings.filter((_, i) => i !== index))}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove ${label}`}
+                    >
+                      <TrashIcon size={15} color={colors.muted} />
+                    </Pressable>
+                  )}
+                </View>
+                {shown.length ? (
+                  <View style={styles.grid}>
+                    {shown.map((field) => (
+                      <View key={field.key} style={styles.gridCell}>
+                        <View style={styles.ruleTop}>
+                          <Text style={[styles.label, styles.subLabel]}>{field.label}</Text>
+                          {disabled ? null : (
+                            <Pressable
+                              onPress={() => removeHeadingRule(index, field.key)}
+                              hitSlop={8}
+                              style={styles.ruleRemove}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Remove ${field.label} from ${label}`}
+                            >
+                              <CloseIcon size={12} color={colors.muted} />
+                            </Pressable>
+                          )}
+                        </View>
+                        {field.key === "size" ? (
+                          <TextInput
+                            editable={!disabled}
+                            style={[styles.input, disabled && styles.inputDisabled]}
+                            value={heading.size == null ? "" : String(heading.size)}
+                            onChangeText={(v) => setHeadingValue(index, "size", v)}
+                            keyboardType="decimal-pad"
+                            placeholderTextColor={colors.muted}
+                          />
+                        ) : (
+                          <ChoiceSelect
+                            title={`${label} · ${field.label}`}
+                            disabled={disabled}
+                            value={heading[field.key]}
+                            onChange={(v) => setHeadingValue(index, field.key, v)}
+                            options={field.options}
+                          />
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.hint}>No rules set for this heading.</Text>
+                )}
+                {!disabled && missing.length ? (
+                  <View style={styles.chipRow}>
+                    {missing.map((field) => (
+                      <Pressable
+                        key={field.key}
+                        onPress={() => addHeadingRule(index, field.key)}
+                        style={({ pressed }) => [styles.chip, pressed && styles.chipPressed]}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Add ${field.label} to ${label}`}
+                      >
+                        <Text style={styles.chipText}>+ {field.label}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
               </View>
-            </View>
-          ))}
+            );
+          })}
+          {!disabled && headings.length < MAX_HEADING_LEVELS ? (
+            <Pressable
+              onPress={() => set("headings", [...headings, emptyHeading()])}
+              style={({ pressed }) => [styles.addLevel, pressed && styles.chipPressed]}
+              accessibilityRole="button"
+            >
+              <Text style={styles.addLevelText}>+ Add heading level</Text>
+            </Pressable>
+          ) : null}
         </Section>
 
         <Section title="Pagination">
@@ -384,23 +444,6 @@ export default function FormatMechanicsFields({
               options={BODY_NUMBERING_OPTIONS}
             />
           </Field>
-          <View>
-            <Text style={styles.label}>Chapter starts</Text>
-            <Text style={styles.hint}>
-              Headings that begin a new chapter page. None selected uses CHAPTER I and Chapter 1 styles.
-            </Text>
-            <View style={{ marginTop: 6, gap: 6 }}>
-              {CHAPTER_MARKER_OPTIONS.map((option) => (
-                <CheckBox
-                  key={option.value}
-                  label={option.label}
-                  checked={chapterMarkers.includes(option.value)}
-                  onToggle={() => toggleChapterMarker(option.value)}
-                  disabled={disabled}
-                />
-              ))}
-            </View>
-          </View>
         </Section>
 
         <Section title="Page breaks">
@@ -419,7 +462,7 @@ export default function FormatMechanicsFields({
           <Field label="Citation style">
             <SelectField
               title="Citation style"
-              value={String(form.citationFormat || "APA").toUpperCase()}
+              value={supportedCitationStyle(form.citationFormat)}
               options={CITATION_OPTIONS}
               onChange={(v) => set("citationFormat", v)}
               disabled={disabled}
@@ -522,19 +565,36 @@ const styles = StyleSheet.create({
   comboOptionText: { fontSize: 13, color: "#334155" },
   comboOptionSelected: { fontWeight: "600", color: "#109b89" },
   subLabel: { marginTop: 6, fontWeight: "400", color: "#64748b" },
-  checkRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
-  checkBox: {
-    marginTop: 1,
-    width: 16,
-    height: 16,
-    borderRadius: 4,
-    borderWidth: 1.5,
-    borderColor: "#94a3b8",
+  headingCard: {
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
     backgroundColor: colors.white,
-    alignItems: "center",
-    justifyContent: "center",
+    padding: 12,
   },
-  checkBoxOn: { borderColor: colors.accent, backgroundColor: colors.accent },
-  checkMark: { fontSize: 11, lineHeight: 13, fontWeight: "800", color: colors.white },
-  checkLabel: { flex: 1, fontSize: 12, lineHeight: 17, color: "#334155" },
+  headingTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  ruleTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 4 },
+  ruleRemove: { marginTop: 6 },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 },
+  chip: {
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "#cbd5e1",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  chipPressed: { backgroundColor: "#e6f9f4" },
+  chipText: { fontSize: 11, fontWeight: "600", color: colors.slate },
+  addLevel: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "#cbd5e1",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  addLevelText: { fontSize: 12, fontWeight: "600", color: "#475569" },
 });

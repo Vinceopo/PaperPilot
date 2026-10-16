@@ -11,6 +11,7 @@ export default function ConfirmDialog({
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   tone = "primary", // "primary" | "danger"
+  icon = null,
   busy = false,
   onConfirm,
   onCancel,
@@ -31,6 +32,7 @@ export default function ConfirmDialog({
       aria-describedby="confirm-dialog-message"
     >
       <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-2xl">
+        {icon ? <div className="mb-3">{icon}</div> : null}
         <h3 id="confirm-dialog-title" className="text-lg font-bold text-[#172033]">
           {title}
         </h3>

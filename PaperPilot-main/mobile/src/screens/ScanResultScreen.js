@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { Alert, Animated, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert, Animated, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect } from "@react-navigation/native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
@@ -179,18 +180,28 @@ export default function ScanResultScreen({ navigation }) {
   const { scanFlow, handleBackToDashboard } = useAppData();
   const hasResult = Boolean(scanFlow?.result);
 
+  const goBack = useCallback(() => {
+    handleBackToDashboard();
+    navigation.navigate("Upload");
+  }, [handleBackToDashboard, navigation]);
+
+  // Android back would otherwise land on Upload while the scan is still on "results" (a blank page).
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasResult) return undefined;
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        goBack();
+        return true;
+      });
+      return () => sub.remove();
+    }, [hasResult, goBack])
+  );
+
   return (
     <AppShell
       breadcrumb="Dashboard"
       title="Scan Results"
-      onBack={
-        hasResult
-          ? () => {
-              handleBackToDashboard();
-              navigation.navigate("Upload");
-            }
-          : undefined
-      }
+      onBack={hasResult ? goBack : undefined}
     >
       <ScanResultBody navigation={navigation} />
     </AppShell>
@@ -469,6 +480,7 @@ function ScanResultBody({ navigation }) {
           <View style={styles.previewBody}>
             <View style={styles.previewFrame}>
               <TraceDocumentViewer
+                key={scanFlow.file?.uri || cloudinaryUrl || "empty"}
                 file={scanFlow.file}
                 documentUrl={cloudinaryUrl}
                 documentName={documentName || scanFlow.file?.name || ""}

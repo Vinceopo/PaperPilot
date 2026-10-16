@@ -13,7 +13,6 @@ const SEVERITY = {
     pill: "bg-amber-100 text-amber-800 border-amber-200",
     pillActive: "bg-amber-200 text-amber-900 border-amber-400 ring-2 ring-amber-300/70",
     badge: "bg-amber-400 text-white",
-    border: "border-l-amber-400",
     rowBg: "bg-amber-50/40",
     tag: "bg-amber-100 text-amber-700 border-amber-200",
   },
@@ -22,7 +21,6 @@ const SEVERITY = {
     pill: "bg-orange-100 text-orange-800 border-orange-200",
     pillActive: "bg-orange-200 text-orange-900 border-orange-400 ring-2 ring-orange-300/70",
     badge: "bg-orange-500 text-white",
-    border: "border-l-orange-400",
     rowBg: "bg-orange-50/40",
     tag: "bg-orange-100 text-orange-700 border-orange-200",
   },
@@ -31,7 +29,6 @@ const SEVERITY = {
     pill: "bg-rose-100 text-rose-800 border-rose-200",
     pillActive: "bg-rose-200 text-rose-900 border-rose-400 ring-2 ring-rose-300/70",
     badge: "bg-rose-500 text-white",
-    border: "border-l-rose-500",
     rowBg: "bg-rose-50/40",
     tag: "bg-rose-100 text-rose-700 border-rose-200",
   },
@@ -124,6 +121,15 @@ function LocationBadge({ page, line }) {
       {pageStr}
       {lineStr ? <span className="ml-0.5 text-[#16bfa8]">{lineStr}</span> : null}
     </span>
+  );
+}
+
+function AiSparkleIcon({ className = "h-4 w-4" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.5 13.6 8.4 18.5 10 13.6 11.6 12 16.5 10.4 11.6 5.5 10 10.4 8.4 12 3.5Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 15.5 18.7 17.3 20.5 18 18.7 18.7 18 20.5 17.3 18.7 15.5 18 17.3 17.3 18 15.5Z" />
+    </svg>
   );
 }
 
@@ -397,7 +403,7 @@ export default function IssuesDetectedPanel({
                 return (
                   <div
                     key={block.key}
-                    className={`overflow-hidden rounded-xl border border-slate-200 border-l-4 ${s.border} ${s.rowBg}`}
+                    className={`overflow-hidden rounded-xl border border-slate-200 ${s.rowBg}`}
                   >
                     <div className="border-b border-slate-200/70 px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
@@ -435,25 +441,22 @@ export default function IssuesDetectedPanel({
                                   >
                                     {entrySeverity.label}
                                   </span>
-                                  <span className="text-[11px] font-semibold text-slate-400">
-                                    {entry.section}
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span className="text-[11px] font-semibold text-slate-400">
+                                      {entry.section}
+                                    </span>
+                                    <span
+                                      className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-slate-400"
+                                      role="img"
+                                      aria-label="AI"
+                                      title="AI-detected severity"
+                                    >
+                                      <AiSparkleIcon className="h-3.5 w-3.5" />
+                                    </span>
                                   </span>
                                 </div>
                                 <p className="mt-1 text-sm font-semibold text-slate-800">{entry.finding}</p>
-                                <p className="mt-2">
-                                  <span
-                                    className="inline-flex h-5 w-5 items-center justify-center text-slate-400"
-                                    role="img"
-                                    aria-label="XAI explanation"
-                                    title="XAI explanation"
-                                  >
-                                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.5 13.6 8.4 18.5 10 13.6 11.6 12 16.5 10.4 11.6 5.5 10 10.4 8.4 12 3.5Z" />
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M18 15.5 18.7 17.3 20.5 18 18.7 18.7 18 20.5 17.3 18.7 15.5 18 17.3 17.3 18 15.5Z" />
-                                    </svg>
-                                  </span>
-                                </p>
-                                <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                                <p className="mt-2 text-sm leading-relaxed text-slate-600">
                                   {entry.explanation}
                                 </p>
                                 {entry.recommendation ? (

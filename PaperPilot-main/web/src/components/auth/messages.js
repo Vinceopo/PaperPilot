@@ -1,9 +1,15 @@
 /** Maps Firebase auth error codes to copy we are happy to show a user. */
 export function authMessage(err) {
   const code = err?.code;
-  if (code === "auth/invalid-credential" || code === "auth/wrong-password" || code === "auth/user-not-found") {
+  if (
+    code === "auth/invalid-credential" ||
+    code === "auth/invalid-login-credentials" ||
+    code === "auth/wrong-password" ||
+    code === "auth/user-not-found"
+  ) {
     return "Email or password is incorrect.";
   }
+  if (code === "auth/missing-password") return "Password is required.";
   if (code === "auth/invalid-email") return "Enter a valid email address.";
   if (code === "auth/email-already-in-use") return "An account with this email already exists.";
   if (code === "auth/weak-password") return "Password must be at least 8 characters.";
@@ -14,11 +20,12 @@ export function authMessage(err) {
   if (code === "auth/network-request-failed") return "Network error. Check your connection and try again.";
   if (code === "auth/too-many-requests") return "Too many attempts. Please try again later.";
   if (code === "auth/user-disabled") return "This account has been disabled.";
-  return err?.message || "Something went wrong.";
+  if (typeof code === "string" && code.startsWith("auth/")) return "Something went wrong. Please try again.";
+  return err?.message || "Something went wrong. Please try again.";
 }
 
 export const FIREBASE_MISSING =
-  "Add Firebase keys to web/.env (see .env.example). You can still continue as a guest.";
+  "Add Firebase keys to web/.env (see .env.example) to enable sign-in.";
 
 /** mm:ss for the OTP expiry countdown. */
 export function formatCountdown(totalSeconds) {

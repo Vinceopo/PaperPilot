@@ -2,9 +2,16 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from app import compliance_db, otp, profiles
+from app import compliance_db, emailer, otp, profiles
 from app.compliance import run_compliance_scan
-from app.documents import DocumentError, derive_mechanics_rules, parse_document, validate_document
+from app.documents import (
+    DocumentError,
+    build_sample_mechanics_docx,
+    derive_mechanics_rules,
+    normalize_mechanics_rules,
+    parse_document,
+    validate_document,
+)
 
 
 class FakeReference:
@@ -21,13 +28,18 @@ class FakeReference:
                 node = node.get(part, {})
         return node
 
-    def get(self):
+    def get(self, shallow=False):
         node = self.store
         for part in self.parts:
             if not isinstance(node, dict) or part not in node:
                 return None
             node = node[part]
+        if shallow and isinstance(node, dict):
+            return {key: True for key in node}
         return copy.deepcopy(node)
+
+    def child(self, path):
+        return FakeReference(self.store, "/" + "/".join([*self.parts, *path.split("/")]))
 
     def set(self, value):
         if not self.parts:
@@ -93,6 +105,96 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(rules["citation_style"], "APA")
         self.assertNotIn("first_line_indent_inches", rules)
 
+    def test_prose_margins_and_typeface_size_from_outline_guide(self):
+        rules = derive_mechanics_rules(
+            "A. Typeface - Arial/Times New Roman font, size 12 must be used throughout the "
+            "manuscript unless otherwise indicated (as in Titles, Headings)\n"
+            "b. Spacing - Double spacing throughout the manuscript. Single spacing for "
+            "bibliography entries and captions.\n"
+            "C. Margins - 1.5 inch on the left, 1 inch on the right, top and bottom\n"
+            "Preliminary Pages\n"
+        )
+        self.assertEqual(
+            rules["margins_inches"],
+            {"left": 1.5, "right": 1.0, "top": 1.0, "bottom": 1.0},
+        )
+        self.assertEqual(rules["font"]["families"][:2], ["Arial", "Times New Roman"])
+        self.assertEqual(rules["font"]["body_size"], 12.0)
+        self.assertEqual(rules["line_spacing"], 2.0)
+        self.assertNotIn("size", rules.get("paper") or {})
+
+    def test_one_side_and_other_sides_margins(self):
+        rules = derive_mechanics_rules(
+            "Margins: 1.5 inches on the left and 1 inch on all other sides."
+        )
+        self.assertEqual(
+            rules["margins_inches"],
+            {"left": 1.5, "right": 1.0, "top": 1.0, "bottom": 1.0},
+        )
+
+    def test_listed_sides_share_one_margin_value(self):
+        rules = derive_mechanics_rules(
+            "Page size should be 8.5 x 11-inches.\n"
+            "All margins (left, right, top and bottom) should be 1.5 inches (3.8 cm), including your\n"
+            "tables and figures.\nSingle space your text.\nFont:\n"
+            "1. Main Body\u201412 pt. Times or the closest comparable font available\n"
+            "2. Footnotes\u201410 pt. Times or the closest comparable font available\n"
+        )
+        self.assertEqual(
+            rules["margins_inches"],
+            {"left": 1.5, "right": 1.5, "top": 1.5, "bottom": 1.5},
+        )
+        self.assertEqual(rules["font"]["type"], "Times New Roman")
+        self.assertEqual(rules["font"]["body_size"], 12.0)
+        self.assertNotIn("table_layout_requirements", rules)
+        self.assertNotIn("figure_layout_requirements", rules)
+
+    def test_side_list_label_and_font_type_and_size(self):
+        rules = derive_mechanics_rules(
+            'b. Margins: Top, Right and Bottom: 1.00"\n'
+            'Left: 1.25" to allow for binding\n'
+            "c. Font Type and Size: Times New Roman; 12 points\n"
+        )
+        self.assertEqual(
+            rules["margins_inches"],
+            {"top": 1.0, "right": 1.0, "bottom": 1.0, "left": 1.25},
+        )
+        self.assertEqual(rules["font"]["body_size"], 12.0)
+
+    def test_sample_mechanics_docx_fills_every_format_field(self):
+        parsed = parse_document(build_sample_mechanics_docx(), "docx")
+        rules = derive_mechanics_rules(parsed["text"])
+        self.assertEqual(
+            rules["paper"],
+            {
+                "size": "8.5 x 11",
+                "orientation": "Portrait",
+                "substance": "20",
+                "landscape_pages": "Allowed for tables and figures",
+            },
+        )
+        self.assertEqual(rules["line_spacing"], 2.0)
+        self.assertEqual(rules["first_line_indent_inches"], 0.5)
+        self.assertEqual(rules["alignment"], "left")
+        self.assertEqual(
+            rules["margins_inches"],
+            {"top": 1.0, "bottom": 1.0, "left": 1.0, "right": 1.0, "gutter": 0.0, "header": 0.5, "footer": 0.5},
+        )
+        font = rules["font"]
+        self.assertEqual(font["type"], "Times New Roman")
+        self.assertEqual(font["color"], "Black/Automatic")
+        self.assertEqual((font["heading1_size"], font["heading2_size"], font["body_size"]), (12.0, 12.0, 12.0))
+        self.assertEqual(font["heading_levels"], 2)
+        self.assertNotIn("heading3_size", font)
+        self.assertEqual(rules["pagination"]["position"], "Top right")
+        self.assertEqual(rules["pagination"]["first_page_of_chapter"], "Same position as other pages")
+        self.assertEqual(
+            rules["page_break_requirements"], ["Only to start each new chapter and the reference list"]
+        )
+        self.assertTrue(rules["table_layout_requirements"][0].endswith("both placed above it"))
+        self.assertTrue(rules["figure_layout_requirements"][0].endswith("both placed above the image"))
+        self.assertEqual(rules["citation_style"], "APA")
+
     def test_rejects_extension_signature_mismatch(self):
         with self.assertRaises(DocumentError):
             validate_document("paper.pdf", b"not a pdf", 100)
@@ -118,14 +220,31 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(result["issues"][0]["severity"], "critical")
         self.assertEqual(
             result["issues"][0]["locations"],
-            [{"page": 2, "line": 1, "section": "Fonts", "excerpt": "Example line"}],
+            [{"page": 2, "line": 1, "section": "Fonts", "excerpt": "Example line",
+              "page_width": 612, "page_height": 792}],
         )
         self.assertEqual([item["section"] for item in result["sections"]], [
-            "Fonts", "Margins", "Indentation", "Spacing", "Alignment",
+            "Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination",
         ])
         fonts = next(item for item in result["sections"] if item["section"] == "Fonts")
         self.assertEqual(fonts["formatting_score"], 0)
         self.assertEqual(result["overall_score"], fonts["formatting_score"])
+
+    def test_sample_guide_fills_every_mechanics_field(self):
+        from app.documents import build_sample_mechanics_docx, normalize_mechanics_rules
+
+        text = parse_document(build_sample_mechanics_docx(), "docx")["text"]
+        rules = normalize_mechanics_rules(derive_mechanics_rules(text))
+        self.assertEqual(rules["pagination"], {
+            "position": "Top right",
+            "first_page_of_chapter": "Same position as other pages",
+            "title_page": "Number shown",
+            "body_numbering": "Arabic, continuous",
+            "chapter_markers": ["chapter_roman", "chapter_arabic"],
+        })
+        self.assertEqual(rules["font"]["heading_styles"]["heading1"], {"bold": True, "case": "title", "alignment": "center"})
+        self.assertEqual(rules["word_spacing"], "One space between words and after periods")
+        self.assertEqual(rules["paper"]["landscape_pages"], "Allowed for tables and figures")
 
     def test_overall_score_averages_checked_breakdown_metrics(self):
         parsed = {
@@ -243,6 +362,150 @@ class MechanicsExtractionTests(unittest.TestCase):
         size_issues = [issue for issue in result["issues"] if issue["issue_type"] == "font_size"]
         self.assertTrue(size_issues)
         self.assertEqual(size_issues[0]["locations"][0]["line"], 2)
+
+    def test_guide_heading_levels_follow_the_guide(self):
+        rules = derive_mechanics_rules(
+            "Font\nHeading 1 size: 16 pt\nHeading 2 size: 14 pt\nHeading 4 size: 11 pt\n"
+            "Body text size: 12 pt\nHeading 4 style: Bold italic, Title Case, flush left\n"
+        )
+        font = rules["font"]
+        self.assertEqual(font["heading_levels"], 4)
+        self.assertEqual(
+            (font["heading1_size"], font["heading2_size"], font["heading4_size"], font["body_size"]),
+            (16.0, 14.0, 11.0, 12.0),
+        )
+        self.assertNotIn("heading3_size", font)
+        self.assertEqual(font["heading_styles"]["heading4"], {"bold": True, "italic": True, "case": "title", "alignment": "left"})
+
+        only_one = derive_mechanics_rules("Font\nHeading 1 size: 14 pt\nFont type: Arial\n")["font"]
+        self.assertEqual(only_one["heading_levels"], 1)
+        self.assertNotIn("heading_levels", derive_mechanics_rules("Font\nFont type: Arial\n").get("font", {}))
+
+    def test_combined_heading3_and_content_size_sets_both(self):
+        font = derive_mechanics_rules("Font\nHeading 1 size: 16 pt\nHeading 3 and content size: 12 pt\n")["font"]
+        self.assertEqual((font["heading3_size"], font["body_size"]), (12.0, 12.0))
+        self.assertEqual(font["heading_levels"], 3)
+
+    def test_saved_rules_keep_every_heading_level(self):
+        rules = normalize_mechanics_rules(
+            {"font": {"heading5_size": 10, "body_size": 12, "heading_levels": 5,
+                      "heading_styles": {"heading5": {"bold": "yes"}}}}
+        )
+        font = rules["font"]
+        self.assertEqual((font["heading5_size"], font["body_size"], font["heading_levels"]), (10.0, 12.0, 5))
+        self.assertEqual(font["heading3_content_size"], 12.0)
+        self.assertEqual(font["heading_styles"], {"heading5": {"bold": True}})
+
+    def test_heading_four_is_checked_against_its_own_rules(self):
+        text = "Methods Overview"
+        body = "This body paragraph is long enough to be ordinary text in the manuscript."
+        parsed = {
+            "text": f"{text}\n{body}",
+            "metadata": {"format": "docx"},
+            "paragraphs": [
+                {
+                    "paragraph_index": index,
+                    "source": "body",
+                    "style": style,
+                    "text": value,
+                    "lines": [{"line_index": 0, "text": value}],
+                    "runs": [{"text": value, "font": "Times New Roman", "size": size, "bold": False}],
+                    "formatting": {"line_spacing": 2.0, "alignment": "left"},
+                }
+                for index, (style, value, size) in enumerate((("Heading 4", text, 11), ("Normal", body, 12)))
+            ],
+            "sections": [{
+                "section_index": 0,
+                "page_width_inches": 8.5,
+                "page_height_inches": 11.0,
+                "top_margin_inches": 1.0,
+                "bottom_margin_inches": 1.0,
+                "left_margin_inches": 1.0,
+                "right_margin_inches": 1.0,
+            }],
+        }
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading4_size": 12,
+                "body_size": 12,
+                "heading_levels": 4,
+                "heading_styles": {"heading4": {"bold": True}},
+            }
+        })
+        issues = run_compliance_scan(parsed, rules, "free")["issues"]
+        titles = {issue["title"] for issue in issues}
+        self.assertIn("Heading 4 font size differs", titles)
+        self.assertIn("Heading 4 style differs", titles)
+        self.assertNotIn("body text font size differs", titles)
+
+    def _heading_doc(self, heading, *, style="Normal", size=12, bold=True, body=None):
+        body = body or "This body paragraph is long enough to be ordinary text in the manuscript."
+        return {
+            "text": f"{heading}\n{body}",
+            "metadata": {"format": "docx"},
+            "paragraphs": [
+                {
+                    "paragraph_index": index,
+                    "source": "body",
+                    "style": para_style,
+                    "text": value,
+                    "lines": [{"line_index": 0, "text": value}],
+                    "runs": [{"text": value, "font": "Times New Roman", "size": para_size, "bold": para_bold}],
+                    "formatting": {"line_spacing": 2.0, "alignment": "left"},
+                }
+                for index, (para_style, value, para_size, para_bold) in enumerate(
+                    ((style, heading, size, bold), ("Normal", body, 12, False))
+                )
+            ],
+            "sections": [{
+                "section_index": 0,
+                "page_width_inches": 8.5,
+                "page_height_inches": 11.0,
+                "top_margin_inches": 1.0,
+                "bottom_margin_inches": 1.0,
+                "left_margin_inches": 1.0,
+                "right_margin_inches": 1.0,
+            }],
+        }
+
+    def test_heading_one_only_does_not_invent_heading_two(self):
+        parsed = self._heading_doc("Related Work", bold=True)
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading1_size": 12,
+                "body_size": 12,
+                "heading_levels": 1,
+                "heading_styles": {"heading1": {"bold": True, "case": "upper"}},
+            }
+        })
+        types = {issue["issue_type"] for issue in run_compliance_scan(parsed, rules, "free")["issues"]}
+        self.assertIn("heading1_style", types)
+        self.assertNotIn("heading2_style", types)
+
+    def test_no_heading_rules_do_not_flag_heading_issues(self):
+        parsed = self._heading_doc("Related Work", style="Heading 2", bold=True)
+        rules = normalize_mechanics_rules({"font": {"families": ["Times New Roman"], "body_size": 12}})
+        issues = run_compliance_scan(parsed, rules, "free")["issues"]
+        types = {issue["issue_type"] for issue in issues}
+        titles = {issue["title"] for issue in issues}
+        self.assertFalse(any(item.endswith("_style") and item.startswith("heading") for item in types))
+        self.assertFalse(any("Heading" in title and "font size" in title for title in titles))
+
+    def test_word_heading_outside_the_format_is_not_that_level(self):
+        parsed = self._heading_doc("Methods Overview", style="Heading 5", size=10, bold=True)
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading1_size": 14,
+                "heading2_size": 12,
+                "body_size": 12,
+                "heading_levels": 2,
+            }
+        })
+        titles = {issue["title"] for issue in run_compliance_scan(parsed, rules, "free")["issues"]}
+        self.assertNotIn("Heading 5 font size differs", titles)
 
     def test_segoe_ui_emoji_does_not_override_times_new_roman(self):
         parsed = {
@@ -466,7 +729,7 @@ class MechanicsExtractionTests(unittest.TestCase):
                 "page_height_inches": 11.0,
                 "top_margin_inches": 1.0,
                 "bottom_margin_inches": 1.0,
-                "left_margin_inches": 1.5,
+                "left_margin_inches": 0.5,
                 "right_margin_inches": 1.0,
             }],
         }
@@ -480,7 +743,7 @@ class MechanicsExtractionTests(unittest.TestCase):
         left = [i for i in result["issues"] if i["issue_type"] == "left_margin"]
         self.assertEqual(len(left), 1)
         self.assertEqual(left[0]["severity"], "moderate")
-        self.assertIn("1.5", left[0]["explanation"])
+        self.assertIn("0.5", left[0]["explanation"])
 
     def test_paper_size_mismatch_does_not_zero_correct_margins(self):
         parsed = {
@@ -736,6 +999,100 @@ class PersistenceTests(FirebaseTestCase):
         self.assertTrue(profiles.username_taken("pilot.user"))
         self.assertFalse(profiles.reserve_username("PILOT.USER", "two"))
 
+    def _activate(self, cs="cs_1", pay="pay_1"):
+        return compliance_db.activate_premium_from_payment(
+            "owner", billing_period="monthly", payment_method="card", amount_pesos=949,
+            checkout_session_id=cs, payment_id=pay,
+        )
+
+    def test_payment_is_applied_once(self):
+        first = self._activate()
+        renews = first["renews_at"]
+        self.assertEqual(first["tier"], "premium")
+        again = self._activate()
+        self.assertEqual(again["renews_at"], renews)
+        subscribed = [h for h in again["history"] if h.get("action") == "subscribed"]
+        self.assertEqual(len(subscribed), 1)
+
+    def test_concurrent_activation_claim_blocks_second_caller(self):
+        self.assertIsNotNone(compliance_db._claim_payment_activation("cs_2", "pay_2"))
+        self.assertEqual(self._activate("cs_2", "pay_2")["tier"], "free")
+
+    def test_cancel_on_free_keeps_used_scans(self):
+        compliance_db.subscription_snapshot("owner")
+        compliance_db._reference("/paperpilot/subscriptions/owner").update({"scans_used": 3})
+        self.assertEqual(compliance_db.cancel_user_subscription("owner")["used"], 3)
+
+    def test_free_overshoot_does_not_refill_allowance(self):
+        compliance_db.subscription_snapshot("owner")
+        compliance_db._reference("/paperpilot/subscriptions/owner").update({"scans_used": 5})
+        snap = compliance_db.subscription_snapshot("owner")
+        self.assertEqual(snap["tier"], "free")
+        self.assertEqual(snap["remaining"], 0)
+
+    def test_running_scans_count_toward_limit(self):
+        mechanics = self.mechanics()
+        version, _ = compliance_db.create_version(
+            "owner", "Paper", mechanics["id"], "paper.docx", "docx", "text", self.parsed(), None,
+        )
+        compliance_db.subscription_snapshot("owner")
+        compliance_db._reference("/paperpilot/subscriptions/owner").update({"scans_used": 2})
+        compliance_db._reference("/paperpilot/compliance_scans/owner/s1").set(
+            {"id": "s1", "status": "running", "created_at": compliance_db._iso(compliance_db._now())}
+        )
+        with self.assertRaises(compliance_db.UpgradeRequired):
+            compliance_db.check_scan_eligibility("owner", version["manuscript_id"], version["id"])
+
+    def _version_with_scan(self, mechanics, filename):
+        version, _ = compliance_db.create_version(
+            "owner", "Thesis", mechanics["id"], filename, "docx", "text", self.parsed(), None,
+        )
+        scan = compliance_db.persist_scan(
+            "owner", version["manuscript_id"], version["id"], mechanics["id"], 90.0, [],
+            [{"section": "General", "formatting_score": 90.0, "issue_count": 0, "issues": []}],
+        )
+        return version, scan
+
+    def test_deleting_a_version_keeps_numbers_and_records_its_scans(self):
+        self._activate()
+        mechanics = self.mechanics()
+        v1, s1 = self._version_with_scan(mechanics, "a.docx")
+        v2, s2 = self._version_with_scan(mechanics, "b.docx")
+        v3, s3 = self._version_with_scan(mechanics, "c.docx")
+        mid = v1["manuscript_id"]
+
+        self.assertTrue(compliance_db.delete_version("owner", mid, v2["id"]))
+        self.assertIsNone(compliance_db.get_scan("owner", s2["id"]))
+        self.assertEqual(compliance_db.deleted_scan_ids("owner"), [s2["id"]])
+        summaries = compliance_db.list_scan_summaries("owner")
+        self.assertEqual([s["version_number"] for s in summaries], [1, 3])
+        self.assertTrue(compliance_db.is_current_version("owner", mid, v3["id"]))
+
+        v4, _ = self._version_with_scan(mechanics, "d.docx")
+        self.assertEqual(v4["version_number"], 4)
+
+        self.assertTrue(compliance_db.delete_version("owner", "other-manuscript", v4["id"]))
+        self.assertTrue(compliance_db.is_current_version("owner", mid, v3["id"]))
+        self.assertFalse(compliance_db.delete_version("owner", mid, v4["id"]))
+
+    def test_deleting_the_last_version_removes_the_manuscript(self):
+        mechanics = self.mechanics()
+        v1, s1 = self._version_with_scan(mechanics, "a.docx")
+        self.assertTrue(compliance_db.delete_version("owner", v1["manuscript_id"], v1["id"]))
+        self.assertEqual(compliance_db.list_manuscripts("owner"), [])
+        self.assertEqual(compliance_db.deleted_scan_ids("owner"), [s1["id"]])
+
+    def test_version_with_running_scan_cannot_be_deleted(self):
+        mechanics = self.mechanics()
+        version, _ = compliance_db.create_version(
+            "owner", "Paper", mechanics["id"], "paper.docx", "docx", "text", self.parsed(), None,
+        )
+        compliance_db._reference("/paperpilot/compliance_scans/owner/s9").set(
+            {"id": "s9", "status": "running", "manuscript_version_id": version["id"]}
+        )
+        with self.assertRaises(compliance_db.VersionScanRunning):
+            compliance_db.delete_version("owner", version["manuscript_id"], version["id"])
+
 
 class OtpTests(FirebaseTestCase):
     def test_new_code_invalidates_old_and_challenge_is_single_use(self):
@@ -747,7 +1104,7 @@ class OtpTests(FirebaseTestCase):
                 otp.verify_otp("user@example.com", "verify_email", "111111")
             token = otp.verify_otp("user@example.com", "verify_email", "222222")
             otp.consume_challenge(token, "USER@example.com", "verify_email")
-            with self.assertRaisesRegex(ValueError, "Verification expired"):
+            with self.assertRaisesRegex(ValueError, "expired or was already used"):
                 otp.consume_challenge(token, "user@example.com", "verify_email")
 
     def test_attempt_limit_removes_challenge(self):
@@ -760,6 +1117,50 @@ class OtpTests(FirebaseTestCase):
                 otp.verify_otp("user@example.com", "reset_password", "000000")
             with self.assertRaisesRegex(ValueError, "No active code"):
                 otp.verify_otp("user@example.com", "reset_password", "123456")
+
+    def test_simultaneous_requests_keep_codes_isolated_per_email(self):
+        with patch.object(otp.time, "time", return_value=3000):
+            otp.store_otp("vince@example.com", "reset_password", "111111")
+            otp.store_otp("jemusu@example.com", "reset_password", "222222")
+            with self.assertRaisesRegex(ValueError, "Incorrect code"):
+                otp.verify_otp("vince@example.com", "reset_password", "222222")
+            with self.assertRaisesRegex(ValueError, "Incorrect code"):
+                otp.verify_otp("jemusu@example.com", "reset_password", "111111")
+            vince_token = otp.verify_otp("vince@example.com", "reset_password", "111111")
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                otp.consume_challenge(vince_token, "jemusu@example.com", "reset_password")
+            jemusu_token = otp.verify_otp("jemusu@example.com", "reset_password", "222222")
+            otp.consume_challenge(jemusu_token, "jemusu@example.com", "reset_password")
+
+
+class OtpEmailTests(unittest.TestCase):
+    def test_each_code_is_delivered_only_to_its_requester(self):
+        sent = []
+
+        def resend(to_email, subject, text, html):
+            if to_email != "owner@example.com":
+                raise RuntimeError("You can only send testing emails to your own email address")
+            sent.append(("resend", to_email, subject))
+
+        def smtp(to_email, subject, text, html):
+            sent.append(("smtp", to_email, subject))
+
+        with (
+            patch.object(emailer.settings, "resend_api_key", "re_test"),
+            patch.object(emailer.settings, "smtp_host", "smtp.example.com"),
+            patch.object(emailer, "_send_via_resend", side_effect=resend),
+            patch.object(emailer, "_send_via_smtp", side_effect=smtp),
+        ):
+            emailer.send_otp_email("owner@example.com", "111111", "reset_password")
+            emailer.send_otp_email("jemusu@example.com", "222222", "reset_password")
+
+        self.assertEqual(
+            sent,
+            [
+                ("resend", "owner@example.com", "111111 is your PaperPilot password reset code"),
+                ("smtp", "jemusu@example.com", "222222 is your PaperPilot password reset code"),
+            ],
+        )
 
 
 if __name__ == "__main__":

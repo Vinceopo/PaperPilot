@@ -1,8 +1,8 @@
 import {
-  browserLocalPersistence,
   browserSessionPersistence,
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
+  indexedDBLocalPersistence,
   setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -65,8 +65,10 @@ export async function signOutEverywhere(authInstance) {
   }
 }
 
+// "Remember me" uses IndexedDB, the same storage getAuth starts with, so a new tab
+// never has to move the saved session (other open tabs would see that as a sign-out).
 export async function signInWithEmail(auth, email, password, remember) {
-  await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+  await setPersistence(auth, remember ? indexedDBLocalPersistence : browserSessionPersistence);
   return signInWithEmailAndPassword(auth, email, password);
 }
 
@@ -83,7 +85,7 @@ export async function registerWithEmail(auth, email, password, displayName) {
 }
 
 export async function signInWithGoogle(auth, remember) {
-  await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+  await setPersistence(auth, remember ? indexedDBLocalPersistence : browserSessionPersistence);
   return signInWithPopup(auth, new GoogleAuthProvider());
 }
 

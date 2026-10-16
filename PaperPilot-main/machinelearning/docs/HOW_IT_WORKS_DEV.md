@@ -59,6 +59,24 @@ sequenceDiagram
 | Citation “predicted style” mismatch | **Optional** small classifier from `paperpilot-ml` |
 | Wording / severity tweak on already-detected issues | **Optional** Gemini enrichment |
 
+### Mechanics rule fields
+
+Dropdown labels live in [`app/mechanics_options.py`](../app/mechanics_options.py) (identical copy in `api/app/`, mirrored by `web/src/lib/mechanicsOptions.js` and `mobile/src/lib/mechanicsOptions.js`). Rules store the label text; the checker parses it leniently, so older free-text values keep working.
+
+| Rule | Checked as | Category |
+|------|-----------|----------|
+| `pagination.position` | One of 6 positions (Top/Bottom × left/center/right) on normal pages | Pagination |
+| `pagination.title_page` | Document page 1: hidden but counted, hidden and not counted, or number shown | Pagination |
+| `pagination.first_page_of_chapter` | Chapter start pages: no number, same position, or bottom center | Pagination |
+| `pagination.preliminary_style` / `body_numbering` | Roman or Arabic before Chapter 1; Arabic restarting at 1 or continuous after | Pagination |
+| `pagination.chapter_markers` | Which headings start a chapter page (`chapter_roman`, `chapter_arabic`, `back_matter`, `preliminary`); empty means the two chapter styles | Pagination |
+| (always, when pagination rules exist) | Skipped, repeated, or restarted page numbers | Pagination |
+| `font.heading_styles.heading1..3` | `bold`, `italic`, `case` (`upper`/`title`), `alignment` (`center`/`left`) | Fonts |
+| `word_spacing` | Double spaces between words; one vs two spaces after periods | Spacing |
+| `paper.landscape_pages` | Landscape pages in a portrait paper: not allowed, tables/figures only, or any page | Margins |
+
+DOCX page numbers come from each section's header/footer PAGE field, `w:titlePg`, and `w:pgNumType` (format and restart). PDF page numbers are read from text in the top or bottom 15% of each page, so PDF results are best-effort.
+
 ## Unit scoring formulas
 
 The product-facing **right/wrong** model (see plan) is defined over **check units** (lines/regions evaluated), not over the legacy `overall_score` alone. The gateway/ML service should expose both during migration if needed.

@@ -67,7 +67,7 @@ function Root() {
   if (!signedIn) {
     return (
       <>
-        <StatusBar style="dark" />
+        <StatusBar style="light" />
         <AuthScreen onRegistered={onRegistered} />
       </>
     );

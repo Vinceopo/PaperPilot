@@ -8,13 +8,20 @@ import AppShell from "../components/shell/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { ChevronLeftIcon } from "../components/shell/icons";
 import { APP_TIME_ZONE } from "../lib/timeZone";
+import {
+  ANNUAL_SAVINGS_LABEL,
+  FREE_FEATURES,
+  PREMIUM_FEATURES,
+  PRO_FEATURES,
+  isPaidTier,
+  normalizeTier,
+  planLimit,
+  planName,
+  planPrice,
+  resetWindow,
+} from "../lib/plans";
 
-const PREMIUM_MONTHLY = 949;
-const PREMIUM_ANNUAL = 9490;
 const PAYMONGO_LOGO = require("../../assets/paymongo-logo.png");
-
-const FREE_FEATURES = ["3 scans / month", "View current version only", "APA style only"];
-const PREMIUM_FEATURES = ["Up to 50 scans / month", "Unlimited version history", "APA, MLA, & IEEE styles"];
 
 function peso(amount) {
   return `₱${Number(amount).toLocaleString("en-PH", { minimumFractionDigits: 0 })}`;
@@ -36,17 +43,18 @@ function statusLabel(subscription) {
   const tier = String(subscription?.tier || "free").toLowerCase();
   const status = String(subscription?.status || "").toLowerCase();
   if (status === "canceled" || status === "cancelled") return "Free";
-  if (tier === "premium") return "Active";
+  if (isPaidTier(tier)) return "Active";
   if (status === "expired") return "Expired";
   return "Free";
 }
 
 function historyLabel(entry) {
   const action = entry?.action || "";
-  if (action === "subscribed") return "Subscribed to Premium";
-  if (action === "changed") return "Changed Premium plan";
-  if (action === "canceled") return "Canceled Premium";
-  if (action === "renewed") return "Renewed Premium";
+  const name = planName(isPaidTier(entry?.tier) ? entry.tier : "premium");
+  if (action === "subscribed") return `Subscribed to ${name}`;
+  if (action === "changed") return `Changed ${name} plan`;
+  if (action === "canceled") return `Canceled ${name}`;
+  if (action === "renewed") return `Renewed ${name}`;
   return action || "Update";
 }
 
@@ -82,16 +90,48 @@ function PlanCard({ selected, onPress, title, children }) {
   );
 }
 
+function PaidPlanCard({ plan, selected, billingPeriod, features, badge, onPress }) {
+  const annual = billingPeriod === "annual";
+  return (
+    <PlanCard selected={selected} onPress={onPress} title={`${planName(plan)} Plan`}>
+      <Text style={styles.planPrice}>
+        {peso(planPrice(plan, billingPeriod))}
+        <Text style={styles.planPer}> / {annual ? "year" : "month"}</Text>
+      </Text>
+      <View style={styles.billedRow}>
+        <Text style={styles.billedNote}>{annual ? "Billed annually" : "Billed monthly"}</Text>
+        {annual ? (
+          <View style={styles.saveBadge}>
+            <Text style={styles.saveBadgeText}>{ANNUAL_SAVINGS_LABEL}</Text>
+          </View>
+        ) : null}
+      </View>
+      <View style={styles.featureList}>
+        {features.map((f) => (
+          <Text key={f} style={styles.feature}>
+            • {f}
+          </Text>
+        ))}
+      </View>
+      <View style={styles.bestFor}>
+        <Text style={styles.bestForText}>{badge}</Text>
+      </View>
+    </PlanCard>
+  );
+}
+
 /** Subscription management — plans, PayMongo checkout, cancel, history (mirrors the web page). */
 export default function SubscriptionScreen({ navigation }) {
   const { subscription, applySubscription, refreshSubscription, handleBackToDashboard } = useAppData();
-  const tier = String(subscription?.tier || "free").toLowerCase();
-  const isPremium = tier === "premium";
+  const tier = normalizeTier(subscription?.tier);
+  // Any paid plan (Premium or Pro).
+  const isPremium = isPaidTier(tier);
+  const currentPlanName = planName(tier);
 
   const [billingPeriod, setBillingPeriod] = useState(
     subscription?.billing_period === "annual" ? "annual" : "monthly"
   );
-  const [selectedPlan, setSelectedPlan] = useState("premium");
+  const [selectedPlan, setSelectedPlan] = useState(isPremium ? tier : "premium");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -111,14 +151,15 @@ export default function SubscriptionScreen({ navigation }) {
     }
   }, [subscription?.billing_period]);
 
-  const price = billingPeriod === "annual" ? PREMIUM_ANNUAL : PREMIUM_MONTHLY;
-  const subscribeCta = isPremium
-    ? billingPeriod === "annual"
-      ? `Renew with PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
-      : `Renew with PayMongo — ${peso(PREMIUM_MONTHLY)}/month`
-    : billingPeriod === "annual"
-      ? `Pay with PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
-      : `Pay with PayMongo — ${peso(PREMIUM_MONTHLY)}/month`;
+  const price = planPrice(selectedPlan, billingPeriod);
+  const perPeriod = billingPeriod === "annual" ? "year" : "month";
+  const switchingPlan = isPremium && isPaidTier(selectedPlan) && selectedPlan !== tier;
+  const subscribeCta =
+    isPremium && selectedPlan === tier
+      ? `Renew with PayMongo — ${peso(price)}/${perPeriod}`
+      : switchingPlan
+        ? `Switch to ${planName(selectedPlan)} with PayMongo — ${peso(price)}/${perPeriod}`
+        : `Pay with PayMongo — ${peso(price)}/${perPeriod}`;
 
   const history = useMemo(
     () => (Array.isArray(subscription?.history) ? subscription.history : []),
@@ -141,27 +182,61 @@ export default function SubscriptionScreen({ navigation }) {
     }
 
     setBusy(true);
+    const plan = selectedPlan;
     try {
-      const result = await subscribeToPlan({ plan: "premium", billingPeriod });
+      const result = await subscribeToPlan({ plan, billingPeriod });
       const url = result?.checkout_url;
-      if (!url) throw new Error("PayMongo checkout URL was not returned.");
-      await WebBrowser.openBrowserAsync(url);
-      // Webhooks cannot reach a local API, so verify the session once the browser closes.
-      const confirmed = await confirmCheckoutPayment({
-        checkoutSessionId: result?.checkout_session_id,
-      }).catch(() => null);
-      if (String(confirmed?.tier || "").toLowerCase() === "premium") {
+      if (!url) {
+        throw new Error(
+          "The PayMongo payment page could not be opened. You were not charged. Try again in a minute."
+        );
+      }
+      const session = await WebBrowser.openAuthSessionAsync(url, "paperpilot://billing");
+      const returnedUrl = session?.type === "success" ? String(session.url || "") : "";
+      if (returnedUrl.includes("status=canceled")) {
+        setPaymentCanceled(true);
+        setSelectedPlan(plan);
+        setSuccess("Payment canceled. No charges were made.");
+        return;
+      }
+      const paidReturn = returnedUrl.includes("status=success");
+      // PayMongo can take a few seconds to mark a session paid, so retry briefly.
+      const attempts = paidReturn ? 6 : 2;
+      // A renewal keeps the same tier while pending, so require a non-pending confirmation.
+      const isActivated = (next) => Boolean(next) && !next.pending && normalizeTier(next.tier) === plan;
+      let confirmed = null;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        confirmed = await confirmCheckoutPayment({
+          checkoutSessionId: result?.checkout_session_id,
+        }).catch(() => null);
+        if (isActivated(confirmed)) break;
+        if (attempt < attempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+      }
+      if (isActivated(confirmed)) {
         applySubscription(confirmed);
         setCheckoutOpen(false);
-        setSuccess("Welcome to Premium! Your PayMongo payment was confirmed.");
+        setSuccess(`Welcome to ${planName(plan)}! Your PayMongo payment was confirmed.`);
+      } else if (paidReturn) {
+        await refreshSubscription?.();
+        setCheckoutOpen(false);
+        setSuccess(
+          "Payment received. PayMongo is still confirming it — your plan will activate within a minute. Pull to refresh or reopen this page."
+        );
       } else {
         await refreshSubscription?.();
         setPaymentCanceled(true);
-        setSelectedPlan("premium");
-        setSuccess("Payment canceled. No charges were made.");
+        setSelectedPlan(plan);
+        setSuccess(
+          "Payment not completed. No charges were made. If you did pay, your plan will activate within a minute — pull to refresh or reopen this page."
+        );
       }
     } catch (err) {
-      setError(err?.message || "Could not start PayMongo checkout.");
+      setError(
+        err?.message ||
+          "The PayMongo payment page could not be opened. You were not charged. Try again in a minute."
+      );
     } finally {
       setBusy(false);
     }
@@ -178,7 +253,7 @@ export default function SubscriptionScreen({ navigation }) {
       setSuccess("Switched to Free plan.");
       setConfirmFreeOpen(false);
     } catch (err) {
-      setError(err?.message || "Could not switch plans.");
+      setError(err?.message || "Your plan could not be changed. Check your connection, then try again.");
     } finally {
       setBusy(false);
     }
@@ -196,20 +271,22 @@ export default function SubscriptionScreen({ navigation }) {
       setSuccess("Subscription canceled. You are on the Free plan — 3 scans this month.");
       setConfirmCancelOpen(false);
     } catch (err) {
-      setError(err?.message || "Could not cancel subscription.");
+      setError(
+        err?.message || "Your subscription could not be canceled. Check your connection, then try again."
+      );
     } finally {
       setBusy(false);
     }
   }
 
-  const planScanLimit = isPremium ? 50 : 3;
+  const planScanLimit = Number(subscription?.limit) || planLimit(tier);
   const scansRemaining = Math.max(planScanLimit - Number(subscription?.used || 0), 0);
 
   return (
     <AppShell
       active="account"
       breadcrumb="Settings / Subscription"
-      title={showManage ? "Manage Subscription" : "Upgrade to Premium"}
+      title={showManage ? "Manage Subscription" : "Upgrade your plan"}
       onBack={() => navigation.goBack()}
       backLabel="Back"
     >
@@ -234,17 +311,22 @@ export default function SubscriptionScreen({ navigation }) {
           ) : null}
         </View>
 
-        {error ? (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
+        <ConfirmDialog
+          open={Boolean(error)}
+          title="Something went wrong"
+          message={error}
+          confirmLabel="OK"
+          cancelLabel={null}
+          tone="danger"
+          onConfirm={() => setError("")}
+          onCancel={() => setError("")}
+        />
         {subscription?.payment_issue ? (
           <View style={styles.warnBox}>
             <Text style={styles.warnText}>
               Payment issue detected
-              {subscription.payment_issue_reason ? ` (${subscription.payment_issue_reason})` : ""}. Your Premium
-              access stays active during the grace period — update billing via PayMongo or contact support if this
+              {subscription.payment_issue_reason ? ` (${subscription.payment_issue_reason})` : ""}. Your{" "}
+              {currentPlanName} access stays active during the grace period — update billing via PayMongo or contact support if this
               persists.
             </Text>
           </View>
@@ -257,12 +339,14 @@ export default function SubscriptionScreen({ navigation }) {
                 onPress={() => {
                   setSuccess("");
                   setPaymentCanceled(false);
-                  setSelectedPlan("premium");
+                  setSelectedPlan(isPaidTier(selectedPlan) ? selectedPlan : "premium");
                   setCheckoutOpen(true);
                 }}
                 style={({ pressed }) => [styles.payAgainBtn, pressed && styles.accentPressed]}
               >
-                <Text style={styles.payAgainText}>Pay for Premium again</Text>
+                <Text style={styles.payAgainText}>
+                  Pay for {planName(isPaidTier(selectedPlan) ? selectedPlan : "premium")} again
+                </Text>
               </Pressable>
             ) : null}
             {paymentCanceled ? (
@@ -284,22 +368,30 @@ export default function SubscriptionScreen({ navigation }) {
           <>
             <View style={styles.card}>
               <Text style={styles.cardKicker}>Current plan</Text>
-              <Text style={styles.currentPlan}>Premium</Text>
+              <Text style={styles.currentPlan}>{currentPlanName}</Text>
               <View style={styles.details}>
                 <DetailRow label="Status" value={statusLabel(subscription)} />
                 <DetailRow label="Billing period" value={subscription?.billing_period || "monthly"} capitalize />
                 <DetailRow label="Payment method" value={subscription?.payment_method || "PayMongo"} uppercase />
+                <DetailRow
+                  label="Current billing period"
+                  value={`${formatDate(subscription?.billing_period_start)} – ${formatDate(
+                    subscription?.billing_period_end || subscription?.renews_at
+                  )}`}
+                />
                 <DetailRow label="Renewal date" value={formatDate(subscription?.renews_at)} />
                 <DetailRow
                   label="Scan allowance"
-                  value={`${scansRemaining} of ${planScanLimit} remaining`}
+                  value={`${scansRemaining} of ${planScanLimit} remaining this ${resetWindow(tier)}${
+                    subscription?.reset_at ? `\nResets ${formatDate(subscription.reset_at)}` : ""
+                  }`}
                   last
                 />
               </View>
               <View style={styles.manageActions}>
                 <Pressable
                   onPress={() => {
-                    setSelectedPlan("premium");
+                    setSelectedPlan(tier);
                     setCheckoutOpen(true);
                   }}
                   style={({ pressed }) => [styles.changePlanBtn, pressed && styles.accentPressed]}
@@ -375,6 +467,7 @@ export default function SubscriptionScreen({ navigation }) {
                 >
                   <Text style={[styles.periodText, billingPeriod === opt.id && styles.periodTextActive]}>
                     {opt.label}
+                    {opt.id === "annual" ? ` · ${ANNUAL_SAVINGS_LABEL}` : ""}
                   </Text>
                 </Pressable>
               ))}
@@ -391,27 +484,28 @@ export default function SubscriptionScreen({ navigation }) {
               </View>
             </PlanCard>
 
-            <PlanCard
+            <PaidPlanCard
+              plan="premium"
               selected={selectedPlan === "premium"}
+              billingPeriod={billingPeriod}
+              features={PREMIUM_FEATURES}
+              badge="Best for thesis writers"
               onPress={() => setSelectedPlan("premium")}
-              title="Premium Plan"
-            >
-              <Text style={styles.planPrice}>
-                {peso(price)}
-                <Text style={styles.planPer}> / {billingPeriod === "annual" ? "year" : "month"}</Text>
+            />
+            <PaidPlanCard
+              plan="pro"
+              selected={selectedPlan === "pro"}
+              billingPeriod={billingPeriod}
+              features={PRO_FEATURES}
+              badge="Best for heavy revision cycles"
+              onPress={() => setSelectedPlan("pro")}
+            />
+            {switchingPlan ? (
+              <Text style={styles.switchNote}>
+                Switching to {planName(selectedPlan)} starts a new billing period today, and your scan allowance
+                changes to {planLimit(selectedPlan)} scans per {resetWindow(selectedPlan)}.
               </Text>
-              <Text style={styles.billedNote}>{billingPeriod === "annual" ? "Billed annually" : "Billed monthly"}</Text>
-              <View style={styles.featureList}>
-                {PREMIUM_FEATURES.map((f) => (
-                  <Text key={f} style={styles.feature}>
-                    • {f}
-                  </Text>
-                ))}
-              </View>
-              <View style={styles.bestFor}>
-                <Text style={styles.bestForText}>Best for thesis writers</Text>
-              </View>
-            </PlanCard>
+            ) : null}
 
             <View style={[styles.card, styles.cardSpacing]}>
               <Text style={styles.checkoutTitle}>Secure checkout</Text>
@@ -421,23 +515,28 @@ export default function SubscriptionScreen({ navigation }) {
               <View style={styles.checkoutList}>
                 <Text style={styles.checkoutItem}>• Card · GCash · Maya · GrabPay · QR Ph</Text>
                 <Text style={styles.checkoutItem}>• Receipt emailed by PayMongo after payment</Text>
-                <Text style={styles.checkoutItem}>• Premium unlocks when the webhook confirms payment</Text>
+                <Text style={styles.checkoutItem}>• Your plan unlocks as soon as PayMongo confirms payment</Text>
               </View>
 
               <View style={styles.summary}>
                 <Text style={styles.cardKicker}>Payment summary</Text>
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>
-                    {selectedPlan === "premium"
-                      ? `Premium (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
+                    {isPaidTier(selectedPlan)
+                      ? `${planName(selectedPlan)} (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
                       : "Free Plan"}
                   </Text>
-                  <Text style={styles.summaryValue}>{selectedPlan === "premium" ? peso(price) : "₱0"}</Text>
+                  <Text style={styles.summaryValue}>{isPaidTier(selectedPlan) ? peso(price) : "₱0"}</Text>
                 </View>
+                {isPaidTier(selectedPlan) && billingPeriod === "annual" ? (
+                  <Text style={styles.savingsLine}>
+                    {ANNUAL_SAVINGS_LABEL} — {peso(planPrice(selectedPlan, "monthly"))} off 12 monthly payments
+                  </Text>
+                ) : null}
                 <View style={styles.totalRow}>
                   <Text style={styles.totalLabel}>Total due today</Text>
                   <Text style={styles.totalValue}>
-                    {selectedPlan === "premium" ? `${peso(price)}.00` : "₱0.00"}
+                    {isPaidTier(selectedPlan) ? `${peso(price)}.00` : "₱0.00"}
                   </Text>
                 </View>
               </View>
@@ -474,8 +573,8 @@ export default function SubscriptionScreen({ navigation }) {
 
       <ConfirmDialog
         open={confirmCancelOpen}
-        title="Cancel Premium subscription?"
-        message="You will return to the Free plan immediately, with 3 scans this month. You can subscribe to Premium again whenever you want."
+        title={`Cancel ${currentPlanName} subscription?`}
+        message={`You will return to the Free plan immediately, with 3 scans this month. You can subscribe to ${currentPlanName} again whenever you want.`}
         confirmLabel="Cancel subscription"
         tone="danger"
         busy={busy}
@@ -489,7 +588,7 @@ export default function SubscriptionScreen({ navigation }) {
       <ConfirmDialog
         open={confirmFreeOpen}
         title="Switch to Free plan?"
-        message="Your Premium subscription will end and you will move to the Free plan."
+        message={`Your ${currentPlanName} subscription will end and you will move to the Free plan.`}
         confirmLabel="Switch to Free"
         busy={busy}
         onCancel={() => {
@@ -684,7 +783,12 @@ const styles = StyleSheet.create({
   planTitle: { fontSize: 14, fontWeight: "600", color: "#334155" },
   planPrice: { marginTop: 8, fontSize: 30, fontWeight: "700", color: "#172033" },
   planPer: { fontSize: 14, fontWeight: "500", color: colors.muted },
-  billedNote: { marginTop: 4, fontSize: 11, color: colors.muted },
+  billedNote: { fontSize: 11, color: colors.muted },
+  billedRow: { marginTop: 4, flexDirection: "row", alignItems: "center", gap: 8 },
+  saveBadge: { borderRadius: 999, backgroundColor: "#ecfdf5", paddingHorizontal: 8, paddingVertical: 2 },
+  saveBadgeText: { fontSize: 10, fontWeight: "700", color: "#047857" },
+  switchNote: { marginBottom: 8, fontSize: 12, lineHeight: 17, color: colors.slate },
+  savingsLine: { marginTop: 4, fontSize: 11, fontWeight: "600", color: "#047857" },
   featureList: { marginTop: 16, gap: 8 },
   feature: { fontSize: 12, color: colors.slate },
   bestFor: {

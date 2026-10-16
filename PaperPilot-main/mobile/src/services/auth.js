@@ -42,7 +42,9 @@ export async function enforceAuthSession(authInstance) {
   if (restore && authInstance.currentUser) {
     try {
       await authInstance.currentUser.getIdToken(true);
-    } catch {
+    } catch (err) {
+      // Offline at launch is not a revoked session; keep the user signed in.
+      if (err?.code === "auth/network-request-failed") return authInstance.currentUser;
       await signOut(authInstance);
       await clearRememberMe();
       return null;

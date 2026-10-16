@@ -68,6 +68,32 @@ export async function saveScannedManuscripts(items, uid) {
   }
 }
 
+function versionTime(version) {
+  return String(version?.scannedAt || version?.scanResult?.scannedAt || version?.scannedDate || "");
+}
+
+/** One entry per scan; a full stored result wins over a server summary. */
+function uniqueByScanId(versions) {
+  const byScan = new Map();
+  const out = [];
+  for (const v of versions) {
+    const scanId = versionScanId(v);
+    if (!scanId) {
+      out.push(v);
+      continue;
+    }
+    const prev = byScan.get(scanId);
+    if (!prev) {
+      byScan.set(scanId, v);
+      out.push(v);
+    } else if (prev.trimmed && !v.trimmed) {
+      byScan.set(scanId, v);
+      out[out.indexOf(prev)] = v;
+    }
+  }
+  return out;
+}
+
 export function dedupeManuscriptsByTitle(items) {
   const map = new Map();
   for (const m of items || []) {
@@ -85,18 +111,22 @@ export function dedupeManuscriptsByTitle(items) {
   }
 
   return [...map.values()].map((m) => {
-    const chronological = [...(m.versions || [])].sort((a, b) => {
-      const da = String(a.scannedDate || "");
-      const db = String(b.scannedDate || "");
+    const chronological = uniqueByScanId(m.versions || []).sort((a, b) => {
+      const da = versionTime(a);
+      const db = versionTime(b);
       if (da !== db) return da.localeCompare(db);
       return (Number(a.versionNumber) || 0) - (Number(b.versionNumber) || 0);
     });
+    // Server numbers are kept as-is (gaps after a delete are expected); only
+    // legacy versions without one get the next number in order.
+    let last = 0;
     const versions = chronological
-      .map((v, i) => ({
-        ...v,
-        manuscriptId: m.id,
-        versionNumber: i + 1,
-      }))
+      .map((v) => {
+        const own = Number(v.versionNumber);
+        const versionNumber = own > 0 ? own : last + 1;
+        last = Math.max(last, versionNumber);
+        return { ...v, manuscriptId: m.id, versionNumber };
+      })
       .reverse();
     return { ...m, versions };
   });
@@ -134,16 +164,49 @@ function versionPartsFromResult(scanResult) {
   };
 }
 
-/** Summaries from GET /scans for scans this device has not stored (scanned on another device). */
-export function mergeServerScans(items, summaries, dismissed = new Set()) {
-  const list = (Array.isArray(items) ? items : []).map((m) => ({ ...m, versions: [...(m.versions || [])] }));
+/**
+ * Sync with GET /scans: add scans this device has not stored (scanned on another
+ * device), adopt the server's version numbers, and drop versions deleted elsewhere.
+ */
+export function mergeServerScans(items, summaries, dismissed = new Set(), deleted = []) {
+  const removed = new Set((Array.isArray(deleted) ? deleted : []).map(String));
+  const serverNumbers = new Map();
+  for (const scan of Array.isArray(summaries) ? summaries : []) {
+    const number = Number(scan?.version_number);
+    if (scan?.id && number > 0) serverNumbers.set(String(scan.id), number);
+  }
+  let changed = 0;
+  const list = (Array.isArray(items) ? items : [])
+    .map((m) => {
+      const versions = [];
+      for (const v of m.versions || []) {
+        const scanId = versionScanId(v);
+        if (scanId && removed.has(scanId)) {
+          changed += 1;
+          continue;
+        }
+        const number = serverNumbers.get(scanId);
+        if (number && Number(v.versionNumber) !== number) {
+          changed += 1;
+          versions.push({
+            ...v,
+            versionNumber: number,
+            scanResult: v.scanResult ? { ...v.scanResult, versionNumber: number } : v.scanResult,
+          });
+        } else {
+          versions.push(v);
+        }
+      }
+      return { ...m, versions };
+    })
+    .filter((m) => m.versions.length > 0);
   const known = new Set(list.flatMap((m) => m.versions.map(versionScanId)).filter(Boolean));
   const monthPrefix = new Date().toISOString().slice(0, 7);
   let added = 0;
 
   for (const scan of Array.isArray(summaries) ? summaries : []) {
     const scanId = String(scan?.id || "");
-    if (!scanId || known.has(scanId) || dismissed.has(scanId)) continue;
+    if (!scanId || known.has(scanId) || dismissed.has(scanId) || removed.has(scanId)) continue;
     const manuscriptId = String(scan.manuscript_id || "");
     const title = String(scan.title || "").trim() || "Untitled manuscript";
     const titleKey = normalizeTitle(title);
@@ -172,6 +235,7 @@ export function mergeServerScans(items, summaries, dismissed = new Set()) {
       id: `ver-${scanId}`,
       manuscriptId: list[idx].id,
       versionNumber: Number(scan.version_number) || 0,
+      scannedAt: String(scan.created_at || new Date().toISOString()),
       scannedDate: String(scan.created_at || new Date().toISOString()).slice(0, 10),
       score,
       status: scoreBand(score).status,
@@ -185,7 +249,8 @@ export function mergeServerScans(items, summaries, dismissed = new Set()) {
     known.add(scanId);
     added += 1;
   }
-  return { items: added ? dedupeManuscriptsByTitle(list) : items, added };
+  changed += added;
+  return { items: changed ? dedupeManuscriptsByTitle(list) : items, added, changed };
 }
 
 /** Store a freshly fetched full result on a version that only had a server summary. */
@@ -208,8 +273,12 @@ export function attachScanResult(items, manuscriptId, versionId, scanResult) {
   });
 }
 
-export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
+export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
   const list = dedupeManuscriptsByTitle(Array.isArray(items) ? items : []);
+  const scanId = String(scanResult?.scanId || "");
+  if (scanId && list.some((m) => (m.versions || []).some((v) => versionScanId(v) === scanId))) {
+    return list;
+  }
   const title = scanResult.documentTitle || "Untitled manuscript";
   const titleKey = normalizeTitle(title);
 
@@ -221,14 +290,12 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
   const documentId =
     (idx >= 0 ? list[idx].id : null) || scanResult.documentId || `doc-${Date.now()}`;
 
-  let nextVersion = Math.max(1, Number(versionNumber) || 1);
-  if (idx >= 0) {
-    const maxVer = Math.max(
-      0,
-      ...(list[idx].versions || []).map((v) => Number(v.versionNumber) || 0)
-    );
-    nextVersion = Math.max(nextVersion, maxVer + 1);
-  }
+  const maxVer =
+    idx >= 0
+      ? Math.max(0, ...(list[idx].versions || []).map((v) => Number(v.versionNumber) || 0))
+      : 0;
+  const serverVersion = Number(versionNumber) || Number(scanResult.versionNumber) || 0;
+  const nextVersion = serverVersion > 0 ? serverVersion : maxVer + 1;
 
   const score =
     scanResult.overallScore == null || !Number.isFinite(Number(scanResult.overallScore))
@@ -236,11 +303,13 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
       : Number(scanResult.overallScore);
   const status = scoreBand(score).status;
 
+  const scannedAt = String(scanResult.scannedAt || new Date().toISOString());
   const version = {
     id: `ver-${documentId}-${nextVersion}-${Date.now()}`,
     manuscriptId: documentId,
     versionNumber: nextVersion,
-    scannedDate: (scanResult.scannedAt || new Date().toISOString()).slice(0, 10),
+    scannedAt,
+    scannedDate: scannedAt.slice(0, 10),
     score,
     status,
     ...versionPartsFromResult(scanResult),
@@ -278,8 +347,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 1) {
 }
 
 /**
- * Drop one stored version and renumber the rest with the same chronological
- * rules as dedupeManuscriptsByTitle. An empty manuscript is removed.
+ * Drop one stored version; the others keep their numbers. An empty manuscript is removed.
  */
 export function removeManuscriptVersion(items, manuscriptId, versionId) {
   const stripped = (items || [])
@@ -312,7 +380,7 @@ export function versionToScanResult(manuscript, version) {
     documentTitle: manuscript?.title || "Untitled",
     campus: manuscript?.institution || "—",
     citationStyle: manuscript?.citationStyle || "APA",
-    scannedAt: version.scannedDate,
+    scannedAt: version.scannedAt || version.scannedDate,
     overallScore: version.score,
     versionNumber: version.versionNumber,
     scoreBreakdown: (version.breakdown || []).map((b) => ({

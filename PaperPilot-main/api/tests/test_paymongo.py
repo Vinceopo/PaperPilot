@@ -19,9 +19,13 @@ from app.paymongo_events import handle_paymongo_event
 class PayMongoHelpersTest(unittest.TestCase):
     def test_plan_amounts(self):
         self.assertEqual(plan_amount_centavos("monthly"), 94_900)
-        self.assertEqual(plan_amount_centavos("annual"), 949_000)
+        self.assertEqual(plan_amount_centavos("annual"), 1_043_900)
         self.assertEqual(plan_amount_pesos("monthly"), 949)
-        self.assertEqual(plan_amount_pesos("annual"), 9490)
+        self.assertEqual(plan_amount_pesos("annual"), 10439)
+        self.assertEqual(plan_amount_pesos("monthly", "pro"), 1499)
+        self.assertEqual(plan_amount_pesos("annual", "pro"), 16489)
+        self.assertEqual(plan_amount_pesos("annual", "pro"), 11 * plan_amount_pesos("monthly", "pro"))
+        self.assertEqual(plan_amount_pesos("annual"), 11 * plan_amount_pesos("monthly"))
 
     def test_webhook_signature_accepts_valid(self):
         settings.paymongo_webhook_secret = "whsk_test_secret"

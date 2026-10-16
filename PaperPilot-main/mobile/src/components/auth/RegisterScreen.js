@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../api";
 import { auth, db, firebaseReady } from "../../firebase";
 import { FIREBASE_MISSING, authMessage } from "../../lib/messages";
@@ -12,8 +12,10 @@ import PrimaryButton from "../ui/PrimaryButton";
 import AuthShell from "./AuthShell";
 import GoogleButton from "./GoogleButton";
 import OtpStep from "./OtpStep";
+import TermsModal from "./TermsModal";
 
 const TWO_COLUMN_MIN_WIDTH = 640;
+const TERMS_REQUIRED = "You must agree to the Terms and Conditions to create an account.";
 
 const EMPTY = {
   firstName: "",
@@ -33,8 +35,16 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
   const [otpMeta, setOtpMeta] = useState(null);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [termsError, setTermsError] = useState("");
+  const [termsOpen, setTermsOpen] = useState(false);
   const { width } = useWindowDimensions();
   const twoColumn = width >= TWO_COLUMN_MIN_WIDTH;
+
+  function setAgreed(value) {
+    setAgreedToTerms(value);
+    if (value) setTermsError("");
+  }
 
   function inputProps(field, label, extra = {}) {
     return {
@@ -71,7 +81,8 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
     const next = registerErrors(values);
     setErrors(next);
     setTouched(Object.keys(EMPTY).reduce((acc, key) => ({ ...acc, [key]: true }), {}));
-    if (Object.keys(next).length > 0) return;
+    setTermsError(agreedToTerms ? "" : TERMS_REQUIRED);
+    if (Object.keys(next).length > 0 || !agreedToTerms) return;
     if (!firebaseReady || !auth) {
       setFormError(FIREBASE_MISSING);
       return;
@@ -142,6 +153,10 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
 
   async function onGoogle() {
     setFormError("");
+    if (!agreedToTerms) {
+      setTermsError(TERMS_REQUIRED);
+      return;
+    }
     if (!firebaseReady || !auth) {
       setFormError("Add Firebase keys to mobile/app.json to enable Google sign-up.");
       return;
@@ -256,6 +271,33 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
           })}
         />
 
+        <View>
+          <View style={styles.termsRow}>
+            <Pressable
+              onPress={() => setAgreed(!agreedToTerms)}
+              disabled={busy}
+              hitSlop={8}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: agreedToTerms, disabled: busy }}
+              accessibilityLabel="I agree to the Terms and Conditions"
+              style={[
+                styles.checkbox,
+                agreedToTerms && styles.checkboxChecked,
+                termsError ? styles.checkboxError : null,
+              ]}
+            >
+              {agreedToTerms ? <Text style={styles.checkboxMark}>✓</Text> : null}
+            </Pressable>
+            <Text style={styles.termsText}>
+              <Text onPress={() => !busy && setAgreed(!agreedToTerms)}>I agree to the </Text>
+              <Text style={styles.termsLink} onPress={() => setTermsOpen(true)} accessibilityRole="link">
+                Terms and Conditions
+              </Text>
+            </Text>
+          </View>
+          {termsError ? <Text style={styles.termsError}>{termsError}</Text> : null}
+        </View>
+
         {formError ? <Text style={styles.error}>{formError}</Text> : null}
 
         <PrimaryButton
@@ -266,6 +308,14 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
       </View>
 
       <GoogleButton label="Sign up with Google" onPress={onGoogle} disabled={busy} />
+      <TermsModal
+        open={termsOpen}
+        onClose={() => setTermsOpen(false)}
+        onAgree={() => {
+          setAgreed(true);
+          setTermsOpen(false);
+        }}
+      />
     </AuthShell>
   );
 }
@@ -279,6 +329,24 @@ const styles = StyleSheet.create({
   check: { fontSize: 12.5, color: colors.muted },
   checkMet: { color: colors.accent },
   error: { fontSize: 14, color: colors.rose },
+  termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  checkbox: {
+    marginTop: 1,
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: "#cbd5e1",
+    backgroundColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkboxChecked: { borderColor: colors.accent, backgroundColor: colors.accent },
+  checkboxError: { borderColor: colors.rose },
+  checkboxMark: { fontSize: 12, lineHeight: 14, fontWeight: "700", color: colors.white },
+  termsText: { flex: 1, fontSize: 14, lineHeight: 20, color: colors.slate },
+  termsLink: { fontWeight: "600", color: colors.accent, textDecorationLine: "underline" },
+  termsError: { marginTop: 6, fontSize: 12.5, color: colors.rose },
   footer: { marginTop: 24, textAlign: "center", fontSize: 14, color: colors.slate },
   footerLink: { fontWeight: "600", color: colors.accent },
 });

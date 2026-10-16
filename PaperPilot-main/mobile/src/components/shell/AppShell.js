@@ -6,6 +6,7 @@ import { useAppData } from "../../context/AppDataContext";
 import { auth } from "../../firebase";
 import { signOutUser } from "../../services/auth";
 import { colors } from "../../theme";
+import { isPaidTier, resetWindow } from "../../lib/plans";
 import Sidebar from "./Sidebar";
 import NotificationsPanel from "./NotificationsPanel";
 import { ArrowLeftIcon, BellIcon, MenuIcon } from "./icons";
@@ -81,7 +82,7 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
               {tier} plan
             </Text>
             <Text style={styles.remaining} numberOfLines={2}>
-              {remaining} of {limit} scans remaining
+              {remaining} of {limit} scans remaining this {resetWindow(tier)}
             </Text>
           </View>
 
@@ -91,7 +92,7 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
             accessibilityRole="button"
           >
             <Text style={styles.subscribeText} numberOfLines={1}>
-              {tier === "premium" ? "Manage subscription" : "Subscribe to Premium"}
+              {isPaidTier(tier) ? "Manage subscription" : "Subscribe to Premium"}
             </Text>
           </Pressable>
 

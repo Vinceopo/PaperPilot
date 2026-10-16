@@ -38,6 +38,22 @@ class RegisterCheckRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=40)
 
 
+class ResolveEmailRequest(BaseModel):
+    """Email or username typed on the sign-in form."""
+
+    identifier: str = Field(..., min_length=1, max_length=254)
+
+
+class UpdateProfileRequest(BaseModel):
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str | None = None
+    contact_number: str | None = None
+    username: str | None = None
+    photo_url: str | None = None
+    remove_photo: bool = False
+
+
 class RegisterRequest(BaseModel):
     signup_token: str = Field(..., min_length=1)
     first_name: str = Field(..., min_length=1, max_length=40)
@@ -89,11 +105,13 @@ class ManuscriptVersionCloudinaryRequest(BaseModel):
     mechanics_id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1, max_length=300)
     manuscript_id: str | None = Field(default=None, max_length=80)
+    client_request_id: str | None = Field(default=None, max_length=120)
 
 
 class SubscribeRequest(BaseModel):
-    plan: str = Field(..., pattern="^(free|premium)$")
+    plan: str = Field(..., pattern="^(free|premium|pro)$")
     billing_period: str | None = Field(default="monthly", pattern="^(monthly|annual)$")
+    return_to: str | None = Field(default=None, pattern="^(web|app)$")
 
 
 class CancelSubscriptionRequest(BaseModel):

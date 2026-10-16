@@ -8,16 +8,34 @@ import { cancelSubscription, confirmCheckoutPayment, getSubscription, subscribeT
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 import paymongoLogo from "../../assets/paymongo-logo.png";
+import {
+  ANNUAL_SAVINGS_LABEL,
+  FREE_FEATURES,
+  PLAN_PRICES,
+  PREMIUM_FEATURES,
+  PRO_FEATURES,
+  isPaidTier,
+  normalizeTier,
+  planLimit,
+  planName,
+  planPrice,
+  resetWindow,
+} from "../../lib/plans.js";
+import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
-export const PREMIUM_MONTHLY = 949;
-export const PREMIUM_ANNUAL = 9490;
+export const PREMIUM_MONTHLY = PLAN_PRICES.premium.monthly;
+export const PREMIUM_ANNUAL = PLAN_PRICES.premium.annual;
 
-const FREE_FEATURES = ["3 scans / month", "View current version only", "APA style only"];
-const PREMIUM_FEATURES = [
-  "Up to 50 scans / month",
-  "Unlimited version history",
-  "APA, MLA, & IEEE styles",
-];
+const CHECKOUT_PLAN_KEY = "pp_checkout_plan";
+
+function storedCheckoutPlan() {
+  try {
+    const value = sessionStorage.getItem(CHECKOUT_PLAN_KEY);
+    return isPaidTier(value) ? value : "";
+  } catch {
+    return "";
+  }
+}
 
 function peso(amount) {
   return `₱${Number(amount).toLocaleString("en-PH", { minimumFractionDigits: 0 })}`;
@@ -27,25 +45,75 @@ function formatDate(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
-  return d.toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: APP_TIME_ZONE,
+  });
 }
 
 function statusLabel(subscription) {
   const tier = String(subscription?.tier || "free").toLowerCase();
   const status = String(subscription?.status || "").toLowerCase();
   if (status === "canceled" || status === "cancelled") return "Free";
-  if (tier === "premium") return "Active";
+  if (isPaidTier(tier)) return "Active";
   if (status === "expired") return "Expired";
   return "Free";
 }
 
 function historyLabel(entry) {
   const action = entry?.action || "";
-  if (action === "subscribed") return "Subscribed to Premium";
-  if (action === "changed") return "Changed Premium plan";
-  if (action === "canceled") return "Canceled Premium";
-  if (action === "renewed") return "Renewed Premium";
+  const name = planName(isPaidTier(entry?.tier) ? entry.tier : "premium");
+  if (action === "subscribed") return `Subscribed to ${name}`;
+  if (action === "changed") return `Changed ${name} plan`;
+  if (action === "canceled") return `Canceled ${name}`;
+  if (action === "renewed") return `Renewed ${name}`;
   return action || "Update";
+}
+
+function PaidPlanCard({ plan, selected, billingPeriod, features, badge, onSelect }) {
+  const annual = billingPeriod === "annual";
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") onSelect();
+      }}
+      className={`cursor-pointer rounded-2xl border bg-white p-5 text-left shadow-sm transition ${
+        selected ? "border-[#3b82f6] ring-2 ring-[#3b82f6]/20" : "border-slate-200 hover:border-slate-300"
+      }`}
+    >
+      {selected && (
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[#3b82f6]">
+          Selected plan ✓
+        </p>
+      )}
+      <p className="text-sm font-semibold text-slate-700">{planName(plan)} Plan</p>
+      <p className="mt-2 text-3xl font-bold text-[#172033]">
+        {peso(planPrice(plan, billingPeriod))}
+        <span className="ml-1 text-sm font-medium text-slate-400">/ {annual ? "year" : "month"}</span>
+      </p>
+      <p className="mt-1 text-[11px] text-slate-400">
+        {annual ? "Billed annually" : "Billed monthly"}
+        {annual && (
+          <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 font-bold text-emerald-700">
+            {ANNUAL_SAVINGS_LABEL}
+          </span>
+        )}
+      </p>
+      <ul className="mt-4 space-y-2 text-xs text-slate-500">
+        {features.map((f) => (
+          <li key={f}>• {f}</li>
+        ))}
+      </ul>
+      <span className="mt-5 inline-flex rounded-lg bg-[#16bfa8]/10 px-4 py-2 text-xs font-semibold text-[#109b89]">
+        {badge}
+      </span>
+    </div>
+  );
 }
 
 export default function SubscriptionScreen({
@@ -56,30 +124,37 @@ export default function SubscriptionScreen({
   billingReturn,
   onBillingSettled,
 }) {
-  const tier = String(subscription?.tier || "free").toLowerCase();
-  const isPremium = tier === "premium";
+  const tier = normalizeTier(subscription?.tier);
+  // Any paid plan (Premium or Pro).
+  const isPremium = isPaidTier(tier);
+  const currentPlanName = planName(tier);
+  const limit = Number(subscription?.limit) || planLimit(tier);
 
   const [billingPeriod, setBillingPeriod] = useState(
     subscription?.billing_period === "annual" ? "annual" : "monthly"
   );
-  const [selectedPlan, setSelectedPlan] = useState(isPremium ? "premium" : "premium");
+  const [selectedPlan, setSelectedPlan] = useState(
+    () => storedCheckoutPlan() || (isPremium ? tier : "premium")
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [paymentCanceled, setPaymentCanceled] = useState(false);
+  const [activating, setActivating] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(!isPremium);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [confirmFreeOpen, setConfirmFreeOpen] = useState(false);
 
-  const price = billingPeriod === "annual" ? PREMIUM_ANNUAL : PREMIUM_MONTHLY;
-  const subscribeCta = isPremium
-    ? billingPeriod === "annual"
-      ? `Renew with PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
-      : `Renew with PayMongo — ${peso(PREMIUM_MONTHLY)}/month`
-    : billingPeriod === "annual"
-      ? `Pay with PayMongo — ${peso(PREMIUM_ANNUAL)}/year`
-      : `Pay with PayMongo — ${peso(PREMIUM_MONTHLY)}/month`;
+  const price = planPrice(selectedPlan, billingPeriod);
+  const perPeriod = billingPeriod === "annual" ? "year" : "month";
+  const switchingPlan = isPremium && isPaidTier(selectedPlan) && selectedPlan !== tier;
+  const subscribeCta =
+    isPremium && selectedPlan === tier
+      ? `Renew with PayMongo — ${peso(price)}/${perPeriod}`
+      : switchingPlan
+        ? `Switch to ${planName(selectedPlan)} with PayMongo — ${peso(price)}/${perPeriod}`
+        : `Pay with PayMongo — ${peso(price)}/${perPeriod}`;
 
   const history = useMemo(
     () => (Array.isArray(subscription?.history) ? subscription.history : []),
@@ -91,14 +166,17 @@ export default function SubscriptionScreen({
   onSettledRef.current = onBillingSettled;
 
   function applyPremium(next) {
-    const tierNow = String(next?.tier || "").toLowerCase();
-    if (tierNow !== "premium") return false;
+    const tierNow = normalizeTier(next?.tier);
+    const expected = storedCheckoutPlan();
+    if (next?.pending || !isPaidTier(tierNow) || (expected && tierNow !== expected)) return false;
     onChangeRef.current?.(next);
+    setActivating(false);
     setError("");
     setCheckoutOpen(false);
-    setSuccess("Welcome to Premium! Your PayMongo payment was confirmed.");
+    setSuccess(`Welcome to ${planName(tierNow)}! Your PayMongo payment was confirmed.`);
     try {
       sessionStorage.removeItem("pp_checkout_cs");
+      sessionStorage.removeItem(CHECKOUT_PLAN_KEY);
     } catch {
       // ignore
     }
@@ -107,20 +185,25 @@ export default function SubscriptionScreen({
   }
 
   function showPayAgain(message) {
+    setActivating(false);
     setSuccess("");
     setError(message);
-    setSelectedPlan("premium");
+    setSelectedPlan(storedCheckoutPlan() || "premium");
     setCheckoutOpen(true);
     onSettledRef.current?.();
   }
 
   useEffect(() => {
     if (billingReturn === "success") {
-      setSuccess("Payment received. Activating Premium…");
+      const expectedPlan = storedCheckoutPlan() || "premium";
+      setSuccess(`Payment received. Activating ${planName(expectedPlan)}…`);
       setPaymentCanceled(false);
+      setActivating(true);
       setError("");
-      setSelectedPlan("premium");
+      setSelectedPlan(expectedPlan);
       setCheckoutOpen(true);
+      // A renewal keeps the same tier, so only the confirm endpoint can prove it was paid.
+      const tierAtReturn = tier;
       let cancelled = false;
       let timer = null;
       let tries = 0;
@@ -157,7 +240,7 @@ export default function SubscriptionScreen({
           try {
             const next = await getSubscription();
             if (cancelled) return;
-            if (applyPremium(next)) {
+            if (normalizeTier(next?.tier) !== tierAtReturn && applyPremium(next)) {
               clearInterval(timer);
               return;
             }
@@ -169,7 +252,7 @@ export default function SubscriptionScreen({
             clearInterval(timer);
             if (!cancelled) {
               showPayAgain(
-                "That return from PayMongo did not turn Premium on. You can pay again below. If your last Premium plan still has time and scans left, those stay available."
+                "We could not confirm your PayMongo payment yet. If you were charged, wait a minute and refresh this page — it will activate automatically. Otherwise, pay again below. Any paid plan time and scans you already have stay available."
               );
             }
           }
@@ -178,6 +261,7 @@ export default function SubscriptionScreen({
 
       return () => {
         cancelled = true;
+        setActivating(false);
         if (timer) clearInterval(timer);
       };
     }
@@ -185,9 +269,10 @@ export default function SubscriptionScreen({
       setPaymentCanceled(true);
       setSuccess("Payment canceled. No charges were made.");
       setCheckoutOpen(true);
-      setSelectedPlan("premium");
+      setSelectedPlan(storedCheckoutPlan() || "premium");
       try {
         sessionStorage.removeItem("pp_checkout_cs");
+        sessionStorage.removeItem(CHECKOUT_PLAN_KEY);
       } catch {
         // ignore
       }
@@ -213,23 +298,29 @@ export default function SubscriptionScreen({
     setBusy(true);
     try {
       const result = await subscribeToPlan({
-        plan: "premium",
+        plan: selectedPlan,
         billingPeriod,
       });
       const url = result?.checkout_url;
       if (!url) {
-        throw new Error("PayMongo checkout URL was not returned.");
+        throw new Error(
+          "The PayMongo payment page could not be opened. You were not charged. Try again in a minute."
+        );
       }
       try {
         if (result.checkout_session_id) {
           sessionStorage.setItem("pp_checkout_cs", String(result.checkout_session_id));
         }
+        sessionStorage.setItem(CHECKOUT_PLAN_KEY, selectedPlan);
       } catch {
         // Private mode — confirm will use latest pending checkout on the server.
       }
       window.location.assign(url);
     } catch (err) {
-      setError(err.message || "Could not start PayMongo checkout.");
+      setError(
+        err.message ||
+          "The PayMongo payment page could not be opened. You were not charged. Try again in a minute."
+      );
       setBusy(false);
     }
   }
@@ -245,7 +336,7 @@ export default function SubscriptionScreen({
       setSuccess("Switched to Free plan.");
       setConfirmFreeOpen(false);
     } catch (err) {
-      setError(err.message || "Could not switch plans.");
+      setError(err.message || "Your plan could not be changed. Check your connection, then try again.");
     } finally {
       setBusy(false);
     }
@@ -267,7 +358,9 @@ export default function SubscriptionScreen({
       setSuccess("Subscription canceled. You are on the Free plan — 3 scans this month.");
       setConfirmCancelOpen(false);
     } catch (err) {
-      setError(err.message || "Could not cancel subscription.");
+      setError(
+        err.message || "Your subscription could not be canceled. Check your connection, then try again."
+      );
     } finally {
       setBusy(false);
     }
@@ -281,7 +374,7 @@ export default function SubscriptionScreen({
             Settings / Subscription
           </p>
           <h2 className="mt-1 text-2xl font-bold text-[#172033]">
-            {isPremium && !checkoutOpen ? "Manage Subscription" : "Upgrade to Premium"}
+            {isPremium && !checkoutOpen ? "Manage Subscription" : "Upgrade your plan"}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
             {isPremium && !checkoutOpen
@@ -289,48 +382,53 @@ export default function SubscriptionScreen({
               : "Secure checkout powered by PayMongo (Card, GCash, Maya, and more)."}
           </p>
         </div>
-        {isPremium && (
+        {isPremium && checkoutOpen && (
           <button
             type="button"
             onClick={() => {
-              setCheckoutOpen((open) => !open);
+              setCheckoutOpen(false);
               setError("");
               setSuccess("");
             }}
             className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
           >
-            {checkoutOpen ? "View current plan" : "Change plan"}
+            View current plan
           </button>
         )}
       </div>
 
-      {error && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert">
-          {error}
-        </div>
-      )}
+      <ConfirmDialog
+        open={Boolean(error)}
+        title="Something went wrong"
+        message={error}
+        confirmLabel="OK"
+        cancelLabel={null}
+        tone="danger"
+        onConfirm={() => setError("")}
+        onCancel={() => setError("")}
+      />
       {subscription?.payment_issue && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
           Payment issue detected
-          {subscription.payment_issue_reason ? ` (${subscription.payment_issue_reason})` : ""}. Your
-          Premium access stays active during the grace period — update billing via PayMongo or contact
-          support if this persists.
+          {subscription.payment_issue_reason ? ` (${subscription.payment_issue_reason})` : ""}. Your{" "}
+          {currentPlanName} access stays active during the grace period — update billing via PayMongo or
+          contact support if this persists.
         </div>
       )}
       {success && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3" role="status">
           <p className="text-sm text-emerald-800">{success}</p>
-          {!isPremium && (
+          {!isPremium && paymentCanceled && (
             <button
               type="button"
               onClick={() => {
                 setSuccess("");
-                setSelectedPlan("premium");
+                setSelectedPlan(isPaidTier(selectedPlan) ? selectedPlan : "premium");
                 setCheckoutOpen(true);
               }}
               className="mt-3 rounded-lg bg-[#16bfa8] px-5 py-2 text-xs font-bold text-[#092823] hover:bg-[#12ae99]"
             >
-              Pay for Premium again
+              Pay for {planName(isPaidTier(selectedPlan) ? selectedPlan : "premium")} again
             </button>
           )}
           {paymentCanceled && onBackToDashboard && (
@@ -352,7 +450,7 @@ export default function SubscriptionScreen({
         <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current plan</p>
-            <p className="mt-2 text-xl font-bold text-[#172033]">Premium</p>
+            <p className="mt-2 text-xl font-bold text-[#172033]">{currentPlanName}</p>
             <dl className="mt-5 space-y-3 text-sm">
               <div className="flex justify-between gap-3 border-b border-slate-100 pb-2">
                 <dt className="text-slate-500">Status</dt>
@@ -371,14 +469,26 @@ export default function SubscriptionScreen({
                 </dd>
               </div>
               <div className="flex justify-between gap-3 border-b border-slate-100 pb-2">
+                <dt className="text-slate-500">Current billing period</dt>
+                <dd className="font-semibold text-slate-800">
+                  {formatDate(subscription?.billing_period_start)} –{" "}
+                  {formatDate(subscription?.billing_period_end || subscription?.renews_at)}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3 border-b border-slate-100 pb-2">
                 <dt className="text-slate-500">Renewal date</dt>
                 <dd className="font-semibold text-slate-800">{formatDate(subscription?.renews_at)}</dd>
               </div>
               <div className="flex justify-between gap-3">
                 <dt className="text-slate-500">Scan allowance</dt>
-                <dd className="font-semibold text-slate-800">
-                  {Math.max((isPremium ? 50 : 3) - Number(subscription?.used || 0), 0)} of{" "}
-                  {isPremium ? 50 : 3} remaining
+                <dd className="text-right font-semibold text-slate-800">
+                  {Math.max(limit - Number(subscription?.used || 0), 0)} of {limit} remaining this{" "}
+                  {resetWindow(tier)}
+                  {subscription?.reset_at ? (
+                    <span className="block text-[11px] font-medium text-slate-400">
+                      Resets {formatDate(subscription.reset_at)}
+                    </span>
+                  ) : null}
                 </dd>
               </div>
             </dl>
@@ -386,7 +496,7 @@ export default function SubscriptionScreen({
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedPlan("premium");
+                  setSelectedPlan(tier);
                   setCheckoutOpen(true);
                 }}
                 className="rounded-lg bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-white hover:bg-[#12ae99]"
@@ -474,11 +584,20 @@ export default function SubscriptionScreen({
                   }`}
                 >
                   {opt.label}
+                  {opt.id === "annual" && (
+                    <span
+                      className={`ml-2 rounded-full px-2 py-0.5 text-[10px] ${
+                        billingPeriod === "annual" ? "bg-white/25 text-white" : "bg-emerald-50 text-emerald-700"
+                      }`}
+                    >
+                      {ANNUAL_SAVINGS_LABEL}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-3">
               <div
                 role="button"
                 tabIndex={0}
@@ -506,44 +625,29 @@ export default function SubscriptionScreen({
                 </ul>
               </div>
 
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setSelectedPlan("premium")}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") setSelectedPlan("premium");
-                }}
-                className={`cursor-pointer rounded-2xl border bg-white p-5 text-left shadow-sm transition ${
-                  selectedPlan === "premium"
-                    ? "border-[#3b82f6] ring-2 ring-[#3b82f6]/20"
-                    : "border-slate-200 hover:border-slate-300"
-                }`}
-              >
-                {selectedPlan === "premium" && (
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[#3b82f6]">
-                    Selected plan ✓
-                  </p>
-                )}
-                <p className="text-sm font-semibold text-slate-700">Premium Plan</p>
-                <p className="mt-2 text-3xl font-bold text-[#172033]">
-                  {billingPeriod === "annual" ? peso(PREMIUM_ANNUAL) : peso(PREMIUM_MONTHLY)}
-                  <span className="ml-1 text-sm font-medium text-slate-400">
-                    / {billingPeriod === "annual" ? "year" : "month"}
-                  </span>
-                </p>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  {billingPeriod === "annual" ? "Billed annually" : "Billed monthly"}
-                </p>
-                <ul className="mt-4 space-y-2 text-xs text-slate-500">
-                  {PREMIUM_FEATURES.map((f) => (
-                    <li key={f}>• {f}</li>
-                  ))}
-                </ul>
-                <span className="mt-5 inline-flex rounded-lg bg-[#16bfa8]/10 px-4 py-2 text-xs font-semibold text-[#109b89]">
-                  Best for thesis writers
-                </span>
-              </div>
+              <PaidPlanCard
+                plan="premium"
+                selected={selectedPlan === "premium"}
+                billingPeriod={billingPeriod}
+                features={PREMIUM_FEATURES}
+                badge="Best for thesis writers"
+                onSelect={() => setSelectedPlan("premium")}
+              />
+              <PaidPlanCard
+                plan="pro"
+                selected={selectedPlan === "pro"}
+                billingPeriod={billingPeriod}
+                features={PRO_FEATURES}
+                badge="Best for heavy revision cycles"
+                onSelect={() => setSelectedPlan("pro")}
+              />
             </div>
+            {switchingPlan && (
+              <p className="text-xs text-slate-500">
+                Switching to {planName(selectedPlan)} starts a new billing period today, and your scan
+                allowance changes to {planLimit(selectedPlan)} scans per {resetWindow(selectedPlan)}.
+              </p>
+            )}
           </section>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -555,7 +659,7 @@ export default function SubscriptionScreen({
             <ul className="mt-4 space-y-2 text-xs text-slate-600">
               <li>• Card · GCash · Maya · GrabPay · QR Ph</li>
               <li>• Receipt emailed by PayMongo after payment</li>
-              <li>• Premium unlocks when the webhook confirms payment</li>
+              <li>• Your plan unlocks as soon as PayMongo confirms payment</li>
             </ul>
 
             <div className="mt-5 rounded-xl border border-slate-100 bg-[#f8f9fb] px-4 py-3">
@@ -564,18 +668,23 @@ export default function SubscriptionScreen({
               </p>
               <div className="mt-2 flex items-center justify-between text-sm">
                 <span className="text-slate-600">
-                  {selectedPlan === "premium"
-                    ? `Premium (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
+                  {isPaidTier(selectedPlan)
+                    ? `${planName(selectedPlan)} (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
                     : "Free Plan"}
                 </span>
                 <span className="font-semibold text-slate-800">
-                  {selectedPlan === "premium" ? peso(price) : "₱0"}
+                  {isPaidTier(selectedPlan) ? peso(price) : "₱0"}
                 </span>
               </div>
+              {isPaidTier(selectedPlan) && billingPeriod === "annual" && (
+                <p className="mt-1 text-[11px] font-semibold text-emerald-700">
+                  {ANNUAL_SAVINGS_LABEL} — {peso(planPrice(selectedPlan, "monthly"))} off 12 monthly payments
+                </p>
+              )}
               <div className="mt-3 flex items-end justify-between border-t border-slate-200 pt-3">
                 <span className="text-xs font-semibold text-slate-500">Total due today</span>
                 <span className="text-2xl font-bold text-[#16bfa8]">
-                  {selectedPlan === "premium" ? `${peso(price)}.00` : "₱0.00"}
+                  {isPaidTier(selectedPlan) ? `${peso(price)}.00` : "₱0.00"}
                 </span>
               </div>
             </div>
@@ -583,12 +692,14 @@ export default function SubscriptionScreen({
             <form onSubmit={handleSubscribe} className="mt-5 space-y-3">
               <button
                 type="submit"
-                disabled={busy}
+                disabled={busy || activating}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#16bfa8] py-3 text-sm font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:opacity-50"
               >
-                {busy ? <Spinner /> : null}
+                {busy || activating ? <Spinner /> : null}
                 {busy
                   ? "Redirecting to PayMongo…"
+                  : activating
+                    ? "Confirming your payment…"
                   : selectedPlan === "free"
                     ? isPremium
                       ? "Switch to Free Plan"
@@ -613,8 +724,8 @@ export default function SubscriptionScreen({
 
       <ConfirmDialog
         open={confirmCancelOpen}
-        title="Cancel Premium subscription?"
-        message="You will return to the Free plan immediately, with 3 scans this month. You can subscribe to Premium again whenever you want."
+        title={`Cancel ${currentPlanName} subscription?`}
+        message={`You will return to the Free plan immediately, with 3 scans this month. You can subscribe to ${currentPlanName} again whenever you want.`}
         confirmLabel="Cancel subscription"
         tone="danger"
         busy={busy}
@@ -628,7 +739,7 @@ export default function SubscriptionScreen({
       <ConfirmDialog
         open={confirmFreeOpen}
         title="Switch to Free plan?"
-        message="Your Premium subscription will end and you will move to the Free plan."
+        message={`Your ${currentPlanName} subscription will end and you will move to the Free plan.`}
         confirmLabel="Switch to Free"
         busy={busy}
         onCancel={() => {

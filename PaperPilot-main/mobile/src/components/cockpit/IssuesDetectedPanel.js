@@ -155,9 +155,9 @@ function TriangleIcon({ color, size = 14 }) {
   );
 }
 
-function SparkleIcon() {
+function SparkleIcon({ size = 16 }) {
   return (
-    <Svg width={16} height={16} viewBox="0 0 24 24" fill="none" accessibilityLabel="XAI explanation">
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" accessibilityLabel="AI">
       <Path
         d="M12 3.5 13.6 8.4 18.5 10 13.6 11.6 12 16.5 10.4 11.6 5.5 10 10.4 8.4 12 3.5Z"
         stroke="#94a3b8"
@@ -224,12 +224,14 @@ function IssueItem({ entry }) {
             <View style={[styles.sevTag, { backgroundColor: s.tagBg, borderColor: s.tagBorder }]}>
               <Text style={[styles.sevTagText, { color: s.tagText }]}>{s.label}</Text>
             </View>
-            <Text style={styles.section}>{entry.section}</Text>
+            <View style={styles.aiTag}>
+              <Text style={styles.section}>{entry.section}</Text>
+              <View style={styles.aiIconBox} accessibilityLabel="AI-detected severity">
+                <SparkleIcon size={14} />
+              </View>
+            </View>
           </View>
           <Text style={styles.finding}>{entry.finding}</Text>
-          <View style={styles.sparkle}>
-            <SparkleIcon />
-          </View>
           <Text style={styles.explanation}>{entry.explanation}</Text>
           {entry.recommendation ? (
             <View style={styles.recBox}>
@@ -681,8 +683,9 @@ const styles = StyleSheet.create({
   tagRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   section: { fontSize: 11, fontWeight: "600", color: "#94a3b8" },
   finding: { marginTop: 4, fontSize: 14, lineHeight: 20, fontWeight: "600", color: "#1e293b" },
-  sparkle: { marginTop: 8, width: 20, height: 20, alignItems: "center", justifyContent: "center" },
-  explanation: { marginTop: 4, fontSize: 14, lineHeight: 21, color: "#475569" },
+  aiTag: { flexDirection: "row", alignItems: "center", gap: 6 },
+  aiIconBox: { width: 16, height: 16, alignItems: "center", justifyContent: "center" },
+  explanation: { marginTop: 8, fontSize: 14, lineHeight: 21, color: "#475569" },
   recBox: {
     marginTop: 12,
     flexDirection: "row",

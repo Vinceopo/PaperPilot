@@ -18,6 +18,7 @@ import { sendOtp, resetPasswordWithOtp, getProfile, updateUserProfile, otpBypass
 import { markPasswordChanged } from "../../services/auth.js";
 import OtpStep from "../auth/OtpStep.jsx";
 import { nameError, phoneError, usernameError } from "../auth/validation.js";
+import { isPaidTier, planName } from "../../lib/plans.js";
 import {
   loadNotifications,
   saveNotifications,
@@ -92,7 +93,7 @@ function Avatar({ photoURL, first, last, size = "lg" }) {
 }
 
 function PlanBadge({ tier }) {
-  const isPremium = String(tier).toLowerCase() === "premium";
+  const isPremium = isPaidTier(tier);
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold ${
@@ -101,7 +102,7 @@ function PlanBadge({ tier }) {
           : "bg-slate-600/40 text-slate-300"
       }`}
     >
-      {isPremium ? "★ Premium plan" : "Free plan"}
+      {isPremium ? `★ ${planName(tier)} plan` : "Free plan"}
     </span>
   );
 }
@@ -519,7 +520,7 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
             title="Check your email"
             subtitle={`Enter the 6-digit code sent to ${email}`}
             expiresIn={otpMeta?.expires_in || 300}
-            resendIn={otpMeta?.resend_in || 60}
+            resendIn={otpMeta?.resend_in || 30}
             devCode={otpMeta?.dev_code || ""}
             onVerified={handleOtpVerified}
             onBack={() => { setView("summary"); setSendOtpError(""); }}
