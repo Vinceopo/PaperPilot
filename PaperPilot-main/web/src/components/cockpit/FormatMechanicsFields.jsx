@@ -481,16 +481,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               onChange={setValue("paginationPosition")}
               options={PAGE_POSITIONS}
             />
-            <label className="mt-2 flex items-start gap-2 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                disabled={disabled}
-                checked={Boolean(form.paginationNumberOnly)}
-                onChange={(e) => onChange({ ...form, paginationNumberOnly: e.target.checked })}
-                className="mt-0.5"
-              />
-              <span>Number only (Arabic or Roman — no “Page 2”, dashes, or extra text)</span>
-            </label>
           </Field>
           <Field label="Title page" hint="Document page 1">
             <ChoiceSelect

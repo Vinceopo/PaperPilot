@@ -161,6 +161,46 @@ class MechanicsExtractionTests(unittest.TestCase):
         )
         self.assertEqual(rules["font"]["body_size"], 12.0)
 
+    def test_side_list_margins_with_curly_inch_marks(self):
+        """PDF text often uses curly quotes as inch marks (Mapúa-style guides)."""
+        rules = derive_mechanics_rules(
+            "b. Margins: Top, Right and Bottom: 1.00\u201d\n"
+            "Left: 1.25\u201d to allow for binding\n"
+            "c. Font Type and Size: Times New Roman, 12 points\n"
+        )
+        self.assertEqual(
+            rules["margins_inches"],
+            {"top": 1.0, "right": 1.0, "bottom": 1.0, "left": 1.25},
+        )
+
+    def test_side_list_margins_when_inch_mark_missing(self):
+        rules = derive_mechanics_rules(
+            "b. Margins: Top, Right and Bottom: 1.00\n"
+            "Left: 1.25 to allow for binding\n"
+        )
+        self.assertEqual(
+            rules["margins_inches"],
+            {"top": 1.0, "right": 1.0, "bottom": 1.0, "left": 1.25},
+        )
+
+    def test_outline_layout_for_tables_and_figures(self):
+        rules = derive_mechanics_rules(
+            "f. Pagination\n"
+            "i. Top Right\n"
+            "ii. No page shown on first page of every chapter\n"
+            "g. Page Breaks: Do page break only when starting a new chapter.\n"
+            "h. Layout for Tables\n"
+            "Table number in bold, title in italic title case above the table\n"
+            "i. Layout for Figures\n"
+            "Figure number in bold with the title underlined below the image\n"
+            "j. Citation Format: APA\n"
+        )
+        self.assertEqual(rules["pagination"]["position"], "Top right")
+        self.assertIn("chapter", rules["page_break_requirements"][0].lower())
+        self.assertIn("table", rules["table_layout_requirements"][0].lower())
+        self.assertIn("figure", rules["figure_layout_requirements"][0].lower())
+        self.assertEqual(rules["citation_style"], "APA")
+
     def test_sample_mechanics_docx_fills_every_format_field(self):
         parsed = parse_document(build_sample_mechanics_docx(), "docx")
         rules = derive_mechanics_rules(parsed["text"])

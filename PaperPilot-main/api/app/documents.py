@@ -897,23 +897,35 @@ def _flatten_mechanics_text(text: str) -> str:
     return cleaned.strip()
 
 
+def _stop_pattern(stop_words: tuple[str, ...]) -> str:
+    """Outline markers like 'h.' must not require a word-boundary after the period."""
+    parts: list[str] = []
+    for word in stop_words:
+        esc = re.escape(word)
+        if word.endswith("."):
+            parts.append(esc)
+        else:
+            parts.append(rf"{esc}\b")
+    return "|".join(parts)
+
+
 def _clip_value(value: str, stop_words: tuple[str, ...]) -> str:
     text = (value or "").strip(" \t-:;,.|/\\")
     if not text:
         return ""
     # Stop at the next outline/label boundary when the capture ran long.
-    pattern = r"(?i)\s+(?:%s)\b" % "|".join(re.escape(word) for word in stop_words)
+    pattern = rf"(?i)\s+(?:{_stop_pattern(stop_words)})"
     parts = re.split(pattern, text, maxsplit=1)
     return parts[0].strip(" \t-:;,.|/\\")[:200]
 
 
 def _value_after_label(flat: str, labels: tuple[str, ...], stop_words: tuple[str, ...]) -> str:
     label_alt = "|".join(re.escape(label) for label in labels)
-    stop_alt = "|".join(re.escape(word) for word in stop_words)
+    stop_alt = _stop_pattern(stop_words)
     match = re.search(
         rf"(?i)\b(?:{label_alt})\b(?:\s*[)\].-]*)?\s*"
         rf"(?:[:：=\-–]|is|are|of|should be|must be)?\s*"
-        rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})\b|$)",
+        rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})|$)",
         flat,
     )
     if not match:
@@ -940,8 +952,12 @@ def _line_value(text: str, labels: tuple[str, ...]) -> str:
             return match.group(1).strip(" :：")[:200]
         if match or alone.match(line):
             following = next((item for item in lines[index + 1 :] if item.strip(" :：")), "").strip(" :：")
-            # A section heading followed by a paragraph is not a label/value pair.
-            if len(following) <= 120:
+            # Next outline heading is not this label's value.
+            if not following or alone.match(following) or re.match(r"^[a-k]\.\s", following, re.I):
+                return ""
+            # Layout / caption rules are often a full sentence; other label values stay short.
+            max_len = 300 if re.search(r"layout|caption|naming|title convention", line, re.I) else 120
+            if len(following) <= max_len:
                 return following
     return ""
 
@@ -1272,11 +1288,15 @@ def derive_mechanics_rules(text: str) -> dict:
     if not flat:
         return rules
 
+    # Do not use bare "Table"/"Figure"/"Page" here — they chop mid-sentence
+    # ("above the table", "Do page break only…"). Prefer section titles + outline letters.
     stop = (
         "Size", "Orientation", "Substance", "Spacing", "Indention", "Indentation",
         "Margins", "Margin", "Font", "Type", "Color", "Pagination", "Citation",
-        "Heading", "Table", "Figure", "Page", "Top", "Bottom", "Left", "Right",
-        "Gutter", "Header", "Footer", "Paper", "Alignment", "Justification", "a.", "b.", "c.", "d.", "e.",
+        "Heading", "Top", "Bottom", "Left", "Right",
+        "Gutter", "Header", "Footer", "Paper", "Alignment", "Justification",
+        "Layout for Tables", "Layout for Figures", "Table layout", "Figure layout",
+        "a.", "b.", "c.", "d.", "e.", "f.", "g.", "h.", "i.", "j.", "k.",
         "i.", "ii.", "iii.", "iv.", "v.", "vi.",
     )
 
@@ -1584,11 +1604,34 @@ def derive_mechanics_rules(text: str) -> dict:
             return value
         return _line_value(text, (f"{word}s", word)) or _value_after_label(flat, (f"{word}s", word), stop)
 
-    table_layout = _section_value(("Table layout", "Table naming"), "Table")
+    # Guides often say "Layout for Tables" / "h. Layout for Tables" rather than "Table layout".
+    table_layout = _section_value(
+        (
+            "Layout for Tables",
+            "Layout for Table",
+            "Table layout",
+            "Table naming",
+            "Tables layout",
+            "Table caption",
+            "Table title",
+        ),
+        "Table",
+    )
     if table_layout and len(table_layout) > 3:
         rules["table_layout_requirements"] = [table_layout[:300]]
 
-    figure_layout = _section_value(("Figure layout", "Figure naming"), "Figure")
+    figure_layout = _section_value(
+        (
+            "Layout for Figures",
+            "Layout for Figure",
+            "Figure layout",
+            "Figure naming",
+            "Figures layout",
+            "Figure caption",
+            "Figure title",
+        ),
+        "Figure",
+    )
     if figure_layout and len(figure_layout) > 3:
         rules["figure_layout_requirements"] = [figure_layout[:300]]
 
