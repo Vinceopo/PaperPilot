@@ -5,24 +5,14 @@ from collections import Counter, defaultdict
 
 from app.enrichment import enrich_compliance_issues
 from app.mechanics_options import (
-    BODY_CONTINUOUS,
-    BODY_RESTART,
-    DEFAULT_CHAPTER_MARKERS,
     FONT_SIZE_KEYS,
     HEADING_LEVELS,
     LANDSCAPE_ANY,
     LANDSCAPE_TABLES_FIGURES,
-    PRELIM_ARABIC,
-    PRELIM_ROMAN,
     WORD_SPACING_SINGLE,
     WORD_SPACING_TWO,
-    canonical_body_numbering,
-    canonical_chapter_markers,
     canonical_landscape_pages,
-    canonical_preliminary_style,
     canonical_word_spacing,
-    chapter_first_page_rule,
-    page_number_only,
     page_position_parts,
     title_page_rule,
 )
@@ -1645,58 +1635,6 @@ def _is_bare_page_token(text: str) -> bool:
     return bool(ROMAN_RE.match(raw))
 
 
-def _styles_compatible(actual: str | None, needed: str | None) -> bool:
-    """Arabic must match arabic; any Roman case matches any Roman requirement."""
-    if not needed:
-        return True
-    if needed == "arabic":
-        return actual == "arabic"
-    if needed in ROMAN_STYLES:
-        return actual in ROMAN_STYLES
-    return actual == needed
-
-
-def _section_starts(units: list[dict]) -> dict[int, str]:
-    """Pages whose first lines open a chapter or chapter-like section, keyed to a CHAPTER_MARKERS key."""
-    heads: dict[int, list[dict]] = defaultdict(list)
-    for unit in units:
-        text = (unit.get("text") or "").strip()
-        if (unit.get("source") or "body") != "body" or not text:
-            continue
-        if unit.get("role") in {"pagination", "toc", "empty"}:
-            continue
-        if len(heads[unit["page_index"]]) < 6:
-            heads[unit["page_index"]].append(unit)
-    starts: dict[int, str] = {}
-    for page, page_units in heads.items():
-        for unit in page_units:
-            text = unit["text"].strip()
-            heading_like = (
-                len(text) <= 60
-                and not text.endswith(".")
-                and not re.search(r"\.{2,}\s*\S+$|…", text)
-                and (
-                    str(unit.get("role") or "").startswith("heading")
-                    or _is_bold(unit)
-                    or text.isupper()
-                    or len(text.split()) <= 6
-                )
-            )
-            if not heading_like:
-                continue
-            kind = (
-                "chapter_roman" if CHAPTER_ROMAN_RE.match(text)
-                else "chapter_arabic" if CHAPTER_ARABIC_RE.match(text)
-                else "back_matter" if BACK_MATTER_RE.match(text)
-                else "preliminary" if PRELIM_HEADING_RE.match(text)
-                else None
-            )
-            if kind:
-                starts[page] = kind
-                break
-    return starts
-
-
 def _docx_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
     """Word prints page numbers from header/footer fields, so compute each page's number from the section setup."""
     sections = parsed.get("sections") or [{}]
@@ -1788,20 +1726,16 @@ def _position_label(vertical: str | None, horizontal: str | None) -> str:
 def _check_pagination(
     units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector, parsed: dict | None = None
 ) -> None:
+    """Only flag page numbers that appear in the wrong place.
+
+    Missing numbers (including page 1), style, sequence, and chapter/title hide rules
+    are not issues — any numbering style is fine when the position matches the mechanics.
+    """
     pagination = rules.get("pagination") or {}
     vertical, horizontal = page_position_parts(pagination.get("position"))
-    chapter_rule = chapter_first_page_rule(pagination.get("first_page_of_chapter"))
-    title_rule = title_page_rule(pagination.get("title_page"))
-    prelim_style = canonical_preliminary_style(pagination.get("preliminary_style"))
-    body_numbering = canonical_body_numbering(pagination.get("body_numbering"))
-    number_only = bool(pagination.get("number_only")) or page_number_only(pagination.get("position"))
-    # Style / sequence only when the mechanics explicitly ask for them — position-only
-    # formats must not fail for Roman vs Arabic or where counting starts.
-    check_numbering = bool(prelim_style or body_numbering)
-    if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering, number_only)):
+    if not (vertical or horizontal):
         return
     stats.applicable = True
-    markers = set(canonical_chapter_markers(pagination.get("chapter_markers"))) or set(DEFAULT_CHAPTER_MARKERS)
     is_pdf = (parsed or {}).get("metadata", {}).get("format") == "pdf"
     page_count = max((unit["page_index"] for unit in units), default=-1) + 1
     if is_pdf:
@@ -1810,180 +1744,31 @@ def _check_pagination(
         return
     marks = _pdf_page_marks(parsed or {}, units, page_count) if is_pdf else _docx_page_marks(parsed or {}, units, page_count)
 
-    starts = _section_starts(units)
-    chapter_pages = {page for page, kind in starts.items() if kind in markers and page > 0}
-    body_start = min((page for page, kind in starts.items() if kind.startswith("chapter_")), default=None)
-    has_title = title_rule is not None and page_count >= 2
-    title_counts = title_rule in {"hidden_counted", "shown"}
-    split_blocks = bool(body_start)
-
-    def block_of(page: int) -> str:
-        return "prelim" if split_blocks and page < body_start else "body"
-
-    expected_style = {"prelim": None, "body": None}
-    if check_numbering:
-        if prelim_style == PRELIM_ROMAN and split_blocks:
-            expected_style["prelim"] = "roman_lower"
-        elif prelim_style == PRELIM_ARABIC:
-            expected_style["prelim"] = "arabic"
-            expected_style["body"] = "arabic"
-        if split_blocks or prelim_style != PRELIM_ROMAN:
-            expected_style["body"] = "arabic"
-
-    def expected_value(page: int) -> int | None:
-        """The number the first numbered page of a block should carry, when the rules pin it down."""
-        if not check_numbering:
-            return None
-        if block_of(page) == "body" and split_blocks:
-            if body_numbering == BODY_RESTART:
-                return page - body_start + 1
-            if body_numbering == BODY_CONTINUOUS and title_rule:
-                return page + (1 if title_counts else 0)
-            return None
-        if title_rule:
-            return page + (1 if title_counts else 0)
-        return None
-
-    last_shown: dict[str, tuple[int, int]] = {}
     for mark in marks:
+        if not mark.get("shown"):
+            # No printed number (e.g. title page) — not an issue.
+            continue
         page = mark["page"]
         unit = mark.get("unit")
         loc = _unit_location(unit, "Pagination") if unit else _location(page, 0, "Pagination")
-        shown = mark["shown"]
-        printed = (mark.get("raw") or _format_page_value(mark["value"], mark["style"] or "arabic")) if shown else ""
-        if page == 0 and has_title:
-            want, rule_kind = ("hidden" if title_rule != "shown" else "main"), "title"
-        elif page in chapter_pages and chapter_rule:
-            want, rule_kind = {"hidden": "hidden", "same": "main", "bottom_center": "bottom_center"}[chapter_rule], "chapter"
+        printed = mark.get("raw") or _format_page_value(mark["value"], mark["style"] or "arabic")
+        wrong_v = bool(vertical and mark.get("vertical") != vertical)
+        wrong_h = bool(horizontal and mark.get("horizontal") != horizontal)
+        if wrong_v or wrong_h:
+            actual = _position_label(mark.get("vertical"), mark.get("horizontal"))
+            collector.add(
+                "pagination_position",
+                "moderate",
+                "Page number position differs",
+                "The page number is not in the position required by the uploaded format.",
+                f"The page number on page {page + 1} is at the {actual}; the format requires the "
+                f"{_position_label(vertical, horizontal)}.",
+                f"Move the page number to the {_position_label(vertical, horizontal)} of the page.",
+                loc,
+            )
+            stats.observe(False)
         else:
-            want, rule_kind = ("main" if (vertical or horizontal) else None), "page"
-        checked = want is not None
-        ok = True
-
-        if want == "hidden" and shown:
-            ok = False
-            if rule_kind == "title":
-                collector.add(
-                    "pagination_title_page",
-                    "minor",
-                    "Page number shown on the title page",
-                    "The uploaded format hides the page number on page 1 (the title page).",
-                    f"Page 1 shows the page number “{printed}”.",
-                    "Hide the page number on the title page (Word: Different First Page).",
-                    loc,
-                )
-            else:
-                collector.add(
-                    "pagination_chapter_first",
-                    "minor",
-                    "Page number shown on chapter first page",
-                    "The uploaded format hides page numbers on the first page of each chapter.",
-                    f"Page {page + 1} starts a chapter but shows the page number “{printed}”.",
-                    "Hide the page number on the first page of each chapter (Word: Different First Page).",
-                    loc,
-                )
-        elif want in {"main", "bottom_center"}:
-            want_v, want_h = (vertical, horizontal) if want == "main" else ("bottom", "center")
-            if not shown:
-                ok = False
-                where = "this chapter's first page" if rule_kind == "chapter" else f"page {page + 1}"
-                collector.add(
-                    "pagination_missing",
-                    "moderate",
-                    "Page number missing",
-                    "The uploaded format requires a page number on this page.",
-                    f"No page number was found on {where}.",
-                    f"Add a page number at the {_position_label(want_v, want_h)} of the page.",
-                    loc,
-                )
-            elif (want_v and mark.get("vertical") != want_v) or (want_h and mark.get("horizontal") != want_h):
-                ok = False
-                actual = _position_label(mark.get("vertical"), mark.get("horizontal"))
-                if rule_kind == "chapter" and want == "bottom_center":
-                    collector.add(
-                        "pagination_chapter_first",
-                        "minor",
-                        "Chapter first page number position differs",
-                        "The uploaded format places the page number at the bottom center on each chapter's first page.",
-                        f"Page {page + 1} starts a chapter; its page number is at the {actual}.",
-                        "Put the chapter's first-page number at the bottom center (Word: Different First Page footer).",
-                        loc,
-                    )
-                else:
-                    collector.add(
-                        "pagination_position",
-                        "moderate",
-                        "Page number position differs",
-                        "The page number is not in the position required by the uploaded format.",
-                        f"The page number on page {page + 1} is at the {actual}; the format requires the "
-                        f"{_position_label(want_v, want_h)}.",
-                        f"Move the page number to the {_position_label(want_v, want_h)} of the page.",
-                        loc,
-                    )
-            elif number_only and shown and mark.get("bare") is False:
-                ok = False
-                collector.add(
-                    "pagination_extra_characters",
-                    "minor",
-                    "Page number has extra characters",
-                    "The uploaded format requires the page number alone (no “Page”, dashes, or “of N”).",
-                    f"Page {page + 1} shows “{printed}” instead of a bare number such as “2” or “ii”.",
-                    "Use only the numeral (Arabic or Roman) with no extra characters.",
-                    loc,
-                )
-
-        if shown and want != "hidden" and check_numbering:
-            block = block_of(page)
-            style_needed = expected_style[block]
-            if style_needed:
-                checked = True
-                if not _styles_compatible(mark.get("style"), style_needed):
-                    ok = False
-                    part = "preliminary pages" if block == "prelim" else "the main body"
-                    style_label = (
-                        "Roman (i, ii, iii or I, II, III)"
-                        if style_needed in ROMAN_STYLES
-                        else STYLE_LABELS[style_needed]
-                    )
-                    collector.add(
-                        "pagination_style",
-                        "moderate",
-                        "Page number style differs",
-                        f"The uploaded format numbers {part} in {style_label}.",
-                        f"Page {page + 1} is numbered “{printed}” ({STYLE_LABELS.get(mark['style'], 'unknown style')}).",
-                        f"Use {style_label} page numbers for {part} (Word: Format Page Numbers).",
-                        loc,
-                    )
-            previous = last_shown.get(block)
-            expected = previous[1] + (page - previous[0]) if previous else expected_value(page)
-            if expected is not None:
-                checked = True
-                if mark["value"] != expected:
-                    ok = False
-                    want_text = _format_page_value(expected, mark["style"] or "arabic")
-                    if previous:
-                        detail = (
-                            f"Page {page + 1} is numbered “{printed}”, but after "
-                            f"“{_format_page_value(previous[1], mark['style'] or 'arabic')}” on page {previous[0] + 1} "
-                            f"it should be “{want_text}”."
-                        )
-                    elif block == "body" and split_blocks and body_numbering == BODY_RESTART:
-                        detail = f"Chapter 1 starts on page {page + 1} numbered “{printed}”; it should restart at 1."
-                    else:
-                        detail = f"Page {page + 1} is numbered “{printed}”; counting from page 1 it should be “{want_text}”."
-                    collector.add(
-                        "pagination_sequence",
-                        "moderate",
-                        "Page numbers out of sequence",
-                        "Page numbers skip, repeat, or restart where the uploaded format does not allow it.",
-                        detail,
-                        "Fix the page numbering so it counts up by one (Word: Format Page Numbers → Start at).",
-                        loc,
-                    )
-            last_shown[block] = (page, mark["value"])
-
-        if checked:
-            stats.observe(ok)
+            stats.observe(True)
 
 
 def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -> None:

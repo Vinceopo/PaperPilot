@@ -84,7 +84,7 @@ def _thesis(
     prelim_fmt="lowerRoman",
     body_start=1,
     title_first_page="hidden",
-    chapter_first_page=("footer", WD_ALIGN_PARAGRAPH.CENTER),
+    chapter_first_page=None,
     align=WD_ALIGN_PARAGRAPH.RIGHT,
 ):
     """Title page + 2 preliminary pages, then Chapter I (2 pages) and Chapter II, each chapter its own section."""
@@ -164,39 +164,26 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(_section(result, "Pagination")["formatting_score"], 100.0)
         self.assertGreater(_section(result, "Pagination")["issue_count"], -1)
 
-    def test_title_page_number_shown_is_flagged(self):
-        result = self.scan(_thesis(title_first_page=None), PAGINATION_RULES)
-        self.assertIn("pagination_title_page", _issue_types(result))
+    def test_missing_page_one_is_not_an_issue(self):
+        result = self.scan(_thesis(title_first_page="hidden"), {"pagination": {"position": "Top right"}})
+        self.assertEqual(_issue_types(result, "pagination"), set())
 
     def test_left_position_is_checked(self):
-        rules = {"pagination": {**PAGINATION_RULES["pagination"], "position": "Top left"}}
+        rules = {"pagination": {"position": "Top left"}}
         result = self.scan(_thesis(), rules)
         self.assertIn("pagination_position", _issue_types(result))
         compliant = self.scan(_thesis(align=WD_ALIGN_PARAGRAPH.LEFT), rules)
         self.assertNotIn("pagination_position", _issue_types(compliant))
 
-    def test_arabic_preliminary_pages_flagged_when_roman_required(self):
-        result = self.scan(_thesis(prelim_fmt="decimal"), PAGINATION_RULES)
-        self.assertIn("pagination_style", _issue_types(result))
+    def test_style_and_sequence_are_not_checked(self):
+        result = self.scan(_thesis(prelim_fmt="decimal", body_start=5), PAGINATION_RULES)
+        self.assertEqual(_issue_types(result, "pagination"), set())
 
-    def test_body_must_restart_at_one(self):
-        result = self.scan(_thesis(body_start=5), PAGINATION_RULES)
-        issues = {issue["issue_type"]: issue for issue in result["issues"]}
-        self.assertIn("pagination_sequence", issues)
-        self.assertIn("restart at 1", issues["pagination_sequence"]["explanation"])
-
-    def test_chapter_first_page_rules(self):
+    def test_chapter_first_and_title_rules_are_not_flagged(self):
         hidden_rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "No page number shown"}}
-        self.assertIn("pagination_chapter_first", _issue_types(self.scan(_thesis(), hidden_rules)))
-        self.assertNotIn(
-            "pagination_chapter_first", _issue_types(self.scan(_thesis(chapter_first_page="hidden"), hidden_rules))
-        )
-        same_rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "Same position as other pages"}}
-        self.assertNotIn("pagination_position", _issue_types(self.scan(_thesis(chapter_first_page=None), same_rules)))
-
-    def test_hidden_and_not_counted_title_page(self):
-        rules = {"pagination": {**PAGINATION_RULES["pagination"], "title_page": "Hidden and not counted"}}
-        self.assertIn("pagination_sequence", _issue_types(self.scan(_thesis(), rules)))
+        self.assertEqual(_issue_types(self.scan(_thesis(), hidden_rules), "pagination"), set())
+        shown_title = self.scan(_thesis(title_first_page=None), PAGINATION_RULES)
+        self.assertEqual(_issue_types(shown_title, "pagination"), set())
 
     def test_page_tokens(self):
         self.assertEqual(_page_token("iv"), (4, "roman_lower"))
@@ -205,7 +192,7 @@ class PaginationTests(unittest.TestCase):
         self.assertIsNone(_page_token("iiii"))
         self.assertIsNone(_page_token("Introduction"))
 
-    def test_pdf_page_numbers(self):
+    def test_pdf_only_flags_wrong_position(self):
         def page(index, number, x=540, y=40, heading=None):
             lines = [{"text": heading or f"Body text line on page {index + 1} with enough words.",
                       "bbox": [72, 300, 540, 314], "spans": [{"text": "x", "size": 12, "font": "Times"}]}]
@@ -216,14 +203,19 @@ class PaginationTests(unittest.TestCase):
                 line.update(page_index=index, line_index=line_index)
             return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
 
-        pages = [page(0, None), page(1, "ii"), page(2, "iii"),
-                 page(3, None, heading="CHAPTER I"), page(4, "2"), page(5, "4")]
+        pages = [
+            page(0, None),
+            page(1, "ii"),
+            page(2, "III"),
+            page(3, None, heading="CHAPTER I"),
+            page(4, "2"),
+            page(5, "4", x=72, y=750),
+        ]
         parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
-        rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "No page number shown"}}
-        result = self.scan(parsed, rules)
-        issues = {issue["issue_type"]: issue for issue in result["issues"]}
-        self.assertEqual(set(issues), {"pagination_sequence"})
-        self.assertEqual(issues["pagination_sequence"]["locations"][0]["page"], 6)
+        result = self.scan(parsed, {"pagination": {"position": "Top right"}})
+        issues = [issue for issue in result["issues"] if issue["issue_type"].startswith("pagination")]
+        self.assertEqual({issue["issue_type"] for issue in issues}, {"pagination_position"})
+        self.assertEqual(issues[0]["locations"][0]["page"], 6)
 
 
 class HeadingAndSpacingTests(unittest.TestCase):
