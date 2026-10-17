@@ -196,6 +196,7 @@ class MechanicsExtractionTests(unittest.TestCase):
             "j. Citation Format: APA\n"
         )
         self.assertEqual(rules["pagination"]["position"], "Top right")
+        self.assertEqual(rules["pagination"]["first_page_of_chapter"], "No page number shown")
         self.assertIn("chapter", rules["page_break_requirements"][0].lower())
         self.assertIn("table", rules["table_layout_requirements"][0].lower())
         self.assertIn("figure", rules["figure_layout_requirements"][0].lower())

@@ -1513,7 +1513,13 @@ def derive_mechanics_rules(text: str) -> dict:
         ):
             pagination["number_only"] = True
     first_page = _line_value(text, ("First page of each chapter", "First page of a chapter", "Chapter first page"))
-    if not first_page and re.search(r"no page number.*(chapter|first page)|first page.*no page number", flat, re.I):
+    if not first_page and re.search(
+        r"no\s+page\s+(?:number|shown|displayed|printed).*(?:chapter|first\s+page)"
+        r"|first\s+page.*(?:no|without|hide|hidden)\s+page"
+        r"|(?:chapter|every\s+chapter).*no\s+page",
+        flat,
+        re.I,
+    ):
         first_page = CHAPTER_FIRST_HIDDEN
     if first_page:
         pagination["first_page_of_chapter"] = canonical_chapter_first_page(first_page)[:160]
