@@ -108,7 +108,6 @@ def _month_bounds(now: datetime) -> tuple[str, str]:
 
 
 PAID_TIERS = ("premium", "pro")
-WEEK = timedelta(days=7)
 
 
 def is_paid_tier(tier) -> bool:
@@ -116,20 +115,41 @@ def is_paid_tier(tier) -> bool:
 
 
 def _reset_period(tier) -> str:
-    """Pro allowance resets every 7 days; Free and Premium reset monthly."""
+    """Pro allowance resets every Monday; Free and Premium reset monthly."""
     return "weekly" if str(tier or "").lower() == "pro" else "monthly"
 
 
-def _usage_bounds(tier, now: datetime, anchor: datetime | None = None) -> tuple[str, str]:
-    """Pro resets weekly; Premium resets on its billing date; Free on the 1st of the month."""
+def _monday_week_bounds(now: datetime) -> tuple[datetime, datetime]:
+    """Philippine calendar week: Monday 00:00 through next Monday 00:00 (UTC+8)."""
+    local = now.astimezone(BILLING_TZ)
+    start_local = (local - timedelta(days=local.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    end_local = start_local + timedelta(days=7)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+def _usage_bounds(
+    tier,
+    now: datetime,
+    anchor: datetime | None = None,
+    *,
+    coverage_end: datetime | None = None,
+) -> tuple[str, str]:
+    """Pro resets every Monday while paid; Premium on billing date; Free on the 1st."""
     if _reset_period(tier) != "weekly":
         if str(tier or "").lower() == "premium" and anchor:
             start, end = _billing_cycle_bounds(anchor, now)
             return _iso(start), _iso(end)
         return _month_bounds(now)
-    start = anchor if anchor and anchor <= now else now
-    start = start + WEEK * ((now - start) // WEEK)
-    return _iso(start), _iso(start + WEEK)
+    start_dt, end_dt = _monday_week_bounds(now)
+    # Weekly Pro windows stop at the paid-through date (end of the subscribed month/year).
+    if coverage_end:
+        if coverage_end <= start_dt:
+            end_dt = start_dt
+        elif coverage_end < end_dt:
+            end_dt = coverage_end
+    return _iso(start_dt), _iso(end_dt)
 
 
 def _name_key(name: str) -> str:
@@ -714,9 +734,22 @@ def _subscription_row(owner_uid: str) -> dict:
         }
         ref.set(row)
         return row
+
+    tier = str(row.get("tier") or "free").lower()
+    coverage = None if row.get("premium_ended") else _coverage_end(row)
+    # Pro Monday resets only run while the paid subscription term is still open.
+    # After the paid month/year ends, leave counters alone — snapshot drops the tier to free.
+    if tier == "pro" and not (coverage and coverage >= now):
+        return row
+
+    anchor = _parse_iso(row.get("billing_period_start")) or _parse_iso(row.get("period_start"))
+    start, end = _usage_bounds(
+        tier,
+        now,
+        anchor,
+        coverage_end=coverage if tier == "pro" else None,
+    )
     if now_text >= str(row.get("period_end") or ""):
-        tier = row.get("tier")
-        start, end = _usage_bounds(tier, now, _parse_iso(row.get("period_end")))
         row = {
             **row,
             "scans_used": 0,
@@ -727,7 +760,7 @@ def _subscription_row(owner_uid: str) -> dict:
         }
         ref.set(row)
     elif (row.get("period_start"), row.get("period_end")) != (start, end):
-        # Same allowance window, just re-aligned (e.g. calendar month -> billing cycle).
+        # Same allowance window, just re-aligned (e.g. calendar month -> billing cycle / Monday).
         fix = {"period_start": start, "period_end": end, "updated_at": now_text}
         ref.update(fix)
         row = {**row, **fix}
@@ -1047,8 +1080,8 @@ def _paid_term_patch(row: dict, tier: str, period: str, now: datetime) -> dict:
             "renews_at": _iso(renews),
             "reset_period": _reset_period(tier),
         }
-    start, end = _usage_bounds(tier, now, now)
     renews = _billing_period_end(now, period)
+    start, end = _usage_bounds(tier, now, now, coverage_end=renews)
     return {
         "billing_period_start": _iso(now),
         "billing_period_end": _iso(renews),
@@ -1628,6 +1661,24 @@ def create_pending_scan(
     }
     _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(scan)
     return get_scan(owner_uid, scan_id) or scan
+
+
+def mark_scan_ml_requeued(owner_uid: str, scan_id: str) -> bool:
+    """Claim a one-time ML requeue so parallel progress polls do not submit twice."""
+    row = get_scan(owner_uid, scan_id)
+    if not isinstance(row, dict) or row.get("status") != "running":
+        return False
+    if row.get("ml_requeued"):
+        return False
+    claims = _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}/ml_requeue_claims").transaction(
+        lambda current: int(current or 0) + 1
+    )
+    if int(claims or 0) != 1:
+        return False
+    _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").update(
+        {"ml_requeued": True, "updated_at": _iso(_now())}
+    )
+    return True
 
 
 def finalize_scan_from_ml(
