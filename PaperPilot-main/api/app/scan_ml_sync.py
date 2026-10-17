@@ -235,9 +235,9 @@ def scan_progress_payload(owner_uid: str, scan_id: str) -> dict | None:
             return {
                 "scan_id": scan_id,
                 "job_id": job_id,
-                "stage": "queued",
-                "percent": 2,
-                "message": "Waiting for the analysis server (busy with other scans)…",
+                "stage": "parsing",
+                "percent": 4,
+                "message": "Downloading document",
                 "status": "running",
             }
         if _is_stale(scan):

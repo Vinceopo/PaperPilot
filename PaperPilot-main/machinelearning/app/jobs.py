@@ -189,9 +189,6 @@ class JobStore:
 
 job_store = JobStore()
 
-# Cap concurrent heavy PDF parses so 3+ users do not OOM the ML instance.
-_ANALYZE_SLOTS = threading.BoundedSemaphore(max(1, int(settings.max_concurrent_jobs or 2)))
-
 
 def _load_document_bytes(document_url: str | None, document_base64: str | None) -> bytes:
     if document_base64:
@@ -221,11 +218,8 @@ def run_analyze_job(
     mechanics_rules: dict,
     tier: str,
 ) -> None:
-    acquired = False
     try:
-        job_store.set_stage(job_id, JobStage.queued, 1, "Waiting for an analysis slot…")
-        _ANALYZE_SLOTS.acquire()
-        acquired = True
+        # Every concurrent user gets the same progress path — no slot queue.
         job_store.set_stage(job_id, JobStage.parsing, 4, "Downloading document")
         raw = _load_document_bytes(document_url, document_base64)
         job_store.set_stage(job_id, JobStage.parsing, 12, "Checking the file")
@@ -255,9 +249,6 @@ def run_analyze_job(
         job_store.fail(job_id, str(exc))
     except Exception as exc:
         job_store.fail(job_id, f"Analysis failed: {exc}")
-    finally:
-        if acquired:
-            _ANALYZE_SLOTS.release()
 
 
 def start_analyze_job(**kwargs) -> JobRecord:
