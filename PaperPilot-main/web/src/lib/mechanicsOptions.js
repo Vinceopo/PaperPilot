@@ -58,6 +58,15 @@ export function canonicalPagePosition(value) {
   return vertical && horizontal ? `${vertical} ${horizontal}` : clean(value);
 }
 
+/** Bare numeral only (Arabic or Roman) — no “Page 2”, dashes, or “of N”. */
+export function pageNumberOnly(value) {
+  if (value === true) return true;
+  const text = lower(value);
+  return /no\s+extra|without\s+extra|number\s+only|numeral\s+only|digits?\s+only|bare\s+number|no\s+(?:other\s+)?(?:characters?|text|words?|prefix|suffix)/.test(
+    text
+  );
+}
+
 export function canonicalChapterFirstPage(value) {
   const text = lower(value);
   if (!text) return "";

@@ -12,6 +12,7 @@ import {
   canonicalPreliminaryStyle,
   canonicalTitlePage,
   canonicalWordSpacing,
+  pageNumberOnly,
   HEADING_RULE_FIELDS,
   emptyHeading,
   headingsFromRules,
@@ -57,10 +58,11 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
       starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "left" }),
     ],
     paginationPosition: "Top right",
+    paginationNumberOnly: false,
     paginationTitlePage: "Number shown",
     paginationFirstPageRule: "Same position as other pages",
     paginationPreliminaryStyle: "",
-    paginationBodyNumbering: "Arabic, continuous",
+    paginationBodyNumbering: "",
     paginationChapterMarkers: ["chapter_roman", "chapter_arabic"],
     pageBreaks: "Only to start each new chapter and the reference list",
     tableLayout:
@@ -95,6 +97,7 @@ export function emptyMechanicsForm(name = "") {
     fontColor: "Black/Automatic",
     headings: [],
     paginationPosition: "",
+    paginationNumberOnly: false,
     paginationTitlePage: "",
     paginationFirstPageRule: "",
     paginationPreliminaryStyle: "",
@@ -239,6 +242,11 @@ export function rulesToForm(rules = {}, name = "") {
     paginationPosition: canonicalPagePosition(
       pagination.position || rules.pagination_position || asText(rules.pagination_requirements)
     ),
+    paginationNumberOnly: Boolean(
+      pagination.number_only
+        || pageNumberOnly(pagination.position)
+        || pageNumberOnly(asText(rules.pagination_requirements))
+    ),
     paginationTitlePage: canonicalTitlePage(pagination.title_page),
     paginationFirstPageRule: canonicalChapterFirstPage(
       pagination.first_page_of_chapter || rules.pagination_first_page_rule || ""
@@ -351,8 +359,7 @@ export function formToRules(form) {
     if (/^heading\d+_size$/.test(key)) sizes.push(value);
   }
   if (sizes.length) font.sizes_points = [...new Set(sizes)];
-  const headingStyles = headingStylesToRules(form.headingStyles);
-  if (Object.keys(headingStyles).length) font.heading_styles = headingStyles;
+  // heading_styles are already included by headingsToRules(form.headings) above.
   if (Object.keys(font).length) rules.font = font;
 
   const pagination = {};
@@ -365,6 +372,9 @@ export function formToRules(form) {
   ]) {
     const value = String(form[field] || "").trim();
     if (value) pagination[key] = value;
+  }
+  if (form.paginationNumberOnly || pageNumberOnly(form.paginationPosition)) {
+    pagination.number_only = true;
   }
   const markers = canonicalChapterMarkers(form.paginationChapterMarkers);
   if (markers.length) pagination.chapter_markers = markers;

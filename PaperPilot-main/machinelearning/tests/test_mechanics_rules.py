@@ -225,6 +225,65 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(set(issues), {"pagination_sequence"})
         self.assertEqual(issues["pagination_sequence"]["locations"][0]["page"], 6)
 
+    def test_position_only_allows_roman_or_arabic(self):
+        """Mechanics with only position + chapter-first must not judge style or sequence."""
+        def page(index, number, x=540, y=40, heading=None):
+            lines = [{"text": heading or f"Body text line on page {index + 1} with enough words.",
+                      "bbox": [72, 300, 540, 314], "spans": [{"text": "x", "size": 12, "font": "Times"}]}]
+            if number is not None:
+                lines.append({"text": number, "bbox": [x, y, x + 10, y + 12],
+                              "spans": [{"text": number, "size": 12, "font": "Times"}]})
+            for line_index, line in enumerate(lines):
+                line.update(page_index=index, line_index=line_index)
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        pages = [
+            page(0, "i"),
+            page(1, "II"),
+            page(2, None, heading="CHAPTER I"),
+            page(3, "1"),
+            page(4, "2"),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        rules = {
+            "pagination": {
+                "position": "Top right (no extra characters)",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman"],
+            }
+        }
+        result = self.scan(parsed, rules)
+        self.assertEqual(_issue_types(result, "pagination"), set())
+
+    def test_number_only_flags_decorated_tokens(self):
+        def page(index, number, x=540, y=40):
+            lines = [
+                {
+                    "text": f"Body text line on page {index + 1} with enough words.",
+                    "bbox": [72, 300, 540, 314],
+                    "spans": [{"text": "x", "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": 0,
+                },
+                {
+                    "text": number,
+                    "bbox": [x, y, x + 40, y + 12],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": 1,
+                },
+            ]
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": [page(0, "Page 1")]}
+        rules = {"pagination": {"position": "Top right", "number_only": True}}
+        result = self.scan(parsed, rules)
+        self.assertIn("pagination_extra_characters", _issue_types(result))
+
+    def test_roman_case_does_not_matter_when_roman_required(self):
+        result = self.scan(_thesis(prelim_fmt="upperRoman"), PAGINATION_RULES)
+        self.assertNotIn("pagination_style", _issue_types(result))
+
 
 class HeadingAndSpacingTests(unittest.TestCase):
     def _doc(self, heading_bold=True, body=BODY):

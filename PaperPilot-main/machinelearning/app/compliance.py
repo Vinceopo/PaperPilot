@@ -22,6 +22,7 @@ from app.mechanics_options import (
     canonical_preliminary_style,
     canonical_word_spacing,
     chapter_first_page_rule,
+    page_number_only,
     page_position_parts,
     title_page_rule,
 )
@@ -1590,12 +1591,14 @@ ROMAN_RE = re.compile(r"^(?=[mdclxvi]+$)m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(i
 PAGE_TOKEN_RE = re.compile(
     r"^(?:page\s+)?[-–—]?\s*(\d{1,4}|[ivxlcdm]{1,7})\s*[-–—]?(?:\s*(?:of|/)\s*\d{1,4})?$", re.I
 )
+BARE_PAGE_TOKEN_RE = re.compile(r"^(\d{1,4}|[ivxlcdm]{1,7})$", re.I)
 ROMAN_NUMERALS = (
     (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
     (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"),
 )
 STYLE_LABELS = {"arabic": "Arabic (1, 2, 3)", "roman_lower": "lowercase Roman (i, ii, iii)",
                 "roman_upper": "uppercase Roman (I, II, III)", "other": "letters or another style"}
+ROMAN_STYLES = frozenset({"roman_lower", "roman_upper"})
 
 
 def _roman_to_int(token: str) -> int:
@@ -1608,7 +1611,7 @@ def _roman_to_int(token: str) -> int:
 
 
 def _format_page_value(value: int, style: str) -> str:
-    if style in {"roman_lower", "roman_upper"} and value > 0:
+    if style in ROMAN_STYLES and value > 0:
         out, rest = "", value
         for amount, numeral in ROMAN_NUMERALS:
             while rest >= amount:
@@ -1630,6 +1633,27 @@ def _page_token(text: str) -> tuple[int, str] | None:
         return None
     style = "roman_lower" if token.islower() else "roman_upper" if token.isupper() else "other"
     return _roman_to_int(token), style
+
+
+def _is_bare_page_token(text: str) -> bool:
+    """True for '2' / 'ii' / 'II' only — no 'Page 2', dashes, or 'of N'."""
+    raw = (text or "").strip()
+    if not BARE_PAGE_TOKEN_RE.match(raw):
+        return False
+    if raw.isdigit():
+        return True
+    return bool(ROMAN_RE.match(raw))
+
+
+def _styles_compatible(actual: str | None, needed: str | None) -> bool:
+    """Arabic must match arabic; any Roman case matches any Roman requirement."""
+    if not needed:
+        return True
+    if needed == "arabic":
+        return actual == "arabic"
+    if needed in ROMAN_STYLES:
+        return actual in ROMAN_STYLES
+    return actual == needed
 
 
 def _section_starts(units: list[dict]) -> dict[int, str]:
@@ -1695,11 +1719,19 @@ def _docx_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[d
             placement = {"where": setup.get("where"), "align": setup.get("align")} if setup.get("where") else None
             if first_of_section and setup.get("first_page_hidden"):
                 placement = None
-        mark = {"page": page, "shown": bool(placement and placement.get("where")), "value": counter,
-                "style": setup.get("format") or "arabic", "unit": None}
+        mark = {
+            "page": page,
+            "shown": bool(placement and placement.get("where")),
+            "value": counter,
+            "style": setup.get("format") or "arabic",
+            "unit": None,
+            "raw": None,
+            "bare": True,
+        }
         if mark["shown"]:
             mark["vertical"] = "top" if placement["where"] == "header" else "bottom"
             mark["horizontal"] = placement.get("align") or "left"
+            mark["raw"] = _format_page_value(counter, mark["style"])
         marks.append(mark)
     return marks
 
@@ -1716,7 +1748,8 @@ def _pdf_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[di
             bbox = unit.get("bbox")
             height = float(unit.get("page_height") or 0)
             width = float(unit.get("page_width") or 0)
-            token = _page_token(unit.get("text") or "")
+            raw = (unit.get("text") or "").strip()
+            token = _page_token(raw)
             if not token or not bbox or len(bbox) < 4 or not height or not width:
                 continue
             if bbox[1] <= height * 0.15:
@@ -1728,13 +1761,23 @@ def _pdf_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[di
             middle = (bbox[0] + bbox[2]) / 2 / width
             horizontal = "left" if middle < 0.4 else "right" if middle > 0.6 else "center"
             if best is None or distance < best[0]:
-                best = (distance, unit, token, vertical, horizontal)
+                best = (distance, unit, token, vertical, horizontal, raw)
         if best is None:
-            marks.append({"page": page, "shown": False, "value": None, "style": None, "unit": None})
+            marks.append({"page": page, "shown": False, "value": None, "style": None, "unit": None,
+                          "raw": None, "bare": True})
             continue
-        _distance, unit, (value, style), vertical, horizontal = best
-        marks.append({"page": page, "shown": True, "value": value, "style": style, "unit": unit,
-                      "vertical": vertical, "horizontal": horizontal})
+        _distance, unit, (value, style), vertical, horizontal, raw = best
+        marks.append({
+            "page": page,
+            "shown": True,
+            "value": value,
+            "style": style,
+            "unit": unit,
+            "vertical": vertical,
+            "horizontal": horizontal,
+            "raw": raw,
+            "bare": _is_bare_page_token(raw),
+        })
     return marks
 
 
@@ -1751,7 +1794,11 @@ def _check_pagination(
     title_rule = title_page_rule(pagination.get("title_page"))
     prelim_style = canonical_preliminary_style(pagination.get("preliminary_style"))
     body_numbering = canonical_body_numbering(pagination.get("body_numbering"))
-    if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering)):
+    number_only = bool(pagination.get("number_only")) or page_number_only(pagination.get("position"))
+    # Style / sequence only when the mechanics explicitly ask for them — position-only
+    # formats must not fail for Roman vs Arabic or where counting starts.
+    check_numbering = bool(prelim_style or body_numbering)
+    if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering, number_only)):
         return
     stats.applicable = True
     markers = set(canonical_chapter_markers(pagination.get("chapter_markers"))) or set(DEFAULT_CHAPTER_MARKERS)
@@ -1774,16 +1821,19 @@ def _check_pagination(
         return "prelim" if split_blocks and page < body_start else "body"
 
     expected_style = {"prelim": None, "body": None}
-    if prelim_style == PRELIM_ROMAN and split_blocks:
-        expected_style["prelim"] = "roman_lower"
-    elif prelim_style == PRELIM_ARABIC:
-        expected_style["prelim"] = "arabic"
-        expected_style["body"] = "arabic"
-    if (prelim_style or body_numbering) and (split_blocks or prelim_style != PRELIM_ROMAN):
-        expected_style["body"] = "arabic"
+    if check_numbering:
+        if prelim_style == PRELIM_ROMAN and split_blocks:
+            expected_style["prelim"] = "roman_lower"
+        elif prelim_style == PRELIM_ARABIC:
+            expected_style["prelim"] = "arabic"
+            expected_style["body"] = "arabic"
+        if split_blocks or prelim_style != PRELIM_ROMAN:
+            expected_style["body"] = "arabic"
 
     def expected_value(page: int) -> int | None:
         """The number the first numbered page of a block should carry, when the rules pin it down."""
+        if not check_numbering:
+            return None
         if block_of(page) == "body" and split_blocks:
             if body_numbering == BODY_RESTART:
                 return page - body_start + 1
@@ -1800,7 +1850,7 @@ def _check_pagination(
         unit = mark.get("unit")
         loc = _unit_location(unit, "Pagination") if unit else _location(page, 0, "Pagination")
         shown = mark["shown"]
-        printed = _format_page_value(mark["value"], mark["style"] or "arabic") if shown else ""
+        printed = (mark.get("raw") or _format_page_value(mark["value"], mark["style"] or "arabic")) if shown else ""
         if page == 0 and has_title:
             want, rule_kind = ("hidden" if title_rule != "shown" else "main"), "title"
         elif page in chapter_pages and chapter_rule:
@@ -1870,22 +1920,38 @@ def _check_pagination(
                         f"Move the page number to the {_position_label(want_v, want_h)} of the page.",
                         loc,
                     )
+            elif number_only and shown and mark.get("bare") is False:
+                ok = False
+                collector.add(
+                    "pagination_extra_characters",
+                    "minor",
+                    "Page number has extra characters",
+                    "The uploaded format requires the page number alone (no “Page”, dashes, or “of N”).",
+                    f"Page {page + 1} shows “{printed}” instead of a bare number such as “2” or “ii”.",
+                    "Use only the numeral (Arabic or Roman) with no extra characters.",
+                    loc,
+                )
 
-        if shown and want != "hidden":
+        if shown and want != "hidden" and check_numbering:
             block = block_of(page)
             style_needed = expected_style[block]
             if style_needed:
                 checked = True
-                if mark["style"] != style_needed:
+                if not _styles_compatible(mark.get("style"), style_needed):
                     ok = False
                     part = "preliminary pages" if block == "prelim" else "the main body"
+                    style_label = (
+                        "Roman (i, ii, iii or I, II, III)"
+                        if style_needed in ROMAN_STYLES
+                        else STYLE_LABELS[style_needed]
+                    )
                     collector.add(
                         "pagination_style",
                         "moderate",
                         "Page number style differs",
-                        f"The uploaded format numbers {part} in {STYLE_LABELS[style_needed]}.",
+                        f"The uploaded format numbers {part} in {style_label}.",
                         f"Page {page + 1} is numbered “{printed}” ({STYLE_LABELS.get(mark['style'], 'unknown style')}).",
-                        f"Use {STYLE_LABELS[style_needed]} page numbers for {part} (Word: Format Page Numbers).",
+                        f"Use {style_label} page numbers for {part} (Word: Format Page Numbers).",
                         loc,
                     )
             previous = last_shown.get(block)
