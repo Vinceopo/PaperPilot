@@ -105,6 +105,11 @@ function writeCachedSubscription(uid, next) {
   }
 }
 
+/** Prefer updated_at so a newer server snapshot can replace an older one. */
+function subscriptionStamp(sub) {
+  return String(sub?.updated_at || sub?.renews_at || sub?.billing_period_end || "");
+}
+
 function pendingRegistration(user) {
   try {
     const saved = JSON.parse(sessionStorage.getItem(REGISTRATION_SUCCESS_KEY) || "null");
@@ -155,12 +160,33 @@ export default function App() {
   // checkout confirm), so a reply requested before the latest plan update is dropped.
   const subscriptionTicketRef = useRef(0);
   const subscriptionAppliedRef = useRef(0);
+  const subscriptionRef = useRef(null);
   const nextSubscriptionTicket = useCallback(() => ++subscriptionTicketRef.current, []);
-  const storeSubscription = useCallback((next, ticket) => {
+  const storeSubscription = useCallback((next, ticket, opts = {}) => {
     if (!next || typeof next !== "object") return false;
     const order = ticket ?? ++subscriptionTicketRef.current;
     if (order < subscriptionAppliedRef.current) return false;
+
+    const current = subscriptionRef.current;
+    const nextTier = String(next.tier || "free").toLowerCase();
+    const currentTier = String(current?.tier || "free").toLowerCase();
+    // After PayMongo confirm, an in-flight GET /subscription often still returns Free.
+    // That stale snapshot must not wipe the paid plan from the header / scan limits.
+    // A newer Free snapshot (explicit cancel, or period ended) is still allowed through.
+    if (
+      !opts.allowDowngrade &&
+      isPaidTier(currentTier) &&
+      !isPaidTier(nextTier)
+    ) {
+      const curStamp = subscriptionStamp(current);
+      const nextStamp = subscriptionStamp(next);
+      if (!(curStamp && nextStamp && nextStamp > curStamp)) {
+        return false;
+      }
+    }
+
     subscriptionAppliedRef.current = order;
+    subscriptionRef.current = next;
     setSubscription(next);
     writeCachedSubscription(auth?.currentUser?.uid, next);
     return true;
@@ -466,7 +492,9 @@ export default function App() {
     setCurrentManuscript(null);
     setCurrentVersion(null);
     subscriptionAppliedRef.current = ++subscriptionTicketRef.current;
-    setSubscription(uid ? readCachedSubscription(uid) : null);
+    const cached = uid ? readCachedSubscription(uid) : null;
+    subscriptionRef.current = cached;
+    setSubscription(cached);
     setBillingReturn(null);
     setUpgradeMessage("");
     setError("");
@@ -661,7 +689,13 @@ export default function App() {
       if (next) {
         setRegistrationSuccess(pendingRegistration(next));
         const cached = readCachedSubscription(next.uid);
-        if (cached) setSubscription((current) => current || cached);
+        if (cached) {
+          setSubscription((current) => {
+            if (current) return current;
+            subscriptionRef.current = cached;
+            return cached;
+          });
+        }
       }
       setAuthReady(true);
     });
@@ -1133,7 +1167,11 @@ export default function App() {
   }
 
   if (!authReady) {
-    return <div className="grid min-h-screen place-items-center bg-navy text-sm text-slate-400">Loading…</div>;
+    return (
+      <div className="grid min-h-screen place-items-center bg-[#f3f5f7] text-sm text-slate-500">
+        Loading PaperPilot…
+      </div>
+    );
   }
 
   if (!signedIn) {
@@ -1439,8 +1477,8 @@ export default function App() {
             subscription={subscription}
             billingReturn={billingReturn}
             onBillingSettled={() => setBillingReturn(null)}
-            onSubscriptionChange={(next) => {
-              storeSubscription(next);
+            onSubscriptionChange={(next, opts) => {
+              storeSubscription(next, undefined, opts);
               const note = notificationFromSubscription(next);
               if (note) appendNotifications(note);
             }}

@@ -3,7 +3,8 @@
 @tailwind utilities;
 
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  /* Light shell so a failed JS load is not a blank black screen (theme-color stays navy). */
+  @apply bg-[#f3f5f7] text-[#172033] antialiased;
 }
 
 @layer components {

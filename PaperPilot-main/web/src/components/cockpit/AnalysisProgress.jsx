@@ -19,7 +19,10 @@ export default function AnalysisProgress({ progress, percent }) {
   }, [stepIndex, done]);
 
   const safePercent = Math.min(100, Math.max(0, Number(percent) || 0));
-  const activeStep = ANALYSIS_STEPS[Math.min(stepIndex, ANALYSIS_STEPS.length - 1)];
+  const safeIndex = Number.isFinite(stepIndex)
+    ? Math.min(Math.max(0, stepIndex), ANALYSIS_STEPS.length - 1)
+    : 0;
+  const activeStep = ANALYSIS_STEPS[safeIndex] || ANALYSIS_STEPS[0];
 
   return (
     <div className="w-full">

@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import "./index.css";
 
 /** PayMongo return page for checkouts started in the mobile app. */
@@ -37,6 +38,8 @@ const appCheckoutStatus = params.get("app") === "1" ? params.get("billing") : nu
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    {appCheckoutStatus ? <AppCheckoutReturn status={appCheckoutStatus} /> : <App />}
+    <ErrorBoundary>
+      {appCheckoutStatus ? <AppCheckoutReturn status={appCheckoutStatus} /> : <App />}
+    </ErrorBoundary>
   </React.StrictMode>
 );
