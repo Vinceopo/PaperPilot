@@ -1564,6 +1564,71 @@ def _assert_scan_inputs(
     return sub, manuscript, version, mechanics
 
 
+# Pagination only flags wrong position. Drop legacy issue types from older ML builds /
+# saved scans so "missing page 1" never surfaces again.
+_PAGINATION_POSITION_ISSUE = "pagination_position"
+_LEGACY_PAGINATION_ISSUES = frozenset(
+    {
+        "pagination_missing",
+        "pagination_title_page",
+        "pagination_chapter_first",
+        "pagination_style",
+        "pagination_sequence",
+        "pagination_extra_characters",
+    }
+)
+
+
+def sanitize_pagination_issues(issues: list | None) -> list:
+    """Keep only position mismatches for Pagination; drop missing/style/sequence flags."""
+    out: list = []
+    for issue in issues or []:
+        if not isinstance(issue, dict):
+            continue
+        issue_type = str(issue.get("issue_type") or "")
+        if issue_type in _LEGACY_PAGINATION_ISSUES:
+            continue
+        out.append(issue)
+    return out
+
+
+def _sanitize_pagination_sections(sections: list | None, issues: list) -> list:
+    pag_issues = [
+        issue
+        for issue in issues
+        if str(issue.get("issue_type") or "").startswith("pagination")
+        or str(issue.get("category") or "") == "Pagination"
+    ]
+    cleaned: list = []
+    for section in sections or []:
+        if not isinstance(section, dict):
+            continue
+        if str(section.get("section") or "") != "Pagination":
+            cleaned.append(section)
+            continue
+        row = dict(section)
+        count = len(pag_issues)
+        row["issue_count"] = count
+        if count == 0:
+            row["formatting_score"] = 100.0
+            row["status"] = "pass"
+            row["failed_units"] = 0
+        cleaned.append(row)
+    return cleaned
+
+
+def sanitize_scan_pagination_payload(payload: dict) -> dict:
+    """Strip legacy pagination issues from a scan result or get_scan payload."""
+    if not isinstance(payload, dict):
+        return payload
+    issues = sanitize_pagination_issues(payload.get("issues"))
+    out = dict(payload)
+    out["issues"] = issues
+    if "sections" in out:
+        out["sections"] = _sanitize_pagination_sections(out.get("sections"), issues)
+    return out
+
+
 SCAN_RESULT_FIELDS = (
     "right_pct",
     "wrong_pct",
@@ -1717,11 +1782,12 @@ def finalize_scan_from_ml(
     # The limit was checked when the scan started; re-checking here would leave an admitted
     # scan stuck in "running" forever.
     _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id, enforce_limit=False)
-    issues = result.get("issues") or []
-    sections = result.get("sections") or []
-    overall_score = _optional_float(result.get("overall_score"))
+    cleaned = sanitize_scan_pagination_payload(result)
+    issues = cleaned.get("issues") or []
+    sections = cleaned.get("sections") or []
+    overall_score = _optional_float(cleaned.get("overall_score"))
 
-    row.update({key: result.get(key) for key in SCAN_RESULT_FIELDS})
+    row.update({key: cleaned.get(key) for key in SCAN_RESULT_FIELDS})
     row.update(
         {
             "status": "done",
@@ -1754,6 +1820,8 @@ def persist_scan(
 ) -> dict:
     scan_id, created = str(uuid.uuid4()), _iso(_now())
     _assert_scan_inputs(owner_uid, manuscript_id, version_id, mechanics_id)
+    issues = sanitize_pagination_issues(issues)
+    sections = _sanitize_pagination_sections(sections, issues)
 
     scan = {
         "id": scan_id,
@@ -1843,4 +1911,4 @@ def get_scan(owner_uid: str, scan_id: str) -> dict | None:
         payload["page_count"] = int(row.get("page_count") or 0)
     if row.get("pagination") is not None:
         payload["pagination"] = row.get("pagination") or {}
-    return payload
+    return sanitize_scan_pagination_payload(payload)

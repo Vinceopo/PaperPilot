@@ -244,6 +244,20 @@ def run_analyze_job(
 
         job_store.set_stage(job_id, JobStage.scoring, 92, "Computing scores and summaries")
         scan["document_format"] = file_type
+        # Defense in depth: never return legacy pagination issue types.
+        scan["issues"] = [
+            issue
+            for issue in (scan.get("issues") or [])
+            if str((issue or {}).get("issue_type") or "")
+            not in {
+                "pagination_missing",
+                "pagination_title_page",
+                "pagination_chapter_first",
+                "pagination_style",
+                "pagination_sequence",
+                "pagination_extra_characters",
+            }
+        ]
         job_store.complete(job_id, scan)
     except DocumentError as exc:
         job_store.fail(job_id, str(exc))
