@@ -14,6 +14,7 @@ import { auth } from "../firebase";
 import { enforceAuthSession } from "../services/auth";
 import {
   deleteManuscript as deleteManuscriptRequest,
+  deleteManuscriptVersion,
   deleteMechanics as deleteMechanicsRequest,
   extractMechanics,
   getComplianceScan,
@@ -231,7 +232,21 @@ export function AppDataProvider({ children }) {
     if (next !== notificationsRef.current) persistNotifications(next);
   }
 
+  function discardUnscannedVersion() {
+    const flow = scanFlowRef.current;
+    if (flow?.persistScan || ["summary", "tracing", "results", "analyzing", "documentTrace"].includes(flow?.step)) {
+      return;
+    }
+    const version = currentVersionRef.current;
+    const manuscript = currentManuscriptRef.current;
+    if (!version?.pending || !isServerId(version.id)) return;
+    const manuscriptId = version.manuscript_id || manuscript?.serverManuscriptId;
+    if (!isServerId(manuscriptId)) return;
+    deleteManuscriptVersion({ manuscriptId, versionId: version.id }).catch(() => {});
+  }
+
   function cancelManuscriptUpload() {
+    discardUnscannedVersion();
     uploadSessionRef.current += 1;
     setUploadCancelKey((key) => key + 1);
     setFileDetailsNotice("");
@@ -249,6 +264,10 @@ export function AppDataProvider({ children }) {
   }
 
   function handleBackToDashboard() {
+    const step = scanFlowRef.current?.step;
+    if (!step || step === "idle" || step === "fileSelected" || step === "error") {
+      discardUnscannedVersion();
+    }
     setManuscriptReady(false);
     setFileDetailsNotice("");
     setCurrentVersion(null);

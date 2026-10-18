@@ -297,16 +297,17 @@ const SCRIPT = String.raw`
     }
     return needles.filter(function (v, i, list) { return v.length >= 8 && list.indexOf(v) === i; });
   }
-  function pagesByDistance(page, total) {
+  function pagesByDistance(page, total, maxDistance) {
     var count = Math.max(0, total);
     var start = Math.min(count, Math.max(1, page || 1));
+    var limit = maxDistance == null ? count : maxDistance;
     var order = [];
     for (var step = 0; order.length < count; step += 1) {
+      if (step > limit || step > count) break;
       var after = start + step;
       var before = start - step;
       if (after <= count && order.indexOf(after) < 0) order.push(after);
       if (step && before >= 1 && order.indexOf(before) < 0) order.push(before);
-      if (step > count) break;
     }
     return order;
   }
@@ -422,7 +423,7 @@ const SCRIPT = String.raw`
     var estimate = reported ? lineCountBox(reported, line) : null;
     var needles = excerptNeedles(excerpt);
     for (var n = 0; n < needles.length; n += 1) {
-      var order = pagesByDistance(pageNumber, sections.length);
+      var order = pagesByDistance(pageNumber, sections.length, 1);
       for (var p = 0; p < order.length; p += 1) {
         var ranges = textRangesIn(sections[order[p] - 1], needles[n]);
         if (!ranges.length) continue;

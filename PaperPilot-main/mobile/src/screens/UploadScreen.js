@@ -202,10 +202,10 @@ export default function UploadScreen({ navigation }) {
     label: item.name || item.source_filename,
   }));
   const titleOptions = uploadTargets.map((item) => {
-    const versionCount = Number(
-      item.version_count ?? item.current_version_number ?? item.versions?.length ?? 0
-    );
-    return { value: item.id, label: `${item.title} · version ${versionCount + 1}` };
+    const latest = Number(item.current_version_number || 0);
+    const counted = Number(item.version_count ?? item.versions?.length ?? 0);
+    const shown = latest > 0 ? latest : counted;
+    return { value: item.id, label: `${item.title} · v${shown}.0` };
   });
 
   useEffect(() => {
@@ -1242,9 +1242,15 @@ export default function UploadScreen({ navigation }) {
                     <Text style={styles.fileGroupLabel}>Version label</Text>
                     <View style={styles.versionBox}>
                       <Text style={styles.versionText}>
-                        v{currentVersion.version_number || scanFlow.versionNumber || "1.0"}
+                        v{Number(currentVersion.version_number || scanFlow.versionNumber || 1)}.0
                       </Text>
                     </View>
+                    {currentVersion.pending ? (
+                      <Text style={styles.versionHint}>
+                        Saved as this version only after the scan finishes. Cancel upload leaves the
+                        latest version unchanged.
+                      </Text>
+                    ) : null}
                   </View>
                 ) : null}
 
@@ -1825,6 +1831,7 @@ const styles = StyleSheet.create({
   fileGroupLabel: { marginBottom: 8, fontSize: 12, fontWeight: "600", color: "#475569" },
   fileMeta: { marginTop: 2, fontSize: 11, color: colors.muted },
   versionText: { fontSize: 12, fontWeight: "500", color: colors.muted },
+  versionHint: { marginTop: 6, fontSize: 11, lineHeight: 16, color: colors.muted },
   savedHint: { marginTop: 12, fontSize: 11, lineHeight: 17, color: colors.muted },
   savedHintName: { fontWeight: "600", color: "#475569" },
   msActions: { marginTop: 12, flexDirection: "row", gap: 12, alignItems: "stretch" },
