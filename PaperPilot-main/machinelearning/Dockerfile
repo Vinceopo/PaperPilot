@@ -17,4 +17,6 @@ ENV PORT=8000
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn app.main:app --host ${HOST} --port ${PORT}"]
+# Single worker: jobs are in-process threads; multiple workers would 404 each other's jobs.
+# Build stamp: pagination position-only (redeploy when this comment changes).
+CMD ["sh", "-c", "uvicorn app.main:app --host ${HOST} --port ${PORT} --workers 1 --timeout-keep-alive 75"]

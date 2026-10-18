@@ -21,7 +21,6 @@ from app.mechanics_options import (
     FONT_SIZE_KEYS,
     MAX_HEADING_LEVELS,
     CHAPTER_FIRST_HIDDEN,
-    PRELIM_ROMAN,
     WORD_SPACING_TWO,
     canonical_body_numbering,
     canonical_chapter_first_page,
@@ -34,6 +33,7 @@ from app.mechanics_options import (
     heading_style_from_text,
     normalize_heading_styles,
     normalize_pagination_rules,
+    page_number_only,
     page_position_parts,
 )
 
@@ -897,23 +897,35 @@ def _flatten_mechanics_text(text: str) -> str:
     return cleaned.strip()
 
 
+def _stop_pattern(stop_words: tuple[str, ...]) -> str:
+    """Outline markers like 'h.' must not require a word-boundary after the period."""
+    parts: list[str] = []
+    for word in stop_words:
+        esc = re.escape(word)
+        if word.endswith("."):
+            parts.append(esc)
+        else:
+            parts.append(rf"{esc}\b")
+    return "|".join(parts)
+
+
 def _clip_value(value: str, stop_words: tuple[str, ...]) -> str:
     text = (value or "").strip(" \t-:;,.|/\\")
     if not text:
         return ""
     # Stop at the next outline/label boundary when the capture ran long.
-    pattern = r"(?i)\s+(?:%s)\b" % "|".join(re.escape(word) for word in stop_words)
+    pattern = rf"(?i)\s+(?:{_stop_pattern(stop_words)})"
     parts = re.split(pattern, text, maxsplit=1)
     return parts[0].strip(" \t-:;,.|/\\")[:200]
 
 
 def _value_after_label(flat: str, labels: tuple[str, ...], stop_words: tuple[str, ...]) -> str:
     label_alt = "|".join(re.escape(label) for label in labels)
-    stop_alt = "|".join(re.escape(word) for word in stop_words)
+    stop_alt = _stop_pattern(stop_words)
     match = re.search(
         rf"(?i)\b(?:{label_alt})\b(?:\s*[)\].-]*)?\s*"
         rf"(?:[:：=\-–]|is|are|of|should be|must be)?\s*"
-        rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})\b|$)",
+        rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})|$)",
         flat,
     )
     if not match:
@@ -940,8 +952,12 @@ def _line_value(text: str, labels: tuple[str, ...]) -> str:
             return match.group(1).strip(" :：")[:200]
         if match or alone.match(line):
             following = next((item for item in lines[index + 1 :] if item.strip(" :：")), "").strip(" :：")
-            # A section heading followed by a paragraph is not a label/value pair.
-            if len(following) <= 120:
+            # Next outline heading is not this label's value.
+            if not following or alone.match(following) or re.match(r"^[a-k]\.\s", following, re.I):
+                return ""
+            # Layout / caption rules are often a full sentence; other label values stay short.
+            max_len = 300 if re.search(r"layout|caption|naming|title convention", line, re.I) else 120
+            if len(following) <= max_len:
                 return following
     return ""
 
@@ -984,8 +1000,26 @@ def _parse_paper_size(value: str) -> dict:
 UNICODE_FRACTIONS = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625}
 WORD_NUMBERS = {"half": 0.5, "one": 1.0, "two": 2.0, "three": 3.0}
 UNIT_TO_INCHES = {"cm": 1 / 2.54, "mm": 1 / 25.4, "pt": 1 / 72, "point": 1 / 72, "points": 1 / 72}
+# PDF extractors often emit curly quotes / primes instead of ASCII " for inches.
+_INCH_MARK_CHARS = "\"“”″〞′’'"
+_INCH_OR_LENGTH_UNIT = rf"(?:inches|inch|in|cm|mm|pt|points?|[{re.escape(_INCH_MARK_CHARS)}]+)"
 # A measurement as written in a guide: "1.5", "1 ½", "1/2", "2.54 cm", "25mm", '1"'.
-MEASURE_PATTERN = r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)\s*(?:inches|inch|in|cm|mm|pt|″|\")?"
+MEASURE_PATTERN = (
+    r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)"
+    rf"\s*(?:{_INCH_OR_LENGTH_UNIT})?"
+)
+
+
+def _normalize_inch_marks(text: str) -> str:
+    """Turn PDF curly quotes / primes after a number into ASCII inch marks."""
+    if not text:
+        return text
+    # 1.00” / 1.00 '' / 1″ → 1.00"
+    return re.sub(
+        rf"(\d)\s*([{_INCH_MARK_CHARS}]{{1,2}})",
+        r'\1"',
+        str(text),
+    )
 
 
 def parse_length_inches(value) -> float | None:
@@ -1078,10 +1112,16 @@ def _parse_inches(value: str) -> float | None:
 
 MARGIN_SIDES = ("top", "bottom", "left", "right", "gutter", "header", "footer")
 _MARGIN_SIDE_ALT = "|".join(MARGIN_SIDES)
-# "1.5 inch" / '1"' — unit required so "page 1 on the left" is not a margin.
+# "1.5 inch" / '1"' / '1.00”' — unit required so "page 1 on the left" is not a margin.
 _MEASURE_WITH_UNIT = (
     r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)"
-    r"(?:\s*|-)(?:inches|inch|in|cm|mm|″|\")"
+    rf"(?:\s*|-)(?:{_INCH_OR_LENGTH_UNIT})"
+)
+# After a clear "Top, Right and Bottom:" label, PDFs sometimes drop the inch mark entirely.
+_MEASURE_AFTER_SIDE_LIST = (
+    rf"(?:{_MEASURE_WITH_UNIT}|"
+    r"(?:\d+(?:[.,]\d+)?)"
+    r"(?=\s*(?:$|[.;,)\]}]|to\b|for\b|and\b|left\b|right\b|top\b|bottom\b|gutter\b|header\b|footer\b)))"
 )
 
 
@@ -1108,6 +1148,7 @@ def _simple_margin_amount(value: str) -> float | None:
 def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]:
     """Labeled 'Top: 1' and prose '1.5 inch on the left, 1 inch on the right, top and bottom'."""
     margins: dict[str, float] = {}
+    flat = _normalize_inch_marks(flat)
     window_match = re.search(r"\bmargins?\b.{0,500}", flat, re.I)
     window = window_match.group(0) if window_match else flat
     # Sides may be listed just before the word "margins" ("Top and bottom margins: 1 inch").
@@ -1129,11 +1170,12 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
                 margins[side] = amount
 
     # "Top, Right and Bottom: 1.00\"" / "(left, right, top and bottom) should be 1.5 inches".
+    # Also "Top, Right and Bottom: 1.00" when the PDF dropped the inch mark.
     side_list = rf"(?:{_MARGIN_SIDE_ALT})(?:\s*(?:,|and|&|/)\s*(?:the\s+)?(?:{_MARGIN_SIDE_ALT}))+"
     listed = re.compile(
         rf"\b({side_list})\b\s*\)?\s*(?:margins?\s*)?"
         rf"(?::|=|-|–|—|should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
-        rf"(?:set\s+(?:to|at)\s+)?({_MEASURE_WITH_UNIT})",
+        rf"(?:set\s+(?:to|at)\s+)?({_MEASURE_AFTER_SIDE_LIST})",
         re.I,
     )
     for match in listed.finditer(lead_window):
@@ -1246,11 +1288,15 @@ def derive_mechanics_rules(text: str) -> dict:
     if not flat:
         return rules
 
+    # Do not use bare "Table"/"Figure"/"Page" here — they chop mid-sentence
+    # ("above the table", "Do page break only…"). Prefer section titles + outline letters.
     stop = (
         "Size", "Orientation", "Substance", "Spacing", "Indention", "Indentation",
         "Margins", "Margin", "Font", "Type", "Color", "Pagination", "Citation",
-        "Heading", "Table", "Figure", "Page", "Top", "Bottom", "Left", "Right",
-        "Gutter", "Header", "Footer", "Paper", "Alignment", "Justification", "a.", "b.", "c.", "d.", "e.",
+        "Heading", "Top", "Bottom", "Left", "Right",
+        "Gutter", "Header", "Footer", "Paper", "Alignment", "Justification",
+        "Layout for Tables", "Layout for Figures", "Table layout", "Figure layout",
+        "a.", "b.", "c.", "d.", "e.", "f.", "g.", "h.", "i.", "j.", "k.",
         "i.", "ii.", "iii.", "iv.", "v.", "vi.",
     )
 
@@ -1462,8 +1508,18 @@ def derive_mechanics_rules(text: str) -> dict:
         position = found.group(0) if found else position
     if position.strip():
         pagination["position"] = canonical_page_position(position)[:120]
+        if page_number_only(position) or page_number_only(
+            _line_value(text, ("Pagination", "Page numbering", "Page numbers"))
+        ):
+            pagination["number_only"] = True
     first_page = _line_value(text, ("First page of each chapter", "First page of a chapter", "Chapter first page"))
-    if not first_page and re.search(r"no page number.*(chapter|first page)|first page.*no page number", flat, re.I):
+    if not first_page and re.search(
+        r"no\s+page\s+(?:number|shown|displayed|printed).*(?:chapter|first\s+page)"
+        r"|first\s+page.*(?:no|without|hide|hidden)\s+page"
+        r"|(?:chapter|every\s+chapter).*no\s+page",
+        flat,
+        re.I,
+    ):
         first_page = CHAPTER_FIRST_HIDDEN
     if first_page:
         pagination["first_page_of_chapter"] = canonical_chapter_first_page(first_page)[:160]
@@ -1472,11 +1528,11 @@ def derive_mechanics_rules(text: str) -> dict:
     )
     if title_page:
         pagination["title_page"] = title_page
+    # Only set preliminary / body numbering when those lines exist in the guide —
+    # do not infer them from unrelated wording (avoids false pagination style checks).
     preliminary = canonical_preliminary_style(
         _line_value(text, ("Preliminary pages", "Preliminary page numbers", "Front matter"))
     )
-    if not preliminary and re.search(r"\b(?:lower\s*case|small)\s+roman\b", flat, re.I):
-        preliminary = PRELIM_ROMAN
     if preliminary:
         pagination["preliminary_style"] = preliminary
     body_numbering = canonical_body_numbering(
@@ -1554,11 +1610,34 @@ def derive_mechanics_rules(text: str) -> dict:
             return value
         return _line_value(text, (f"{word}s", word)) or _value_after_label(flat, (f"{word}s", word), stop)
 
-    table_layout = _section_value(("Table layout", "Table naming"), "Table")
+    # Guides often say "Layout for Tables" / "h. Layout for Tables" rather than "Table layout".
+    table_layout = _section_value(
+        (
+            "Layout for Tables",
+            "Layout for Table",
+            "Table layout",
+            "Table naming",
+            "Tables layout",
+            "Table caption",
+            "Table title",
+        ),
+        "Table",
+    )
     if table_layout and len(table_layout) > 3:
         rules["table_layout_requirements"] = [table_layout[:300]]
 
-    figure_layout = _section_value(("Figure layout", "Figure naming"), "Figure")
+    figure_layout = _section_value(
+        (
+            "Layout for Figures",
+            "Layout for Figure",
+            "Figure layout",
+            "Figure naming",
+            "Figures layout",
+            "Figure caption",
+            "Figure title",
+        ),
+        "Figure",
+    )
     if figure_layout and len(figure_layout) > 3:
         rules["figure_layout_requirements"] = [figure_layout[:300]]
 

@@ -511,12 +511,12 @@ export default function ManuscriptPanel({
                   className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-[#f8f9fb] px-3 text-sm font-medium normal-case tracking-normal text-slate-700 outline-none focus:border-[#16bfa8]"
                 >
                   {manuscripts.map((item) => {
-                    const versionCount = Number(
-                      item.version_count ?? item.current_version_number ?? item.versions?.length ?? 0
-                    );
+                    const latest = Number(item.current_version_number || 0);
+                    const counted = Number(item.version_count ?? item.versions?.length ?? 0);
+                    const shown = latest > 0 ? latest : counted;
                     return (
                       <option key={item.id} value={item.id}>
-                        {item.title} · version {versionCount + 1}
+                        {item.title} · v{shown}.0
                       </option>
                     );
                   })}

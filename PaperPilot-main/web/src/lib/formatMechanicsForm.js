@@ -60,7 +60,7 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
     paginationTitlePage: "Number shown",
     paginationFirstPageRule: "Same position as other pages",
     paginationPreliminaryStyle: "",
-    paginationBodyNumbering: "Arabic, continuous",
+    paginationBodyNumbering: "",
     paginationChapterMarkers: ["chapter_roman", "chapter_arabic"],
     pageBreaks: "Only to start each new chapter and the reference list",
     tableLayout:
@@ -351,8 +351,7 @@ export function formToRules(form) {
     if (/^heading\d+_size$/.test(key)) sizes.push(value);
   }
   if (sizes.length) font.sizes_points = [...new Set(sizes)];
-  const headingStyles = headingStylesToRules(form.headingStyles);
-  if (Object.keys(headingStyles).length) font.heading_styles = headingStyles;
+  // heading_styles are already included by headingsToRules(form.headings) above.
   if (Object.keys(font).length) rules.font = font;
 
   const pagination = {};

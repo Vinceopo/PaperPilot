@@ -80,6 +80,20 @@ def canonical_page_position(value) -> str:
     return " ".join(str(value or "").split())
 
 
+def page_number_only(value) -> bool:
+    """True when the format requires a bare numeral (e.g. '2' or 'ii'), not 'Page 2' / '- 2 -'."""
+    if isinstance(value, bool):
+        return value
+    text = _text(value)
+    return bool(
+        re.search(
+            r"no\s+extra|without\s+extra|number\s+only|numeral\s+only|digits?\s+only|"
+            r"bare\s+number|no\s+(?:other\s+)?(?:characters?|text|words?|prefix|suffix)",
+            text,
+        )
+    )
+
+
 def canonical_chapter_first_page(value) -> str:
     text = _text(value)
     if not text:
@@ -270,6 +284,12 @@ def normalize_pagination_rules(pagination_in: dict, raw: dict) -> dict:
     position = pagination_in.get("position") or raw.get("pagination_position") or ""
     if str(position).strip():
         out["position"] = canonical_page_position(position)[:200]
+    if page_number_only(
+        pagination_in.get("number_only")
+        if "number_only" in pagination_in
+        else position or raw.get("pagination_position") or raw.get("pagination_number_only")
+    ):
+        out["number_only"] = True
     first_page = pagination_in.get("first_page_of_chapter") or raw.get("pagination_first_page_rule") or ""
     if str(first_page).strip():
         out["first_page_of_chapter"] = canonical_chapter_first_page(first_page)[:200]

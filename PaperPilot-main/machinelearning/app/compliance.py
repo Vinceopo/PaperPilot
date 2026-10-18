@@ -5,23 +5,14 @@ from collections import Counter, defaultdict
 
 from app.enrichment import enrich_compliance_issues
 from app.mechanics_options import (
-    BODY_CONTINUOUS,
-    BODY_RESTART,
-    DEFAULT_CHAPTER_MARKERS,
     FONT_SIZE_KEYS,
     HEADING_LEVELS,
     LANDSCAPE_ANY,
     LANDSCAPE_TABLES_FIGURES,
-    PRELIM_ARABIC,
-    PRELIM_ROMAN,
     WORD_SPACING_SINGLE,
     WORD_SPACING_TWO,
-    canonical_body_numbering,
-    canonical_chapter_markers,
     canonical_landscape_pages,
-    canonical_preliminary_style,
     canonical_word_spacing,
-    chapter_first_page_rule,
     page_position_parts,
     title_page_rule,
 )
@@ -963,7 +954,7 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
 def _expected_size_for_role(role: str, font: dict) -> float | None:
     if _is_heading_role(role):
         return _heading_sizes(font).get(role)
-    if role in {"body", "caption"}:
+    if role in {"body", "caption", "title_page"}:
         return _body_size(font)
     return None
 
@@ -997,6 +988,49 @@ def _mostly_black(unit: dict) -> bool | None:
     return colored <= 0.5 * total
 
 
+def _role_for_font_check(unit: dict) -> str:
+    """Font rules follow the line’s content role. Headings stay headings.
+
+    Title-page sizing applies only to short title-page lines on page 1 — never to
+    a Heading style, chapter title, body paragraph, or table.
+    """
+    role = unit.get("role") or "body"
+    if role == "title_page" and unit.get("title_page_text") and unit.get("page_index") == 0:
+        return "title_page"
+    if _is_heading_role(role):
+        return role
+    saved = unit.get("content_role")
+    if _is_heading_role(saved):
+        return saved
+    if role == "title_page":
+        if saved and saved != "title_page":
+            return saved
+        if unit.get("source") == "table":
+            return "table"
+        return "body"
+    return role
+
+
+def _font_role_label(role: str) -> str:
+    if _is_heading_role(role):
+        return _heading_label(role)
+    return {
+        "caption": "caption",
+        "body": "body text",
+        "table": "table text",
+        "title_page": "title page text",
+    }.get(role, "text")
+
+
+def _font_size_issue_type(role: str) -> str:
+    """One issue type per role so Heading 1 is never folded into title-page text."""
+    if _is_heading_role(role):
+        return f"font_size_{role}"
+    if role in {"body", "caption", "table", "title_page"}:
+        return f"font_size_{role}"
+    return "font_size"
+
+
 def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     font_rule = rules.get("font") or {}
     allowed_fonts = {_font_key(font) for font in font_rule.get("families", [])}
@@ -1007,7 +1041,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         return
     stats.applicable = True
     for unit in units:
-        role = unit.get("role") or "body"
+        role = _role_for_font_check(unit)
         text = (unit.get("text") or "").strip()
         # Blank / spacing lines are typeable but have no glyphs to measure.
         if not text or role in {"empty", "pagination"}:
@@ -1026,6 +1060,10 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         expected_size = _expected_size_for_role(role, font_rule) if role_sizes else None
         if expected_size is not None:
             size_ok = _size_matches(shown_size, expected_size)
+        elif _is_heading_role(role):
+            # Headings must use that heading’s own size from the format — never the
+            # full sizes_points list (that mixes every heading/body size together).
+            size_ok = True
         elif listed_sizes and shown_size is not None:
             size_ok = any(abs(shown_size - allowed) <= SIZE_TOLERANCE for allowed in listed_sizes)
         else:
@@ -1060,15 +1098,11 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 "Apply the format-mechanics font family to this text.",
                 loc,
             )
-        if not size_ok and shown_size is not None:
-            role_label = (
-                _heading_label(role)
-                if _is_heading_role(role)
-                else {"caption": "caption", "body": "body text", "title_page": "title page text"}.get(role, "text")
-            )
-            expected_label = expected_size if expected_size is not None else sorted(listed_sizes)
+        if not size_ok and shown_size is not None and expected_size is not None:
+            role_label = _font_role_label(role)
+            expected_label = f"{expected_size:g}"
             collector.add(
-                "font_size",
+                _font_size_issue_type(role),
                 "critical",
                 f"{role_label} font size differs",
                 f"This {role_label} does not use the point size required by the uploaded format.",
@@ -1077,6 +1111,22 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                     f"the format specifies {expected_label} pt for {role_label}."
                 ),
                 f"Select this line’s text and set the font size to {expected_label} pt.",
+                loc,
+            )
+        elif not size_ok and shown_size is not None and listed_sizes and not _is_heading_role(role):
+            role_label = _font_role_label(role)
+            # Non-heading lines with only a shared sizes list (no per-role size).
+            allowed = ", ".join(f"{size:g}" for size in sorted(listed_sizes))
+            collector.add(
+                _font_size_issue_type(role),
+                "critical",
+                f"{role_label} font size differs",
+                f"This {role_label} does not use the point size required by the uploaded format.",
+                (
+                    f"Measured {shown_size:g} pt on this line’s text; "
+                    f"the format allows {allowed} pt for {role_label}."
+                ),
+                f"Select this line’s text and set the font size to one of: {allowed} pt.",
                 loc,
             )
 
@@ -1590,12 +1640,14 @@ ROMAN_RE = re.compile(r"^(?=[mdclxvi]+$)m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(i
 PAGE_TOKEN_RE = re.compile(
     r"^(?:page\s+)?[-–—]?\s*(\d{1,4}|[ivxlcdm]{1,7})\s*[-–—]?(?:\s*(?:of|/)\s*\d{1,4})?$", re.I
 )
+BARE_PAGE_TOKEN_RE = re.compile(r"^(\d{1,4}|[ivxlcdm]{1,7})$", re.I)
 ROMAN_NUMERALS = (
     (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
     (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"),
 )
 STYLE_LABELS = {"arabic": "Arabic (1, 2, 3)", "roman_lower": "lowercase Roman (i, ii, iii)",
                 "roman_upper": "uppercase Roman (I, II, III)", "other": "letters or another style"}
+ROMAN_STYLES = frozenset({"roman_lower", "roman_upper"})
 
 
 def _roman_to_int(token: str) -> int:
@@ -1608,7 +1660,7 @@ def _roman_to_int(token: str) -> int:
 
 
 def _format_page_value(value: int, style: str) -> str:
-    if style in {"roman_lower", "roman_upper"} and value > 0:
+    if style in ROMAN_STYLES and value > 0:
         out, rest = "", value
         for amount, numeral in ROMAN_NUMERALS:
             while rest >= amount:
@@ -1632,45 +1684,14 @@ def _page_token(text: str) -> tuple[int, str] | None:
     return _roman_to_int(token), style
 
 
-def _section_starts(units: list[dict]) -> dict[int, str]:
-    """Pages whose first lines open a chapter or chapter-like section, keyed to a CHAPTER_MARKERS key."""
-    heads: dict[int, list[dict]] = defaultdict(list)
-    for unit in units:
-        text = (unit.get("text") or "").strip()
-        if (unit.get("source") or "body") != "body" or not text:
-            continue
-        if unit.get("role") in {"pagination", "toc", "empty"}:
-            continue
-        if len(heads[unit["page_index"]]) < 6:
-            heads[unit["page_index"]].append(unit)
-    starts: dict[int, str] = {}
-    for page, page_units in heads.items():
-        for unit in page_units:
-            text = unit["text"].strip()
-            heading_like = (
-                len(text) <= 60
-                and not text.endswith(".")
-                and not re.search(r"\.{2,}\s*\S+$|…", text)
-                and (
-                    str(unit.get("role") or "").startswith("heading")
-                    or _is_bold(unit)
-                    or text.isupper()
-                    or len(text.split()) <= 6
-                )
-            )
-            if not heading_like:
-                continue
-            kind = (
-                "chapter_roman" if CHAPTER_ROMAN_RE.match(text)
-                else "chapter_arabic" if CHAPTER_ARABIC_RE.match(text)
-                else "back_matter" if BACK_MATTER_RE.match(text)
-                else "preliminary" if PRELIM_HEADING_RE.match(text)
-                else None
-            )
-            if kind:
-                starts[page] = kind
-                break
-    return starts
+def _is_bare_page_token(text: str) -> bool:
+    """True for '2' / 'ii' / 'II' only — no 'Page 2', dashes, or 'of N'."""
+    raw = (text or "").strip()
+    if not BARE_PAGE_TOKEN_RE.match(raw):
+        return False
+    if raw.isdigit():
+        return True
+    return bool(ROMAN_RE.match(raw))
 
 
 def _docx_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
@@ -1695,11 +1716,19 @@ def _docx_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[d
             placement = {"where": setup.get("where"), "align": setup.get("align")} if setup.get("where") else None
             if first_of_section and setup.get("first_page_hidden"):
                 placement = None
-        mark = {"page": page, "shown": bool(placement and placement.get("where")), "value": counter,
-                "style": setup.get("format") or "arabic", "unit": None}
+        mark = {
+            "page": page,
+            "shown": bool(placement and placement.get("where")),
+            "value": counter,
+            "style": setup.get("format") or "arabic",
+            "unit": None,
+            "raw": None,
+            "bare": True,
+        }
         if mark["shown"]:
             mark["vertical"] = "top" if placement["where"] == "header" else "bottom"
             mark["horizontal"] = placement.get("align") or "left"
+            mark["raw"] = _format_page_value(counter, mark["style"])
         marks.append(mark)
     return marks
 
@@ -1716,7 +1745,8 @@ def _pdf_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[di
             bbox = unit.get("bbox")
             height = float(unit.get("page_height") or 0)
             width = float(unit.get("page_width") or 0)
-            token = _page_token(unit.get("text") or "")
+            raw = (unit.get("text") or "").strip()
+            token = _page_token(raw)
             if not token or not bbox or len(bbox) < 4 or not height or not width:
                 continue
             if bbox[1] <= height * 0.15:
@@ -1728,13 +1758,23 @@ def _pdf_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[di
             middle = (bbox[0] + bbox[2]) / 2 / width
             horizontal = "left" if middle < 0.4 else "right" if middle > 0.6 else "center"
             if best is None or distance < best[0]:
-                best = (distance, unit, token, vertical, horizontal)
+                best = (distance, unit, token, vertical, horizontal, raw)
         if best is None:
-            marks.append({"page": page, "shown": False, "value": None, "style": None, "unit": None})
+            marks.append({"page": page, "shown": False, "value": None, "style": None, "unit": None,
+                          "raw": None, "bare": True})
             continue
-        _distance, unit, (value, style), vertical, horizontal = best
-        marks.append({"page": page, "shown": True, "value": value, "style": style, "unit": unit,
-                      "vertical": vertical, "horizontal": horizontal})
+        _distance, unit, (value, style), vertical, horizontal, raw = best
+        marks.append({
+            "page": page,
+            "shown": True,
+            "value": value,
+            "style": style,
+            "unit": unit,
+            "vertical": vertical,
+            "horizontal": horizontal,
+            "raw": raw,
+            "bare": _is_bare_page_token(raw),
+        })
     return marks
 
 
@@ -1745,16 +1785,16 @@ def _position_label(vertical: str | None, horizontal: str | None) -> str:
 def _check_pagination(
     units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector, parsed: dict | None = None
 ) -> None:
+    """Only flag page numbers that appear in the wrong place.
+
+    Missing numbers (including page 1), style, sequence, and chapter/title hide rules
+    are not issues — any numbering style is fine when the position matches the mechanics.
+    """
     pagination = rules.get("pagination") or {}
     vertical, horizontal = page_position_parts(pagination.get("position"))
-    chapter_rule = chapter_first_page_rule(pagination.get("first_page_of_chapter"))
-    title_rule = title_page_rule(pagination.get("title_page"))
-    prelim_style = canonical_preliminary_style(pagination.get("preliminary_style"))
-    body_numbering = canonical_body_numbering(pagination.get("body_numbering"))
-    if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering)):
+    if not (vertical or horizontal):
         return
     stats.applicable = True
-    markers = set(canonical_chapter_markers(pagination.get("chapter_markers"))) or set(DEFAULT_CHAPTER_MARKERS)
     is_pdf = (parsed or {}).get("metadata", {}).get("format") == "pdf"
     page_count = max((unit["page_index"] for unit in units), default=-1) + 1
     if is_pdf:
@@ -1763,196 +1803,260 @@ def _check_pagination(
         return
     marks = _pdf_page_marks(parsed or {}, units, page_count) if is_pdf else _docx_page_marks(parsed or {}, units, page_count)
 
-    starts = _section_starts(units)
-    chapter_pages = {page for page, kind in starts.items() if kind in markers and page > 0}
-    body_start = min((page for page, kind in starts.items() if kind.startswith("chapter_")), default=None)
-    has_title = title_rule is not None and page_count >= 2
-    title_counts = title_rule in {"hidden_counted", "shown"}
-    split_blocks = bool(body_start)
-
-    def block_of(page: int) -> str:
-        return "prelim" if split_blocks and page < body_start else "body"
-
-    expected_style = {"prelim": None, "body": None}
-    if prelim_style == PRELIM_ROMAN and split_blocks:
-        expected_style["prelim"] = "roman_lower"
-    elif prelim_style == PRELIM_ARABIC:
-        expected_style["prelim"] = "arabic"
-        expected_style["body"] = "arabic"
-    if (prelim_style or body_numbering) and (split_blocks or prelim_style != PRELIM_ROMAN):
-        expected_style["body"] = "arabic"
-
-    def expected_value(page: int) -> int | None:
-        """The number the first numbered page of a block should carry, when the rules pin it down."""
-        if block_of(page) == "body" and split_blocks:
-            if body_numbering == BODY_RESTART:
-                return page - body_start + 1
-            if body_numbering == BODY_CONTINUOUS and title_rule:
-                return page + (1 if title_counts else 0)
-            return None
-        if title_rule:
-            return page + (1 if title_counts else 0)
-        return None
-
-    last_shown: dict[str, tuple[int, int]] = {}
     for mark in marks:
+        if not mark.get("shown"):
+            # No printed number (e.g. title page) — not an issue.
+            continue
         page = mark["page"]
         unit = mark.get("unit")
         loc = _unit_location(unit, "Pagination") if unit else _location(page, 0, "Pagination")
-        shown = mark["shown"]
-        printed = _format_page_value(mark["value"], mark["style"] or "arabic") if shown else ""
-        if page == 0 and has_title:
-            want, rule_kind = ("hidden" if title_rule != "shown" else "main"), "title"
-        elif page in chapter_pages and chapter_rule:
-            want, rule_kind = {"hidden": "hidden", "same": "main", "bottom_center": "bottom_center"}[chapter_rule], "chapter"
+        printed = mark.get("raw") or _format_page_value(mark["value"], mark["style"] or "arabic")
+        wrong_v = bool(vertical and mark.get("vertical") != vertical)
+        wrong_h = bool(horizontal and mark.get("horizontal") != horizontal)
+        if wrong_v or wrong_h:
+            actual = _position_label(mark.get("vertical"), mark.get("horizontal"))
+            collector.add(
+                "pagination_position",
+                "moderate",
+                "Page number position differs",
+                "The page number is not in the position required by the uploaded format.",
+                f"The page number on page {page + 1} is at the {actual}; the format requires the "
+                f"{_position_label(vertical, horizontal)}.",
+                f"Move the page number to the {_position_label(vertical, horizontal)} of the page.",
+                loc,
+            )
+            stats.observe(False)
         else:
-            want, rule_kind = ("main" if (vertical or horizontal) else None), "page"
-        checked = want is not None
-        ok = True
+            stats.observe(True)
 
-        if want == "hidden" and shown:
-            ok = False
-            if rule_kind == "title":
-                collector.add(
-                    "pagination_title_page",
-                    "minor",
-                    "Page number shown on the title page",
-                    "The uploaded format hides the page number on page 1 (the title page).",
-                    f"Page 1 shows the page number “{printed}”.",
-                    "Hide the page number on the title page (Word: Different First Page).",
-                    loc,
-                )
-            else:
-                collector.add(
-                    "pagination_chapter_first",
-                    "minor",
-                    "Page number shown on chapter first page",
-                    "The uploaded format hides page numbers on the first page of each chapter.",
-                    f"Page {page + 1} starts a chapter but shows the page number “{printed}”.",
-                    "Hide the page number on the first page of each chapter (Word: Different First Page).",
-                    loc,
-                )
-        elif want in {"main", "bottom_center"}:
-            want_v, want_h = (vertical, horizontal) if want == "main" else ("bottom", "center")
-            if not shown:
-                ok = False
-                where = "this chapter's first page" if rule_kind == "chapter" else f"page {page + 1}"
-                collector.add(
-                    "pagination_missing",
-                    "moderate",
-                    "Page number missing",
-                    "The uploaded format requires a page number on this page.",
-                    f"No page number was found on {where}.",
-                    f"Add a page number at the {_position_label(want_v, want_h)} of the page.",
-                    loc,
-                )
-            elif (want_v and mark.get("vertical") != want_v) or (want_h and mark.get("horizontal") != want_h):
-                ok = False
-                actual = _position_label(mark.get("vertical"), mark.get("horizontal"))
-                if rule_kind == "chapter" and want == "bottom_center":
-                    collector.add(
-                        "pagination_chapter_first",
-                        "minor",
-                        "Chapter first page number position differs",
-                        "The uploaded format places the page number at the bottom center on each chapter's first page.",
-                        f"Page {page + 1} starts a chapter; its page number is at the {actual}.",
-                        "Put the chapter's first-page number at the bottom center (Word: Different First Page footer).",
-                        loc,
-                    )
-                else:
-                    collector.add(
-                        "pagination_position",
-                        "moderate",
-                        "Page number position differs",
-                        "The page number is not in the position required by the uploaded format.",
-                        f"The page number on page {page + 1} is at the {actual}; the format requires the "
-                        f"{_position_label(want_v, want_h)}.",
-                        f"Move the page number to the {_position_label(want_v, want_h)} of the page.",
-                        loc,
-                    )
 
-        if shown and want != "hidden":
-            block = block_of(page)
-            style_needed = expected_style[block]
-            if style_needed:
-                checked = True
-                if mark["style"] != style_needed:
-                    ok = False
-                    part = "preliminary pages" if block == "prelim" else "the main body"
-                    collector.add(
-                        "pagination_style",
-                        "moderate",
-                        "Page number style differs",
-                        f"The uploaded format numbers {part} in {STYLE_LABELS[style_needed]}.",
-                        f"Page {page + 1} is numbered “{printed}” ({STYLE_LABELS.get(mark['style'], 'unknown style')}).",
-                        f"Use {STYLE_LABELS[style_needed]} page numbers for {part} (Word: Format Page Numbers).",
-                        loc,
-                    )
-            previous = last_shown.get(block)
-            expected = previous[1] + (page - previous[0]) if previous else expected_value(page)
-            if expected is not None:
-                checked = True
-                if mark["value"] != expected:
-                    ok = False
-                    want_text = _format_page_value(expected, mark["style"] or "arabic")
-                    if previous:
-                        detail = (
-                            f"Page {page + 1} is numbered “{printed}”, but after "
-                            f"“{_format_page_value(previous[1], mark['style'] or 'arabic')}” on page {previous[0] + 1} "
-                            f"it should be “{want_text}”."
-                        )
-                    elif block == "body" and split_blocks and body_numbering == BODY_RESTART:
-                        detail = f"Chapter 1 starts on page {page + 1} numbered “{printed}”; it should restart at 1."
-                    else:
-                        detail = f"Page {page + 1} is numbered “{printed}”; counting from page 1 it should be “{want_text}”."
-                    collector.add(
-                        "pagination_sequence",
-                        "moderate",
-                        "Page numbers out of sequence",
-                        "Page numbers skip, repeat, or restart where the uploaded format does not allow it.",
-                        detail,
-                        "Fix the page numbering so it counts up by one (Word: Format Page Numbers → Start at).",
-                        loc,
-                    )
-            last_shown[block] = (page, mark["value"])
+TABLE_LABEL_RE = re.compile(r"^\s*table\s+(\d+)\b\s*[:.\-–]?\s*(.*)$", re.I)
+FIGURE_LABEL_RE = re.compile(r"^\s*(figure|fig\.?)\s+(\d+)\b\s*[:.\-–]?\s*(.*)$", re.I)
 
-        if checked:
-            stats.observe(ok)
+
+def _layout_expectations(rule_text: str) -> dict:
+    """What a table or figure rule actually requires, read from the saved wording."""
+    text = " ".join(str(rule_text or "").split()).lower()
+    upper = bool(re.search(r"\b(all[\s-]?caps|uppercase|capital letters|in caps)\b", text))
+    title_case = "title case" in text and not upper
+    above = bool(re.search(r"\b(above|over)\b", text)) and not bool(
+        re.search(r"\b(below|under|beneath)\b", text) and not re.search(r"\b(above|over)\b", text)
+    )
+    below = bool(re.search(r"\b(below|under|beneath)\b", text)) and not above
+    if re.search(r"\b(above|over)\b", text) and re.search(r"\b(below|under|beneath)\b", text):
+        above = bool(re.search(r"\b(placed|put|set|positioned|sit(?:s|ting)?)\s+above\b|\babove\s+(?:the|it|each)", text))
+        below = bool(re.search(r"\b(placed|put|set|positioned|sit(?:s|ting)?)\s+below\b|\bbelow\s+(?:the|it|each)", text))
+        if above and below:
+            above, below = False, False
+    number_bold = bool(re.search(r"number.{0,40}\bbold\b|\bbold\b.{0,40}number", text))
+    title_italic = bool(re.search(r"title.{0,40}\bitalic\b|\bitalic\b.{0,30}title", text))
+    title_bold = bool(re.search(r"title.{0,30}\bbold\b|\bbold\b.{0,20}title", text)) and not title_italic
+    return {
+        "upper": upper,
+        "title_case": title_case,
+        "above": above and not below,
+        "below": below and not above,
+        "bold": ("bold" in text) and not number_bold and not title_bold,
+        "italic": ("italic" in text) and not title_italic,
+        "number_bold": number_bold,
+        "title_italic": title_italic,
+        "wants_title": "title" in text or "caption" in text,
+    }
+
+
+def _caption_pieces(unit: dict) -> list[dict]:
+    return list(unit.get("line_runs") or unit.get("spans") or unit.get("runs") or [])
+
+
+def _flag_caption(collector: IssueCollector, issue_type: str, unit: dict, title: str, detail: str, fix: str) -> None:
+    collector.add(
+        issue_type,
+        "minor",
+        title,
+        "This table or figure does not follow the layout saved in format mechanics.",
+        detail,
+        fix,
+        _unit_location(unit, "Captions"),
+    )
+
+
+def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, collector: IssueCollector) -> None:
+    text = (unit.get("text") or "").strip()
+    if kind == "table":
+        title = (match.group(2) or "").strip()
+        label = "Table"
+    else:
+        prefix = match.group(1) or ""
+        title = (match.group(3) or "").strip()
+        label = "Figure"
+        if prefix.lower().startswith("fig") and not prefix.lower().startswith("figure"):
+            _flag_caption(
+                collector,
+                "figure_caption",
+                unit,
+                "Figure caption prefix differs",
+                f"Found “{text}”; the format expects the caption to start with Figure and a number.",
+                "Rewrite the caption so it starts with Figure and the figure number.",
+            )
+    if expect["wants_title"] and not title:
+        _flag_caption(
+            collector,
+            f"{kind}_caption",
+            unit,
+            f"{label} caption is missing its title",
+            f"Found “{text}”; the format expects a {label.lower()} number and a title.",
+            f"Add the {label.lower()} title on the caption line required by the format.",
+        )
+    if title and expect["upper"]:
+        letters = [ch for ch in title if ch.isalpha()]
+        if letters and not all(ch.isupper() for ch in letters):
+            _flag_caption(
+                collector,
+                f"{kind}_caption",
+                unit,
+                f"{label} title is not in the required caption form",
+                f"Found “{text}”; the format expects the {label.lower()} title in capital letters.",
+                f"Retype the {label.lower()} title in capital letters.",
+            )
+    elif title and expect["title_case"] and not _is_title_case(title):
+        _flag_caption(
+            collector,
+            f"{kind}_caption",
+            unit,
+            f"{label} title is not in the required caption form",
+            f"Found “{text}”; the format expects the {label.lower()} title in Title Case.",
+            f"Retype the {label.lower()} title in Title Case.",
+        )
+    pieces = _caption_pieces(unit)
+    if pieces and expect["bold"] and _share(pieces, "bold") < 0.6:
+        _flag_caption(
+            collector,
+            f"{kind}_caption_style",
+            unit,
+            f"{label} caption is not bold",
+            f"Found “{text}”; the format expects this {label.lower()} caption in bold.",
+            f"Select the {label.lower()} caption and turn on bold.",
+        )
+    if pieces and (expect["italic"] or expect["title_italic"]) and _share(pieces, "italic") < 0.4:
+        _flag_caption(
+            collector,
+            f"{kind}_caption_style",
+            unit,
+            f"{label} caption is not italic",
+            f"Found “{text}”; the format expects italic text in this {label.lower()} caption.",
+            f"Select the {label.lower()} title and turn on italic.",
+        )
+    if pieces and expect["number_bold"] and _share(pieces, "bold") < 0.2:
+        _flag_caption(
+            collector,
+            f"{kind}_caption_style",
+            unit,
+            f"{label} number is not bold",
+            f"Found “{text}”; the format expects the {label.lower()} number in bold.",
+            f"Select the {label.lower()} number and turn on bold.",
+        )
+
+
+def _is_table_unit(unit: dict) -> bool:
+    return unit.get("source") == "table" or unit.get("role") == "table"
+
+
+def _is_figure_unit(unit: dict) -> bool:
+    return bool(unit.get("has_drawing")) and not _is_table_unit(unit)
+
+
+def _object_clusters(units: list[dict], predicate) -> list[list[int]]:
+    clusters: list[list[int]] = []
+    current: list[int] = []
+    for index, unit in enumerate(units):
+        if predicate(unit) and ((unit.get("text") or "").strip() or unit.get("has_drawing")):
+            current.append(index)
+            continue
+        if current:
+            clusters.append(current)
+            current = []
+    if current:
+        clusters.append(current)
+    return clusters
+
+
+def _nearest_caption(units: list[dict], cluster: list[int], pattern: re.Pattern, direction: int) -> int | None:
+    start = cluster[0] - 1 if direction < 0 else cluster[-1] + 1
+    step = -1 if direction < 0 else 1
+    page = units[cluster[0]].get("page_index")
+    seen = 0
+    index = start
+    while 0 <= index < len(units) and seen < 8:
+        unit = units[index]
+        if unit.get("page_index") != page and abs((unit.get("page_index") or 0) - (page or 0)) > 1:
+            break
+        text = (unit.get("text") or "").strip()
+        if text and not _is_table_unit(unit):
+            seen += 1
+            if pattern.match(text) and not PROSE_REFERENCE_RE.match(text):
+                return index
+            if seen >= 4 and len(text) > 80:
+                break
+        index += step
+    return None
+
+
+def _check_object_placement(units: list[dict], kind: str, expect: dict, collector: IssueCollector) -> None:
+    if not expect["above"] and not expect["below"]:
+        return
+    pattern = TABLE_LABEL_RE if kind == "table" else FIGURE_LABEL_RE
+    predicate = _is_table_unit if kind == "table" else _is_figure_unit
+    label = "Table" if kind == "table" else "Figure"
+    wanted = "above" if expect["above"] else "below"
+    for cluster in _object_clusters(units, predicate):
+        before = _nearest_caption(units, cluster, pattern, -1)
+        after = _nearest_caption(units, cluster, pattern, 1)
+        if before is None and after is None:
+            anchor = units[cluster[0]]
+            _flag_caption(
+                collector,
+                f"{kind}_caption_missing",
+                anchor,
+                f"{label} is missing its caption",
+                f"This {label.lower()} has no “{label} n” caption; the format requires one {wanted} it.",
+                f"Add a {label} number and title {wanted} this {label.lower()}.",
+            )
+            continue
+        present = before if wanted == "above" else after
+        other = after if wanted == "above" else before
+        if present is None and other is not None:
+            _flag_caption(
+                collector,
+                f"{kind}_caption_placement",
+                units[other],
+                f"{label} caption is on the wrong side",
+                f"The caption is {'below' if wanted == 'above' else 'above'} the {label.lower()}; "
+                f"the format requires it {wanted}.",
+                f"Move the {label.lower()} caption so it sits {wanted} the {label.lower()}.",
+            )
 
 
 def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -> None:
-    table_rules = " ".join(rules.get("table_layout_requirements") or []).lower()
-    figure_rules = " ".join(rules.get("figure_layout_requirements") or []).lower()
+    table_rules = " ".join(rules.get("table_layout_requirements") or [])
+    figure_rules = " ".join(rules.get("figure_layout_requirements") or [])
     if not table_rules and not figure_rules:
         return
-    want_table_caps = "title" in table_rules and ("caps" in table_rules or "uppercase" in table_rules or "capital" in table_rules)
-    want_figure_prefix = "figure" in figure_rules
-    for index, unit in enumerate(units):
-        text = (unit.get("text") or "").strip()
-        loc = _unit_location(unit, "Captions")
-        if table_rules and unit.get("role") == "caption" and TABLE_CAPTION_RE.match(text):
-            title = re.sub(r"^\s*table\s+\d+\s*[:.\-–]?\s*", "", text, flags=re.I).strip()
-            if want_table_caps and title and title != title.upper():
-                collector.add(
-                    "table_caption",
-                    "minor",
-                    "Table title is not in the required caption form",
-                    "Table captions do not follow the uploaded format mechanics.",
-                    f"Found “{text}”; the format expects a Table number plus an uppercase title.",
-                    "Rewrite the table caption using the mechanics-specified Table n + TITLE pattern.",
-                    loc,
-                )
-        if figure_rules and want_figure_prefix:
-            if re.match(r"^\s*fig\.?\s+\d+", text, re.I) and not FIGURE_CAPTION_RE.match(text):
-                collector.add(
-                    "figure_caption",
-                    "minor",
-                    "Figure caption prefix differs",
-                    "Figure captions do not follow the uploaded format mechanics.",
-                    f"Found “{text}”; the format expects captions to start with Figure n.",
-                    "Rewrite the figure caption using the mechanics-specified Figure n pattern.",
-                    loc,
-                )
+    kinds = []
+    if table_rules:
+        kinds.append(("table", TABLE_LABEL_RE, _layout_expectations(table_rules)))
+    if figure_rules:
+        kinds.append(("figure", FIGURE_LABEL_RE, _layout_expectations(figure_rules)))
+    for kind, pattern, expect in kinds:
+        for unit in units:
+            if (unit.get("source") or "body") in CHROME_SOURCES:
+                continue
+            text = (unit.get("text") or "").strip()
+            if not text or PROSE_REFERENCE_RE.match(text):
+                continue
+            match = pattern.match(text)
+            if match:
+                _check_one_caption(unit, kind, match, expect, collector)
+        _check_object_placement(units, kind, expect, collector)
 
 
 def _check_citations(units: list[dict], text: str, rules: dict, collector: IssueCollector) -> None:
@@ -2038,16 +2142,53 @@ def _check_citations(units: list[dict], text: str, rules: dict, collector: Issue
             )
 
 
+def _page_has_body_structure(page_units: list[dict]) -> bool:
+    """A normal manuscript page has a section heading, a paragraph, or a table.
+
+    Those pages are never the title page, even when they are the first page the
+    scanner counted or the preview is showing a high printed page number.
+    """
+    for unit in page_units:
+        if (unit.get("source") or "body") in CHROME_SOURCES:
+            continue
+        text = (unit.get("text") or "").strip()
+        if not text:
+            continue
+        if unit.get("role") == "table" or unit.get("source") == "table":
+            return True
+        if _is_heading_role(unit.get("role")) and (
+            CHAPTER_RE.match(text) or PRELIM_HEADING_RE.match(text) or BACK_MATTER_RE.match(text)
+        ):
+            return True
+        if unit.get("role") in {"body", "caption"} and len(text) >= 80 and unit.get("source") != "table":
+            return True
+    return False
+
+
 def _mark_title_page(units: list[dict], rules: dict) -> None:
-    """When the format declares a title page, page 1 is not body text (no spacing/indent/alignment rules)."""
+    """Mark only real title-page lines. Later pages keep heading, body, and table roles."""
     if not title_page_rule((rules.get("pagination") or {}).get("title_page")):
         return
     if max((unit["page_index"] for unit in units), default=0) < 1:
         return
-    for unit in units:
-        if unit["page_index"] == 0 and (unit.get("source") or "body") not in CHROME_SOURCES:
-            if unit.get("role") not in {"empty", "pagination"}:
-                unit["role"] = "title_page"
+    first = [unit for unit in units if unit.get("page_index") == 0]
+    if _page_has_body_structure(first):
+        return
+    for unit in first:
+        if (unit.get("source") or "body") in CHROME_SOURCES:
+            continue
+        if unit.get("role") in {"empty", "pagination", "table", "caption", "toc"}:
+            continue
+        text = (unit.get("text") or "").strip()
+        if not text or len(text) > 160:
+            continue
+        style = str(unit.get("style") or "").lower()
+        # Real Heading styles / chapter titles stay headings — never “title page”.
+        if HEADING_STYLE_RE.search(style) or CHAPTER_RE.match(text):
+            continue
+        unit["content_role"] = unit.get("role")
+        unit["title_page_text"] = True
+        unit["role"] = "title_page"
 
 
 def _share(pieces: list[dict], key: str) -> float:

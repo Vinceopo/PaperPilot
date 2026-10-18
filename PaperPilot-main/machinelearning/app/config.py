@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.0-flash"
     max_document_bytes: int = 25 * 1024 * 1024
     job_ttl_seconds: int = 3600
+    job_store_dir: str = "/tmp/paperpilot-jobs"
     host: str = "0.0.0.0"
     port: int = 8000
 

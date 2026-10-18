@@ -140,9 +140,14 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
       setScanProgress({ percent: 100, stage: "done", message: "Analysis complete" });
     } catch (err) {
       if (run !== runRef.current) return;
-      setError(
-        err?.message || "The analysis could not finish. No scan was used. Check your connection, then run the scan again."
-      );
+      const raw = err?.message || err?.detail?.message || err?.detail;
+      const message =
+        typeof raw === "string" && raw.trim()
+          ? raw.trim()
+          : Array.isArray(raw) && raw[0]?.msg
+            ? String(raw[0].msg)
+            : "The analysis could not finish. No scan was used. Check your connection, then run the scan again.";
+      setError(message);
       setStep("error");
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);

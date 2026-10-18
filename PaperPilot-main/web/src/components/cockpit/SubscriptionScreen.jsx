@@ -162,14 +162,28 @@ export default function SubscriptionScreen({
   );
   const onChangeRef = useRef(onSubscriptionChange);
   const onSettledRef = useRef(onBillingSettled);
+  const paidActivatedRef = useRef(isPaidTier(tier));
   onChangeRef.current = onSubscriptionChange;
   onSettledRef.current = onBillingSettled;
+  if (isPaidTier(tier)) paidActivatedRef.current = true;
+
+  function pushSubscription(next, opts) {
+    if (!next) return;
+    // Once Pro/Premium is confirmed, ignore Free snapshots from confirm polling.
+    if (paidActivatedRef.current && !isPaidTier(normalizeTier(next?.tier)) && !opts?.allowDowngrade) {
+      return;
+    }
+    if (isPaidTier(normalizeTier(next?.tier))) paidActivatedRef.current = true;
+    onChangeRef.current?.(next, opts);
+  }
 
   function applyPremium(next) {
     const tierNow = normalizeTier(next?.tier);
     const expected = storedCheckoutPlan();
     if (next?.pending || !isPaidTier(tierNow) || (expected && tierNow !== expected)) return false;
-    onChangeRef.current?.(next);
+    // Paid confirm must win over any in-flight Free snapshot from dashboard refresh.
+    paidActivatedRef.current = true;
+    pushSubscription(next, { allowDowngrade: false });
     setActivating(false);
     setError("");
     setCheckoutOpen(false);
@@ -222,7 +236,7 @@ export default function SubscriptionScreen({
           });
           if (cancelled) return true;
           if (applyPremium(next)) return true;
-          if (next) onChangeRef.current?.(next);
+          pushSubscription(next);
         } catch {
           // Fall through to polling — webhook may still arrive.
         }
@@ -244,7 +258,7 @@ export default function SubscriptionScreen({
               clearInterval(timer);
               return;
             }
-            if (next) onChangeRef.current?.(next);
+            pushSubscription(next);
           } catch {
             // keep trying
           }
@@ -331,7 +345,8 @@ export default function SubscriptionScreen({
     setSuccess("");
     try {
       const next = await subscribeToPlan({ plan: "free" });
-      onSubscriptionChange?.(next);
+      paidActivatedRef.current = false;
+      pushSubscription(next, { allowDowngrade: true });
       setCheckoutOpen(false);
       setSuccess("Switched to Free plan.");
       setConfirmFreeOpen(false);
@@ -352,7 +367,8 @@ export default function SubscriptionScreen({
     setSuccess("");
     try {
       const next = await cancelSubscription({ immediate: true });
-      onSubscriptionChange?.(next);
+      paidActivatedRef.current = false;
+      pushSubscription(next, { allowDowngrade: true });
       setCheckoutOpen(true);
       setSelectedPlan("premium");
       setSuccess("Subscription canceled. You are on the Free plan — 3 scans this month.");

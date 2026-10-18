@@ -21,7 +21,13 @@ app = FastAPI(
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "paperpilot-machinelearning"}
+    return {
+        "status": "ok",
+        "service": "paperpilot-machinelearning",
+        # Bumped when pagination policy changes so deploys are easy to verify.
+        "pagination_policy": "position_only",
+        "build": "2026-10-17-pagination-position",
+    }
 
 
 @app.post("/v1/analyze", response_model=AnalyzeCreateResponse, dependencies=[Depends(require_service_key)])

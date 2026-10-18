@@ -93,23 +93,24 @@ class ApiTests(unittest.TestCase):
                             "mechanics": {"rules": {"font": {"families": ["Times New Roman"], "sizes_points": [12]}}},
                         },
                     )
-        self.assertEqual(create.status_code, 200)
-        job_id = create.json()["job_id"]
-        for _ in range(50):
-            progress = self.client.get(
-                f"/v1/analyze/{job_id}/progress",
-                headers={"ML-Service-Key": "test-key"},
-            )
-            if progress.json()["status"] in {"done", "failed"}:
-                break
-            time.sleep(0.05)
-        result = self.client.get(
-            f"/v1/analyze/{job_id}/result",
-            headers={"ML-Service-Key": "test-key"},
-        )
+                    self.assertEqual(create.status_code, 200)
+                    job_id = create.json()["job_id"]
+                    # Keep mocks active until the worker thread finishes (queued slot + parse).
+                    for _ in range(100):
+                        progress = self.client.get(
+                            f"/v1/analyze/{job_id}/progress",
+                            headers={"ML-Service-Key": "test-key"},
+                        )
+                        if progress.json()["status"] in {"done", "failed"}:
+                            break
+                        time.sleep(0.05)
+                    result = self.client.get(
+                        f"/v1/analyze/{job_id}/result",
+                        headers={"ML-Service-Key": "test-key"},
+                    )
         self.assertEqual(result.status_code, 200)
         body = result.json()
-        self.assertEqual(body["status"], "done")
+        self.assertEqual(body["status"], "done", body.get("error") or body.get("message"))
         self.assertIsNotNone(body["right_pct"])
         scoring = body["scoring"]
         self.assertTrue(scoring["consistency"]["ok"], scoring["consistency"]["errors"])

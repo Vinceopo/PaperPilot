@@ -161,6 +161,47 @@ class MechanicsExtractionTests(unittest.TestCase):
         )
         self.assertEqual(rules["font"]["body_size"], 12.0)
 
+    def test_side_list_margins_with_curly_inch_marks(self):
+        """PDF text often uses curly quotes as inch marks (Mapúa-style guides)."""
+        rules = derive_mechanics_rules(
+            "b. Margins: Top, Right and Bottom: 1.00\u201d\n"
+            "Left: 1.25\u201d to allow for binding\n"
+            "c. Font Type and Size: Times New Roman, 12 points\n"
+        )
+        self.assertEqual(
+            rules["margins_inches"],
+            {"top": 1.0, "right": 1.0, "bottom": 1.0, "left": 1.25},
+        )
+
+    def test_side_list_margins_when_inch_mark_missing(self):
+        rules = derive_mechanics_rules(
+            "b. Margins: Top, Right and Bottom: 1.00\n"
+            "Left: 1.25 to allow for binding\n"
+        )
+        self.assertEqual(
+            rules["margins_inches"],
+            {"top": 1.0, "right": 1.0, "bottom": 1.0, "left": 1.25},
+        )
+
+    def test_outline_layout_for_tables_and_figures(self):
+        rules = derive_mechanics_rules(
+            "f. Pagination\n"
+            "i. Top Right\n"
+            "ii. No page shown on first page of every chapter\n"
+            "g. Page Breaks: Do page break only when starting a new chapter.\n"
+            "h. Layout for Tables\n"
+            "Table number in bold, title in italic title case above the table\n"
+            "i. Layout for Figures\n"
+            "Figure number in bold with the title underlined below the image\n"
+            "j. Citation Format: APA\n"
+        )
+        self.assertEqual(rules["pagination"]["position"], "Top right")
+        self.assertEqual(rules["pagination"]["first_page_of_chapter"], "No page number shown")
+        self.assertIn("chapter", rules["page_break_requirements"][0].lower())
+        self.assertIn("table", rules["table_layout_requirements"][0].lower())
+        self.assertIn("figure", rules["figure_layout_requirements"][0].lower())
+        self.assertEqual(rules["citation_style"], "APA")
+
     def test_sample_mechanics_docx_fills_every_format_field(self):
         parsed = parse_document(build_sample_mechanics_docx(), "docx")
         rules = derive_mechanics_rules(parsed["text"])
@@ -359,7 +400,9 @@ class MechanicsExtractionTests(unittest.TestCase):
             },
             "free",
         )
-        size_issues = [issue for issue in result["issues"] if issue["issue_type"] == "font_size"]
+        size_issues = [
+            issue for issue in result["issues"] if str(issue["issue_type"]).startswith("font_size")
+        ]
         self.assertTrue(size_issues)
         self.assertEqual(size_issues[0]["locations"][0]["line"], 2)
 
@@ -670,7 +713,7 @@ class MechanicsExtractionTests(unittest.TestCase):
         )
         # No font_size issue should claim an empty line measured 12pt.
         for issue in result["issues"]:
-            if issue["issue_type"] != "font_size":
+            if not str(issue["issue_type"]).startswith("font_size"):
                 continue
             self.assertNotIn("Measured 12", issue["explanation"].replace("12.0", "12"))
 
@@ -897,6 +940,169 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(last_page, result["page_count"])
 
 
+def _mechanics_paragraph(index, text, *, source="body", style="Normal", size=12, bold=False, italic=False, page_breaks=0, drawing=False):
+    return {
+        "paragraph_index": index,
+        "source": source,
+        "style": style,
+        "text": text,
+        "has_drawing": drawing,
+        "lines": [{"line_index": 0, "text": text}],
+        "runs": [{
+            "text": text,
+            "font": "Times New Roman",
+            "size": size,
+            "bold": bold,
+            "italic": italic,
+            "rendered_page_breaks": page_breaks,
+        }],
+        "formatting": {"line_spacing": 2.0, "alignment": "left"},
+    }
+
+
+class LayoutAndPageTests(unittest.TestCase):
+    def _doc(self, paragraphs):
+        return {
+            "text": "\n".join(p["text"] for p in paragraphs),
+            "metadata": {"format": "docx"},
+            "paragraphs": paragraphs,
+            "sections": [{
+                "section_index": 0,
+                "page_width_inches": 8.5,
+                "page_height_inches": 11.0,
+                "top_margin_inches": 1.0,
+                "bottom_margin_inches": 1.0,
+                "left_margin_inches": 1.0,
+                "right_margin_inches": 1.0,
+                "start_type": "new_page",
+            }],
+        }
+
+    def test_table_and_figure_rules_flag_real_violations(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "Table 1. Sensor readings"),
+            _mechanics_paragraph(1, "Year Value", source="table", size=10),
+            _mechanics_paragraph(2, "Fig. 1. Setup"),
+            _mechanics_paragraph(3, "", drawing=True),
+            _mechanics_paragraph(
+                4,
+                "Table 2 shows the sample in the narrative and is not a caption.",
+            ),
+        ]
+        rules = {
+            "font": {"families": ["Times New Roman"], "body_size": 12},
+            "table_layout_requirements": [
+                "Each table must be labeled Table number with its title in capital letters, both placed above the table."
+            ],
+            "figure_layout_requirements": [
+                "Each figure must be labeled Figure number with its title placed below the figure."
+            ],
+        }
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        types = {issue["issue_type"] for issue in issues}
+        self.assertIn("table_caption", types)
+        self.assertIn("figure_caption", types)
+        self.assertIn("figure_caption_placement", types)
+        prose = [
+            issue for issue in issues
+            if any("narrative" in (loc.get("excerpt") or "") for loc in issue.get("locations") or [])
+        ]
+        self.assertEqual(prose, [])
+
+    def test_matching_table_and_figure_captions_are_not_flagged(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "Table 1. SENSOR READINGS"),
+            _mechanics_paragraph(1, "Year Value", source="table", size=12),
+            _mechanics_paragraph(2, "", drawing=True),
+            _mechanics_paragraph(3, "Figure 1. Setup"),
+        ]
+        rules = {
+            "font": {"families": ["Times New Roman"], "body_size": 12, "sizes_points": [12]},
+            "table_layout_requirements": [
+                "Each table must be labeled Table number with its title in capital letters, both placed above the table."
+            ],
+            "figure_layout_requirements": [
+                "Each figure must be labeled Figure number with its title placed below the figure."
+            ],
+        }
+        types = {issue["issue_type"] for issue in run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]}
+        self.assertFalse(any(item.startswith("table_caption") or item.startswith("figure_caption") for item in types))
+
+    def test_body_page_is_not_labeled_as_the_title_page(self):
+        prose = (
+            "This paragraph explains the method in enough detail to count as ordinary "
+            "body text on a normal manuscript page."
+        )
+        paragraphs = [
+            _mechanics_paragraph(0, "A Research Title", size=16, bold=True),
+            _mechanics_paragraph(1, "Chapter 1", style="Heading 1", size=14, bold=True, page_breaks=1),
+            _mechanics_paragraph(2, prose, size=11),
+            _mechanics_paragraph(3, "Year Value", source="table", size=10),
+        ]
+        rules = {
+            "font": {
+                "families": ["Times New Roman"],
+                "body_size": 12,
+                "heading1_size": 14,
+                "heading_levels": 1,
+                "sizes_points": [12, 14],
+            },
+            "pagination": {"title_page": "Number shown"},
+        }
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        for issue in issues:
+            if "title page" not in issue["title"].lower():
+                continue
+            pages = {loc.get("page") for loc in issue.get("locations") or []}
+            self.assertEqual(pages, {1})
+        body_font = [issue for issue in issues if issue["title"] == "body text font size differs"]
+        self.assertTrue(body_font)
+        body_pages = {loc.get("page") for issue in body_font for loc in issue["locations"]}
+        self.assertIn(2, body_pages)
+        self.assertNotIn(1, body_pages)
+
+    def test_heading_font_issues_use_heading_label_and_specific_size(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "A Research Title", size=16, bold=True),
+            _mechanics_paragraph(1, "CHAPTER 1", style="Heading 1", size=12, bold=True, page_breaks=1),
+            _mechanics_paragraph(2, "Method", style="Heading 2", size=11, bold=True),
+            _mechanics_paragraph(
+                3,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=11,
+            ),
+        ]
+        rules = {
+            "font": {
+                "families": ["Times New Roman"],
+                "body_size": 12,
+                "heading1_size": 14,
+                "heading2_size": 12,
+                "heading_levels": 2,
+                "sizes_points": [11, 12, 14],
+            },
+            "pagination": {"title_page": "Number shown"},
+        }
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        by_type = {issue["issue_type"]: issue for issue in issues}
+        self.assertIn("font_size_heading1", by_type)
+        self.assertIn("font_size_heading2", by_type)
+        h1 = by_type["font_size_heading1"]
+        h2 = by_type["font_size_heading2"]
+        self.assertEqual(h1["title"], "Heading 1 font size differs")
+        self.assertEqual(h2["title"], "Heading 2 font size differs")
+        self.assertNotIn("title page", h1["title"].lower())
+        self.assertNotIn("title page", h2["title"].lower())
+        self.assertIn("14 pt", h1["explanation"])
+        self.assertIn("12 pt", h2["explanation"])
+        self.assertNotIn("11", h1["explanation"].split("specifies", 1)[-1])
+        self.assertNotIn("14", h2["explanation"].split("specifies", 1)[-1])
+        for loc in h1["locations"]:
+            self.assertNotIn("title page", (loc.get("excerpt") or "").lower())
+        excerpts = " ".join(loc.get("excerpt") or "" for loc in h1["locations"])
+        self.assertIn("CHAPTER 1", excerpts)
+
+
 class PersistenceTests(FirebaseTestCase):
     def parsed(self):
         return {
@@ -961,6 +1167,13 @@ class PersistenceTests(FirebaseTestCase):
             "owner", "Thesis Draft", mechanics["id"], "a.docx", "docx", "Text", parsed, None
         )
         self.assertTrue(created_first)
+        self.assertTrue(first["pending"])
+        compliance_db.persist_scan(
+            "owner", first["manuscript_id"], first["id"], mechanics["id"], 90.0, [],
+            [{"section": "General", "formatting_score": 90.0, "issue_count": 0, "issues": []}],
+        )
+        saved = compliance_db.get_version("owner", first["manuscript_id"], first["id"])
+        self.assertFalse(saved["pending"])
         second, created_second = compliance_db.create_version(
             "owner", "thesis draft", mechanics["id"], "b.docx", "docx", "Text", parsed, None
         )
@@ -968,6 +1181,32 @@ class PersistenceTests(FirebaseTestCase):
         self.assertEqual(first["manuscript_id"], second["manuscript_id"])
         self.assertEqual(first["version_number"], 1)
         self.assertEqual(second["version_number"], 2)
+        listed = compliance_db.list_manuscripts("owner")
+        self.assertEqual(listed[0]["version_count"], 1)
+        self.assertEqual(listed[0]["current_version_number"], 1)
+
+    def test_unscanned_upload_releases_its_version_number(self):
+        parsed, mechanics = self.parsed(), self.mechanics()
+        first, _ = compliance_db.create_version(
+            "owner", "Thesis Draft", mechanics["id"], "a.docx", "docx", "Text", parsed, None
+        )
+        compliance_db.persist_scan(
+            "owner", first["manuscript_id"], first["id"], mechanics["id"], 90.0, [],
+            [{"section": "General", "formatting_score": 90.0, "issue_count": 0, "issues": []}],
+        )
+        abandoned, _ = compliance_db.create_version(
+            "owner", "Thesis Draft", mechanics["id"], "b.docx", "docx", "Text", parsed, first["manuscript_id"]
+        )
+        self.assertEqual(abandoned["version_number"], 2)
+        self.assertTrue(abandoned["pending"])
+        self.assertEqual(compliance_db.list_manuscripts("owner")[0]["current_version_number"], 1)
+        self.assertTrue(compliance_db.delete_version("owner", first["manuscript_id"], abandoned["id"]))
+        self.assertEqual(compliance_db.list_manuscripts("owner")[0]["current_version_number"], 1)
+        again, _ = compliance_db.create_version(
+            "owner", "Thesis Draft", mechanics["id"], "c.docx", "docx", "Text", parsed, first["manuscript_id"]
+        )
+        self.assertEqual(again["version_number"], 2)
+        self.assertTrue(again["pending"])
 
     def test_orphaned_mechanics_name_reservation_is_reclaimed(self):
         # Simulate a stale name index entry whose mechanics row is already gone.

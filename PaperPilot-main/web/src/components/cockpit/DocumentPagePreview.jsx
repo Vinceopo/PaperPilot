@@ -573,8 +573,10 @@ function lineCountBox(section, line, scroller) {
 function locateDocxBox(sections, pageNumber, line, excerpt, scroller) {
   const reported = sections[pageNumber - 1];
   const estimate = reported ? lineCountBox(reported, line, scroller) : null;
-  for (const needle of excerptNeedles(excerpt)) {
-    for (const page of pagesByDistance(pageNumber, sections.length)) {
+    for (const needle of excerptNeedles(excerpt)) {
+    // Stay on the reported page. A short excerpt must not jump to a later
+    // sheet (a heading and table on page 52) when the issue belongs elsewhere.
+    for (const page of pagesByDistance(pageNumber, sections.length, 1)) {
       const ranges = textRangesIn(sections[page - 1], needle);
       if (!ranges.length) continue;
       const candidates = ranges
