@@ -132,16 +132,17 @@ export function excerptNeedles(excerpt) {
 }
 
 /** Page numbers ordered by distance from the reported page: p, p+1, p-1, p+2, … */
-export function pagesByDistance(page, total) {
+export function pagesByDistance(page, total, maxDistance = Infinity) {
   const count = Math.max(0, Number(total) || 0);
   const start = Math.min(count, Math.max(1, Number(page) || 1));
+  const limit = Number.isFinite(Number(maxDistance)) ? Math.max(0, Number(maxDistance)) : count;
   const order = [];
   for (let step = 0; order.length < count; step += 1) {
+    if (step > limit || step > count) break;
     const after = start + step;
     const before = start - step;
     if (after <= count && !order.includes(after)) order.push(after);
     if (step && before >= 1 && !order.includes(before)) order.push(before);
-    if (step > count) break;
   }
   return order;
 }

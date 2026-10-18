@@ -954,7 +954,7 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
 def _expected_size_for_role(role: str, font: dict) -> float | None:
     if _is_heading_role(role):
         return _heading_sizes(font).get(role)
-    if role in {"body", "caption"}:
+    if role in {"body", "caption", "title_page"}:
         return _body_size(font)
     return None
 
@@ -988,6 +988,49 @@ def _mostly_black(unit: dict) -> bool | None:
     return colored <= 0.5 * total
 
 
+def _role_for_font_check(unit: dict) -> str:
+    """Font rules follow the line’s content role. Headings stay headings.
+
+    Title-page sizing applies only to short title-page lines on page 1 — never to
+    a Heading style, chapter title, body paragraph, or table.
+    """
+    role = unit.get("role") or "body"
+    if role == "title_page" and unit.get("title_page_text") and unit.get("page_index") == 0:
+        return "title_page"
+    if _is_heading_role(role):
+        return role
+    saved = unit.get("content_role")
+    if _is_heading_role(saved):
+        return saved
+    if role == "title_page":
+        if saved and saved != "title_page":
+            return saved
+        if unit.get("source") == "table":
+            return "table"
+        return "body"
+    return role
+
+
+def _font_role_label(role: str) -> str:
+    if _is_heading_role(role):
+        return _heading_label(role)
+    return {
+        "caption": "caption",
+        "body": "body text",
+        "table": "table text",
+        "title_page": "title page text",
+    }.get(role, "text")
+
+
+def _font_size_issue_type(role: str) -> str:
+    """One issue type per role so Heading 1 is never folded into title-page text."""
+    if _is_heading_role(role):
+        return f"font_size_{role}"
+    if role in {"body", "caption", "table", "title_page"}:
+        return f"font_size_{role}"
+    return "font_size"
+
+
 def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     font_rule = rules.get("font") or {}
     allowed_fonts = {_font_key(font) for font in font_rule.get("families", [])}
@@ -998,7 +1041,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         return
     stats.applicable = True
     for unit in units:
-        role = unit.get("role") or "body"
+        role = _role_for_font_check(unit)
         text = (unit.get("text") or "").strip()
         # Blank / spacing lines are typeable but have no glyphs to measure.
         if not text or role in {"empty", "pagination"}:
@@ -1017,6 +1060,10 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         expected_size = _expected_size_for_role(role, font_rule) if role_sizes else None
         if expected_size is not None:
             size_ok = _size_matches(shown_size, expected_size)
+        elif _is_heading_role(role):
+            # Headings must use that heading’s own size from the format — never the
+            # full sizes_points list (that mixes every heading/body size together).
+            size_ok = True
         elif listed_sizes and shown_size is not None:
             size_ok = any(abs(shown_size - allowed) <= SIZE_TOLERANCE for allowed in listed_sizes)
         else:
@@ -1051,15 +1098,11 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 "Apply the format-mechanics font family to this text.",
                 loc,
             )
-        if not size_ok and shown_size is not None:
-            role_label = (
-                _heading_label(role)
-                if _is_heading_role(role)
-                else {"caption": "caption", "body": "body text", "title_page": "title page text"}.get(role, "text")
-            )
-            expected_label = expected_size if expected_size is not None else sorted(listed_sizes)
+        if not size_ok and shown_size is not None and expected_size is not None:
+            role_label = _font_role_label(role)
+            expected_label = f"{expected_size:g}"
             collector.add(
-                "font_size",
+                _font_size_issue_type(role),
                 "critical",
                 f"{role_label} font size differs",
                 f"This {role_label} does not use the point size required by the uploaded format.",
@@ -1068,6 +1111,22 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                     f"the format specifies {expected_label} pt for {role_label}."
                 ),
                 f"Select this line’s text and set the font size to {expected_label} pt.",
+                loc,
+            )
+        elif not size_ok and shown_size is not None and listed_sizes and not _is_heading_role(role):
+            role_label = _font_role_label(role)
+            # Non-heading lines with only a shared sizes list (no per-role size).
+            allowed = ", ".join(f"{size:g}" for size in sorted(listed_sizes))
+            collector.add(
+                _font_size_issue_type(role),
+                "critical",
+                f"{role_label} font size differs",
+                f"This {role_label} does not use the point size required by the uploaded format.",
+                (
+                    f"Measured {shown_size:g} pt on this line’s text; "
+                    f"the format allows {allowed} pt for {role_label}."
+                ),
+                f"Select this line’s text and set the font size to one of: {allowed} pt.",
                 loc,
             )
 
@@ -1771,39 +1830,233 @@ def _check_pagination(
             stats.observe(True)
 
 
+TABLE_LABEL_RE = re.compile(r"^\s*table\s+(\d+)\b\s*[:.\-–]?\s*(.*)$", re.I)
+FIGURE_LABEL_RE = re.compile(r"^\s*(figure|fig\.?)\s+(\d+)\b\s*[:.\-–]?\s*(.*)$", re.I)
+
+
+def _layout_expectations(rule_text: str) -> dict:
+    """What a table or figure rule actually requires, read from the saved wording."""
+    text = " ".join(str(rule_text or "").split()).lower()
+    upper = bool(re.search(r"\b(all[\s-]?caps|uppercase|capital letters|in caps)\b", text))
+    title_case = "title case" in text and not upper
+    above = bool(re.search(r"\b(above|over)\b", text)) and not bool(
+        re.search(r"\b(below|under|beneath)\b", text) and not re.search(r"\b(above|over)\b", text)
+    )
+    below = bool(re.search(r"\b(below|under|beneath)\b", text)) and not above
+    if re.search(r"\b(above|over)\b", text) and re.search(r"\b(below|under|beneath)\b", text):
+        above = bool(re.search(r"\b(placed|put|set|positioned|sit(?:s|ting)?)\s+above\b|\babove\s+(?:the|it|each)", text))
+        below = bool(re.search(r"\b(placed|put|set|positioned|sit(?:s|ting)?)\s+below\b|\bbelow\s+(?:the|it|each)", text))
+        if above and below:
+            above, below = False, False
+    number_bold = bool(re.search(r"number.{0,40}\bbold\b|\bbold\b.{0,40}number", text))
+    title_italic = bool(re.search(r"title.{0,40}\bitalic\b|\bitalic\b.{0,30}title", text))
+    title_bold = bool(re.search(r"title.{0,30}\bbold\b|\bbold\b.{0,20}title", text)) and not title_italic
+    return {
+        "upper": upper,
+        "title_case": title_case,
+        "above": above and not below,
+        "below": below and not above,
+        "bold": ("bold" in text) and not number_bold and not title_bold,
+        "italic": ("italic" in text) and not title_italic,
+        "number_bold": number_bold,
+        "title_italic": title_italic,
+        "wants_title": "title" in text or "caption" in text,
+    }
+
+
+def _caption_pieces(unit: dict) -> list[dict]:
+    return list(unit.get("line_runs") or unit.get("spans") or unit.get("runs") or [])
+
+
+def _flag_caption(collector: IssueCollector, issue_type: str, unit: dict, title: str, detail: str, fix: str) -> None:
+    collector.add(
+        issue_type,
+        "minor",
+        title,
+        "This table or figure does not follow the layout saved in format mechanics.",
+        detail,
+        fix,
+        _unit_location(unit, "Captions"),
+    )
+
+
+def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, collector: IssueCollector) -> None:
+    text = (unit.get("text") or "").strip()
+    if kind == "table":
+        title = (match.group(2) or "").strip()
+        label = "Table"
+    else:
+        prefix = match.group(1) or ""
+        title = (match.group(3) or "").strip()
+        label = "Figure"
+        if prefix.lower().startswith("fig") and not prefix.lower().startswith("figure"):
+            _flag_caption(
+                collector,
+                "figure_caption",
+                unit,
+                "Figure caption prefix differs",
+                f"Found “{text}”; the format expects the caption to start with Figure and a number.",
+                "Rewrite the caption so it starts with Figure and the figure number.",
+            )
+    if expect["wants_title"] and not title:
+        _flag_caption(
+            collector,
+            f"{kind}_caption",
+            unit,
+            f"{label} caption is missing its title",
+            f"Found “{text}”; the format expects a {label.lower()} number and a title.",
+            f"Add the {label.lower()} title on the caption line required by the format.",
+        )
+    if title and expect["upper"]:
+        letters = [ch for ch in title if ch.isalpha()]
+        if letters and not all(ch.isupper() for ch in letters):
+            _flag_caption(
+                collector,
+                f"{kind}_caption",
+                unit,
+                f"{label} title is not in the required caption form",
+                f"Found “{text}”; the format expects the {label.lower()} title in capital letters.",
+                f"Retype the {label.lower()} title in capital letters.",
+            )
+    elif title and expect["title_case"] and not _is_title_case(title):
+        _flag_caption(
+            collector,
+            f"{kind}_caption",
+            unit,
+            f"{label} title is not in the required caption form",
+            f"Found “{text}”; the format expects the {label.lower()} title in Title Case.",
+            f"Retype the {label.lower()} title in Title Case.",
+        )
+    pieces = _caption_pieces(unit)
+    if pieces and expect["bold"] and _share(pieces, "bold") < 0.6:
+        _flag_caption(
+            collector,
+            f"{kind}_caption_style",
+            unit,
+            f"{label} caption is not bold",
+            f"Found “{text}”; the format expects this {label.lower()} caption in bold.",
+            f"Select the {label.lower()} caption and turn on bold.",
+        )
+    if pieces and (expect["italic"] or expect["title_italic"]) and _share(pieces, "italic") < 0.4:
+        _flag_caption(
+            collector,
+            f"{kind}_caption_style",
+            unit,
+            f"{label} caption is not italic",
+            f"Found “{text}”; the format expects italic text in this {label.lower()} caption.",
+            f"Select the {label.lower()} title and turn on italic.",
+        )
+    if pieces and expect["number_bold"] and _share(pieces, "bold") < 0.2:
+        _flag_caption(
+            collector,
+            f"{kind}_caption_style",
+            unit,
+            f"{label} number is not bold",
+            f"Found “{text}”; the format expects the {label.lower()} number in bold.",
+            f"Select the {label.lower()} number and turn on bold.",
+        )
+
+
+def _is_table_unit(unit: dict) -> bool:
+    return unit.get("source") == "table" or unit.get("role") == "table"
+
+
+def _is_figure_unit(unit: dict) -> bool:
+    return bool(unit.get("has_drawing")) and not _is_table_unit(unit)
+
+
+def _object_clusters(units: list[dict], predicate) -> list[list[int]]:
+    clusters: list[list[int]] = []
+    current: list[int] = []
+    for index, unit in enumerate(units):
+        if predicate(unit) and ((unit.get("text") or "").strip() or unit.get("has_drawing")):
+            current.append(index)
+            continue
+        if current:
+            clusters.append(current)
+            current = []
+    if current:
+        clusters.append(current)
+    return clusters
+
+
+def _nearest_caption(units: list[dict], cluster: list[int], pattern: re.Pattern, direction: int) -> int | None:
+    start = cluster[0] - 1 if direction < 0 else cluster[-1] + 1
+    step = -1 if direction < 0 else 1
+    page = units[cluster[0]].get("page_index")
+    seen = 0
+    index = start
+    while 0 <= index < len(units) and seen < 8:
+        unit = units[index]
+        if unit.get("page_index") != page and abs((unit.get("page_index") or 0) - (page or 0)) > 1:
+            break
+        text = (unit.get("text") or "").strip()
+        if text and not _is_table_unit(unit):
+            seen += 1
+            if pattern.match(text) and not PROSE_REFERENCE_RE.match(text):
+                return index
+            if seen >= 4 and len(text) > 80:
+                break
+        index += step
+    return None
+
+
+def _check_object_placement(units: list[dict], kind: str, expect: dict, collector: IssueCollector) -> None:
+    if not expect["above"] and not expect["below"]:
+        return
+    pattern = TABLE_LABEL_RE if kind == "table" else FIGURE_LABEL_RE
+    predicate = _is_table_unit if kind == "table" else _is_figure_unit
+    label = "Table" if kind == "table" else "Figure"
+    wanted = "above" if expect["above"] else "below"
+    for cluster in _object_clusters(units, predicate):
+        before = _nearest_caption(units, cluster, pattern, -1)
+        after = _nearest_caption(units, cluster, pattern, 1)
+        if before is None and after is None:
+            anchor = units[cluster[0]]
+            _flag_caption(
+                collector,
+                f"{kind}_caption_missing",
+                anchor,
+                f"{label} is missing its caption",
+                f"This {label.lower()} has no “{label} n” caption; the format requires one {wanted} it.",
+                f"Add a {label} number and title {wanted} this {label.lower()}.",
+            )
+            continue
+        present = before if wanted == "above" else after
+        other = after if wanted == "above" else before
+        if present is None and other is not None:
+            _flag_caption(
+                collector,
+                f"{kind}_caption_placement",
+                units[other],
+                f"{label} caption is on the wrong side",
+                f"The caption is {'below' if wanted == 'above' else 'above'} the {label.lower()}; "
+                f"the format requires it {wanted}.",
+                f"Move the {label.lower()} caption so it sits {wanted} the {label.lower()}.",
+            )
+
+
 def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -> None:
-    table_rules = " ".join(rules.get("table_layout_requirements") or []).lower()
-    figure_rules = " ".join(rules.get("figure_layout_requirements") or []).lower()
+    table_rules = " ".join(rules.get("table_layout_requirements") or [])
+    figure_rules = " ".join(rules.get("figure_layout_requirements") or [])
     if not table_rules and not figure_rules:
         return
-    want_table_caps = "title" in table_rules and ("caps" in table_rules or "uppercase" in table_rules or "capital" in table_rules)
-    want_figure_prefix = "figure" in figure_rules
-    for index, unit in enumerate(units):
-        text = (unit.get("text") or "").strip()
-        loc = _unit_location(unit, "Captions")
-        if table_rules and unit.get("role") == "caption" and TABLE_CAPTION_RE.match(text):
-            title = re.sub(r"^\s*table\s+\d+\s*[:.\-–]?\s*", "", text, flags=re.I).strip()
-            if want_table_caps and title and title != title.upper():
-                collector.add(
-                    "table_caption",
-                    "minor",
-                    "Table title is not in the required caption form",
-                    "Table captions do not follow the uploaded format mechanics.",
-                    f"Found “{text}”; the format expects a Table number plus an uppercase title.",
-                    "Rewrite the table caption using the mechanics-specified Table n + TITLE pattern.",
-                    loc,
-                )
-        if figure_rules and want_figure_prefix:
-            if re.match(r"^\s*fig\.?\s+\d+", text, re.I) and not FIGURE_CAPTION_RE.match(text):
-                collector.add(
-                    "figure_caption",
-                    "minor",
-                    "Figure caption prefix differs",
-                    "Figure captions do not follow the uploaded format mechanics.",
-                    f"Found “{text}”; the format expects captions to start with Figure n.",
-                    "Rewrite the figure caption using the mechanics-specified Figure n pattern.",
-                    loc,
-                )
+    kinds = []
+    if table_rules:
+        kinds.append(("table", TABLE_LABEL_RE, _layout_expectations(table_rules)))
+    if figure_rules:
+        kinds.append(("figure", FIGURE_LABEL_RE, _layout_expectations(figure_rules)))
+    for kind, pattern, expect in kinds:
+        for unit in units:
+            if (unit.get("source") or "body") in CHROME_SOURCES:
+                continue
+            text = (unit.get("text") or "").strip()
+            if not text or PROSE_REFERENCE_RE.match(text):
+                continue
+            match = pattern.match(text)
+            if match:
+                _check_one_caption(unit, kind, match, expect, collector)
+        _check_object_placement(units, kind, expect, collector)
 
 
 def _check_citations(units: list[dict], text: str, rules: dict, collector: IssueCollector) -> None:
@@ -1889,16 +2142,53 @@ def _check_citations(units: list[dict], text: str, rules: dict, collector: Issue
             )
 
 
+def _page_has_body_structure(page_units: list[dict]) -> bool:
+    """A normal manuscript page has a section heading, a paragraph, or a table.
+
+    Those pages are never the title page, even when they are the first page the
+    scanner counted or the preview is showing a high printed page number.
+    """
+    for unit in page_units:
+        if (unit.get("source") or "body") in CHROME_SOURCES:
+            continue
+        text = (unit.get("text") or "").strip()
+        if not text:
+            continue
+        if unit.get("role") == "table" or unit.get("source") == "table":
+            return True
+        if _is_heading_role(unit.get("role")) and (
+            CHAPTER_RE.match(text) or PRELIM_HEADING_RE.match(text) or BACK_MATTER_RE.match(text)
+        ):
+            return True
+        if unit.get("role") in {"body", "caption"} and len(text) >= 80 and unit.get("source") != "table":
+            return True
+    return False
+
+
 def _mark_title_page(units: list[dict], rules: dict) -> None:
-    """When the format declares a title page, page 1 is not body text (no spacing/indent/alignment rules)."""
+    """Mark only real title-page lines. Later pages keep heading, body, and table roles."""
     if not title_page_rule((rules.get("pagination") or {}).get("title_page")):
         return
     if max((unit["page_index"] for unit in units), default=0) < 1:
         return
-    for unit in units:
-        if unit["page_index"] == 0 and (unit.get("source") or "body") not in CHROME_SOURCES:
-            if unit.get("role") not in {"empty", "pagination"}:
-                unit["role"] = "title_page"
+    first = [unit for unit in units if unit.get("page_index") == 0]
+    if _page_has_body_structure(first):
+        return
+    for unit in first:
+        if (unit.get("source") or "body") in CHROME_SOURCES:
+            continue
+        if unit.get("role") in {"empty", "pagination", "table", "caption", "toc"}:
+            continue
+        text = (unit.get("text") or "").strip()
+        if not text or len(text) > 160:
+            continue
+        style = str(unit.get("style") or "").lower()
+        # Real Heading styles / chapter titles stay headings — never “title page”.
+        if HEADING_STYLE_RE.search(style) or CHAPTER_RE.match(text):
+            continue
+        unit["content_role"] = unit.get("role")
+        unit["title_page_text"] = True
+        unit["role"] = "title_page"
 
 
 def _share(pieces: list[dict], key: str) -> float:

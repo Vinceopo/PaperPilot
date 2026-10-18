@@ -395,14 +395,23 @@ def delete_version(owner_uid: str, manuscript_id: str, version_id: str) -> bool:
         _delete_scan(owner_uid, scan_id)
     _mark_scans_deleted(owner_uid, matched)
 
+    removed = versions.get(version_id) if isinstance(versions.get(version_id), dict) else {}
+    pending = bool(removed.get("pending"))
+    removed_number = int(removed.get("version_number") or 0)
     remaining = {vid: row for vid, row in versions.items() if vid != version_id and isinstance(row, dict)}
     if not remaining:
         _delete_manuscript_tree(owner_uid, manuscript_id)
         return True
     _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").delete()
+    if pending:
+        _sync_counter_after_release(owner_uid, manuscript_id, remaining, [removed_number])
+    committed = [row for row in remaining.values() if not row.get("pending")]
     if manuscript.get("current_version_id") == version_id:
-        latest = max(remaining.values(), key=lambda row: int(row.get("version_number") or 0))
-        ms_ref.update({"current_version_id": latest.get("id"), "updated_at": _iso(_now())})
+        if committed:
+            latest = max(committed, key=lambda row: int(row.get("version_number") or 0))
+            ms_ref.update({"current_version_id": latest.get("id"), "updated_at": _iso(_now())})
+        else:
+            ms_ref.update({"current_version_id": None, "updated_at": _iso(_now())})
     return True
 
 
@@ -437,6 +446,120 @@ def get_mechanics(owner_uid: str, mechanics_id: str, conn=None) -> dict | None:
         "text": row.get("extracted_text") or "",
         "parsed_data": row.get("parsed_data") or {},
     }
+
+
+def _version_counter_ref(owner_uid: str, manuscript_id: str):
+    return _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}/version_counter")
+
+
+def _scan_states_for_manuscript(owner_uid: str, manuscript_id: str) -> dict[str, str]:
+    """version_id -> 'running' or 'done'."""
+    states: dict[str, str] = {}
+    scan_ids = _reference(f"{ROOT}/compliance_scans/{owner_uid}").get(shallow=True) or {}
+    if not isinstance(scan_ids, dict):
+        return states
+    for scan_id in scan_ids:
+        base = f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}"
+        if _reference(f"{base}/manuscript_id").get() != manuscript_id:
+            continue
+        version_id = str(_reference(f"{base}/manuscript_version_id").get() or "")
+        status = str(_reference(f"{base}/status").get() or "")
+        if not version_id:
+            continue
+        if status == "running":
+            states[version_id] = "running"
+        elif status == "done" and states.get(version_id) != "running":
+            states[version_id] = "done"
+    return states
+
+
+def _occupied_version_numbers(versions: dict) -> int:
+    numbers = [
+        int(row.get("version_number") or 0)
+        for row in versions.values()
+        if isinstance(row, dict)
+    ]
+    return max(numbers) if numbers else 0
+
+
+def _sync_counter_after_release(owner_uid: str, manuscript_id: str, versions: dict, deleted_numbers: list[int]) -> None:
+    """Give back numbers that belonged only to uploads the user never scanned."""
+    if not deleted_numbers:
+        return
+    occupied = _occupied_version_numbers(versions)
+    deleted = {int(number) for number in deleted_numbers if int(number) > 0}
+
+    def _lower(current):
+        if current is None:
+            return occupied
+        try:
+            current_n = int(current)
+        except (TypeError, ValueError):
+            return current
+        if current_n <= occupied:
+            return current_n
+        hole = set(range(occupied + 1, current_n + 1))
+        if hole and hole <= deleted:
+            return occupied
+        return current_n
+
+    _version_counter_ref(owner_uid, manuscript_id).transaction(_lower)
+
+
+def _release_unscanned_versions(owner_uid: str, manuscript_id: str) -> dict:
+    """Drop uploads that never finished a scan so they do not consume version numbers."""
+    versions_ref = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}")
+    versions = versions_ref.get() or {}
+    if not isinstance(versions, dict):
+        return {}
+    states = _scan_states_for_manuscript(owner_uid, manuscript_id)
+    deleted_numbers: list[int] = []
+    for version_id, row in list(versions.items()):
+        if not isinstance(row, dict):
+            versions.pop(version_id, None)
+            continue
+        state = states.get(str(version_id))
+        if state == "running":
+            continue
+        if state == "done":
+            if row.get("pending"):
+                versions_ref.child(version_id).update({"pending": False})
+                row["pending"] = False
+            continue
+        deleted_numbers.append(int(row.get("version_number") or 0))
+        versions_ref.child(version_id).delete()
+        versions.pop(version_id, None)
+    _sync_counter_after_release(owner_uid, manuscript_id, versions, deleted_numbers)
+    if deleted_numbers:
+        remaining = [row for row in versions.values() if isinstance(row, dict) and not row.get("pending")]
+        ms_ref = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}")
+        manuscript = ms_ref.get()
+        if isinstance(manuscript, dict):
+            if remaining:
+                latest = max(remaining, key=lambda row: int(row.get("version_number") or 0))
+                if manuscript.get("current_version_id") not in {row.get("id") for row in remaining}:
+                    ms_ref.update({"current_version_id": latest.get("id"), "updated_at": _iso(_now())})
+            else:
+                ms_ref.update({"current_version_id": None, "updated_at": _iso(_now())})
+    return versions
+
+
+def commit_version(owner_uid: str, manuscript_id: str, version_id: str) -> None:
+    """A version becomes a saved manuscript version only after its scan finishes."""
+    ref = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}")
+    row = ref.get()
+    if not isinstance(row, dict):
+        return
+    if row.get("pending"):
+        ref.update({"pending": False})
+    number = int(row.get("version_number") or 0)
+    if number > 0:
+        _version_counter_ref(owner_uid, manuscript_id).transaction(
+            lambda current: max(int(current or 0), number)
+        )
+    _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").update(
+        {"current_version_id": version_id, "updated_at": _iso(_now())}
+    )
 
 
 def create_version(
@@ -497,6 +620,8 @@ def create_version(
         if not isinstance(manuscript, dict):
             raise LookupError("Manuscript not found.")
 
+        # An earlier upload that was never scanned must not keep its number.
+        _release_unscanned_versions(owner_uid, manuscript_id)
         stored_versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get() or {}
         existing_numbers = [
             int(row.get("version_number") or 0)
@@ -515,6 +640,7 @@ def create_version(
             "manuscript_id": manuscript_id,
             "mechanics_id": mechanics_id,
             "version_number": next_number,
+            "pending": True,
             "source_filename": filename,
             "file_type": file_type,
             "extracted_text": text,
@@ -524,13 +650,14 @@ def create_version(
         if cloudinary_url:
             version["cloudinary_url"] = cloudinary_url.strip()
         _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").set(version)
-        ms_ref.update(
-            {
-                "title": title.strip(),
-                "current_version_id": version_id,
-                "updated_at": created,
-            }
+        has_saved = any(
+            isinstance(item, dict) and not item.get("pending") and int(item.get("version_number") or 0) > 0
+            for item in (stored_versions.values() if isinstance(stored_versions, dict) else [])
         )
+        manuscript_update = {"title": title.strip(), "updated_at": created}
+        if not has_saved:
+            manuscript_update["current_version_id"] = version_id
+        ms_ref.update(manuscript_update)
     except Exception:
         if created_parent:
             _delete_manuscript_tree(owner_uid, manuscript_id)
@@ -555,16 +682,20 @@ def list_manuscripts(owner_uid: str) -> list[dict]:
             continue
         mid = row.get("id")
         versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{mid}").get() or {}
-        current_id = row.get("current_version_id")
-        current = versions.get(current_id) if isinstance(versions, dict) else None
-        version_number = (current or {}).get("version_number") if isinstance(current, dict) else None
+        committed = [
+            item
+            for item in (versions.values() if isinstance(versions, dict) else [])
+            if isinstance(item, dict) and not item.get("pending") and int(item.get("version_number") or 0) > 0
+        ]
+        latest = max(committed, key=lambda item: int(item.get("version_number") or 0)) if committed else None
+        version_number = latest.get("version_number") if isinstance(latest, dict) else None
         items.append(
             {
                 "id": mid,
                 "title": row.get("title"),
-                "current_version_id": current_id,
+                "current_version_id": (latest or {}).get("id") if latest else None,
                 "current_version_number": version_number,
-                "version_count": len(versions) if isinstance(versions, dict) else 0,
+                "version_count": len(committed),
                 "created_at": row.get("created_at"),
                 "updated_at": row.get("updated_at"),
             }
@@ -579,6 +710,7 @@ def _version_row(row: dict, include_content: bool = True) -> dict:
         "manuscript_id": row["manuscript_id"],
         "mechanics_id": row["mechanics_id"],
         "version_number": row["version_number"],
+        "pending": bool(row.get("pending")),
         "source_filename": row["source_filename"],
         "file_type": row["file_type"],
         "created_at": row["created_at"],
@@ -640,7 +772,7 @@ def list_versions(owner_uid: str, manuscript_id: str, history: bool) -> tuple[li
     if not isinstance(all_versions, dict):
         return [], current_id
     if history:
-        rows = list(all_versions.values())
+        rows = [row for row in all_versions.values() if isinstance(row, dict) and not row.get("pending")]
         rows.sort(key=lambda r: int(r.get("version_number") or 0), reverse=True)
     else:
         current = all_versions.get(current_id)
@@ -1554,7 +1686,9 @@ def _assert_scan_inputs(
 
     if not enforce_limit:
         return sub, manuscript, version, mechanics
-    old_version = not is_paid_tier(snap["tier"]) and manuscript.get("current_version_id") != version_id
+    # A pending upload is the version being scanned, not an older saved version.
+    scanning_current = manuscript.get("current_version_id") == version_id or bool(version.get("pending"))
+    old_version = not is_paid_tier(snap["tier"]) and not scanning_current
     if old_version:
         raise UpgradeRequired(snap["tier"] or "free", limit, int(snap["used"] or 0), feature=True)
     if int(snap["used"] or 0) >= limit:
@@ -1802,6 +1936,7 @@ def finalize_scan_from_ml(
     )
     _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").update(row)
     _write_section_checks(owner_uid, scan_id, sections)
+    commit_version(owner_uid, manuscript_id, version_id)
     if _claim_scan_usage(owner_uid, scan_id):
         _increment_scan_usage(owner_uid, created)
     return get_scan(owner_uid, scan_id) or row
@@ -1840,6 +1975,7 @@ def persist_scan(
         scan.update(extra)
     _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(scan)
     _write_section_checks(owner_uid, scan_id, sections)
+    commit_version(owner_uid, manuscript_id, version_id)
     _increment_scan_usage(owner_uid, created)
     return get_scan(owner_uid, scan_id)
 

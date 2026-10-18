@@ -61,7 +61,8 @@ def enrich_compliance_issues(
     if not issues:
         return issues
     if not settings.gemini_api_key or settings.gemini_api_key.startswith("your_"):
-        if tier != "premium":
+        paid = str(tier or "").lower() in ("premium", "pro")
+        if not paid:
             for issue in issues:
                 issue["premium_detail_available"] = True
         return issues
@@ -79,20 +80,22 @@ def enrich_compliance_issues(
         }
         for issue in issues
     ]
+    paid = str(tier or "").lower() in ("premium", "pro")
     depth = (
         "Premium: provide a detailed 2-4 sentence explanation and a precise, step-by-step recommendation."
-        if tier == "premium"
+        if paid
         else "Free: provide a concise one-sentence explanation and one-sentence recommendation."
     )
     prompt = f"""You enrich already-detected academic document formatting issues.
 Do not perform grammar, plagiarism, source-validity, or citation-content analysis.
-Consolidate reasoning by issue_type. Do not create or remove issue types.
+Keep each issue_type separate. Do not merge Heading 1, Heading 2, body, or title-page font issues.
 Use measured_explanation numbers as ground truth; do not invent different measurements.
+Do not list every font size from the mechanics — only the size named in measured_explanation for that issue.
 {COMPLIANCE_SEVERITY_RUBRIC}
 {depth}
 
 Return ONLY valid JSON with one key "issues", an array whose entries contain ONLY:
-issue_type (matching an input issue_type), severity (critical|moderate|minor),
+issue_type (matching an input issue_type exactly), severity (critical|moderate|minor),
 explanation (evidence-based reasoning understandable to the author),
 recommendation (a specific actionable fix).
 Never output evaluation questions, test questions, hidden criteria, or the severity rubric.
@@ -135,7 +138,7 @@ DETERMINISTIC GROUPED ISSUES:
             recommendation = update.get("recommendation")
             if isinstance(recommendation, str) and recommendation.strip():
                 issue["recommendation"] = recommendation[:1000]
-        if tier != "premium":
+        if not paid:
             for issue in issues:
                 issue["premium_detail_available"] = True
     except Exception:

@@ -8,6 +8,7 @@ import {
   listManuscripts,
   listMechanics,
   deleteManuscript as deleteManuscriptRequest,
+  deleteManuscriptVersion,
   getComplianceScan,
   getProfile,
   getScanDocument,
@@ -208,6 +209,10 @@ export default function App() {
   const signedIn = Boolean(user);
 
   function handleBackToDashboard() {
+    const step = scanFlowRef.current?.step;
+    if (!step || step === "idle" || step === "fileSelected" || step === "error") {
+      discardUnscannedVersion();
+    }
     setManuscriptReady(false);
     setFileDetailsNotice("");
     setCurrentVersion(null);
@@ -261,7 +266,19 @@ export default function App() {
     setFileDetailsFocusKey((key) => key + 1);
   }
 
+  function discardUnscannedVersion() {
+    const flow = scanFlowRef.current;
+    if (flow?.persistScan || ["summary", "tracing", "results", "analyzing"].includes(flow?.step)) return;
+    const version = currentVersionRef.current;
+    const manuscript = currentManuscriptRef.current;
+    if (!version?.pending || !isServerId(version.id)) return;
+    const manuscriptId = version.manuscript_id || manuscript?.serverManuscriptId;
+    if (!isServerId(manuscriptId)) return;
+    deleteManuscriptVersion({ manuscriptId, versionId: version.id }).catch(() => {});
+  }
+
   function cancelManuscriptUpload() {
+    discardUnscannedVersion();
     uploadSessionRef.current += 1;
     setUploadCancelKey((key) => key + 1);
     setFileDetailsNotice("");
@@ -1811,8 +1828,13 @@ export default function App() {
                   <div className="mt-5 max-w-xs">
                     <label className="text-xs font-semibold text-slate-600">Version label</label>
                     <div className="mt-2 rounded-lg border border-slate-200 bg-[#f8f9fb] px-4 py-3 text-xs font-medium text-slate-400">
-                      v{currentVersion.version_number || scanFlow.versionNumber || "1.0"}
+                      v{Number(currentVersion.version_number || scanFlow.versionNumber || 1)}.0
                     </div>
+                    {currentVersion.pending ? (
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        Saved as this version only after the scan finishes. Cancel upload leaves the latest version unchanged.
+                      </p>
+                    ) : null}
                   </div>
                 )}
 
