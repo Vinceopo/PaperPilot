@@ -954,7 +954,7 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
 def _expected_size_for_role(role: str, font: dict) -> float | None:
     if _is_heading_role(role):
         return _heading_sizes(font).get(role)
-    if role in {"body", "caption", "title_page"}:
+    if role in {"body", "caption"}:
         return _body_size(font)
     return None
 
@@ -988,49 +988,6 @@ def _mostly_black(unit: dict) -> bool | None:
     return colored <= 0.5 * total
 
 
-def _role_for_font_check(unit: dict) -> str:
-    """Font rules follow the line’s content role. Headings stay headings.
-
-    Title-page sizing applies only to short title-page lines on page 1 — never to
-    a Heading style, chapter title, body paragraph, or table.
-    """
-    role = unit.get("role") or "body"
-    if role == "title_page" and unit.get("title_page_text") and unit.get("page_index") == 0:
-        return "title_page"
-    if _is_heading_role(role):
-        return role
-    saved = unit.get("content_role")
-    if _is_heading_role(saved):
-        return saved
-    if role == "title_page":
-        if saved and saved != "title_page":
-            return saved
-        if unit.get("source") == "table":
-            return "table"
-        return "body"
-    return role
-
-
-def _font_role_label(role: str) -> str:
-    if _is_heading_role(role):
-        return _heading_label(role)
-    return {
-        "caption": "caption",
-        "body": "body text",
-        "table": "table text",
-        "title_page": "title page text",
-    }.get(role, "text")
-
-
-def _font_size_issue_type(role: str) -> str:
-    """One issue type per role so Heading 1 is never folded into title-page text."""
-    if _is_heading_role(role):
-        return f"font_size_{role}"
-    if role in {"body", "caption", "table", "title_page"}:
-        return f"font_size_{role}"
-    return "font_size"
-
-
 def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     font_rule = rules.get("font") or {}
     allowed_fonts = {_font_key(font) for font in font_rule.get("families", [])}
@@ -1041,7 +998,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         return
     stats.applicable = True
     for unit in units:
-        role = _role_for_font_check(unit)
+        role = unit.get("role") or "body"
         text = (unit.get("text") or "").strip()
         # Blank / spacing lines are typeable but have no glyphs to measure.
         if not text or role in {"empty", "pagination"}:
@@ -1060,10 +1017,6 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         expected_size = _expected_size_for_role(role, font_rule) if role_sizes else None
         if expected_size is not None:
             size_ok = _size_matches(shown_size, expected_size)
-        elif _is_heading_role(role):
-            # Headings must use that heading’s own size from the format — never the
-            # full sizes_points list (that mixes every heading/body size together).
-            size_ok = True
         elif listed_sizes and shown_size is not None:
             size_ok = any(abs(shown_size - allowed) <= SIZE_TOLERANCE for allowed in listed_sizes)
         else:
@@ -1098,11 +1051,15 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 "Apply the format-mechanics font family to this text.",
                 loc,
             )
-        if not size_ok and shown_size is not None and expected_size is not None:
-            role_label = _font_role_label(role)
-            expected_label = f"{expected_size:g}"
+        if not size_ok and shown_size is not None:
+            role_label = (
+                _heading_label(role)
+                if _is_heading_role(role)
+                else {"caption": "caption", "body": "body text", "title_page": "title page text"}.get(role, "text")
+            )
+            expected_label = expected_size if expected_size is not None else sorted(listed_sizes)
             collector.add(
-                _font_size_issue_type(role),
+                "font_size",
                 "critical",
                 f"{role_label} font size differs",
                 f"This {role_label} does not use the point size required by the uploaded format.",
@@ -1111,22 +1068,6 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                     f"the format specifies {expected_label} pt for {role_label}."
                 ),
                 f"Select this line’s text and set the font size to {expected_label} pt.",
-                loc,
-            )
-        elif not size_ok and shown_size is not None and listed_sizes and not _is_heading_role(role):
-            role_label = _font_role_label(role)
-            # Non-heading lines with only a shared sizes list (no per-role size).
-            allowed = ", ".join(f"{size:g}" for size in sorted(listed_sizes))
-            collector.add(
-                _font_size_issue_type(role),
-                "critical",
-                f"{role_label} font size differs",
-                f"This {role_label} does not use the point size required by the uploaded format.",
-                (
-                    f"Measured {shown_size:g} pt on this line’s text; "
-                    f"the format allows {allowed} pt for {role_label}."
-                ),
-                f"Select this line’s text and set the font size to one of: {allowed} pt.",
                 loc,
             )
 

@@ -25,7 +25,8 @@ class AnalyzeCreateRequest(BaseModel):
     document_base64: str | None = Field(default=None, description="Base64-encoded PDF or DOCX bytes")
     filename: str = "document.pdf"
     mechanics: MechanicsPayload
-    tier: Literal["free", "premium"] = "free"
+    # Pro is accepted and treated like Premium for analysis features.
+    tier: Literal["free", "premium", "pro"] = "free"
 
     @model_validator(mode="after")
     def require_document_source(self):

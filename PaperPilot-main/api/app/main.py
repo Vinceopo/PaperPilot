@@ -682,21 +682,28 @@ def compliance_scan_create(
                 tier=_feature_tier(subscription["tier"]),
             )
         except MLServiceError as exc:
-            status = exc.status_code if exc.status_code and exc.status_code < 500 else 502
-            raise HTTPException(status_code=status, detail=str(exc)) from None
-        try:
-            return create_pending_scan(
-                uid,
-                manuscript_id,
-                version_id,
-                body.mechanics_id,
-                scan_id=scan_id,
-                ml_job_id=scan_id,
-            )
-        except UpgradeRequired as exc:
-            _raise_upgrade(exc)
-        except LookupError:
-            raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
+            # Unreachable / 5xx: fall through to in-process scan so analysis still works.
+            if exc.status_code is None or exc.status_code >= 500:
+                logging.getLogger("paperpilot").warning(
+                    "ML analyze unavailable (%s); using in-process scan.", exc
+                )
+            else:
+                status = exc.status_code if exc.status_code < 500 else 502
+                raise HTTPException(status_code=status, detail=str(exc)) from None
+        else:
+            try:
+                return create_pending_scan(
+                    uid,
+                    manuscript_id,
+                    version_id,
+                    body.mechanics_id,
+                    scan_id=scan_id,
+                    ml_job_id=scan_id,
+                )
+            except UpgradeRequired as exc:
+                _raise_upgrade(exc)
+            except LookupError:
+                raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
 
     result = run_compliance_scan(
         version["parsed_data"], _scan_rules(mechanics["rules"]), _feature_tier(subscription["tier"])
