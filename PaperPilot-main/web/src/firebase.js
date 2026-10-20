@@ -8,7 +8,7 @@ const firebaseConfig = {
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "demo.firebaseapp.com",
   databaseURL:
     import.meta.env.VITE_FIREBASE_DATABASE_URL ||
-    "https://paperpilotv6-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "https://paperpilot-cb289-default-rtdb.asia-southeast1.firebasedatabase.app",
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "demo",
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "demo.appspot.com",
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "0",

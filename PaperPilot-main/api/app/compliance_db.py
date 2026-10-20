@@ -7,11 +7,22 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from app.cloudinary_artifacts import (
+    artifacts_enabled,
+    download_json_artifact,
+    mechanics_public_id,
+    parsed_public_id,
+    scan_public_id,
+    try_upload_json_artifact,
+)
+from app.cloudinary_fetch import CloudinaryFetchError
 from app.config import settings
 from app.firebase_admin_app import firebase_admin_app
 
 ROOT = "/paperpilot"
 _RESPONSE_PARSED_LIMIT = 2_500_000
+# Thesis free-tier guard: keep only the newest committed versions per manuscript.
+_MAX_COMMITTED_VERSIONS = 3
 
 
 class UpgradeRequired(Exception):
@@ -219,11 +230,20 @@ def create_mechanics(
         "name": clean_name,
         "source_filename": filename,
         "file_type": file_type,
-        "extracted_text": text,
-        "parsed_data": parsed,
         "rules": rules,
         "created_at": created,
     }
+    # Prefer Cloudinary sidecars so RTDB list/get of mechanics never pulls multi-MB parse trees.
+    if artifacts_enabled():
+        url = try_upload_json_artifact(
+            mechanics_public_id(owner_uid, item_id),
+            {"extracted_text": text, "parsed_data": parsed or {}},
+        )
+        if url:
+            item["mechanics_json_url"] = url
+    else:
+        item["extracted_text"] = text
+        item["parsed_data"] = parsed
     _reference(f"{ROOT}/mechanics/{owner_uid}/{item_id}").set(item)
     return _mechanics_public(item)
 
@@ -441,10 +461,22 @@ def get_mechanics(owner_uid: str, mechanics_id: str, conn=None) -> dict | None:
     row = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}").get()
     if not isinstance(row, dict):
         return None
+    text = row.get("extracted_text") or ""
+    parsed = row.get("parsed_data") or {}
+    artifact_url = (row.get("mechanics_json_url") or "").strip()
+    if artifact_url and (not text or not parsed):
+        try:
+            blob = download_json_artifact(artifact_url)
+            text = text or (blob.get("extracted_text") or "")
+            if not parsed:
+                parsed = blob.get("parsed_data") or {}
+        except CloudinaryFetchError:
+            pass
     return {
         **_mechanics_public(row),
-        "text": row.get("extracted_text") or "",
-        "parsed_data": row.get("parsed_data") or {},
+        "text": text,
+        "parsed_data": parsed if isinstance(parsed, dict) else {},
+        "mechanics_json_url": artifact_url,
     }
 
 
@@ -506,18 +538,40 @@ def _sync_counter_after_release(owner_uid: str, manuscript_id: str, versions: di
     _version_counter_ref(owner_uid, manuscript_id).transaction(_lower)
 
 
+def _version_list_fields(owner_uid: str, manuscript_id: str, version_id: str) -> dict | None:
+    """Small fields only — never pull parsed_data / extracted_text for listings."""
+    base = f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}"
+    # Existence check without downloading the fat subtree.
+    if _reference(base).get(shallow=True) is None:
+        return None
+    return {
+        "id": _reference(f"{base}/id").get() or version_id,
+        "version_number": int(_reference(f"{base}/version_number").get() or 0),
+        "pending": bool(_reference(f"{base}/pending").get()),
+    }
+
+
+def _list_version_metas(owner_uid: str, manuscript_id: str) -> dict[str, dict]:
+    ids = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get(shallow=True) or {}
+    if not isinstance(ids, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for version_id in ids:
+        meta = _version_list_fields(owner_uid, manuscript_id, version_id)
+        if meta:
+            out[str(version_id)] = meta
+    return out
+
+
 def _release_unscanned_versions(owner_uid: str, manuscript_id: str) -> dict:
     """Drop uploads that never finished a scan so they do not consume version numbers."""
     versions_ref = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}")
-    versions = versions_ref.get() or {}
-    if not isinstance(versions, dict):
+    versions = _list_version_metas(owner_uid, manuscript_id)
+    if not versions:
         return {}
     states = _scan_states_for_manuscript(owner_uid, manuscript_id)
     deleted_numbers: list[int] = []
     for version_id, row in list(versions.items()):
-        if not isinstance(row, dict):
-            versions.pop(version_id, None)
-            continue
         state = states.get(str(version_id))
         if state == "running":
             continue
@@ -544,6 +598,25 @@ def _release_unscanned_versions(owner_uid: str, manuscript_id: str) -> dict:
     return versions
 
 
+def _prune_old_committed_versions(owner_uid: str, manuscript_id: str) -> None:
+    """Keep only the newest N committed versions (plus any pending uploads)."""
+    metas = _list_version_metas(owner_uid, manuscript_id)
+    committed = [
+        (vid, row)
+        for vid, row in metas.items()
+        if isinstance(row, dict) and not row.get("pending") and int(row.get("version_number") or 0) > 0
+    ]
+    if len(committed) <= _MAX_COMMITTED_VERSIONS:
+        return
+    committed.sort(key=lambda item: int(item[1].get("version_number") or 0), reverse=True)
+    keep = {vid for vid, _ in committed[:_MAX_COMMITTED_VERSIONS]}
+    versions_ref = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}")
+    for vid, _row in committed[_MAX_COMMITTED_VERSIONS:]:
+        if vid in keep:
+            continue
+        versions_ref.child(vid).delete()
+
+
 def commit_version(owner_uid: str, manuscript_id: str, version_id: str) -> None:
     """A version becomes a saved manuscript version only after its scan finishes."""
     ref = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}")
@@ -560,6 +633,7 @@ def commit_version(owner_uid: str, manuscript_id: str, version_id: str) -> None:
     _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").update(
         {"current_version_id": version_id, "updated_at": _iso(_now())}
     )
+    _prune_old_committed_versions(owner_uid, manuscript_id)
 
 
 def create_version(
@@ -622,10 +696,10 @@ def create_version(
 
         # An earlier upload that was never scanned must not keep its number.
         _release_unscanned_versions(owner_uid, manuscript_id)
-        stored_versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get() or {}
+        stored_versions = _list_version_metas(owner_uid, manuscript_id)
         existing_numbers = [
             int(row.get("version_number") or 0)
-            for row in (stored_versions.values() if isinstance(stored_versions, dict) else [])
+            for row in stored_versions.values()
             if isinstance(row, dict)
         ]
         highest = max(existing_numbers) if existing_numbers else 0
@@ -643,16 +717,25 @@ def create_version(
             "pending": True,
             "source_filename": filename,
             "file_type": file_type,
-            "extracted_text": text,
-            "parsed_data": parsed,
             "created_at": created,
         }
         if cloudinary_url:
             version["cloudinary_url"] = cloudinary_url.strip()
+        # Heavy parse trees live on Cloudinary when configured; RTDB keeps metadata + URL only.
+        if artifacts_enabled():
+            parsed_url = try_upload_json_artifact(
+                parsed_public_id(owner_uid, manuscript_id, version_id),
+                {"extracted_text": text, "parsed_data": parsed or {}},
+            )
+            if parsed_url:
+                version["parsed_json_url"] = parsed_url
+        else:
+            version["extracted_text"] = text
+            version["parsed_data"] = parsed
         _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").set(version)
         has_saved = any(
             isinstance(item, dict) and not item.get("pending") and int(item.get("version_number") or 0) > 0
-            for item in (stored_versions.values() if isinstance(stored_versions, dict) else [])
+            for item in stored_versions.values()
         )
         manuscript_update = {"title": title.strip(), "updated_at": created}
         if not has_saved:
@@ -681,10 +764,11 @@ def list_manuscripts(owner_uid: str) -> list[dict]:
         if not isinstance(row, dict):
             continue
         mid = row.get("id")
-        versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{mid}").get() or {}
+        # Field-level version metas only — never download parsed_data trees for the dashboard list.
+        versions = _list_version_metas(owner_uid, mid)
         committed = [
             item
-            for item in (versions.values() if isinstance(versions, dict) else [])
+            for item in versions.values()
             if isinstance(item, dict) and not item.get("pending") and int(item.get("version_number") or 0) > 0
         ]
         latest = max(committed, key=lambda item: int(item.get("version_number") or 0)) if committed else None
@@ -704,6 +788,25 @@ def list_manuscripts(owner_uid: str) -> list[dict]:
     return items
 
 
+def _hydrate_version_content(row: dict) -> tuple[str, dict]:
+    """Resolve extracted_text + parsed_data from RTDB legacy fields or Cloudinary sidecar."""
+    text = row.get("extracted_text") or ""
+    parsed = row.get("parsed_data") or {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    artifact_url = (row.get("parsed_json_url") or "").strip()
+    if artifact_url and (not text or not parsed):
+        try:
+            blob = download_json_artifact(artifact_url)
+            text = text or (blob.get("extracted_text") or "")
+            if not parsed:
+                candidate = blob.get("parsed_data") or {}
+                parsed = candidate if isinstance(candidate, dict) else {}
+        except CloudinaryFetchError:
+            pass
+    return text, parsed
+
+
 def _version_row(row: dict, include_content: bool = True) -> dict:
     value = {
         "id": row["id"],
@@ -715,10 +818,12 @@ def _version_row(row: dict, include_content: bool = True) -> dict:
         "file_type": row["file_type"],
         "created_at": row["created_at"],
         "cloudinary_url": row.get("cloudinary_url") or "",
+        "parsed_json_url": row.get("parsed_json_url") or "",
     }
     if include_content:
-        value["text"] = row.get("extracted_text") or ""
-        value["parsed_data"] = row.get("parsed_data") or {}
+        text, parsed = _hydrate_version_content(row)
+        value["text"] = text
+        value["parsed_data"] = parsed
         value = _slim_version_payload(value)
     return value
 
@@ -741,6 +846,7 @@ def get_version_full(owner_uid: str, manuscript_id: str, version_id: str) -> dic
     row = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
     if not isinstance(row, dict):
         return None
+    text, parsed = _hydrate_version_content(row)
     return {
         "id": row["id"],
         "manuscript_id": row["manuscript_id"],
@@ -749,9 +855,10 @@ def get_version_full(owner_uid: str, manuscript_id: str, version_id: str) -> dic
         "source_filename": row["source_filename"],
         "file_type": row["file_type"],
         "created_at": row["created_at"],
-        "text": row.get("extracted_text") or "",
-        "parsed_data": row.get("parsed_data") or {},
+        "text": text,
+        "parsed_data": parsed,
         "cloudinary_url": row.get("cloudinary_url") or "",
+        "parsed_json_url": row.get("parsed_json_url") or "",
     }
 
 
@@ -763,19 +870,50 @@ def get_version_document_url(owner_uid: str, manuscript_id: str, version_id: str
     return url or None
 
 
+def _version_list_row(owner_uid: str, manuscript_id: str, version_id: str) -> dict | None:
+    """Read only list-safe fields from a version node (never parsed_data / extracted_text)."""
+    base = f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}"
+    if _reference(base).get(shallow=True) is None:
+        return None
+    keys = (
+        "id",
+        "manuscript_id",
+        "mechanics_id",
+        "version_number",
+        "pending",
+        "source_filename",
+        "file_type",
+        "created_at",
+        "cloudinary_url",
+        "parsed_json_url",
+    )
+    row = {key: _reference(f"{base}/{key}").get() for key in keys}
+    row["id"] = row.get("id") or version_id
+    row["manuscript_id"] = row.get("manuscript_id") or manuscript_id
+    row["pending"] = bool(row.get("pending"))
+    row["cloudinary_url"] = row.get("cloudinary_url") or ""
+    row["parsed_json_url"] = row.get("parsed_json_url") or ""
+    return row
+
+
 def list_versions(owner_uid: str, manuscript_id: str, history: bool) -> tuple[list[dict] | None, str | None]:
     manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
     if not isinstance(manuscript, dict):
         return None, None
     current_id = manuscript.get("current_version_id")
-    all_versions = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get() or {}
-    if not isinstance(all_versions, dict):
+    version_ids = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}").get(shallow=True) or {}
+    if not isinstance(version_ids, dict):
         return [], current_id
+
     if history:
-        rows = [row for row in all_versions.values() if isinstance(row, dict) and not row.get("pending")]
+        rows = []
+        for vid in version_ids:
+            row = _version_list_row(owner_uid, manuscript_id, vid)
+            if isinstance(row, dict) and not row.get("pending"):
+                rows.append(row)
         rows.sort(key=lambda r: int(r.get("version_number") or 0), reverse=True)
     else:
-        current = all_versions.get(current_id)
+        current = _version_list_row(owner_uid, manuscript_id, str(current_id)) if current_id else None
         rows = [current] if isinstance(current, dict) else []
     return [_version_row(r, include_content=False) for r in rows if isinstance(r, dict)], current_id
 
@@ -1796,6 +1934,7 @@ def _section_row(item: dict) -> dict:
 
 
 def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) -> None:
+    """Store section score summaries only — full issue arrays live in scan.json on Cloudinary."""
     for index, section in enumerate(sections or []):
         if not isinstance(section, dict):
             continue
@@ -1808,7 +1947,7 @@ def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) ->
             "section_name": name,
             "formatting_score": row["formatting_score"],
             "issue_count": row["issue_count"],
-            "issues": row["issues"],
+            # Intentionally omit issues[] from RTDB to avoid download amplification.
         }
         for key in ("status", *_SECTION_COUNT_FIELDS):
             if key in row:
@@ -1926,14 +2065,33 @@ def finalize_scan_from_ml(
         {
             "status": "done",
             "overall_score": overall_score,
-            "issues": issues,
-            "sections": sections,
+            "issue_count": len(issues) if isinstance(issues, list) else 0,
             "page_count": result.get("page_count") or 0,
             "pagination": result.get("pagination") or {},
             "updated_at": updated,
             "error": None,
         }
     )
+    # Drop any previously embedded fat arrays from the RTDB row.
+    row["issues"] = None
+    row["sections"] = None
+    if artifacts_enabled():
+        result_url = try_upload_json_artifact(
+            scan_public_id(owner_uid, manuscript_id, version_id, scan_id),
+            {
+                "issues": issues,
+                "sections": sections,
+                "overall_score": overall_score,
+                **{key: cleaned.get(key) for key in SCAN_RESULT_FIELDS},
+                "page_count": result.get("page_count") or 0,
+                "pagination": result.get("pagination") or {},
+            },
+        )
+        if result_url:
+            row["result_json_url"] = result_url
+    else:
+        row["issues"] = issues
+        row["sections"] = sections
     _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").update(row)
     _write_section_checks(owner_uid, scan_id, sections)
     commit_version(owner_uid, manuscript_id, version_id)
@@ -1965,7 +2123,7 @@ def persist_scan(
         "manuscript_version_id": version_id,
         "mechanics_id": mechanics_id,
         "overall_score": _optional_float(overall_score),
-        "issues": issues,
+        "issue_count": len(issues) if isinstance(issues, list) else 0,
         "status": "done",
         "ml_job_id": scan_id,
         "created_at": created,
@@ -1973,6 +2131,20 @@ def persist_scan(
     }
     if extra:
         scan.update(extra)
+    if artifacts_enabled():
+        result_url = try_upload_json_artifact(
+            scan_public_id(owner_uid, manuscript_id, version_id, scan_id),
+            {
+                "issues": issues,
+                "sections": sections,
+                "overall_score": scan["overall_score"],
+                **{key: (extra or {}).get(key) for key in SCAN_RESULT_FIELDS if extra and key in extra},
+            },
+        )
+        if result_url:
+            scan["result_json_url"] = result_url
+    else:
+        scan["issues"] = issues
     _reference(f"{ROOT}/compliance_scans/{owner_uid}/{scan_id}").set(scan)
     _write_section_checks(owner_uid, scan_id, sections)
     commit_version(owner_uid, manuscript_id, version_id)
@@ -2019,6 +2191,28 @@ def get_scan(owner_uid: str, scan_id: str) -> dict | None:
                 continue
             section_items.append(_section_row(item))
     status = row.get("status") or ("done" if row.get("overall_score") is not None else "running")
+    issues = row.get("issues") or []
+    if not isinstance(issues, list):
+        issues = []
+    artifact_url = (row.get("result_json_url") or "").strip()
+    if artifact_url:
+        try:
+            blob = download_json_artifact(artifact_url)
+            if isinstance(blob.get("issues"), list):
+                issues = blob["issues"]
+            if isinstance(blob.get("sections"), list) and blob["sections"]:
+                section_items = [_section_row(item) for item in blob["sections"] if isinstance(item, dict)]
+            for key in SCAN_RESULT_FIELDS:
+                if blob.get(key) is not None and row.get(key) is None:
+                    row[key] = blob[key]
+            if blob.get("page_count") is not None and row.get("page_count") is None:
+                row["page_count"] = blob.get("page_count")
+            if blob.get("pagination") is not None and row.get("pagination") is None:
+                row["pagination"] = blob.get("pagination")
+            if blob.get("overall_score") is not None and row.get("overall_score") is None:
+                row["overall_score"] = blob.get("overall_score")
+        except CloudinaryFetchError:
+            pass
     if not section_items:
         embedded = row.get("sections") or []
         if isinstance(embedded, list):
@@ -2034,11 +2228,12 @@ def get_scan(owner_uid: str, scan_id: str) -> dict | None:
         "status": status,
         "ml_job_id": row.get("ml_job_id") or row["id"],
         "overall_score": _optional_float(row.get("overall_score")),
-        "issues": row.get("issues") or [],
+        "issues": issues,
         "sections": section_items,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "error": row.get("error"),
+        "result_json_url": artifact_url,
     }
     for key in SCAN_RESULT_FIELDS:
         if row.get(key) is not None:

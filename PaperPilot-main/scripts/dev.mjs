@@ -16,7 +16,9 @@ const apiDir = path.join(root, "api");
 const webDir = path.join(root, "web");
 const API_PORT = 8000;
 const WEB_PORT = 5173;
+const ML_PORT = 8001;
 const BIND_HOST = process.env.PAPERPILOT_HOST || "0.0.0.0";
+const mlDir = path.join(root, "machinelearning");
 
 function localLanIps() {
   try {
@@ -140,20 +142,16 @@ function run(command, args, cwd, name, { shell = false, autoRestart = false } = 
     child.on("exit", (code, signal) => {
       if (stopping) return;
       if (signal) {
-        console.log(`[${name}] stopped (${signal})`);
-        return;
-      }
-      if (code && code !== 0) {
+        console.log(`[${name}] stopped (${signal}) — restarting…`);
+      } else if (code && code !== 0) {
         console.error(`[${name}] exited with code ${code}`);
+      } else {
+        // uvicorn --reload on Windows sometimes exits the whole process with code 0
+        // after a file change; treat that as needing a restart too.
+        console.log(`[${name}] exited — restarting…`);
+        restartAttempts = 0;
       }
       if (!autoRestart) return;
-
-      // Successful start resets the counter next time via exit code 0 without restart need.
-      // Only count failed exits toward the limit.
-      if (code === 0) {
-        restartAttempts = 0;
-        return;
-      }
 
       restartAttempts += 1;
       if (restartAttempts > 8) {
@@ -167,9 +165,10 @@ function run(command, args, cwd, name, { shell = false, autoRestart = false } = 
       clearTimeout(restartTimer);
       restartTimer = setTimeout(async () => {
         // Another Vite/dev instance often still owns 5173 after a crash.
-        if (name === "web") {
+        if (name === "web" || name === "api" || name === "ml") {
           try {
-            await ensurePortFree(WEB_PORT);
+            const port = name === "web" ? WEB_PORT : name === "ml" ? ML_PORT : API_PORT;
+            await ensurePortFree(port);
           } catch {
             // ignore
           }
@@ -227,6 +226,57 @@ function readProxyTarget() {
   return readEnvFileValue(path.join(webDir, ".env"), "VITE_API_PROXY_TARGET");
 }
 
+function readMlServiceUrl() {
+  if (process.env.ML_SERVICE_URL) return process.env.ML_SERVICE_URL.trim();
+  return (
+    readEnvFileValue(path.join(apiDir, ".env"), "ML_SERVICE_URL") ||
+    readEnvFileValue(path.join(root, ".env"), "ML_SERVICE_URL")
+  );
+}
+
+function wantsLocalMl(mlUrl) {
+  if (!mlUrl) return false;
+  try {
+    const parsed = new URL(mlUrl);
+    return (
+      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
+      String(parsed.port || "80") === String(ML_PORT)
+    );
+  } catch {
+    return /127\.0\.0\.1:8001|localhost:8001/i.test(mlUrl);
+  }
+}
+
+async function mlHealthy(timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { host: "127.0.0.1", port: ML_PORT, path: "/health", timeout: timeoutMs },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      }
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on("error", () => resolve(false));
+  });
+}
+
+async function waitForMl(maxMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    if (await mlHealthy()) {
+      console.log(`[ml] ready on http://127.0.0.1:${ML_PORT}`);
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  console.error("[ml] did not become healthy in time — scans may fail until it is up");
+  return false;
+}
+
 function usesRemoteApi(apiUrl, proxyTarget) {
   if (/^https?:\/\//i.test(apiUrl || "")) return true;
   // Only treat as remote when the proxy itself is https (explicit opt-in).
@@ -281,6 +331,29 @@ const python = resolvePython();
 const apiUrl = readViteApiUrl();
 const proxyTarget = readProxyTarget();
 const remoteApi = usesRemoteApi(apiUrl, proxyTarget);
+const mlUrl = readMlServiceUrl();
+const localMl = wantsLocalMl(mlUrl);
+
+if (localMl && fs.existsSync(mlDir)) {
+  if (!(await mlHealthy())) {
+    await ensurePortFree(ML_PORT);
+    console.log(`[ml] starting with ${python} on 127.0.0.1:${ML_PORT}`);
+    children.push(
+      run(
+        python,
+        ["-m", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", String(ML_PORT)],
+        mlDir,
+        "ml",
+        { autoRestart: true }
+      )
+    );
+    await waitForMl();
+  } else {
+    console.log(`[ml] already healthy on http://127.0.0.1:${ML_PORT}`);
+  }
+} else if (mlUrl) {
+  console.log(`[ml] using configured ML_SERVICE_URL (not starting local :${ML_PORT})`);
+}
 
 if (remoteApi) {
   const target = /^https?:\/\//i.test(apiUrl) ? apiUrl : proxyTarget || apiUrl;

@@ -41,6 +41,34 @@ class MLGatewayClientTests(unittest.TestCase):
         headers = client.request.call_args.kwargs["headers"]
         self.assertEqual(headers["ML-Service-Key"], "test-key")
 
+    @patch("app.ml_service_client.httpx.Client")
+    @patch("app.ml_service_client.settings")
+    def test_create_analyze_job_maps_pro_to_premium(self, settings, client_cls):
+        """ML schema historically rejected tier=pro; gateway must send premium."""
+        settings.ml_service_url = "https://ml.example.com"
+        settings.ml_service_key = "test-key"
+        response = MagicMock()
+        response.status_code = 200
+        response.content = b'{"job_id":"pro1"}'
+        response.json.return_value = {"job_id": "pro1"}
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.request.return_value = response
+        client_cls.return_value = client
+
+        from app.ml_service_client import create_analyze_job
+
+        create_analyze_job(
+            job_id="pro1",
+            document_url=None,
+            document_base64="YQ==",
+            filename="doc.pdf",
+            mechanics_rules={},
+            tier="pro",
+        )
+        body = client.request.call_args.kwargs["json"]
+        self.assertEqual(body["tier"], "premium")
+
     @patch("app.ml_service_client.settings")
     def test_request_without_config_raises(self, settings):
         settings.ml_service_url = ""

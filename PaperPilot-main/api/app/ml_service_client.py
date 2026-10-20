@@ -37,7 +37,18 @@ def _error_detail(response: httpx.Response) -> str:
     except ValueError:
         return ""
     detail = body.get("detail") if isinstance(body, dict) else None
-    return detail.strip()[:300] if isinstance(detail, str) else ""
+    if isinstance(detail, str):
+        return detail.strip()[:300]
+    if isinstance(detail, list) and detail:
+        first = detail[0] if isinstance(detail[0], dict) else None
+        msg = first.get("msg") if first else None
+        if isinstance(msg, str) and msg.strip():
+            return msg.strip()[:300]
+    if isinstance(detail, dict):
+        msg = detail.get("message") or detail.get("msg")
+        if isinstance(msg, str) and msg.strip():
+            return msg.strip()[:300]
+    return ""
 
 
 def _request(method: str, path: str, *, json_body: dict | None = None) -> dict[str, Any]:
@@ -69,6 +80,12 @@ def _request(method: str, path: str, *, json_body: dict | None = None) -> dict[s
     return response.json()
 
 
+def _ml_feature_tier(tier: str) -> str:
+    """ML analyze schema only accepts free|premium; Pro uses Premium analysis features."""
+    value = str(tier or "free").lower()
+    return "premium" if value in ("premium", "pro") else "free"
+
+
 def create_analyze_job(
     *,
     job_id: str,
@@ -82,7 +99,7 @@ def create_analyze_job(
         "job_id": job_id,
         "filename": filename,
         "mechanics": {"rules": mechanics_rules},
-        "tier": tier,
+        "tier": _ml_feature_tier(tier),
     }
     if document_url:
         payload["document_url"] = document_url

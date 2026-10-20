@@ -249,6 +249,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               onChange={set("paperOrientation")}
               className={inputClass}
             >
+              <option value="">Not specified</option>
               <option value="Portrait">Portrait</option>
               <option value="Landscape">Landscape</option>
             </select>
@@ -285,14 +286,14 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               className={inputClass}
             />
           </Field>
-          <Field label="Alignment" hint="Body text alignment">
+          <Field label="Alignment" hint="Body text alignment — leave blank to skip this check">
             <select
               disabled={disabled}
               value={form.alignment || ""}
               onChange={set("alignment")}
               className={inputClass}
             >
-              <option value="">Left or justified (not specified)</option>
+              <option value="">Not specified</option>
               <option value="Justified">Justified</option>
               <option value="Left">Left</option>
               <option value="Center">Center</option>
@@ -551,13 +552,14 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
       </Section>
 
       <Section title="Citation format">
-        <Field label="Citation style">
+        <Field label="Citation style" hint="Leave blank to skip citation checks">
           <select
             disabled={disabled}
             value={supportedCitationStyle(form.citationFormat)}
             onChange={set("citationFormat")}
             className={inputClass}
           >
+            <option value="">Not specified</option>
             <option value="APA">APA</option>
             <option value="MLA">MLA</option>
             <option value="IEEE">IEEE</option>

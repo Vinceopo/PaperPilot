@@ -17,10 +17,21 @@ export function authMessage(err) {
     return "Google sign-in was cancelled.";
   }
   if (code === "auth/popup-blocked") return "Your browser blocked the Google sign-in popup.";
+  if (code === "auth/unauthorized-domain") {
+    return "This website domain is not authorized for Google sign-in. Ask an admin to add it in Firebase Authentication → Settings → Authorized domains.";
+  }
+  if (code === "auth/operation-not-allowed") {
+    return "Google sign-in is not enabled for this Firebase project yet.";
+  }
+  if (code === "auth/account-exists-with-different-credential") {
+    return "An account already exists with this email using a different sign-in method. Sign in with email/password instead.";
+  }
   if (code === "auth/network-request-failed") return "Network error. Check your connection and try again.";
   if (code === "auth/too-many-requests") return "Too many attempts. Please try again later.";
   if (code === "auth/user-disabled") return "This account has been disabled.";
-  if (typeof code === "string" && code.startsWith("auth/")) return "Something went wrong. Please try again.";
+  if (typeof code === "string" && code.startsWith("auth/")) {
+    return `Sign-in failed (${code.replace("auth/", "")}). Please try again.`;
+  }
   return err?.message || "Something went wrong. Please try again.";
 }
 
