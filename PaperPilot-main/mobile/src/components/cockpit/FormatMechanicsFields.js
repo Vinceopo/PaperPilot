@@ -24,17 +24,19 @@ import {
 } from "../../lib/mechanicsOptions";
 
 const ORIENTATION_OPTIONS = [
+  { value: "", label: "Not specified" },
   { value: "Portrait", label: "Portrait" },
   { value: "Landscape", label: "Landscape" },
 ];
 const ALIGNMENT_OPTIONS = [
-  { value: "", label: "Left or justified (not specified)" },
+  { value: "", label: "Not specified" },
   { value: "Justified", label: "Justified" },
   { value: "Left", label: "Left" },
   { value: "Center", label: "Center" },
   { value: "Right", label: "Right" },
 ];
 const CITATION_OPTIONS = [
+  { value: "", label: "Not specified" },
   { value: "APA", label: "APA" },
   { value: "MLA", label: "MLA" },
   { value: "IEEE", label: "IEEE" },
@@ -225,7 +227,7 @@ export default function FormatMechanicsFields({
           <Field label="Orientation">
             <SelectField
               title="Orientation"
-              value={form.paperOrientation || "Portrait"}
+              value={form.paperOrientation || ""}
               options={ORIENTATION_OPTIONS}
               onChange={(v) => set("paperOrientation", v)}
               disabled={disabled}
@@ -254,7 +256,7 @@ export default function FormatMechanicsFields({
           <Field label="Indention" hint="e.g. 0.5 inch, 1/2 inch, 1.27 cm">
             {input("indention")}
           </Field>
-          <Field label="Alignment" hint="Body text alignment">
+          <Field label="Alignment" hint="Body text alignment — leave blank to skip this check">
             <SelectField
               title="Alignment"
               value={form.alignment || ""}
@@ -466,7 +468,7 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Citation format">
-          <Field label="Citation style">
+          <Field label="Citation style" hint="Leave blank to skip citation checks">
             <SelectField
               title="Citation style"
               value={supportedCitationStyle(form.citationFormat)}

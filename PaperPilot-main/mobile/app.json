@@ -3,7 +3,7 @@
     "name": "PaperPilot",
     "slug": "paperpilot",
     "owner": "paperpilot",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "scheme": "paperpilot",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -18,19 +18,20 @@
     },
     "extra": {
       "apiUrl": "http://192.168.68.55:8001",
-      "googleWebClientId": "269305680269-kb2otrrnbj6tm6dhe8adtgajmb6lg722.apps.googleusercontent.com",
+      "googleWebClientId": "226823540820-kqbhpbdn5d77qvmev717amvo08v6nv7s.apps.googleusercontent.com",
       "googleIosClientId": "",
       "googleAuthBridgeUrl": "https://paperpilotph.vercel.app/mobile-auth.html",
       "cloudinaryCloudName": "vnyrjlil",
       "cloudinaryUploadPreset": "uploaded_docs",
       "firebase": {
-        "apiKey": "AIzaSyAgoiNT96N7oqVxaMMIAND6GGFTfkOJFXU",
-        "authDomain": "paperpilotv6.firebaseapp.com",
-        "databaseURL": "https://paperpilotv6-default-rtdb.asia-southeast1.firebasedatabase.app",
-        "projectId": "paperpilotv6",
-        "storageBucket": "paperpilotv6.firebasestorage.app",
-        "messagingSenderId": "269305680269",
-        "appId": "1:269305680269:web:fff0a7562083510b3badc4"
+        "apiKey": "AIzaSyCS3voJcHKSjLUlX2Nl72wUtQyPcKEcV8Q",
+        "authDomain": "paperpilot-cb289.firebaseapp.com",
+        "databaseURL": "https://paperpilot-cb289-default-rtdb.asia-southeast1.firebasedatabase.app",
+        "projectId": "paperpilot-cb289",
+        "storageBucket": "paperpilot-cb289.firebasestorage.app",
+        "messagingSenderId": "226823540820",
+        "appId": "1:226823540820:web:cf5161f1bc99cac75d5dc1",
+        "measurementId": "G-3P1HHYHKN6"
       },
       "eas": {
         "projectId": "45e1cf04-e601-4357-aba5-09c75e874a04"
@@ -48,7 +49,8 @@
           "backgroundColor": "#f3f5f7"
         }
       ],
-      "expo-image"
+      "expo-image",
+      "expo-sharing"
     ],
     "updates": {
       "url": "https://u.expo.dev/45e1cf04-e601-4357-aba5-09c75e874a04"

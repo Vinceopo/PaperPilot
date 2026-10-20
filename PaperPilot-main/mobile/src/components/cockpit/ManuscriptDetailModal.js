@@ -85,7 +85,7 @@ function IssueCard({ issue }) {
 
       {issue.recommendation ? (
         <View style={styles.fixBox}>
-          <Text style={styles.fixText}>Fix: {issue.recommendation}</Text>
+          <Text style={styles.fixText}>{issue.recommendation}</Text>
         </View>
       ) : null}
 
@@ -186,8 +186,7 @@ export default function ManuscriptDetailModal({
       const payload = resolveResult
         ? await resolveResult(manuscript, selected)
         : versionToScanResult(manuscript, selected);
-      const report = await downloadReport(payload, { versionNumber: selected.versionNumber });
-      if (report?.summary) Alert.alert("Analysis report", report.summary);
+      await downloadReport(payload, { versionNumber: selected.versionNumber });
     } catch (err) {
       setDownloadError(err?.message || "Download failed.");
     } finally {
@@ -404,7 +403,7 @@ export default function ManuscriptDetailModal({
                 >
                   <DownloadIcon size={14} />
                   <Text style={styles.downloadText}>
-                    {downloadBusy ? "Generating report…" : `Download full report · ${versionLabel}`}
+                    {downloadBusy ? "Generating PDF…" : `Download full report (PDF) · ${versionLabel}`}
                   </Text>
                 </Pressable>
               </View>
@@ -580,13 +579,13 @@ const styles = StyleSheet.create({
   fixBox: {
     marginTop: 8,
     borderWidth: 1,
-    borderColor: "rgba(167,243,208,0.6)",
+    borderColor: "rgba(22,191,168,0.3)",
     borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,0.7)",
+    backgroundColor: "#f0fdfb",
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  fixText: { fontSize: 11, fontWeight: "500", lineHeight: 16, color: "#065f46" },
+  fixText: { fontSize: 12, fontWeight: "500", lineHeight: 17, color: "#0d7a6a" },
   locWrap: { marginTop: 12 },
   locToggle: {
     fontSize: 11,

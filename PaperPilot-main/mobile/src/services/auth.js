@@ -8,7 +8,7 @@ import {
   signOut,
   updateProfile,
 } from "firebase/auth";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { ref, runTransaction, set } from "firebase/database";
 
 export const REMEMBER_ME_KEY = "paperpilot.rememberMe";
 
@@ -108,31 +108,32 @@ export function signInWithGoogleToken(auth, idToken, accessToken) {
 }
 
 /**
- * Writes the profile the API could not save itself (no Firestore credentials).
+ * Writes the profile the API could not save itself (no Admin credentials).
  * Best effort: a failed username claim must not block a verified sign-up.
+ * Uses Realtime Database (same paths as web) after the paperpilot-cb289 cutover.
  */
 export async function saveUserProfile(db, uid, { firstName, middleName, lastName, username, email }) {
   if (!db || !uid) return;
   try {
-    await setDoc(
-      doc(db, "users", uid),
-      {
-        email,
-        username,
-        usernameLower: (username || "").toLowerCase(),
-        firstName,
-        middleName,
-        lastName,
-        emailVerified: true,
-        createdAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+    await set(ref(db, `users/${uid}`), {
+      email,
+      username,
+      usernameLower: (username || "").toLowerCase(),
+      firstName,
+      middleName,
+      lastName,
+      emailVerified: true,
+      createdAt: Date.now(),
+    });
   } catch (err) {
     console.warn("Could not save profile:", err);
   }
   try {
-    await setDoc(doc(db, "usernames", (username || "").toLowerCase()), { uid, username });
+    const usernameKey = encodeURIComponent((username || "").toLowerCase()).replace(/\./g, "%2E");
+    await runTransaction(ref(db, `usernames/${usernameKey}`), (current) => {
+      if (current && current.uid !== uid) return;
+      return { uid, username };
+    });
   } catch (err) {
     console.warn("Could not reserve username:", err);
   }

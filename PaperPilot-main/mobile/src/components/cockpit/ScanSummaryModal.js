@@ -75,35 +75,18 @@ export default function ScanSummaryModal({
                 <Text style={[styles.scoreValue, { color: "#047857" }]}>{pctLabel(rightPct)}</Text>
               </View>
               <View style={[styles.scoreBox, styles.scoreWrong]}>
-                <Text style={[styles.scoreLabel, { color: "#be123c" }]}>Wrong</Text>
+                <Text style={[styles.scoreLabel, { color: "#be123c" }]}>Incorrect</Text>
                 <Text style={[styles.scoreValue, { color: "#be123c" }]}>{pctLabel(wrongPct)}</Text>
               </View>
             </View>
-            {hasValue(result.unitsChecked) ? (
-              <Text style={styles.unitLine}>
-                Checked {formatCount(result.unitsChecked)} {plural(result.unitsChecked, "unit")}
-                {hasValue(result.unitsFailed) ? ` · ${formatCount(result.unitsFailed)} failed` : ""}
-              </Text>
-            ) : null}
-            {!result.scoringVersion ? (
-              <Text style={styles.unitLine}>
-                Full unit counts are not stored for this scan. Re-analyse the manuscript to generate them.
-              </Text>
-            ) : null}
-            {result.scoringConsistency && result.scoringConsistency.ok === false ? (
-              <Text style={styles.warn}>
-                These results failed an internal consistency check. Re-run the analysis before relying on them.
-              </Text>
-            ) : null}
-
             {hasValue(unitsChecked) ? (
-              <Text style={styles.units}>
+              <Text style={styles.unitLine}>
                 Checked {formatCount(unitsChecked)} formatting {plural(unitsChecked, "unit")}
                 {hasValue(unitsFailed) ? ` · ${formatCount(unitsFailed)} failed` : ""}
               </Text>
             ) : null}
             {!result.scoringVersion ? (
-              <Text style={styles.units}>
+              <Text style={styles.unitLine}>
                 Full unit counts are not stored for this scan. Re-analyse the manuscript to generate them.
               </Text>
             ) : null}
@@ -238,7 +221,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   scoreValue: { marginTop: 4, fontSize: 22, fontWeight: "800" },
-  units: { marginTop: 8, fontSize: 11, lineHeight: 16, color: "#64748b", textAlign: "center" },
+  unitLine: { marginTop: 8, fontSize: 11, lineHeight: 16, color: "#64748b", textAlign: "center" },
   consistencyWarn: {
     marginTop: 8,
     overflow: "hidden",

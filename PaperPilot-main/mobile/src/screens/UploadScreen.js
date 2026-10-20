@@ -679,7 +679,7 @@ export default function UploadScreen({ navigation }) {
   function onAnalyse() {
     if (!scanReady || !selectedMechanicsId) return;
     const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
-    if (!isPaidTier(tier) && scanStyle !== "APA") {
+    if (!isPaidTier(tier) && scanStyle && scanStyle !== "APA") {
       setUpgradeMessage(
         `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
       );

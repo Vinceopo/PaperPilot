@@ -24,9 +24,14 @@ function starterHeading(values) {
 
 export const CITATION_STYLES = ["APA", "MLA", "IEEE"];
 
-/** Profiles saved with a style that is no longer offered (e.g. Chicago) fall back to APA. */
+/**
+ * Normalize a stored citation style for the form / scan gate.
+ * Empty means "not set" (citation checks are skipped). Unknown legacy styles
+ * (e.g. Chicago) map to APA; blank stays blank.
+ */
 export function supportedCitationStyle(value) {
   const style = String(value || "").trim().toUpperCase();
+  if (!style) return "";
   return CITATION_STYLES.includes(style) ? style : "APA";
 }
 
@@ -76,7 +81,7 @@ export function emptyMechanicsForm(name = "") {
   return {
     name: name || "",
     paperSize: "",
-    paperOrientation: "Portrait",
+    paperOrientation: "",
     paperSubstance: "",
     paperLandscapePages: "",
     spacing: "",
@@ -92,7 +97,7 @@ export function emptyMechanicsForm(name = "") {
     marginFooter: "",
     bodySize: "",
     fontType: "",
-    fontColor: "Black/Automatic",
+    fontColor: "",
     headings: [],
     paginationPosition: "",
     paginationTitlePage: "",
@@ -103,7 +108,7 @@ export function emptyMechanicsForm(name = "") {
     pageBreaks: "",
     tableLayout: "",
     figureLayout: "",
-    citationFormat: "APA",
+    citationFormat: "",
   };
 }
 
@@ -194,12 +199,12 @@ function alignmentKey(value) {
 export function rulesToForm(rules = {}, name = "") {
   const font = rules.font || {};
   const families = Array.isArray(font.families) ? font.families : [];
-  const sizes = Array.isArray(font.sizes_points) ? font.sizes_points : [];
   const margins = rules.margins_inches || {};
   const paper = rules.paper || {};
   const pagination = rules.pagination || {};
 
-  const bodySize = font.body_size ?? font.heading3_content_size ?? sizes[0];
+  // Do not invent body size from heading sizes_points — unset means "not checked".
+  const bodySize = font.body_size ?? font.heading3_content_size;
 
   const spacing =
     rules.spacing != null
@@ -218,7 +223,7 @@ export function rulesToForm(rules = {}, name = "") {
   return {
     name: name || "",
     paperSize: paperSizeLabel(rules),
-    paperOrientation: String(paper.orientation || rules.orientation || "Portrait"),
+    paperOrientation: String(paper.orientation || rules.orientation || ""),
     paperSubstance: String(paper.substance || rules.substance || ""),
     paperLandscapePages: canonicalLandscapePages(paper.landscape_pages),
     spacing,
@@ -234,7 +239,7 @@ export function rulesToForm(rules = {}, name = "") {
     marginFooter: margins.footer != null ? String(margins.footer) : "",
     bodySize: bodySize != null ? String(bodySize) : "",
     fontType: String(font.type || families[0] || ""),
-    fontColor: String(font.color || "Black/Automatic"),
+    fontColor: String(font.color || ""),
     headings: headingsFromRules(font),
     paginationPosition: canonicalPagePosition(
       pagination.position || rules.pagination_position || asText(rules.pagination_requirements)
