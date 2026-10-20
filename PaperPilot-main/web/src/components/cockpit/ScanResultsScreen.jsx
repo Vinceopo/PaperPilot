@@ -1,15 +1,18 @@
 /**
- * ScanResultsScreen — full results with right/wrong, per-category scores,
- * issues panel, and optional document preview for jump-back.
+ * ScanResultsScreen — report-style results matching the compliance design:
+ * brand lockup, meta strip, overall score + Right/Incorrect bar, breakdown,
+ * and Issues detected (XAI). Why/Fix labels appear in the downloaded PDF only.
  */
 
-import { useEffect, useRef, useState } from "react";
-import IssuesDetectedPanel from "./IssuesDetectedPanel.jsx";
+import { useEffect, useState } from "react";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
+import IssuesDetectedPanel from "./IssuesDetectedPanel.jsx";
+import { PaperPilotMark } from "../PaperPilotLogo.jsx";
 import {
   CATEGORY_STATUS_LABEL,
   formatCount,
   formatPct,
+  formatScore,
   hasValue,
   plural,
   roundSharesToTotal,
@@ -21,107 +24,68 @@ function scoreBand(score) {
     return {
       label: "NOT EVALUATED",
       textColor: "text-slate-500",
-      ringColor: "#cbd5e1",
       badgeBorder: "border-slate-200",
       badgeBg: "bg-slate-50",
+      scoreColor: "text-slate-500",
     };
   if (score >= 80)
     return {
       label: "COMPLIANT",
-      textColor: "text-emerald-600",
-      ringColor: "#16bfa8",
-      badgeBorder: "border-emerald-200",
-      badgeBg: "bg-emerald-50",
+      textColor: "text-[#157347]",
+      badgeBorder: "border-[#b7e4c7]",
+      badgeBg: "bg-[#eaf7ef]",
+      scoreColor: "text-[#157347]",
     };
   if (score >= 50)
     return {
       label: "NEEDS REVISION",
-      textColor: "text-amber-600",
-      ringColor: "#f59e0b",
-      badgeBorder: "border-amber-200",
-      badgeBg: "bg-amber-50",
+      textColor: "text-[#B57200]",
+      badgeBorder: "border-[#f0d9a0]",
+      badgeBg: "bg-[#fff8e8]",
+      scoreColor: "text-[#B57200]",
     };
   return {
     label: "CRITICAL ISSUES",
-    textColor: "text-rose-600",
-    ringColor: "#ef4444",
-    badgeBorder: "border-rose-200",
-    badgeBg: "bg-rose-50",
+    textColor: "text-[#B02A37]",
+    badgeBorder: "border-[#f0c2c7]",
+    badgeBg: "bg-[#fdf0f1]",
+    scoreColor: "text-[#B02A37]",
   };
 }
 
 function barColorClass(score) {
-  if (score >= 80) return "bg-emerald-500";
-  if (score >= 50) return "bg-amber-400";
-  return "bg-rose-500";
+  if (score >= 80) return "bg-[#157347]";
+  if (score >= 60) return "bg-[#B57200]";
+  return "bg-[#B02A37]";
 }
 
-function CircularScore({ score, categoryCount = null }) {
-  const RADIUS = 52;
-  const circumference = 2 * Math.PI * RADIUS;
-  const [progress, setProgress] = useState(0);
-  const rafRef = useRef(null);
-  const band = scoreBand(score);
-  const evaluated = hasValue(score);
-  const target = evaluated ? Number(score) : 0;
-
-  useEffect(() => {
-    const DURATION = 1100;
-    const start = performance.now();
-    const tick = (now) => {
-      const t = Math.min((now - start) / DURATION, 1);
-      const eased = 1 - (1 - t) ** 3;
-      setProgress(eased * target);
-      if (t < 1) rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [target]);
-
-  const offset = circumference - (progress / 100) * circumference;
-
-  return (
-    <div className="flex flex-col items-center gap-4 py-4">
-      <div className="relative">
-        <svg width="148" height="148" viewBox="0 0 148 148" className="-rotate-90">
-          <circle cx="74" cy="74" r={RADIUS} fill="none" stroke="#e2e8f0" strokeWidth="14" />
-          <circle
-            cx="74"
-            cy="74"
-            r={RADIUS}
-            fill="none"
-            stroke={band.ringColor}
-            strokeWidth="14"
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={offset}
-          />
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-3xl font-extrabold text-slate-800">
-            {evaluated ? Math.round(progress) : "—"}
-          </span>
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">/100</span>
-        </div>
-      </div>
-      <span
-        className={`rounded-full border px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider
-          ${band.textColor} ${band.badgeBg} ${band.badgeBorder}`}
-      >
-        {band.label}
-      </span>
-      <p className="text-center text-xs text-slate-400">
-        {!evaluated
-          ? "No formatting unit could be measured"
-          : categoryCount != null
-            ? `Average of the ${categoryCount} measured ${plural(categoryCount, "category", "categories")}`
-            : "Average of categories that were actually measured"}
-      </p>
-    </div>
-  );
+function barTextClass(score) {
+  if (score >= 80) return "text-[#157347]";
+  if (score >= 60) return "text-[#B57200]";
+  return "text-[#B02A37]";
 }
 
-function ScoreBar({ metric, score, status, unitsChecked, unitsPassed, unitsFailed, issueCount = 0 }) {
+function formatReportDate(value) {
+  if (!value) return "—";
+  const raw = String(value);
+  const d = new Date(raw.length <= 10 ? `${raw}T12:00:00` : raw);
+  if (Number.isNaN(d.getTime())) return "—";
+  const datePart = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: APP_TIME_ZONE,
+  });
+  if (raw.length <= 10) return datePart;
+  const timePart = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: APP_TIME_ZONE,
+  });
+  return `${datePart} · ${timePart}`;
+}
+
+function ScoreBar({ metric, score, status }) {
   const [width, setWidth] = useState(0);
   const evaluated = hasValue(score);
   const safe = evaluated ? Math.max(0, Math.min(100, Number(score))) : 0;
@@ -133,51 +97,31 @@ function ScoreBar({ metric, score, status, unitsChecked, unitsPassed, unitsFaile
     return () => cancelAnimationFrame(raf);
   }, [safe]);
 
-  const unitTitle =
-    hasValue(unitsChecked) && hasValue(unitsPassed) && hasValue(unitsFailed)
-      ? `Checked ${formatCount(unitsChecked)} · Passed ${formatCount(unitsPassed)} · Failed ${formatCount(unitsFailed)}`
-      : undefined;
-
   return (
-    <div className="space-y-1.5" title={unitTitle}>
-      <div className="flex items-center justify-between text-xs">
-        <span className="font-medium text-slate-600">
-          {metric}
-          {!evaluated ? (
-            <span className="ml-1.5 font-normal text-slate-400">
-              · {CATEGORY_STATUS_LABEL[status] || "Not evaluated"}
-            </span>
-          ) : hasValue(unitsChecked) ? (
-            <span className={`ml-1.5 font-normal ${unitsFailed ? "text-slate-400" : "text-emerald-600"}`}>
-              · {formatCount(unitsFailed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")} failed
-            </span>
-          ) : null}
-        </span>
-        <span
-          className={`font-bold tabular-nums ${
-            !evaluated
-              ? "text-slate-400"
-              : safe >= 80
-                ? "text-emerald-600"
-                : safe >= 50
-                  ? "text-amber-600"
-                  : "text-rose-500"
-          }`}
-        >
-          {evaluated ? formatPct(safe) : "N/A"}
-        </span>
-      </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+    <div className="grid grid-cols-[7.5rem_minmax(0,1fr)_3.25rem] items-center gap-3 sm:grid-cols-[9rem_minmax(0,1fr)_3.5rem]">
+      <span className="truncate text-sm font-semibold text-slate-700">
+        {metric}
+        {!evaluated ? (
+          <span className="ml-1 font-normal text-slate-400">
+            · {CATEGORY_STATUS_LABEL[status] || "N/A"}
+          </span>
+        ) : null}
+      </span>
+      <div className="h-1.5 overflow-hidden rounded-full bg-[#eeeeee]">
         <div
-          className={`h-2 rounded-full transition-all duration-700 ease-out ${barColorClass(safe)}`}
-          style={{ width: `${width}%` }}
+          className={`h-full rounded-full transition-all duration-700 ease-out ${
+            evaluated ? barColorClass(safe) : "bg-slate-300"
+          }`}
+          style={{ width: evaluated ? `${width}%` : "0%" }}
         />
       </div>
-      {issueCount > 0 ? (
-        <p className="text-[10px] text-slate-400">
-          {formatCount(issueCount)} {plural(issueCount, "issue")} found in this category
-        </p>
-      ) : null}
+      <span
+        className={`text-right text-sm font-bold tabular-nums ${
+          evaluated ? barTextClass(safe) : "text-slate-400"
+        }`}
+      >
+        {evaluated ? formatPct(safe) : "N/A"}
+      </span>
     </div>
   );
 }
@@ -204,7 +148,6 @@ export default function ScanResultsScreen({
     scannedAt,
     citationStyle = "APA",
     overallScore = null,
-    overallCategories = null,
     rightPct,
     wrongPct,
     scoreBreakdown = [],
@@ -215,237 +158,221 @@ export default function ScanResultsScreen({
     documentName = "",
     documentPreview = null,
     unitsChecked,
-    unitsPassed,
-    unitsFailed,
     issueTotals = null,
     scoringConsistency = null,
     scoringVersion = null,
   } = result;
 
-  const [shownRight, shownWrong] = roundSharesToTotal([rightPct, wrongPct]);
+  const [shownRight, shownIncorrect] = roundSharesToTotal([rightPct, wrongPct]);
   const criticalTypes = formatChecks.filter((c) => c.result === "FAIL").length;
   const warningTypes = formatChecks.filter((c) => c.result === "REVIEW").length;
-  const issueTypes = formatChecks.length;
-
-  const scannedDate = scannedAt
-    ? new Date(scannedAt).toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        timeZone: APP_TIME_ZONE,
-      })
-    : "—";
+  const issueTypes = formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
+  const band = scoreBand(overallScore);
+  const evaluated = hasValue(overallScore);
+  const rightShare = hasValue(shownRight) ? Math.max(0, Math.min(100, Number(shownRight))) : 0;
+  const incorrectShare = hasValue(shownIncorrect)
+    ? Math.max(0, Math.min(100, Number(shownIncorrect)))
+    : 0;
 
   const versionLabel = `v${versionNumber}.0`;
+  const scannedLabel = formatReportDate(scannedAt);
+  const generatedLabel = formatReportDate(new Date().toISOString());
   const hasPreview = Boolean(file || documentLoading || cloudinaryUrl || documentPreview);
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-xl bg-[#172033] p-6 text-white">
-        <div className="flex flex-wrap items-start justify-between gap-5">
-          <div className="min-w-0">
-            {(onBackToSummary || onBackToDashboard) && (
-              <div className="mb-2 flex flex-wrap gap-3">
-                {onBackToSummary ? (
-                  <button
-                    type="button"
-                    onClick={onBackToSummary}
-                    className="text-[11px] font-semibold text-[#16bfa8] hover:underline"
-                  >
-                    ← Back to summary
-                  </button>
-                ) : null}
-                {onViewDocument ? (
-                  <button
-                    type="button"
-                    onClick={onViewDocument}
-                    className="text-[11px] font-semibold text-slate-300 hover:text-white hover:underline"
-                  >
-                    Open reference tracing
-                  </button>
-                ) : null}
-              </div>
-            )}
-            <span className="inline-block rounded-full border border-[#16bfa8]/40 bg-[#16bfa8]/10 px-3 py-0.5 text-[10px] font-bold uppercase tracking-widest text-[#16bfa8]">
-              SCOPE: FORMATTING ONLY
-            </span>
-            <h2 className="mt-2 text-xl font-bold leading-snug text-white">{documentTitle}</h2>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <PaperPilotMark className="h-10 w-10 sm:h-11 sm:w-11" />
+        <span className="font-['Quicksand',sans-serif] text-lg font-bold tracking-[0.08em] text-[#172033] sm:text-xl">
+          PAPERPILOT
+        </span>
+        <span className="font-['Quicksand',sans-serif] text-sm font-semibold tracking-[0.1em] text-[#4a5568] sm:text-base">
+          * RESULTS
+        </span>
+      </div>
+
+      {(onBackToSummary || onViewDocument) && (
+        <div className="flex flex-wrap gap-3">
+          {onBackToSummary ? (
+            <button
+              type="button"
+              onClick={onBackToSummary}
+              className="text-[11px] font-semibold text-[#16bfa8] hover:underline"
+            >
+              ← Back to summary
+            </button>
+          ) : null}
+          {onViewDocument ? (
+            <button
+              type="button"
+              onClick={onViewDocument}
+              className="text-[11px] font-semibold text-slate-500 hover:text-[#172033] hover:underline"
+            >
+              Open reference tracing
+            </button>
+          ) : null}
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm sm:px-6">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Document</p>
+            <p className="mt-1 truncate text-sm font-bold text-slate-900" title={documentTitle}>
+              {documentTitle}
+            </p>
             {(campus || college) && (
-              <p className="mt-1 text-sm text-slate-400">
+              <p className="mt-0.5 truncate text-xs text-slate-500">
                 {[college, campus].filter(Boolean).join(" · ")}
               </p>
             )}
           </div>
-
-          <div className="shrink-0">
-            <table className="text-xs">
-              <tbody>
-                <tr>
-                  <td className="pr-4 text-slate-500">Scanned</td>
-                  <td className="font-medium text-slate-200">{scannedDate}</td>
-                </tr>
-                <tr>
-                  <td className="pr-4 pt-1 text-slate-500">Version</td>
-                  <td className="pt-1 font-normal text-slate-400">{versionLabel}</td>
-                </tr>
-                <tr>
-                  <td className="pr-4 pt-1 text-slate-500">Citation style</td>
-                  <td className="pt-1 font-medium text-slate-200">{citationStyle}</td>
-                </tr>
-              </tbody>
-            </table>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+              Citation style
+            </p>
+            <p className="mt-1 text-sm font-bold text-slate-900">
+              {citationStyle} · {versionLabel}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Scanned</p>
+            <p className="mt-1 text-sm font-bold text-slate-900">{scannedLabel}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Generated</p>
+            <p className="mt-1 text-sm font-bold text-slate-900">{generatedLabel}</p>
           </div>
         </div>
-        <p className="mt-4 text-xs text-slate-500">
-          Structure and content are not evaluated — results reflect formatting compliance only.
-        </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-4 text-center">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Right (passed units)</p>
-          <p className="mt-1 text-3xl font-extrabold text-emerald-700">{formatPct(shownRight)}</p>
-          {hasValue(unitsPassed) && hasValue(unitsChecked) ? (
-            <p className="mt-0.5 text-[11px] text-emerald-700/80">
-              {formatCount(unitsPassed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")}
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="grid gap-8 lg:grid-cols-[minmax(12rem,0.9fr)_minmax(0,1.4fr)] lg:items-center">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+              Overall compliance score
             </p>
-          ) : null}
-        </div>
-        <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-4 py-4 text-center">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Wrong (failed units)</p>
-          <p className="mt-1 text-3xl font-extrabold text-rose-700">{formatPct(shownWrong)}</p>
-          {hasValue(unitsFailed) && hasValue(unitsChecked) ? (
-            <p className="mt-0.5 text-[11px] text-rose-700/80">
-              {formatCount(unitsFailed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")}
-            </p>
-          ) : null}
-        </div>
-      </div>
-      {hasValue(unitsChecked) ? (
-        <p className="-mt-3 text-center text-[11px] text-slate-500">
-          {Number(unitsChecked) === 0
-            ? "No formatting unit could be measured in this document."
-            : `Based on ${formatCount(unitsChecked)} measured formatting ${plural(unitsChecked, "unit")}`}
-          {issueTotals
-            ? ` · ${formatCount(issueTotals.occurrences)} ${plural(issueTotals.occurrences, "issue")} found (one failed unit can break more than one rule)`
-            : ""}
-        </p>
-      ) : null}
-      {scoringConsistency && !scoringConsistency.ok ? (
-        <p className="-mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-800" role="alert">
-          These results failed an internal consistency check. Re-run the analysis before relying on them.
-        </p>
-      ) : null}
-      {!scoringVersion ? (
-        <p className="-mt-2 text-center text-[11px] text-slate-500">
-          This scan was saved without the full scoring breakdown. Re-analyse the manuscript to generate checked, passed, and failed unit counts. Stored scores are shown as saved.
-        </p>
-      ) : null}
-
-      <div className="grid gap-5 lg:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Overall Score</p>
-          <CircularScore
-            score={overallScore}
-            categoryCount={Array.isArray(overallCategories) ? overallCategories.length : null}
-          />
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-              Score Breakdown
-            </p>
-            <p className="text-[10px] font-medium text-slate-400">Passed units ÷ checked units</p>
-          </div>
-          <div className="mt-5 space-y-4">
-            {scoreBreakdown.map((item) => (
-              <ScoreBar
-                key={item.metric}
-                metric={item.metric}
-                score={item.score}
-                status={item.status}
-                unitsChecked={item.unitsChecked}
-                unitsPassed={item.unitsPassed}
-                unitsFailed={item.unitsFailed}
-                issueCount={item.issueCount}
-              />
-            ))}
-          </div>
-          <div className="mt-5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-400">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" /> Good (≥80%)
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-amber-400" /> Needs review (50–79%)
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-rose-500" /> Critical (&lt;50%)
-            </span>
-          </div>
-        </div>
-
-        <div className="flex flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Scan Summary</p>
-
-          <div className="mt-4 grid grid-cols-3 gap-2">
-            <div className="rounded-lg bg-rose-50 p-3 text-center">
-              <p className="text-2xl font-extrabold text-rose-600">{criticalTypes}</p>
-              <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-500">Errors</p>
-            </div>
-            <div className="rounded-lg bg-amber-50 p-3 text-center">
-              <p className="text-2xl font-extrabold text-amber-600">{warningTypes}</p>
-              <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-500">
-                Warnings
-              </p>
-            </div>
-            <div className="rounded-lg bg-slate-50 p-3 text-center">
-              <p className="text-2xl font-extrabold text-slate-700">{issueTypes}</p>
-              <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Issue types
-              </p>
-            </div>
-          </div>
-          <p className="mt-2 text-[10px] text-slate-400">
-            Errors are critical issue types; warnings are moderate or minor issue types.
-          </p>
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            {hasValue(unitsPassed) ? (
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
-                {formatCount(unitsPassed)} {plural(unitsPassed, "unit")} passed
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <span className={`text-5xl font-extrabold tabular-nums leading-none ${band.scoreColor}`}>
+                {evaluated ? formatScore(overallScore, 0) : "—"}
               </span>
-            ) : null}
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
-              {citationStyle}
-            </span>
-            <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600">
-              Format only
+              <span className="pb-1 text-base font-semibold text-slate-400">/ 100</span>
+            </div>
+            <span
+              className={`mt-3 inline-flex rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wider ${band.textColor} ${band.badgeBg} ${band.badgeBorder}`}
+            >
+              {band.label}
             </span>
           </div>
 
-          {downloadError && (
-            <p className="mt-3 text-xs text-rose-500" role="alert">
-              {downloadError}
-            </p>
-          )}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold">
+              <span className="text-[#157347]">
+                Right {formatPct(shownRight)}
+              </span>
+              <span className="text-[#B02A37]">
+                Incorrect {formatPct(shownIncorrect)}
+              </span>
+            </div>
+            <div className="flex h-1.5 overflow-hidden rounded-full bg-[#eeeeee]">
+              {hasValue(shownRight) || hasValue(shownIncorrect) ? (
+                <>
+                  <div
+                    className="h-full bg-[#157347] transition-all duration-700"
+                    style={{ width: `${rightShare}%` }}
+                  />
+                  <div
+                    className="h-full bg-[#B02A37] transition-all duration-700"
+                    style={{ width: `${incorrectShare}%` }}
+                  />
+                </>
+              ) : null}
+            </div>
 
-          <button
-            type="button"
-            onClick={onDownload}
-            disabled={downloadBusy}
-            className="mt-auto flex w-full items-center justify-center gap-2 rounded-xl bg-[#172033] py-3 text-xs font-bold text-white shadow-sm transition hover:bg-[#243049] disabled:cursor-not-allowed disabled:opacity-50"
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-xl border border-slate-200 px-3 py-3 text-center">
+                <p className="text-xl font-extrabold tabular-nums text-[#B02A37]">{criticalTypes}</p>
+                <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  Errors
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-200 px-3 py-3 text-center">
+                <p className="text-xl font-extrabold tabular-nums text-[#B57200]">{warningTypes}</p>
+                <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  Warnings
+                </p>
+              </div>
+              <div className="rounded-xl border border-slate-200 px-3 py-3 text-center">
+                <p className="text-xl font-extrabold tabular-nums text-slate-800">{issueTypes}</p>
+                <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  Issue types
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {hasValue(unitsChecked) ? (
+          <p className="mt-4 text-center text-[11px] text-slate-500">
+            {Number(unitsChecked) === 0
+              ? "No formatting unit could be measured in this document."
+              : `Based on ${formatCount(unitsChecked)} measured formatting ${plural(unitsChecked, "unit")}`}
+            {issueTotals
+              ? ` · ${formatCount(issueTotals.occurrences)} ${plural(issueTotals.occurrences, "issue")} found`
+              : ""}
+          </p>
+        ) : null}
+        {scoringConsistency && !scoringConsistency.ok ? (
+          <p
+            className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-800"
+            role="alert"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v12m0 0 4-4m-4 4-4-4M4 20h16" />
-            </svg>
-            {downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
-          </button>
+            These results failed an internal consistency check. Re-run the analysis before relying on
+            them.
+          </p>
+        ) : null}
+        {!scoringVersion ? (
+          <p className="mt-3 text-center text-[11px] text-slate-500">
+            This scan was saved without the full scoring breakdown. Re-analyse the manuscript to
+            generate checked, passed, and failed unit counts.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold text-slate-900">Score breakdown</h3>
+            <p className="mt-0.5 text-sm text-slate-500">
+              Share of measured text that matched the format in each category
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-sm bg-[#157347]" /> 80% and above
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-sm bg-[#B57200]" /> 60–79%
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-sm bg-[#B02A37]" /> Below 60%
+            </span>
+          </div>
+        </div>
+        <div className="mt-5 space-y-4">
+          {scoreBreakdown.map((item) => (
+            <ScoreBar
+              key={item.metric || item.section}
+              metric={item.metric || item.section}
+              score={item.score}
+              status={item.status}
+            />
+          ))}
         </div>
       </div>
 
       {hasPreview || onViewDocument ? (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-[#f8fffd] px-5 py-3">
             <div>
               <h3 className="text-sm font-bold text-slate-800">Document preview</h3>
@@ -487,11 +414,11 @@ export default function ScanResultsScreen({
               Grouped by page with explanations and fix suggestions. Each page starts at line 1.
             </p>
           </div>
-          {issueTypes > 0 && (
+          {issueTypes > 0 ? (
             <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">
               {issueTypes} issue type{issueTypes === 1 ? "" : "s"}
             </span>
-          )}
+          ) : null}
         </div>
         <IssuesDetectedPanel
           formatChecks={formatChecks}
@@ -501,13 +428,35 @@ export default function ScanResultsScreen({
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-3 pb-6">
+        {downloadError ? (
+          <p className="mr-auto text-xs text-rose-500" role="alert">
+            {downloadError}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          onClick={onDownload}
+          disabled={downloadBusy}
+          className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
+        </button>
         <button
           type="button"
           onClick={onUploadNewVersion}
-          className="rounded-lg bg-[#16bfa8] px-6 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#12ae99]"
+          className="rounded-xl bg-[#16bfa8] px-6 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#12ae99]"
         >
           Upload New Version
         </button>
+        {onBackToDashboard ? (
+          <button
+            type="button"
+            onClick={onBackToDashboard}
+            className="rounded-xl bg-[#172033] px-5 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#243049]"
+          >
+            Back to dashboard
+          </button>
+        ) : null}
       </div>
     </div>
   );

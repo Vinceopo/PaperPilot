@@ -77,7 +77,7 @@ export default function ScanSummaryModal({
             <p className="mt-1 text-2xl font-extrabold text-emerald-700">{pctLabel(rightPct)}</p>
           </div>
           <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-3 py-3 text-center">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Wrong</p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Incorrect</p>
             <p className="mt-1 text-2xl font-extrabold text-rose-700">{pctLabel(wrongPct)}</p>
           </div>
         </div>

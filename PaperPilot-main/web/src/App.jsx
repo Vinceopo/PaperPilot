@@ -840,8 +840,8 @@ export default function App() {
     if (signedIn) loadDashboard();
   }, [signedIn, loadDashboard]);
 
-  // Changes made on another device (formats, versions, scans, plan) show up without a manual refresh:
-  // on returning to the tab and every 30 seconds while it is visible.
+  // Cross-device updates: refresh on tab focus/visibility only.
+  // Periodic 30s polling was removed — it re-downloaded RTDB trees and burned the free download CAP.
   useEffect(() => {
     if (!signedIn) return undefined;
     let last = Date.now();
@@ -854,11 +854,9 @@ export default function App() {
       });
     };
     const onReturn = () => refresh(3000);
-    const timer = window.setInterval(() => refresh(25000), 30000);
     document.addEventListener("visibilitychange", onReturn);
     window.addEventListener("focus", onReturn);
     return () => {
-      window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onReturn);
       window.removeEventListener("focus", onReturn);
     };
@@ -1851,7 +1849,7 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
-                      if (!isPaidTier(tier) && scanStyle !== "APA") {
+                      if (!isPaidTier(tier) && scanStyle && scanStyle !== "APA") {
                         setUpgradeMessage(
                           `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
                         );

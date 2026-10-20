@@ -203,7 +203,6 @@ class PaginationTests(unittest.TestCase):
                 line.update(page_index=index, line_index=line_index)
             return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
 
-        # Missing numbers + mixed Roman/Arabic styles are fine; bottom-left number is not.
         pages = [
             page(0, None),
             page(1, "ii"),
@@ -267,6 +266,49 @@ class HeadingAndSpacingTests(unittest.TestCase):
         self.assertIn("paper_orientation", _issue_types(strict))
         allowed = {"paper": {**base["paper"], "landscape_pages": "Allowed for tables and figures"}}
         self.assertNotIn("paper_orientation", _issue_types(run_compliance_scan(parsed, normalize_mechanics_rules(allowed))))
+
+
+class UnsetRulesAreSkippedTests(unittest.TestCase):
+    """Unset mechanics fields must not produce violations for that dimension."""
+
+    def _body_doc(self, *, size=11, align=WD_ALIGN_PARAGRAPH.CENTER):
+        doc = Document()
+        paragraph = doc.add_paragraph(BODY)
+        paragraph.alignment = align
+        paragraph.runs[0].font.size = Pt(size)
+        paragraph.runs[0].font.name = "Arial"
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        return parse_document(buffer.getvalue(), "docx")
+
+    def test_unset_body_size_is_not_flagged_when_only_heading_sizes_exist(self):
+        # Heading sizes used to bleed into body via sizes_points; body must stay unchecked.
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "families": ["Times New Roman"],
+                    "heading1_size": 14,
+                    "heading2_size": 12,
+                    "sizes_points": [14, 12],
+                }
+            }
+        )
+        self.assertNotIn("body_size", rules.get("font") or {})
+        result = run_compliance_scan(self._body_doc(size=11), rules)
+        self.assertNotIn("font_size", _issue_types(result))
+
+    def test_unset_alignment_is_not_flagged(self):
+        rules = normalize_mechanics_rules({"font": {"families": ["Arial"]}})
+        self.assertNotIn("alignment", rules)
+        result = run_compliance_scan(self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER), rules)
+        self.assertNotIn("alignment", _issue_types(result))
+        alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
+        self.assertEqual(alignment["status"], "not_applicable")
+
+    def test_explicit_body_size_still_flags_mismatch(self):
+        rules = normalize_mechanics_rules({"font": {"body_size": 12}})
+        result = run_compliance_scan(self._body_doc(size=11), rules)
+        self.assertIn("font_size", _issue_types(result))
 
 
 class NormalizeTests(unittest.TestCase):

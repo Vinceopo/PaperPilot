@@ -6,7 +6,7 @@
 import { runComplianceScan, uploadManuscriptVersion } from "../api.js";
 import { isServerId, mapComplianceScanToResult } from "./scanMapper.js";
 import { fetchScanWithProgress } from "./scanPoll.js";
-import { CATEGORY_STATUS_LABEL, formatCount, formatPct, formatScore, hasValue } from "./scoreFormat.js";
+import { CATEGORY_STATUS_LABEL, formatPct, formatScore, hasValue } from "./scoreFormat.js";
 import { APP_TIME_ZONE } from "./timeZone.js";
 
 function titleFromFile(file) {
@@ -92,7 +92,6 @@ export async function downloadReport(result, opts = {}) {
   const { default: autoTable } = await import("jspdf-autotable");
 
   const {
-    documentId = "unknown",
     documentTitle = "Untitled Document",
     campus,
     college,
@@ -103,7 +102,6 @@ export async function downloadReport(result, opts = {}) {
     wrongPct,
     scoreBreakdown = [],
     formatChecks = [],
-    unitsPassed = null,
   } = result;
 
   const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
@@ -111,9 +109,29 @@ export async function downloadReport(result, opts = {}) {
   const scoreValue = hasValue(overallScore) ? Number(overallScore) : null;
 
   // ── Derived stats ─────────────────────────────────────────────────────────
-  const totalErrors = formatChecks.filter((c) => c.result === "FAIL").length;
-  const warnings    = formatChecks.filter((c) => c.result === "REVIEW").length;
-  const issueTypes  = formatChecks.length;
+  const issueRows = formatChecks.filter((c) => c && c.result !== "PASS");
+  const totalErrors = issueRows.filter((c) => c.result === "FAIL").length;
+  const warnings = issueRows.filter((c) => c.result === "REVIEW").length;
+  const issueTypes = issueRows.length;
+
+  async function loadBrandLogo() {
+    try {
+      const base = (typeof import.meta !== "undefined" && import.meta.env?.BASE_URL) || "/";
+      const res = await fetch(`${base}icon-192.png`);
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      return await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  const logoDataUrl = await loadBrandLogo();
 
   function scoreBandLabel(score) {
     if (score == null) return "NOT EVALUATED";
@@ -144,18 +162,19 @@ export async function downloadReport(result, opts = {}) {
   const CW = PW - ML - MR; // content width
   let Y = MT;
 
-  // ── Color palette ─────────────────────────────────────────────────────────
-  const NAVY    = [23,  32,  51];   // #172033
-  const TEAL    = [22,  191, 168];  // #16bfa8
-  const PASS_C  = [22,  163, 74];   // emerald-600
-  const FAIL_C  = [220, 38,  38];   // rose-600
-  const REVIEW_C = [217, 119, 6];   // amber-600
-  const SLATE   = [100, 116, 139];  // slate-500
+  // ── Color palette (matches scan-results design) ───────────────────────────
+  const NAVY     = [23,  32,  51];   // #172033
+  const TEAL     = [22,  191, 168];  // #16bfa8
+  const PASS_C   = [21,  115, 71];   // #157347
+  const FAIL_C   = [176, 42,  55];   // #B02A37
+  const REVIEW_C = [181, 114, 0];    // #B57200
+  const SLATE    = [100, 116, 139];  // slate-500
+  const TRACK    = [238, 238, 238];  // #EEEEEE
+  const BAR_H    = 1.6;             // thin bars like the UI reference
 
   function addPage() {
     doc.addPage();
     Y = MT;
-    // Footer on every page
     doc.setFontSize(7).setTextColor(...SLATE);
     doc.text(
       "PaperPilot · Formatting compliance only — grammar, content, and plagiarism are not evaluated.",
@@ -171,95 +190,114 @@ export async function downloadReport(result, opts = {}) {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // HEADER BAND
+  // HEADER — logo + PAPERPILOT * RESULTS
   // ══════════════════════════════════════════════════════════════════════════
-  doc.setFillColor(...NAVY);
-  doc.rect(0, 0, PW, 48, "F");
+  const logoSize = 9;
+  if (logoDataUrl) {
+    try {
+      doc.addImage(logoDataUrl, "PNG", ML, 10, logoSize, logoSize);
+    } catch {
+      /* text lockup still renders */
+    }
+  }
+  const brandX = logoDataUrl ? ML + logoSize + 3 : ML;
+  doc.setFontSize(12).setTextColor(...NAVY).setFont(undefined, "bold");
+  doc.text("PAPERPILOT", brandX, 16);
+  const brandW = doc.getTextWidth("PAPERPILOT");
+  doc.setFontSize(10).setTextColor(74, 85, 104).setFont(undefined, "bold");
+  doc.text("* RESULTS", brandX + brandW + 3, 16);
 
-  // Logo wordmark
-  doc.setFontSize(9).setTextColor(...TEAL).setFont(undefined, "bold");
-  doc.text("PAPER PILOT", ML, 12);
+  Y = 24;
 
-  // Badge
-  doc.setFillColor(...TEAL);
-  doc.roundedRect(ML, 15, 44, 6, 1.5, 1.5, "F");
-  doc.setFontSize(6).setTextColor(255, 255, 255).setFont(undefined, "bold");
-  doc.text("SCOPE: FORMATTING ONLY", ML + 22, 19.2, { align: "center" });
-
-  // Document title
-  doc.setFontSize(14).setTextColor(255, 255, 255).setFont(undefined, "bold");
-  const titleLines = doc.splitTextToSize(documentTitle, CW - 60);
-  doc.text(titleLines, ML, 28);
-
-  // Meta grid (top-right) — Version matches the on-screen results header
-  const metaX = PW - MR - 58;
-  doc.setFontSize(7).setFont(undefined, "normal").setTextColor(180, 190, 205);
-  const meta = [
-    ["Scanned",        scannedDate],
-    ["Version",        versionLabel],
-    ["Citation style", citationStyle],
-    ["Generated",      generatedDate],
+  // Meta card
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(ML, Y, CW, 22, 2, 2, "FD");
+  const metaCols = [
+    ["DOCUMENT", documentTitle],
+    ["CITATION STYLE", `${citationStyle} · ${versionLabel}`],
+    ["SCANNED", scannedDate],
+    ["GENERATED", generatedDate],
   ];
-  if (campus || college) meta.splice(1, 0, ["Campus / College", [college, campus].filter(Boolean).join(", ")]);
-  meta.forEach(([label, val], i) => {
-    const ry = 14 + i * 7;
-    doc.text(label, metaX, ry);
-    doc.setTextColor(230, 235, 245).setFont(undefined, "bold");
-    const valLines = doc.splitTextToSize(String(val), 58);
-    doc.text(valLines, metaX, ry + 3.2);
-    doc.setTextColor(180, 190, 205).setFont(undefined, "normal");
+  const colW = CW / 4;
+  metaCols.forEach(([label, val], i) => {
+    const cx = ML + 4 + i * colW;
+    doc.setFontSize(6).setFont(undefined, "bold").setTextColor(...SLATE);
+    doc.text(label, cx, Y + 7);
+    doc.setFontSize(8).setTextColor(...NAVY);
+    const lines = doc.splitTextToSize(String(val), colW - 8);
+    doc.text(lines.slice(0, 2), cx, Y + 13);
   });
-
-  Y = 54;
+  if (campus || college) {
+    Y += 24;
+    doc.setFontSize(7).setFont(undefined, "normal").setTextColor(...SLATE);
+    doc.text([college, campus].filter(Boolean).join(" · "), ML, Y);
+  } else {
+    Y += 28;
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // SECTION: COMPLIANCE SUMMARY
+  // SECTION: OVERALL COMPLIANCE SCORE
   // ══════════════════════════════════════════════════════════════════════════
-  doc.setTextColor(0, 0, 0).setFont(undefined, "bold").setFontSize(10);
-  doc.text("Compliance Summary", ML, Y);
-  Y += 6;
-
-  // Score + band in a coloured box
   const band = scoreBandLabel(scoreValue);
   const bandColor =
     scoreValue == null ? SLATE : scoreValue >= 80 ? PASS_C : scoreValue >= 50 ? REVIEW_C : FAIL_C;
-  doc.setFillColor(...bandColor);
-  doc.roundedRect(ML, Y, 45, 22, 2, 2, "F");
-  doc.setFontSize(22).setTextColor(255, 255, 255).setFont(undefined, "bold");
-  doc.text(formatScore(scoreValue, 0), ML + 22.5, Y + 12, { align: "center" });
-  doc.setFontSize(7).setFont(undefined, "normal");
-  doc.text("/ 100", ML + 22.5, Y + 18, { align: "center" });
 
-  doc.setFillColor(...bandColor).setGlobalAlpha ? null : null;
-  doc.setFontSize(9).setFont(undefined, "bold").setTextColor(...bandColor);
-  doc.text(band, ML + 49, Y + 9);
-  doc.setFontSize(8).setFont(undefined, "normal").setTextColor(...SLATE);
-  doc.text("Overall compliance score", ML + 49, Y + 15);
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(ML, Y, CW, 42, 2, 2, "FD");
+
+  doc.setFontSize(6.5).setFont(undefined, "bold").setTextColor(...SLATE);
+  doc.text("OVERALL COMPLIANCE SCORE", ML + 5, Y + 8);
+  const scoreStr = formatScore(scoreValue, 0);
+  doc.setFontSize(22).setFont(undefined, "bold").setTextColor(...bandColor);
+  doc.text(scoreStr, ML + 5, Y + 22);
+  const scoreW = doc.getTextWidth(scoreStr);
+  doc.setFontSize(9).setFont(undefined, "normal").setTextColor(...SLATE);
+  doc.text("/ 100", ML + 5 + scoreW + 2, Y + 22);
+  doc.setFontSize(7).setFont(undefined, "bold").setTextColor(...bandColor);
+  doc.text(band, ML + 5, Y + 30);
+
+  // Right / Incorrect labels + thin stacked bar
+  const barX = ML + 58;
+  const barW = CW - 68;
   doc.setFontSize(8).setFont(undefined, "bold").setTextColor(...PASS_C);
-  doc.text(`Right ${formatPct(rightPct)}`, ML + 49, Y + 20);
+  doc.text(`Right ${formatPct(rightPct)}`, barX, Y + 10);
   doc.setTextColor(...FAIL_C);
-  doc.text(`Wrong ${formatPct(wrongPct)}`, ML + 78, Y + 20);
+  doc.text(`Incorrect ${formatPct(wrongPct)}`, barX + barW, Y + 10, { align: "right" });
 
-  // Stat boxes
+  const rightW = Math.max(0, Math.min(barW, ((Number(rightPct) || 0) / 100) * barW));
+  const wrongW = Math.max(0, barW - rightW);
+  doc.setFillColor(...TRACK);
+  doc.roundedRect(barX, Y + 12.5, barW, BAR_H, 0.6, 0.6, "F");
+  if (rightW > 0) {
+    doc.setFillColor(...PASS_C);
+    doc.roundedRect(barX, Y + 12.5, rightW, BAR_H, 0.6, 0.6, "F");
+  }
+  if (wrongW > 0 && Number(wrongPct) > 0) {
+    doc.setFillColor(...FAIL_C);
+    doc.roundedRect(barX + rightW, Y + 12.5, wrongW, BAR_H, 0.6, 0.6, "F");
+  }
+
   const stats = [
-    { label: "Errors",       value: totalErrors,             color: FAIL_C   },
-    { label: "Warnings",     value: warnings,                color: REVIEW_C },
-    { label: "Units passed", value: formatCount(unitsPassed), color: PASS_C   },
-    { label: "Issue types",  value: issueTypes,              color: NAVY     },
+    { label: "ERRORS", value: totalErrors, color: FAIL_C },
+    { label: "WARNINGS", value: warnings, color: REVIEW_C },
+    { label: "ISSUE TYPES", value: issueTypes, color: NAVY },
   ];
-  const boxW = (CW - 48) / 4 - 2;
+  const boxW = (barW - 4) / 3;
   stats.forEach((s, i) => {
-    const bx = ML + 49 + i * (boxW + 2);
-    const by = Y + 21;
-    doc.setFillColor(245, 247, 250);
-    doc.roundedRect(bx, by, boxW, 14, 1.5, 1.5, "F");
-    doc.setFontSize(14).setFont(undefined, "bold").setTextColor(...s.color);
-    doc.text(String(s.value), bx + boxW / 2, by + 8.5, { align: "center" });
-    doc.setFontSize(6.5).setFont(undefined, "normal").setTextColor(...SLATE);
-    doc.text(s.label, bx + boxW / 2, by + 13, { align: "center" });
+    const bx = barX + i * (boxW + 2);
+    const by = Y + 20;
+    doc.setDrawColor(226, 232, 240);
+    doc.setFillColor(255, 255, 255);
+    doc.roundedRect(bx, by, boxW, 14, 1.5, 1.5, "FD");
+    doc.setFontSize(11).setFont(undefined, "bold").setTextColor(...s.color);
+    doc.text(String(s.value), bx + boxW / 2, by + 7, { align: "center" });
+    doc.setFontSize(5.5).setFont(undefined, "bold").setTextColor(...SLATE);
+    doc.text(s.label, bx + boxW / 2, by + 11.5, { align: "center" });
   });
 
-  Y += 40;
+  Y += 48;
 
   // ══════════════════════════════════════════════════════════════════════════
   // SECTION: SCORE BREAKDOWN
@@ -267,36 +305,32 @@ export async function downloadReport(result, opts = {}) {
   if (scoreBreakdown.length) {
     checkPageBreak(scoreBreakdown.length * 9 + 14);
     doc.setFontSize(10).setFont(undefined, "bold").setTextColor(0, 0, 0);
-    doc.text("Score Breakdown", ML, Y);
+    doc.text("Score breakdown", ML, Y);
     Y += 5;
     const barTrackW = CW * 0.55;
-    const barH = 4;
+    const barH = BAR_H;
     scoreBreakdown.forEach((item) => {
-      checkPageBreak(10);
+      checkPageBreak(8);
       const evaluated = hasValue(item.score);
       const score = evaluated ? Number(item.score) : 0;
-      const barColor = !evaluated ? SLATE : score >= 80 ? PASS_C : score >= 50 ? REVIEW_C : FAIL_C;
-      // Metric label
+      const barColor = !evaluated ? SLATE : score >= 80 ? PASS_C : score >= 60 ? REVIEW_C : FAIL_C;
       doc.setFontSize(8).setFont(undefined, "normal").setTextColor(50, 65, 85);
-      doc.text(item.metric, ML, Y + barH - 0.5);
-      // Track
+      doc.text(item.metric || item.section || "", ML, Y + barH + 0.5);
       const trackX = ML + 42;
-      doc.setFillColor(226, 232, 240);
-      doc.roundedRect(trackX, Y, barTrackW, barH, barH / 2, barH / 2, "F");
-      // Fill
+      doc.setFillColor(...TRACK);
+      doc.roundedRect(trackX, Y, barTrackW, barH, 0.6, 0.6, "F");
       if (evaluated) {
-        const fillW = Math.max(2, (score / 100) * barTrackW);
+        const fillW = Math.max(1.2, (score / 100) * barTrackW);
         doc.setFillColor(...barColor);
-        doc.roundedRect(trackX, Y, fillW, barH, barH / 2, barH / 2, "F");
+        doc.roundedRect(trackX, Y, fillW, barH, 0.6, 0.6, "F");
       }
-      // Percentage
       doc.setFontSize(7.5).setFont(undefined, "bold").setTextColor(...barColor);
       doc.text(
         evaluated ? formatPct(score) : CATEGORY_STATUS_LABEL[item.status] || "Not evaluated",
         trackX + barTrackW + 3,
-        Y + barH - 0.5
+        Y + barH + 0.5
       );
-      Y += 9;
+      Y += 7.5;
     });
     Y += 4;
   }
@@ -314,57 +348,57 @@ export async function downloadReport(result, opts = {}) {
   );
   Y += 10;
 
-  const tableRows = formatChecks.map((c) => {
-    const locs = (c.locations || [])
-      .slice(0, 8)
-      .map((loc) =>
-        loc.page != null
-          ? `p.${loc.page}${loc.line != null ? ` L${loc.line}` : ""}`
-          : loc.section || ""
-      )
-      .filter(Boolean)
-      .join(", ");
-    const detail = [
-      c.finding || c.description || "",
-      c.explanation ? `Why: ${c.explanation}` : "",
-      c.recommendation ? `Fix: ${c.recommendation}` : "",
-      locs ? `Where: ${locs}${(c.locations || []).length > 8 ? "…" : ""}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-    return [c.name, detail, c.result];
-  });
+  const formatTableRows = issueRows
+    .map((c) => {
+      const locs = (c.locations || [])
+        .slice(0, 12)
+        .map((loc) =>
+          loc.page != null
+            ? `p.${loc.page}${loc.line != null ? ` L${loc.line}` : ""}`
+            : loc.section || ""
+        )
+        .filter(Boolean)
+        .join(", ");
+      const detail = [
+        c.finding || c.description || "",
+        c.explanation ? `Why: ${c.explanation}` : "",
+        c.recommendation ? `Fix: ${c.recommendation}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      return [c.result || "REVIEW", `${c.name || ""}\n${detail}`.trim(), locs || "—"];
+    });
 
   autoTable(doc, {
     startY: Y,
     margin: { left: ML, right: MR },
-    head: [["Finding", "Explanation / locations", "Result"]],
-    body: tableRows,
-    styles: { fontSize: 8, cellPadding: 3.5, lineColor: [226, 232, 240], lineWidth: 0.3 },
-    headStyles: { fillColor: NAVY, textColor: 255, fontStyle: "bold", fontSize: 7.5 },
+    head: [["Result", "Finding", "Locations"]],
+    body: formatTableRows.length ? formatTableRows : [["—", "No formatting issues detected", "—"]],
+    styles: { fontSize: 8, cellPadding: 3.5, lineColor: [226, 232, 240], lineWidth: 0.3, fillColor: 255 },
+    headStyles: { fillColor: [248, 250, 252], textColor: SLATE, fontStyle: "bold", fontSize: 7.5 },
     columnStyles: {
-      0: { cellWidth: 44, fontStyle: "bold", textColor: [30, 41, 59] },
+      0: { cellWidth: 22, halign: "center", fontStyle: "bold" },
       1: { cellWidth: "auto", textColor: [71, 85, 105] },
-      2: { cellWidth: 22, halign: "center", fontStyle: "bold" },
+      2: { cellWidth: 42, textColor: [100, 116, 139], fontSize: 7 },
     },
     didDrawCell(data) {
-      if (data.column.index !== 2 || data.section !== "body") return;
+      if (data.column.index !== 0 || data.section !== "body") return;
       const val = String(data.cell.raw);
+      if (val === "—") return;
       const { x, y, width, height } = data.cell;
       const [r, g, b] =
         val === "PASS"   ? [220, 252, 231] :
         val === "FAIL"   ? [254, 226, 226] :
                            [254, 243, 199];
       const [tr, tg, tb] =
-        val === "PASS"   ? [22,  163, 74]  :
-        val === "FAIL"   ? [220, 38,  38]  :
-                           [217, 119, 6];
+        val === "PASS"   ? PASS_C :
+        val === "FAIL"   ? FAIL_C :
+                           REVIEW_C;
       doc.setFillColor(r, g, b);
       doc.roundedRect(x + 1.5, y + (height - 5.5) / 2, width - 3, 5.5, 1.5, 1.5, "F");
       doc.setFontSize(6.5).setFont(undefined, "bold").setTextColor(tr, tg, tb);
       doc.text(val, x + width / 2, y + height / 2 + 0.8, { align: "center" });
     },
-    alternateRowStyles: { fillColor: [249, 250, 251] },
     didAddPage: () => { Y = MT; },
   });
 

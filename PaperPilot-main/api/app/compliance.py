@@ -1029,10 +1029,12 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
             allowed in _font_key(shown_font) or _font_key(shown_font) in allowed for allowed in allowed_fonts
         ):
             family_ok = False
-        expected_size = _expected_size_for_role(role, font_rule) if role_sizes else None
+        # Only enforce a size when this role has a rule. Heading sizes must not
+        # bleed into body (or other unset roles) via sizes_points.
+        expected_size = _expected_size_for_role(role, font_rule)
         if expected_size is not None:
             size_ok = _size_matches(shown_size, expected_size)
-        elif listed_sizes and shown_size is not None:
+        elif listed_sizes and shown_size is not None and not role_sizes:
             size_ok = any(abs(shown_size - allowed) <= SIZE_TOLERANCE for allowed in listed_sizes)
         else:
             size_ok = True
@@ -1555,8 +1557,10 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
 
 def _check_alignment(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     expected = str(rules.get("alignment") or "").strip().lower()
-    allowed = {expected} if expected in {"left", "right", "center", "justify"} else {"left", "justify"}
-    # Body alignment always applies: without a rule, left or justified text is expected.
+    if expected not in {"left", "right", "center", "justify"}:
+        # No alignment rule → do not flag any body alignment.
+        return
+    allowed = {expected}
     stats.applicable = True
     for paragraph in _prose_paragraphs(units):
         # Justified text still ends its last line short, so that line cannot show the alignment.
