@@ -17,6 +17,7 @@ mobile/dist/
 # Firebase
 .firebase/
 firebase-debug.log
+*firebase-adminsdk*
 
 # IDE
 .idea/
