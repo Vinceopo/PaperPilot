@@ -3,6 +3,41 @@
  * The labels must match machinelearning/app/mechanics_options.py; the checker parses them.
  */
 
+/** Common Word / WPS Office typefaces for the Format Fields “Type” dropdown. */
+export const FONT_FAMILIES = [
+  "Times New Roman",
+  "Arial",
+  "Calibri",
+  "Cambria",
+  "Georgia",
+  "Garamond",
+  "Arial Black",
+  "Arial Narrow",
+  "Book Antiqua",
+  "Bookman Old Style",
+  "Candara",
+  "Century",
+  "Century Gothic",
+  "Century Schoolbook",
+  "Comic Sans MS",
+  "Consolas",
+  "Constantia",
+  "Corbel",
+  "Courier New",
+  "Franklin Gothic Medium",
+  "Helvetica",
+  "Impact",
+  "Lucida Console",
+  "Lucida Sans Unicode",
+  "Microsoft Sans Serif",
+  "Palatino Linotype",
+  "Rockwell",
+  "Segoe UI",
+  "Tahoma",
+  "Trebuchet MS",
+  "Verdana",
+];
+
 export const PAGE_POSITIONS = ["Top left", "Top center", "Top right", "Bottom left", "Bottom center", "Bottom right"];
 
 export const TITLE_PAGE_OPTIONS = ["Hidden but counted", "Hidden and not counted", "Number shown"];
@@ -139,7 +174,7 @@ export function emptyHeading() {
 
 /**
  * Rules `font` → one form entry per heading level the format defines
- * ("yes"/"no", "upper"/"title", "center"/"left", "" = not checked).
+ * ("yes"/"no", "upper"/"title", "center"/"left", "" = NA / not in mechanics).
  */
 export function headingsFromRules(font = {}) {
   const styles = font.heading_styles && typeof font.heading_styles === "object" ? font.heading_styles : {};

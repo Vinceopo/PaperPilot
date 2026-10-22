@@ -118,7 +118,7 @@ export default function ManuscriptPanel({
     setManuscriptId("");
     setTitle("");
     setTitleError("");
-    setTitleMode(manuscripts.length ? "existing" : "new");
+    setTitleMode("new");
     setExistingId(manuscripts[0]?.id || "");
     setTitleOpen(true);
   }

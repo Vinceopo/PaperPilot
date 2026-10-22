@@ -9,6 +9,7 @@ import { ChevronDown, Plus, Trash2, X } from "lucide-react";
 import {
   BODY_NUMBERING_OPTIONS,
   CHAPTER_FIRST_PAGE_OPTIONS,
+  FONT_FAMILIES,
   HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
   MAX_HEADING_LEVELS,
@@ -26,9 +27,7 @@ const LINE_SPACING_OPTIONS = [
   { value: "1.5", label: "1.5 (One and a half)" },
   { value: "2", label: "2 (Double)" },
 ];
-const FONT_FAMILY_OPTIONS = ["Times New Roman", "Arial", "Calibri", "Cambria", "Georgia", "Garamond"].map(
-  (value) => ({ value })
-);
+const FONT_FAMILY_OPTIONS = FONT_FAMILIES.map((value) => ({ value }));
 const FONT_COLOR_OPTIONS = ["Black/Automatic", "Black", "Automatic"].map((value) => ({ value }));
 
 const inputClass =
@@ -153,8 +152,8 @@ function ComboInput({ value, onChange, options, disabled }) {
   );
 }
 
-/** Select with a "Not checked" choice; a saved value outside the list stays selectable. */
-function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "Not checked" }) {
+/** Select with an "NA" (no rule) choice; a saved value outside the list stays selectable. */
+function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "NA" }) {
   const items = options.map((option) => (typeof option === "string" ? { value: option } : option));
   const current = String(value ?? "");
   if (current && !items.some((item) => item.value === current)) {
@@ -249,7 +248,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               onChange={set("paperOrientation")}
               className={inputClass}
             >
-              <option value="">Not specified</option>
+              <option value="">NA</option>
               <option value="Portrait">Portrait</option>
               <option value="Landscape">Landscape</option>
             </select>
@@ -286,14 +285,14 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               className={inputClass}
             />
           </Field>
-          <Field label="Alignment" hint="Body text alignment — leave blank to skip this check">
+          <Field label="Alignment" hint="Body text alignment — NA skips this check">
             <select
               disabled={disabled}
               value={form.alignment || ""}
               onChange={set("alignment")}
               className={inputClass}
             >
-              <option value="">Not specified</option>
+              <option value="">NA</option>
               <option value="Justified">Justified</option>
               <option value="Left">Left</option>
               <option value="Center">Center</option>
@@ -552,14 +551,14 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
       </Section>
 
       <Section title="Citation format">
-        <Field label="Citation style" hint="Leave blank to skip citation checks">
+        <Field label="Citation style" hint="NA skips citation checks">
           <select
             disabled={disabled}
             value={supportedCitationStyle(form.citationFormat)}
             onChange={set("citationFormat")}
             className={inputClass}
           >
-            <option value="">Not specified</option>
+            <option value="">NA</option>
             <option value="APA">APA</option>
             <option value="MLA">MLA</option>
             <option value="IEEE">IEEE</option>

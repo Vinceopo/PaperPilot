@@ -4,11 +4,25 @@ export function hasValue(value) {
   return value != null && Number.isFinite(Number(value));
 }
 
-/** One-decimal percentage, or an em dash when the backend had no denominator. */
+/** Percentage for display, or an em dash when the backend had no denominator. */
 export function formatPct(value, digits = 1) {
   if (!hasValue(value)) return "—";
   const factor = 10 ** digits;
   return `${Math.round(Number(value) * factor) / factor}%`;
+}
+
+/**
+ * Compliance % from the same counts shown in the UI:
+ * (total − nonCompliant) / total × 100.
+ * Example: 66 issues on 218 units → (218 − 66) / 218 → 69.72.
+ */
+export function compliancePercentFromUnits(total, nonCompliant) {
+  if (!hasValue(total) || Number(total) <= 0) return null;
+  const units = Math.max(0, Number(total));
+  const failed = hasValue(nonCompliant)
+    ? Math.min(units, Math.max(0, Number(nonCompliant)))
+    : 0;
+  return ((units - failed) / units) * 100;
 }
 
 export function formatScore(value, digits = 1) {
@@ -46,6 +60,106 @@ export function roundSharesToTotal(values, digits = 1) {
 
 export function formatCount(value) {
   return hasValue(value) ? Number(value).toLocaleString("en-US") : "—";
+}
+
+/**
+ * Display unit totals so Compliant + Non-Compliant always equals Total when possible.
+ * Prefers `unitsChecked` as Total and derives Non-Compliant from Total − Compliant.
+ */
+export function resolveUnitCounts({ unitsChecked, unitsPassed, unitsFailed } = {}) {
+  const total = hasValue(unitsChecked) ? Math.max(0, Math.round(Number(unitsChecked))) : null;
+  const passed = hasValue(unitsPassed) ? Math.max(0, Math.round(Number(unitsPassed))) : null;
+  const failed = hasValue(unitsFailed) ? Math.max(0, Math.round(Number(unitsFailed))) : null;
+
+  if (total != null && passed != null) {
+    const compliant = Math.min(passed, total);
+    return { total, compliant, nonCompliant: total - compliant };
+  }
+  if (total != null && failed != null) {
+    const nonCompliant = Math.min(failed, total);
+    return { total, compliant: total - nonCompliant, nonCompliant };
+  }
+  if (passed != null && failed != null) {
+    return { total: passed + failed, compliant: passed, nonCompliant: failed };
+  }
+  if (total != null) return { total, compliant: null, nonCompliant: null };
+  return { total: null, compliant: null, nonCompliant: null };
+}
+
+function rowUnitFields(row = {}) {
+  return {
+    unitsChecked: row.unitsChecked ?? row.units_checked,
+    unitsPassed: row.unitsPassed ?? row.units_passed,
+    unitsFailed: row.unitsFailed ?? row.units_failed,
+  };
+}
+
+function issuesFromScore(total, score) {
+  if (!hasValue(total) || total <= 0 || !hasValue(score)) return 0;
+  const safe = Math.max(0, Math.min(100, Number(score)));
+  return Math.max(0, Math.min(total, Math.round((total * (100 - safe)) / 100)));
+}
+
+/**
+ * Per-category display counts from the backend unit fields.
+ * Ring % is (total − issues) / total × 100 from those same counts
+ * (e.g. 66 of 218 → 30.28% non-compliant → 69.72% on the ring).
+ */
+export function resolveCategoryUnitDisplays(rows = []) {
+  const list = Array.isArray(rows) ? rows : [];
+
+  return list.map((row) => {
+    let { total, compliant, nonCompliant } = resolveUnitCounts(rowUnitFields(row));
+
+    // Recover units when only score + issue count were stored (legacy scans).
+    if (total == null && hasValue(row.score)) {
+      const issues = hasValue(row.issueCount) ? Math.max(0, Math.round(Number(row.issueCount))) : 0;
+      const score = Math.max(0, Math.min(100, Number(row.score)));
+      if (issues > 0 && score < 100) {
+        const failRate = (100 - score) / 100;
+        total = Math.max(issues, Math.round(issues / failRate));
+        nonCompliant = Math.min(total, issues);
+        compliant = total - nonCompliant;
+      } else if (issues === 0 && score >= 100) {
+        total = 1;
+        nonCompliant = 0;
+        compliant = 1;
+      }
+    }
+
+    if (total != null && nonCompliant == null) {
+      nonCompliant = issuesFromScore(total, row.score);
+      compliant = total - nonCompliant;
+    }
+    if (total != null && nonCompliant != null) {
+      nonCompliant = Math.min(total, Math.max(0, nonCompliant));
+      compliant = total - nonCompliant;
+    }
+
+    const displayScore = compliancePercentFromUnits(total, nonCompliant);
+    return {
+      ...row,
+      displayTotal: total,
+      displayCompliant: compliant,
+      displayNonCompliant: nonCompliant,
+      displayScore: displayScore != null ? displayScore : hasValue(row.score) ? Number(row.score) : null,
+    };
+  });
+}
+
+/** Sum of per-category non-compliant units (same figures shown on each card). */
+export function sumCategoryNonCompliant(rows = []) {
+  return (Array.isArray(rows) ? rows : []).reduce((acc, row) => {
+    if (!hasValue(row?.displayNonCompliant)) return acc;
+    return acc + Math.max(0, Math.round(Number(row.displayNonCompliant)));
+  }, 0);
+}
+
+export function formatCategoryIssuesDetail(nonCompliant, total) {
+  if (!hasValue(total)) return null;
+  const issues = hasValue(nonCompliant) ? Math.max(0, Math.round(Number(nonCompliant))) : 0;
+  const units = Math.max(0, Math.round(Number(total)));
+  return `${formatCount(issues)} ${plural(issues, "issue")} found on ${formatCount(units)} total ${plural(units, "unit")} checked`;
 }
 
 export function plural(count, word, pluralWord = `${word}s`) {

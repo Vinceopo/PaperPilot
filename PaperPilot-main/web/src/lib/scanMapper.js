@@ -109,34 +109,64 @@ function numberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function sectionUnitField(section, key) {
+  return numberOrNull(section?.[key] ?? section?.[key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())]);
+}
+
 function categoryRows(scan) {
-  const fromScoring = Array.isArray(scan?.scoring?.categories) ? scan.scoring.categories : null;
-  if (fromScoring) {
-    return fromScoring.map((cat) => ({
-      metric: cat.category,
-      score: numberOrNull(cat.score?.value),
-      status: cat.status || null,
-      unitsChecked: numberOrNull(cat.units_checked) ?? 0,
-      unitsPassed: numberOrNull(cat.units_passed) ?? 0,
-      unitsFailed: numberOrNull(cat.units_failed) ?? 0,
-      issueCount: numberOrNull(cat.issue_occurrences) ?? 0,
-      failedShare: numberOrNull(cat.failed_share?.value),
-      measured: (numberOrNull(cat.units_checked) ?? 0) > 0,
-    }));
-  }
-  // Scans saved before the scoring payload existed: show the stored rows as they are.
   const sections = Array.isArray(scan?.sections) ? scan.sections : [];
+  const sectionByName = new Map(
+    sections
+      .filter((section) => section && (section.section || section.section_name))
+      .map((section) => [String(section.section || section.section_name), section]),
+  );
+
+  const fromScoring = Array.isArray(scan?.scoring?.categories) ? scan.scoring.categories : null;
+  if (fromScoring?.length) {
+    return fromScoring.map((cat) => {
+      const name = cat.category;
+      const section = sectionByName.get(String(name)) || {};
+      const unitsChecked =
+        numberOrNull(cat.units_checked ?? cat.unitsChecked) ??
+        sectionUnitField(section, "units_checked");
+      const unitsPassed =
+        numberOrNull(cat.units_passed ?? cat.unitsPassed) ??
+        sectionUnitField(section, "units_passed");
+      const unitsFailed =
+        numberOrNull(cat.units_failed ?? cat.unitsFailed) ??
+        sectionUnitField(section, "units_failed");
+      const score =
+        numberOrNull(cat.score?.value ?? cat.score) ??
+        numberOrNull(section.formatting_score);
+      return {
+        metric: name,
+        score,
+        status: cat.status || section.status || null,
+        unitsChecked,
+        unitsPassed,
+        unitsFailed,
+        issueCount:
+          numberOrNull(cat.issue_occurrences ?? cat.issueCount) ??
+          numberOrNull(section.issue_count) ??
+          0,
+        failedShare: numberOrNull(cat.failed_share?.value ?? cat.failedShare),
+        measured: (unitsChecked ?? 0) > 0 || score != null,
+      };
+    });
+  }
+
+  // Scans saved before the scoring payload existed: show the stored rows as they are.
   return sections
     .filter((section) => section && (section.section || section.section_name))
     .map((section) => {
-      const unitsChecked = numberOrNull(section.units_checked);
+      const unitsChecked = sectionUnitField(section, "units_checked");
       return {
         metric: section.section || section.section_name,
         score: numberOrNull(section.formatting_score),
         status: section.status || null,
         unitsChecked,
-        unitsPassed: numberOrNull(section.units_passed),
-        unitsFailed: numberOrNull(section.units_failed),
+        unitsPassed: sectionUnitField(section, "units_passed"),
+        unitsFailed: sectionUnitField(section, "units_failed"),
         issueCount: numberOrNull(section.issue_count) ?? 0,
         failedShare: null,
         measured: unitsChecked == null ? section.formatting_score != null : unitsChecked > 0,

@@ -1,5 +1,6 @@
 import { auth } from "./firebase.js";
 import { uploadToCloudinary } from "./lib/cloudinaryUpload.js";
+import { isFatalAuthError } from "./services/auth.js";
 
 /**
  * Production (Vercel): always same-origin `/api` — frontend and serverless share one host.
@@ -131,16 +132,18 @@ async function authorizedFetch(path, options = {}) {
   }
   try {
     const res = await fetch(apiUrl(path), { ...options, headers });
-    // Only clear the session when Firebase says the token itself is invalid â€”
-    // a backend 401 (misconfig, expired server session, etc.) must not force logout.
+    // Backend 401 alone must NOT force logout (misconfigured Admin SDK, etc.).
+    // Only sign out when Firebase itself says the token is revoked/invalid.
     if (res.status === 401 && auth?.currentUser) {
       try {
         await auth.currentUser.getIdToken(true);
-      } catch {
-        try {
-          await auth.signOut();
-        } catch {
-          // Session already gone.
+      } catch (err) {
+        if (isFatalAuthError(err)) {
+          try {
+            await auth.signOut();
+          } catch {
+            // Session already gone.
+          }
         }
       }
     }

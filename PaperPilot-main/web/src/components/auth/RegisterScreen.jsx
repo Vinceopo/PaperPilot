@@ -162,6 +162,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
   }
 
   async function onGoogle() {
+    if (busy) return;
     setFormError("");
     if (!agreedToTerms) {
       setTermsError(TERMS_REQUIRED);
@@ -175,14 +176,18 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
     try {
       await signInWithGoogle(auth, true);
     } catch (err) {
-      setFormError(authMessage(err));
+      if (err?.code === "auth/cancelled-popup-request") {
+        setFormError("");
+      } else {
+        setFormError(authMessage(err));
+      }
     } finally {
       setBusy(false);
     }
   }
 
   const loginFooter = (
-    <p className="mt-6 text-center text-sm text-slate-500">
+    <p className="mt-3 text-center text-[13px] leading-4 text-slate-500">
       Already have an account?{" "}
       <button
         type="button"
@@ -203,6 +208,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
         title="Verify your email"
         subtitle="Your account becomes active once the code is confirmed."
         footer={loginFooter}
+        compact
       >
         <OtpStep
           email={values.email.trim()}
@@ -228,10 +234,14 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
       title="Create your account"
       subtitle="Join PaperPilot to save scores and reports."
       footer={loginFooter}
+      compact
     >
-      <form className="mt-7 space-y-4" onSubmit={onSubmit} noValidate>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <FloatingLabelInput {...inputProps("firstName", "First name", { icon: "user", autoComplete: "given-name" })} />
+      <form className="mt-3 flex flex-col gap-2" onSubmit={onSubmit} noValidate>
+        {/* 1. First Name | Middle Name */}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <FloatingLabelInput
+            {...inputProps("firstName", "First name", { icon: "user", autoComplete: "given-name" })}
+          />
           <FloatingLabelInput
             {...inputProps("middleName", "Middle name (optional)", {
               icon: "user",
@@ -239,7 +249,16 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             })}
           />
         </div>
-        <FloatingLabelInput {...inputProps("lastName", "Last name", { icon: "user", autoComplete: "family-name" })} />
+
+        {/* 2. Last Name */}
+        <FloatingLabelInput
+          {...inputProps("lastName", "Last name", { icon: "user", autoComplete: "family-name" })}
+        />
+
+        {/* 3. Email, then Username (above password fields) */}
+        <FloatingLabelInput
+          {...inputProps("email", "Email", { type: "email", icon: "mail", autoComplete: "email" })}
+        />
         <FloatingLabelInput
           {...inputProps("username", "Username", {
             icon: "at",
@@ -247,10 +266,11 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             autoCapitalize: "none",
             spellCheck: false,
             maxLength: 20,
-            hint: "3–20 characters: letters, numbers, underscore, or period.",
+            hint: "3–20 chars: letters, numbers, _ or .",
           })}
         />
-        <FloatingLabelInput {...inputProps("email", "Email", { type: "email", icon: "mail", autoComplete: "email" })} />
+
+        {/* 4. Password */}
         <div>
           <FloatingLabelInput
             {...inputProps("password", "Password", {
@@ -261,11 +281,11 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             })}
           />
           {values.password && !errors.password ? (
-            <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+            <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
               {checks.map((check) => (
                 <li
                   key={check.label}
-                  className={`text-[12.5px] ${check.met ? "text-accent" : "text-slate-400"}`}
+                  className={`text-[11px] leading-3.5 ${check.met ? "text-accent" : "text-slate-400"}`}
                 >
                   {check.met ? "✓" : "○"} {check.label}
                 </li>
@@ -273,6 +293,8 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             </ul>
           ) : null}
         </div>
+
+        {/* 5. Confirm Password */}
         <FloatingLabelInput
           {...inputProps("confirmPassword", "Confirm password", {
             type: "password",
@@ -283,7 +305,10 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
         />
 
         <div>
-          <label htmlFor="register-terms" className="flex cursor-pointer items-start gap-2.5 text-sm text-slate-600">
+          <label
+            htmlFor="register-terms"
+            className="flex min-h-11 cursor-pointer items-start gap-2 text-[13px] leading-4 text-slate-600"
+          >
             <input
               id="register-terms"
               type="checkbox"
@@ -292,7 +317,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
               disabled={busy}
               aria-invalid={Boolean(termsError)}
               aria-describedby={termsError ? "register-terms-error" : undefined}
-              className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 accent-[#1bc9a0]"
+              className="auth-check mt-0.5"
             />
             <span>
               I agree to the{" "}
@@ -309,14 +334,14 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             </span>
           </label>
           {termsError ? (
-            <p id="register-terms-error" className="mt-1.5 text-[12.5px] text-rose-500" role="alert">
+            <p id="register-terms-error" className="mt-0.5 text-[11px] leading-[14px] text-rose-500" role="alert">
               {termsError}
             </p>
           ) : null}
         </div>
 
         {formError && (
-          <p className="text-sm text-rose-500" role="alert">
+          <p className="text-[13px] leading-4 text-rose-500" role="alert">
             {formError}
           </p>
         )}
@@ -324,13 +349,13 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded-xl bg-accent py-3 text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
+          className="mt-0.5 flex h-11 w-full items-center justify-center rounded-[9px] bg-accent text-sm font-semibold text-navy shadow-[0_8px_20px_rgba(27,201,160,0.25)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
         >
           {busy ? "Sending code…" : "Create account"}
         </button>
       </form>
 
-      <GoogleButton label="Sign up with Google" onClick={onGoogle} disabled={busy} />
+      <GoogleButton label="Sign up with Google" onClick={onGoogle} disabled={busy} compact />
       <TermsModal
         open={termsOpen}
         onClose={() => setTermsOpen(false)}

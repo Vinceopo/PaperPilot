@@ -6,6 +6,7 @@ import { markPasswordChanged } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
 import AuthShell from "./AuthShell.jsx";
 import OtpStep from "./OtpStep.jsx";
+import { GOOGLE_PASSWORD_HINT } from "./messages.js";
 import { passwordChecks, confirmPasswordError, emailError, passwordError } from "./validation.js";
 
 /**
@@ -36,8 +37,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
   const cooldownLeft = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
 
   const backToLogin = (
-    <p className="mt-6 text-center text-sm text-slate-500">
-      Remembered it?{" "}
+    <p className="mt-5 text-center text-sm leading-5">
       <button
         type="button"
         className="font-semibold text-accent hover:text-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-sm"
@@ -73,7 +73,8 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
     } catch (err2) {
       const wait = Number(err2.retryAfter) || 0;
       if (wait > 0) setCooldownUntil(Date.now() + wait * 1000);
-      setFormError(err2.message);
+      const msg = err2.message || "";
+      setFormError(msg.includes("Google") ? GOOGLE_PASSWORD_HINT : msg);
     } finally {
       setBusy(false);
     }
@@ -160,7 +161,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
         subtitle={`Choose a new password for ${email.trim()}.`}
         footer={backToLogin}
       >
-        <form className="mt-7 space-y-4" onSubmit={onSetPassword} noValidate>
+        <form className="mt-5 flex flex-col gap-3.5" onSubmit={onSetPassword} noValidate>
           <div>
             <FloatingLabelInput
               id="reset-password"
@@ -223,7 +224,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
           <button
             type="submit"
             disabled={busy}
-            className="w-full rounded-xl bg-accent py-3 text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
+            className="mt-0.5 flex h-[52px] w-full items-center justify-center rounded-[10px] bg-accent text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
           >
             {busy ? "Updating…" : "Update password"}
           </button>
@@ -241,7 +242,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
       subtitle="We will email you a 6-digit code to confirm your address."
       footer={backToLogin}
     >
-      <form className="mt-7 space-y-4" onSubmit={onRequestCode} noValidate>
+      <form className="mt-5 flex flex-col gap-3.5" onSubmit={onRequestCode} noValidate>
         <FloatingLabelInput
           id="forgot-email"
           label="Email"
@@ -259,7 +260,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
         />
 
         {formError && (
-          <p className="text-sm text-rose-500" role="alert">
+          <p className="text-sm leading-5 text-rose-500" role="alert">
             {formError}
           </p>
         )}
@@ -267,7 +268,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
         <button
           type="submit"
           disabled={busy || cooldownLeft > 0}
-          className="w-full rounded-xl bg-accent py-3 text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
+          className="mt-0.5 flex h-[52px] w-full items-center justify-center rounded-[10px] bg-accent text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
         >
           {busy
             ? "Sending code…"

@@ -54,6 +54,44 @@ body {
   .fl-toggle {
     @apply absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50;
   }
+
+  /* Dense auth form (registration) — same look, less vertical height */
+  .auth-form-compact .fl-input {
+    @apply h-11 rounded-[9px] pl-10 text-sm;
+  }
+
+  .auth-form-compact .fl-field:has(.fl-toggle) .fl-input {
+    @apply pr-10;
+  }
+
+  .auth-form-compact .fl-icon {
+    @apply left-3;
+  }
+
+  .auth-form-compact .fl-icon svg {
+    @apply h-4 w-4;
+  }
+
+  .auth-form-compact .fl-label {
+    @apply left-10 text-sm;
+  }
+
+  .auth-form-compact .fl-input:focus ~ .fl-label,
+  .auth-form-compact .fl-input:not(:placeholder-shown) ~ .fl-label {
+    @apply text-[11px];
+  }
+
+  .auth-form-compact .fl-toggle {
+    @apply right-2.5;
+  }
+
+  .auth-form-compact .fl-toggle svg {
+    @apply h-4 w-4;
+  }
+
+  .auth-form-compact .fl-meta {
+    @apply mt-0.5 text-[11px] leading-[14px];
+  }
 }
 
 @keyframes auth-slide-left {
@@ -95,8 +133,32 @@ body {
   animation: auth-slide-right 200ms ease both;
 }
 
-input[type="checkbox"] {
-  accent-color: #1bc9a0;
+/* Auth checkboxes: white fill when checked (no green background). */
+input[type="checkbox"].auth-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 0.25rem;
+  background-color: #fff;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 0.7rem 0.7rem;
+  cursor: pointer;
+  transition: border-color 150ms ease;
+}
+
+input[type="checkbox"].auth-check:checked {
+  border-color: #1bc9a0;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5' stroke='%231bc9a0' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+input[type="checkbox"].auth-check:focus-visible {
+  outline: 2px solid rgba(27, 201, 160, 0.4);
+  outline-offset: 2px;
 }
 
 /* OTP verification animation (entry pulse → verifying morph → success check / error shake) */

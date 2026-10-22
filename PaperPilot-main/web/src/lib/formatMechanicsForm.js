@@ -203,7 +203,7 @@ export function rulesToForm(rules = {}, name = "") {
   const paper = rules.paper || {};
   const pagination = rules.pagination || {};
 
-  // Do not invent body size from heading sizes_points — unset means "not checked".
+  // Do not invent body size from heading sizes_points — unset means NA.
   const bodySize = font.body_size ?? font.heading3_content_size;
 
   const spacing =

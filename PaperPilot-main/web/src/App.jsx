@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, firebaseReady } from "./firebase.js";
+import { completeGoogleRedirect } from "./services/auth.js";
 import {
   deleteMechanics as deleteMechanicsRequest,
   extractMechanics,
@@ -30,12 +31,12 @@ import ScanResultsScreen from "./components/cockpit/ScanResultsScreen.jsx";
 import ScanSummaryModal from "./components/cockpit/ScanSummaryModal.jsx";
 import AnalysisProgress from "./components/cockpit/AnalysisProgress.jsx";
 import PaperCarryAway, { PAPER_CARRY_HOLD_MS } from "./components/cockpit/PaperCarryAway.jsx";
-import ReferenceTracingView from "./components/cockpit/ReferenceTracingView.jsx";
 import AccountSettingsScreen from "./components/cockpit/AccountSettingsScreen.jsx";
 import MyManuscriptsScreen from "./components/cockpit/MyManuscriptsScreen.jsx";
 import SubscriptionScreen from "./components/cockpit/SubscriptionScreen.jsx";
 import NotificationsScreen from "./components/cockpit/NotificationsScreen.jsx";
 import UpgradePrompt from "./components/cockpit/UpgradePrompt.jsx";
+import BackToDashboardButton from "./components/BackToDashboardButton.jsx";
 import ConfirmDialog from "./components/ConfirmDialog.jsx";
 import UploadJourneyModal, {
   ShowStepsRow,
@@ -140,7 +141,7 @@ export default function App() {
   const [manuscriptBusy, setManuscriptBusy] = useState(false);
   const [upgradeMessage, setUpgradeMessage] = useState("");
   const [registrationSuccess, setRegistrationSuccess] = useState(() => pendingRegistration());
-  const [activePage, setActivePage] = useState("upload"); // "upload" | "manuscripts" | "account" | "subscription" | "notifications"
+  const [activePage, setActivePage] = useState("manuscripts"); // "manuscripts" (dashboard) | "upload" | "account" | "subscription" | "notifications"
   const [sidebarOpen, setSidebarOpen] = useState(
     () => typeof window === "undefined" || window.innerWidth >= 768
   );
@@ -218,6 +219,7 @@ export default function App() {
     setCurrentVersion(null);
     resetUploadWizard(1);
     scanFlow.backToDashboard();
+    setActivePage("manuscripts");
   }
 
   const dismissJourney = useCallback(() => {
@@ -515,7 +517,7 @@ export default function App() {
     setBillingReturn(null);
     setUpgradeMessage("");
     setError("");
-    setActivePage("upload");
+    setActivePage("manuscripts");
     setManuscriptReady(false);
     setFileDetailsNotice("");
     resetUploadWizard(1);
@@ -717,28 +719,14 @@ export default function App() {
       setAuthReady(true);
     });
 
-    // If this account's tokens were revoked (password change on any device),
-    // force a refresh so Firebase signs the user out immediately.
-    async function dropRevokedSession() {
-      const current = auth.currentUser;
-      if (!current) return;
-      try {
-        await current.getIdToken(true);
-      } catch {
-        await signOut(auth).catch(() => {});
-        setUser(null);
-      }
-    }
-    const onVisible = () => {
-      if (document.visibilityState === "visible") dropRevokedSession();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", dropRevokedSession);
+    // Finish Google redirect sign-in (popup-blocked fallback).
+    void completeGoogleRedirect(auth);
 
+    // Do NOT force getIdToken(true) on focus/visibility. File pickers, uploads,
+    // and popups steal focus; a flaky refresh used to sign everyone out.
+    // Real revocation is handled in authorizedFetch (fatal Firebase codes only).
     return () => {
       unsub();
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", dropRevokedSession);
     };
   }, []);
 
@@ -1231,17 +1219,15 @@ export default function App() {
           ? "Notifications"
           : activePage === "manuscripts"
             ? "My Manuscripts"
-            : activePage === "upload" && scanFlow.step === "results"
+            : activePage === "upload" && (scanFlow.step === "results" || scanFlow.step === "tracing")
               ? "Scan Results"
-              : activePage === "upload" && scanFlow.step === "tracing"
-                ? "Reference Tracing"
-                : activePage === "upload" && scanFlow.step === "summary"
-                  ? "Scan Summary"
-                  : activePage === "upload" && scanFlow.step === "analyzing"
-                    ? "Analysing Document"
-                    : activePage === "upload" && scanFlow.step === "error"
-                      ? "Analysis Failed"
-                      : "Dashboard";
+              : activePage === "upload" && scanFlow.step === "summary"
+                ? "Scan Summary"
+                : activePage === "upload" && scanFlow.step === "analyzing"
+                  ? "Analysing Document"
+                  : activePage === "upload" && scanFlow.step === "error"
+                    ? "Analysis Failed"
+                    : "Dashboard";
   const breadcrumb =
     activePage === "account"
       ? "Dashboard / Settings"
@@ -1255,7 +1241,7 @@ export default function App() {
   const hidePageHeading =
     activePage === "subscription" ||
     (activePage === "upload" &&
-      ["idle", "fileSelected", "tracing", "analyzing", "summary"].includes(scanFlow.step));
+      ["idle", "fileSelected", "analyzing", "summary"].includes(scanFlow.step));
 
   function openUploadMechanics() {
     setActivePage("upload");
@@ -1287,9 +1273,9 @@ export default function App() {
         <div className="relative px-2">
           <button
             type="button"
-            onClick={openUploadMechanics}
+            onClick={() => setActivePage("manuscripts")}
             className="flex w-full justify-center rounded-xl px-1 pb-2 pt-1 transition hover:bg-white/5"
-            aria-label="PaperPilot, go to upload mechanics"
+            aria-label="PaperPilot, go to My Manuscripts"
           >
             <PaperPilotLogo tone="dark" />
           </button>
@@ -1309,24 +1295,24 @@ export default function App() {
         <nav className="mt-10">
           <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Dashboard</p>
           <button
-            onClick={openUploadMechanics}
-            className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm font-semibold transition ${
-              activePage === "upload"
-                ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
-                : "text-slate-400 hover:text-white"
-            }`}
-          >
-            <span className="text-[#22c9b4]">↑</span> Upload &amp; Analyze
-          </button>
-          <button
             onClick={() => setActivePage("manuscripts")}
-            className={`mt-1 flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition ${
+            className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm transition ${
               activePage === "manuscripts"
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
                 : "text-slate-400 hover:text-white"
             }`}
           >
             <span>▣</span> My Manuscripts
+          </button>
+          <button
+            onClick={openUploadMechanics}
+            className={`mt-1 flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold transition ${
+              activePage === "upload"
+                ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            <span className="text-[#22c9b4]">↑</span> Upload &amp; Analyze
           </button>
         </nav>
 
@@ -1373,17 +1359,9 @@ export default function App() {
             <div className="flex flex-wrap items-center gap-2.5">
               <div>
                 <h1 className="text-xl font-bold tracking-tight text-[#172033]">{pageTitle}</h1>
-                {activePage === "upload" && scanFlow.step === "results" && (
-                  <button
-                    type="button"
-                    onClick={handleBackToDashboard}
-                    className="group mt-2 inline-flex items-center gap-1.5 rounded-full border border-[#bfeee5] bg-[#f0fbf9] py-1.5 pl-2.5 pr-3.5 text-xs font-bold text-[#109b89] shadow-sm transition hover:border-[#16bfa8] hover:bg-[#dcf7f2] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8]/40"
-                  >
-                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
-                    </svg>
-                    Back to Dashboard
-                  </button>
+                {activePage === "upload" &&
+                  (scanFlow.step === "results" || scanFlow.step === "tracing") && (
+                  <BackToDashboardButton onClick={handleBackToDashboard} className="mt-2" />
                 )}
               </div>
               {activePage === "notifications" && notificationUnread > 0 && (
@@ -1498,11 +1476,19 @@ export default function App() {
               if (note) appendNotifications(note);
             }}
             onBack={() => setActivePage("account")}
-            onBackToDashboard={() => setActivePage("upload")}
+            onBackToDashboard={handleBackToDashboard}
           />
         )}
 
         {activePage === "manuscripts" && (
+          loading ? (
+            <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
+              <div className="flex flex-col items-center gap-3">
+                <PaperPlaneLoader className="h-32 w-56" />
+                Loading your compliance workspace…
+              </div>
+            </div>
+          ) : (
           <MyManuscriptsScreen
             items={scannedLibrary}
             onItemsChange={updateScannedLibrary}
@@ -1573,6 +1559,7 @@ export default function App() {
               );
             }}
           />
+          )
         )}
 
         {/* ══════════════════════════════════════════════════════════════════
@@ -1585,21 +1572,12 @@ export default function App() {
         <ScanSummaryModal
           open={activePage === "upload" && scanFlow.step === "summary"}
           result={scanFlow.result}
-          onViewDocument={scanFlow.openReferenceTracing}
+          onViewDocument={scanFlow.openFullResults}
           onViewFullResult={scanFlow.openFullResults}
         />
 
-        {scanFlow.step === "tracing" && scanFlow.result && (
-          <ReferenceTracingView
-            result={scanFlow.result}
-            file={resultFile}
-            documentLoading={resultDocumentLoading}
-            onBack={scanFlow.backToSummary}
-            onViewFullResult={scanFlow.openFullResults}
-          />
-        )}
-
-        {scanFlow.step === "results" && (
+        {/* Legacy "tracing" step → full results (issue tracing & XAI are embedded there). */}
+        {(scanFlow.step === "results" || scanFlow.step === "tracing") && (
           <ScanResultsScreen
             result={scanFlow.result}
             versionNumber={scanFlow.versionNumber}
@@ -1608,20 +1586,7 @@ export default function App() {
             downloadBusy={scanFlow.downloadBusy}
             downloadError={scanFlow.downloadError}
             onDownload={scanFlow.downloadReport}
-            onViewDocument={scanFlow.openReferenceTracing}
-            onBackToSummary={scanFlow.backToSummary}
-            onUploadNewVersion={() => {
-              setManuscriptReady(false);
-              setFileDetailsNotice("");
-              setCurrentVersion(null);
-              // Keep currentManuscript so Upload can target the same paper as a new version.
-              scanFlow.uploadNewVersion();
-              resetUploadWizard(selectedMechanicsId ? 2 : 1);
-            }}
-            onBackToDashboard={() => {
-              setActivePage("upload");
-              handleBackToDashboard();
-            }}
+            onBackToDashboard={handleBackToDashboard}
           />
         )}
 
@@ -1671,15 +1636,6 @@ export default function App() {
         {/* ── Upload flow (idle / fileSelected) ──────────────────────────── */}
         {(scanFlow.step === "idle" || scanFlow.step === "fileSelected") && (
           <>
-            {loading ? (
-              <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
-                <div className="flex flex-col items-center gap-3">
-                  <PaperPlaneLoader className="h-32 w-56" />
-                  Loading your compliance workspace…
-                </div>
-              </div>
-            ) : (
-              <>
                 {uploadWizardStep === 1 && (
                   <MechanicsPanel
                     items={mechanics}
@@ -1893,8 +1849,6 @@ export default function App() {
                     </button>
                   </div>
                 )}
-              </>
-            )}
           </>
         )}
         </div>{/* close upload wrapper */}

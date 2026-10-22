@@ -118,11 +118,11 @@ export default function FloatingLabelInput({
         )}
       </div>
       {error ? (
-        <p id={errorId} className="mt-1.5 text-[13px] text-rose-500" role="alert">
+        <p id={errorId} className="fl-meta mt-1.5 text-[13px] leading-4 text-rose-500" role="alert">
           {error}
         </p>
       ) : hint ? (
-        <p id={hintId} className="mt-1.5 text-[13px] text-slate-400">
+        <p id={hintId} className="fl-meta mt-1.5 text-[13px] leading-4 text-slate-400">
           {hint}
         </p>
       ) : null}

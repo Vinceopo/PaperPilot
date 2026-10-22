@@ -1,7 +1,11 @@
-export default function GoogleButton({ label, onClick, disabled }) {
+export default function GoogleButton({ label, onClick, disabled, compact = false }) {
   return (
     <>
-      <div className="my-6 flex items-center gap-3 text-xs uppercase tracking-wider text-slate-400">
+      <div
+        className={`flex items-center gap-3 text-xs uppercase tracking-wider text-slate-400 ${
+          compact ? "my-2.5" : "my-5"
+        }`}
+      >
         <span className="h-px flex-1 bg-slate-200" />
         or continue with
         <span className="h-px flex-1 bg-slate-200" />
@@ -10,7 +14,9 @@ export default function GoogleButton({ label, onClick, disabled }) {
         type="button"
         disabled={disabled}
         onClick={onClick}
-        className="flex w-full items-center justify-center gap-2.5 rounded-xl border border-slate-200 bg-white py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+        className={`flex w-full items-center justify-center gap-2.5 rounded-[10px] border border-slate-200 bg-white text-sm font-medium text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
+          compact ? "h-11" : "h-[52px]"
+        }`}
       >
         <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
           <path

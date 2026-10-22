@@ -1,21 +1,25 @@
 /**
  * ScanResultsScreen — report-style results matching the compliance design:
- * brand lockup, meta strip, overall score + Right/Incorrect bar, breakdown,
- * and Issues detected (XAI). Why/Fix labels appear in the downloaded PDF only.
+ * brand lockup, meta strip, overall score + Compliant/Non-Compliant bar, breakdown,
+ * and Issue tracing & XAI (preview + clickable findings in one section).
  */
 
-import { useEffect, useState } from "react";
-import DocumentPagePreview from "./DocumentPagePreview.jsx";
-import IssuesDetectedPanel from "./IssuesDetectedPanel.jsx";
+import BackToDashboardButton from "../BackToDashboardButton.jsx";
+import IssueTracingSection from "./IssueTracingSection.jsx";
 import { PaperPilotMark } from "../PaperPilotLogo.jsx";
 import {
   CATEGORY_STATUS_LABEL,
+  formatCategoryIssuesDetail,
   formatCount,
+  compliancePercentFromUnits,
   formatPct,
   formatScore,
   hasValue,
   plural,
+  resolveCategoryUnitDisplays,
+  resolveUnitCounts,
   roundSharesToTotal,
+  sumCategoryNonCompliant,
 } from "../../lib/scoreFormat.js";
 import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
@@ -53,16 +57,11 @@ function scoreBand(score) {
   };
 }
 
-function barColorClass(score) {
-  if (score >= 80) return "bg-[#157347]";
-  if (score >= 60) return "bg-[#B57200]";
-  return "bg-[#B02A37]";
-}
-
-function barTextClass(score) {
-  if (score >= 80) return "text-[#157347]";
-  if (score >= 60) return "text-[#B57200]";
-  return "text-[#B02A37]";
+function ringStroke(score) {
+  if (!hasValue(score)) return "#cbd5e1";
+  if (score >= 80) return "#157347";
+  if (score >= 50) return "#B57200";
+  return "#B02A37";
 }
 
 function formatReportDate(value) {
@@ -85,43 +84,53 @@ function formatReportDate(value) {
   return `${datePart} · ${timePart}`;
 }
 
-function ScoreBar({ metric, score, status }) {
-  const [width, setWidth] = useState(0);
-  const evaluated = hasValue(score);
-  const safe = evaluated ? Math.max(0, Math.min(100, Number(score))) : 0;
-
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => {
-      setTimeout(() => setWidth(safe), 60);
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [safe]);
+function CategoryScoreCard({ metric, score, status, displayTotal, displayNonCompliant, displayScore }) {
+  const fromUnits = compliancePercentFromUnits(displayTotal, displayNonCompliant);
+  const pct = fromUnits != null ? fromUnits : hasValue(displayScore) ? Number(displayScore) : hasValue(score) ? Number(score) : null;
+  const evaluated = hasValue(pct);
+  const safe = evaluated ? Math.max(0, Math.min(100, Number(pct))) : 0;
+  const name = String(metric || "Category").trim() || "Category";
+  const radius = 26;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (safe / 100) * circumference;
+  const stroke = ringStroke(evaluated ? safe : null);
+  const detail = formatCategoryIssuesDetail(displayNonCompliant, displayTotal)
+    || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
+    || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
   return (
-    <div className="grid grid-cols-[7.5rem_minmax(0,1fr)_3.25rem] items-center gap-3 sm:grid-cols-[9rem_minmax(0,1fr)_3.5rem]">
-      <span className="truncate text-sm font-semibold text-slate-700">
-        {metric}
-        {!evaluated ? (
-          <span className="ml-1 font-normal text-slate-400">
-            · {CATEGORY_STATUS_LABEL[status] || "N/A"}
+    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-[#f4f6f8] px-3.5 py-3">
+      <div className="relative h-16 w-16 shrink-0">
+        <svg width="64" height="64" viewBox="0 0 64 64" className="-rotate-90" aria-hidden>
+          <circle cx="32" cy="32" r={radius} fill="none" stroke="#e2e8f0" strokeWidth="5.5" />
+          <circle
+            cx="32"
+            cy="32"
+            r={radius}
+            fill="none"
+            stroke={stroke}
+            strokeWidth="5.5"
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={evaluated ? offset : circumference}
+            className="transition-[stroke-dashoffset] duration-700 ease-out"
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span
+            className={`text-[12px] font-extrabold tabular-nums leading-none ${
+              evaluated ? "" : "text-slate-400"
+            }`}
+            style={evaluated ? { color: stroke } : undefined}
+          >
+            {evaluated ? formatPct(safe, 2) : "—"}
           </span>
-        ) : null}
-      </span>
-      <div className="h-1.5 overflow-hidden rounded-full bg-[#eeeeee]">
-        <div
-          className={`h-full rounded-full transition-all duration-700 ease-out ${
-            evaluated ? barColorClass(safe) : "bg-slate-300"
-          }`}
-          style={{ width: evaluated ? `${width}%` : "0%" }}
-        />
+        </div>
       </div>
-      <span
-        className={`text-right text-sm font-bold tabular-nums ${
-          evaluated ? barTextClass(safe) : "text-slate-400"
-        }`}
-      >
-        {evaluated ? formatPct(safe) : "N/A"}
-      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-bold text-slate-800">{name}</p>
+        <p className="mt-0.5 text-[11px] leading-snug text-slate-500">{detail}</p>
+      </div>
     </div>
   );
 }
@@ -134,10 +143,7 @@ export default function ScanResultsScreen({
   downloadBusy = false,
   downloadError = "",
   onDownload,
-  onUploadNewVersion,
   onBackToDashboard,
-  onViewDocument,
-  onBackToSummary,
 }) {
   if (!result) return null;
 
@@ -152,32 +158,59 @@ export default function ScanResultsScreen({
     wrongPct,
     scoreBreakdown = [],
     formatChecks = [],
-    pageCount = 0,
-    pagination = null,
-    cloudinaryUrl = "",
-    documentName = "",
-    documentPreview = null,
     unitsChecked,
+    unitsPassed,
+    unitsFailed,
     issueTotals = null,
     scoringConsistency = null,
-    scoringVersion = null,
   } = result;
 
-  const [shownRight, shownIncorrect] = roundSharesToTotal([rightPct, wrongPct]);
-  const criticalTypes = formatChecks.filter((c) => c.result === "FAIL").length;
-  const warningTypes = formatChecks.filter((c) => c.result === "REVIEW").length;
-  const issueTypes = formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
+  const overallUnits = resolveUnitCounts({ unitsChecked, unitsPassed, unitsFailed });
+  const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
+  const categoryTotalSum = categoryDisplays.reduce(
+    (acc, row) => acc + (hasValue(row.displayTotal) ? Number(row.displayTotal) : 0),
+    0,
+  );
+  // Same non-compliant units the category cards show — must add up to this figure.
+  const categoryIssueSum = sumCategoryNonCompliant(categoryDisplays);
+  const totalUnits = overallUnits.total ?? (categoryTotalSum > 0 ? categoryTotalSum : null);
+  const rawNonCompliant =
+    categoryIssueSum > 0 ? categoryIssueSum : overallUnits.nonCompliant ?? null;
+  const nonCompliantUnits =
+    hasValue(totalUnits) && hasValue(rawNonCompliant)
+      ? Math.min(Number(totalUnits), Math.max(0, Number(rawNonCompliant)))
+      : rawNonCompliant;
+  const compliantUnits =
+    hasValue(totalUnits) && hasValue(nonCompliantUnits)
+      ? Math.max(0, Number(totalUnits) - Number(nonCompliantUnits))
+      : overallUnits.compliant;
+  // Compliant / Non-Compliant % from those unit totals (not a separate occurrence count).
+  const fromOverallUnits =
+    hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
+      ? [
+          compliancePercentFromUnits(totalUnits, nonCompliantUnits),
+          (Number(nonCompliantUnits) / Number(totalUnits)) * 100,
+        ]
+      : [rightPct, wrongPct];
+  const [shownCompliant, shownNonCompliant] = roundSharesToTotal(fromOverallUnits, 2);
   const band = scoreBand(overallScore);
   const evaluated = hasValue(overallScore);
-  const rightShare = hasValue(shownRight) ? Math.max(0, Math.min(100, Number(shownRight))) : 0;
-  const incorrectShare = hasValue(shownIncorrect)
-    ? Math.max(0, Math.min(100, Number(shownIncorrect)))
+  const compliantShare = hasValue(shownCompliant)
+    ? Math.max(0, Math.min(100, Number(shownCompliant)))
     : 0;
+  const nonCompliantShare = hasValue(shownNonCompliant)
+    ? Math.max(0, Math.min(100, Number(shownNonCompliant)))
+    : 0;
+  // Match the Non-Compliant Units card / category issue lines (failed units), not occurrence tallies.
+  const issuesFound = hasValue(nonCompliantUnits)
+    ? Number(nonCompliantUnits)
+    : hasValue(issueTotals?.occurrences)
+      ? Number(issueTotals.occurrences)
+      : formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
 
   const versionLabel = `v${versionNumber}.0`;
   const scannedLabel = formatReportDate(scannedAt);
   const generatedLabel = formatReportDate(new Date().toISOString());
-  const hasPreview = Boolean(file || documentLoading || cloudinaryUrl || documentPreview);
 
   return (
     <div className="space-y-5">
@@ -190,29 +223,6 @@ export default function ScanResultsScreen({
           * RESULTS
         </span>
       </div>
-
-      {(onBackToSummary || onViewDocument) && (
-        <div className="flex flex-wrap gap-3">
-          {onBackToSummary ? (
-            <button
-              type="button"
-              onClick={onBackToSummary}
-              className="text-[11px] font-semibold text-[#16bfa8] hover:underline"
-            >
-              ← Back to summary
-            </button>
-          ) : null}
-          {onViewDocument ? (
-            <button
-              type="button"
-              onClick={onViewDocument}
-              className="text-[11px] font-semibold text-slate-500 hover:text-[#172033] hover:underline"
-            >
-              Open reference tracing
-            </button>
-          ) : null}
-        </div>
-      )}
 
       <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm sm:px-6">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -252,11 +262,13 @@ export default function ScanResultsScreen({
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
               Overall compliance score
             </p>
-            <div className="mt-2 flex flex-wrap items-end gap-2">
+            <div className="mt-2 flex flex-wrap items-end gap-1">
               <span className={`text-5xl font-extrabold tabular-nums leading-none ${band.scoreColor}`}>
                 {evaluated ? formatScore(overallScore, 0) : "—"}
               </span>
-              <span className="pb-1 text-base font-semibold text-slate-400">/ 100</span>
+              {evaluated ? (
+                <span className={`pb-1 text-2xl font-extrabold tabular-nums ${band.scoreColor}`}>%</span>
+              ) : null}
             </div>
             <span
               className={`mt-3 inline-flex rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wider ${band.textColor} ${band.badgeBg} ${band.badgeBorder}`}
@@ -266,24 +278,33 @@ export default function ScanResultsScreen({
           </div>
 
           <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-semibold">
-              <span className="text-[#157347]">
-                Right {formatPct(shownRight)}
-              </span>
-              <span className="text-[#B02A37]">
-                Incorrect {formatPct(shownIncorrect)}
-              </span>
+            <div className="flex flex-wrap items-start justify-between gap-3 text-sm font-semibold">
+              <div className="text-[#157347]">
+                <p>Compliant {formatPct(shownCompliant, 2)}</p>
+                {hasValue(unitsPassed) ? (
+                  <p className="mt-0.5 text-[11px] font-medium text-[#157347]/90">
+                    {formatCount(unitsPassed)} {plural(unitsPassed, "unit")} compliant
+                    {hasValue(unitsChecked) ? ` of ${formatCount(unitsChecked)}` : ""}
+                  </p>
+                ) : null}
+              </div>
+              <div className="text-right text-[#B02A37]">
+                <p>Non-Compliant {formatPct(shownNonCompliant, 2)}</p>
+                <p className="mt-0.5 text-[11px] font-medium text-[#B02A37]/90">
+                  {formatCount(issuesFound)} {plural(issuesFound, "issue")}
+                </p>
+              </div>
             </div>
             <div className="flex h-1.5 overflow-hidden rounded-full bg-[#eeeeee]">
-              {hasValue(shownRight) || hasValue(shownIncorrect) ? (
+              {hasValue(shownCompliant) || hasValue(shownNonCompliant) ? (
                 <>
                   <div
                     className="h-full bg-[#157347] transition-all duration-700"
-                    style={{ width: `${rightShare}%` }}
+                    style={{ width: `${compliantShare}%` }}
                   />
                   <div
                     className="h-full bg-[#B02A37] transition-all duration-700"
-                    style={{ width: `${incorrectShare}%` }}
+                    style={{ width: `${nonCompliantShare}%` }}
                   />
                 </>
               ) : null}
@@ -291,37 +312,33 @@ export default function ScanResultsScreen({
 
             <div className="grid grid-cols-3 gap-2">
               <div className="rounded-xl border border-slate-200 px-3 py-3 text-center">
-                <p className="text-xl font-extrabold tabular-nums text-[#B02A37]">{criticalTypes}</p>
+                <p className="text-xl font-extrabold tabular-nums text-slate-800">
+                  {formatCount(totalUnits)}
+                </p>
                 <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                  Errors
+                  Total Units
                 </p>
               </div>
               <div className="rounded-xl border border-slate-200 px-3 py-3 text-center">
-                <p className="text-xl font-extrabold tabular-nums text-[#B57200]">{warningTypes}</p>
+                <p className="text-xl font-extrabold tabular-nums text-[#157347]">
+                  {formatCount(compliantUnits)}
+                </p>
                 <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                  Warnings
+                  Compliant Units
                 </p>
               </div>
               <div className="rounded-xl border border-slate-200 px-3 py-3 text-center">
-                <p className="text-xl font-extrabold tabular-nums text-slate-800">{issueTypes}</p>
+                <p className="text-xl font-extrabold tabular-nums text-[#B02A37]">
+                  {formatCount(nonCompliantUnits)}
+                </p>
                 <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                  Issue types
+                  Non-Compliant Units
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        {hasValue(unitsChecked) ? (
-          <p className="mt-4 text-center text-[11px] text-slate-500">
-            {Number(unitsChecked) === 0
-              ? "No formatting unit could be measured in this document."
-              : `Based on ${formatCount(unitsChecked)} measured formatting ${plural(unitsChecked, "unit")}`}
-            {issueTotals
-              ? ` · ${formatCount(issueTotals.occurrences)} ${plural(issueTotals.occurrences, "issue")} found`
-              : ""}
-          </p>
-        ) : null}
         {scoringConsistency && !scoringConsistency.ok ? (
           <p
             className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-800"
@@ -331,101 +348,30 @@ export default function ScanResultsScreen({
             them.
           </p>
         ) : null}
-        {!scoringVersion ? (
-          <p className="mt-3 text-center text-[11px] text-slate-500">
-            This scan was saved without the full scoring breakdown. Re-analyse the manuscript to
-            generate checked, passed, and failed unit counts.
-          </p>
-        ) : null}
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-bold text-slate-900">Score breakdown</h3>
-            <p className="mt-0.5 text-sm text-slate-500">
-              Share of measured text that matched the format in each category
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-sm bg-[#157347]" /> 80% and above
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-sm bg-[#B57200]" /> 60–79%
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-sm bg-[#B02A37]" /> Below 60%
-            </span>
-          </div>
-        </div>
-        <div className="mt-5 space-y-4">
-          {scoreBreakdown.map((item) => (
-            <ScoreBar
+        <h3 className="text-lg font-bold text-slate-900">Score Breakdown</h3>
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {categoryDisplays.map((item) => (
+            <CategoryScoreCard
               key={item.metric || item.section}
               metric={item.metric || item.section}
-              score={item.score}
+              score={item.displayScore ?? item.score}
               status={item.status}
+              displayTotal={item.displayTotal}
+              displayNonCompliant={item.displayNonCompliant}
+              displayScore={item.displayScore}
             />
           ))}
         </div>
       </div>
 
-      {hasPreview || onViewDocument ? (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-[#f8fffd] px-5 py-3">
-            <div>
-              <h3 className="text-sm font-bold text-slate-800">Document preview</h3>
-              <p className="text-[11px] text-slate-500">
-                Starts on page 1. Scroll to read every page, or trace an issue to jump to it.
-              </p>
-            </div>
-            {onViewDocument ? (
-              <button
-                type="button"
-                onClick={onViewDocument}
-                className="rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-emerald-700"
-              >
-                Trace issues in document
-              </button>
-            ) : null}
-          </div>
-          {hasPreview ? (
-            <div className="bg-[#e8ecf1] p-3">
-              <DocumentPagePreview
-                file={file}
-                loading={documentLoading}
-                documentUrl={cloudinaryUrl}
-                documentName={documentName}
-                preview={documentPreview}
-                emptyLabel="Preview unavailable for this version."
-                paged
-              />
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      <div>
-        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-bold text-slate-800">Issues detected</h3>
-            <p className="mt-0.5 text-xs text-slate-400">
-              Grouped by page with explanations and fix suggestions. Each page starts at line 1.
-            </p>
-          </div>
-          {issueTypes > 0 ? (
-            <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">
-              {issueTypes} issue type{issueTypes === 1 ? "" : "s"}
-            </span>
-          ) : null}
-        </div>
-        <IssuesDetectedPanel
-          formatChecks={formatChecks}
-          pageCount={pageCount}
-          pagination={pagination}
-        />
-      </div>
+      <IssueTracingSection
+        result={result}
+        file={file}
+        documentLoading={documentLoading}
+      />
 
       <div className="flex flex-wrap items-center justify-end gap-3 pb-6">
         {downloadError ? (
@@ -441,22 +387,7 @@ export default function ScanResultsScreen({
         >
           {downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
         </button>
-        <button
-          type="button"
-          onClick={onUploadNewVersion}
-          className="rounded-xl bg-[#16bfa8] px-6 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#12ae99]"
-        >
-          Upload New Version
-        </button>
-        {onBackToDashboard ? (
-          <button
-            type="button"
-            onClick={onBackToDashboard}
-            className="rounded-xl bg-[#172033] px-5 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#243049]"
-          >
-            Back to dashboard
-          </button>
-        ) : null}
+        <BackToDashboardButton onClick={onBackToDashboard} />
       </div>
     </div>
   );

@@ -6,7 +6,14 @@
 import { runComplianceScan, uploadManuscriptVersion } from "../api.js";
 import { isServerId, mapComplianceScanToResult } from "./scanMapper.js";
 import { fetchScanWithProgress } from "./scanPoll.js";
-import { CATEGORY_STATUS_LABEL, formatPct, formatScore, hasValue } from "./scoreFormat.js";
+import {
+  CATEGORY_STATUS_LABEL,
+  formatCount,
+  formatPct,
+  formatScore,
+  hasValue,
+  resolveUnitCounts,
+} from "./scoreFormat.js";
 import { APP_TIME_ZONE } from "./timeZone.js";
 
 function titleFromFile(file) {
@@ -102,6 +109,9 @@ export async function downloadReport(result, opts = {}) {
     wrongPct,
     scoreBreakdown = [],
     formatChecks = [],
+    unitsChecked,
+    unitsPassed,
+    unitsFailed,
   } = result;
 
   const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
@@ -110,9 +120,12 @@ export async function downloadReport(result, opts = {}) {
 
   // ── Derived stats ─────────────────────────────────────────────────────────
   const issueRows = formatChecks.filter((c) => c && c.result !== "PASS");
-  const totalErrors = issueRows.filter((c) => c.result === "FAIL").length;
-  const warnings = issueRows.filter((c) => c.result === "REVIEW").length;
   const issueTypes = issueRows.length;
+  const {
+    total: totalUnits,
+    compliant: compliantUnits,
+    nonCompliant: nonCompliantUnits,
+  } = resolveUnitCounts({ unitsChecked, unitsPassed, unitsFailed });
 
   async function loadBrandLogo() {
     try {
@@ -253,18 +266,18 @@ export async function downloadReport(result, opts = {}) {
   doc.setFontSize(22).setFont(undefined, "bold").setTextColor(...bandColor);
   doc.text(scoreStr, ML + 5, Y + 22);
   const scoreW = doc.getTextWidth(scoreStr);
-  doc.setFontSize(9).setFont(undefined, "normal").setTextColor(...SLATE);
-  doc.text("/ 100", ML + 5 + scoreW + 2, Y + 22);
+  doc.setFontSize(12).setFont(undefined, "bold").setTextColor(...bandColor);
+  doc.text("%", ML + 5 + scoreW + 1, Y + 22);
   doc.setFontSize(7).setFont(undefined, "bold").setTextColor(...bandColor);
   doc.text(band, ML + 5, Y + 30);
 
-  // Right / Incorrect labels + thin stacked bar
+  // Compliant / Non-Compliant labels + thin stacked bar
   const barX = ML + 58;
   const barW = CW - 68;
   doc.setFontSize(8).setFont(undefined, "bold").setTextColor(...PASS_C);
-  doc.text(`Right ${formatPct(rightPct)}`, barX, Y + 10);
+  doc.text(`Compliant ${formatPct(rightPct)}`, barX, Y + 10);
   doc.setTextColor(...FAIL_C);
-  doc.text(`Incorrect ${formatPct(wrongPct)}`, barX + barW, Y + 10, { align: "right" });
+  doc.text(`Non-Compliant ${formatPct(wrongPct)}`, barX + barW, Y + 10, { align: "right" });
 
   const rightW = Math.max(0, Math.min(barW, ((Number(rightPct) || 0) / 100) * barW));
   const wrongW = Math.max(0, barW - rightW);
@@ -280,9 +293,9 @@ export async function downloadReport(result, opts = {}) {
   }
 
   const stats = [
-    { label: "ERRORS", value: totalErrors, color: FAIL_C },
-    { label: "WARNINGS", value: warnings, color: REVIEW_C },
-    { label: "ISSUE TYPES", value: issueTypes, color: NAVY },
+    { label: "TOTAL UNITS", value: formatCount(totalUnits), color: NAVY },
+    { label: "COMPLIANT UNITS", value: formatCount(compliantUnits), color: PASS_C },
+    { label: "NON-COMPLIANT", value: formatCount(nonCompliantUnits), color: FAIL_C },
   ];
   const boxW = (barW - 4) / 3;
   stats.forEach((s, i) => {
@@ -293,7 +306,7 @@ export async function downloadReport(result, opts = {}) {
     doc.roundedRect(bx, by, boxW, 14, 1.5, 1.5, "FD");
     doc.setFontSize(11).setFont(undefined, "bold").setTextColor(...s.color);
     doc.text(String(s.value), bx + boxW / 2, by + 7, { align: "center" });
-    doc.setFontSize(5.5).setFont(undefined, "bold").setTextColor(...SLATE);
+    doc.setFontSize(5).setFont(undefined, "bold").setTextColor(...SLATE);
     doc.text(s.label, bx + boxW / 2, by + 11.5, { align: "center" });
   });
 

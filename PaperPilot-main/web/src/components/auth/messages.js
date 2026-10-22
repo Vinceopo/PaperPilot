@@ -13,10 +13,15 @@ export function authMessage(err) {
   if (code === "auth/invalid-email") return "Enter a valid email address.";
   if (code === "auth/email-already-in-use") return "An account with this email already exists.";
   if (code === "auth/weak-password") return "Password must be at least 8 characters.";
-  if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
-    return "Google sign-in was cancelled.";
+  if (code === "auth/cancelled-popup-request") {
+    return "Google sign-in is already open. Finish or close that window, then try once.";
   }
-  if (code === "auth/popup-blocked") return "Your browser blocked the Google sign-in popup.";
+  if (code === "auth/popup-closed-by-user") {
+    return "Google sign-in was closed before finishing. Click Sign in with Google again.";
+  }
+  if (code === "auth/popup-blocked") {
+    return "Your browser blocked the Google popup. Allow popups for PaperPilot, or try again — we will use a full-page Google sign-in.";
+  }
   if (code === "auth/unauthorized-domain") {
     return "This website domain is not authorized for Google sign-in. Ask an admin to add it in Firebase Authentication → Settings → Authorized domains.";
   }
@@ -37,6 +42,10 @@ export function authMessage(err) {
 
 export const FIREBASE_MISSING =
   "Add Firebase keys to web/.env (see .env.example) to enable sign-in.";
+
+/** Shown when a Google Sign-In account tries forgot / change / set password. */
+export const GOOGLE_PASSWORD_HINT =
+  "This account signs in with Google. Change your password in your Google Account (myaccount.google.com), then sign in here with Google.";
 
 /** mm:ss for the OTP expiry countdown. */
 export function formatCountdown(totalSeconds) {

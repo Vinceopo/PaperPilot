@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cancelSubscription, confirmCheckoutPayment, getSubscription, subscribeToPlan } from "../../api.js";
+import BackToDashboardButton from "../BackToDashboardButton.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 import paymongoLogo from "../../assets/paymongo-logo.png";
@@ -447,18 +448,9 @@ export default function SubscriptionScreen({
               Pay for {planName(isPaidTier(selectedPlan) ? selectedPlan : "premium")} again
             </button>
           )}
-          {paymentCanceled && onBackToDashboard && (
-            <button
-              type="button"
-              onClick={onBackToDashboard}
-              className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[#16bfa8] px-5 py-2 text-xs font-bold text-white shadow-sm hover:bg-[#12ae99]"
-            >
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-              </svg>
-              Back to Dashboard
-            </button>
-          )}
+          {paymentCanceled && onBackToDashboard ? (
+            <BackToDashboardButton onClick={onBackToDashboard} className="mt-3" />
+          ) : null}
         </div>
       )}
 

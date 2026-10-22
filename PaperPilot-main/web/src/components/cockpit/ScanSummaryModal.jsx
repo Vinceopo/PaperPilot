@@ -1,14 +1,16 @@
 /**
  * Post-scan compact summary — right/wrong %, category wrong slices, severity chips.
- * Routes to reference tracing or full ScanResultsScreen.
+ * Routes to full ScanResultsScreen (issue tracing & XAI live there).
  */
 
 import {
+  compliancePercentFromUnits,
   formatCount,
   formatPct as pctLabel,
   formatScore,
   hasValue,
   plural,
+  resolveUnitCounts,
   roundSharesToTotal,
 } from "../../lib/scoreFormat.js";
 
@@ -28,7 +30,21 @@ export default function ScanSummaryModal({
 }) {
   if (!open || !result) return null;
 
-  const [rightPct, wrongPct] = roundSharesToTotal([result.rightPct, result.wrongPct]);
+  const overallUnits = resolveUnitCounts({
+    unitsChecked: result.unitsChecked,
+    unitsPassed: result.unitsPassed,
+    unitsFailed: result.unitsFailed,
+  });
+  const fromUnits =
+    hasValue(overallUnits.total) && overallUnits.total > 0
+      ? [
+          compliancePercentFromUnits(overallUnits.total, overallUnits.nonCompliant),
+          hasValue(overallUnits.nonCompliant)
+            ? (Number(overallUnits.nonCompliant) / Number(overallUnits.total)) * 100
+            : null,
+        ]
+      : [result.rightPct, result.wrongPct];
+  const [rightPct, wrongPct] = roundSharesToTotal(fromUnits, 2);
   const overall = result.overallScore;
   const clusterRows = (result.categoryWrongPct || [])
     .filter((row) => hasValue(row.pct) && row.failedUnits > 0)
@@ -73,12 +89,12 @@ export default function ScanSummaryModal({
             </p>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-3 py-3 text-center">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Right</p>
-            <p className="mt-1 text-2xl font-extrabold text-emerald-700">{pctLabel(rightPct)}</p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Compliant</p>
+            <p className="mt-1 text-2xl font-extrabold text-emerald-700">{pctLabel(rightPct, 2)}</p>
           </div>
           <div className="rounded-xl border border-rose-200 bg-rose-50/80 px-3 py-3 text-center">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Incorrect</p>
-            <p className="mt-1 text-2xl font-extrabold text-rose-700">{pctLabel(wrongPct)}</p>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Non-Compliant</p>
+            <p className="mt-1 text-2xl font-extrabold text-rose-700">{pctLabel(wrongPct, 2)}</p>
           </div>
         </div>
 
@@ -158,14 +174,7 @@ export default function ScanSummaryModal({
         <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:items-stretch">
           <button
             type="button"
-            onClick={onViewDocument}
-            className="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
-          >
-            View Document
-          </button>
-          <button
-            type="button"
-            onClick={onViewFullResult}
+            onClick={onViewFullResult || onViewDocument}
             className="flex-1 rounded-lg bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700"
           >
             View Full Result

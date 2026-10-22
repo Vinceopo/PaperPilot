@@ -1,15 +1,32 @@
 import {
   browserSessionPersistence,
   createUserWithEmailAndPassword,
+  getRedirectResult,
   GoogleAuthProvider,
   indexedDBLocalPersistence,
   setPersistence,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
 } from "firebase/auth";
 import { ref, runTransaction, set } from "firebase/database";
+
+/** Only these mean the session is truly dead — never sign out on network blips. */
+const FATAL_AUTH_CODES = new Set([
+  "auth/user-token-expired",
+  "auth/invalid-user-token",
+  "auth/id-token-revoked",
+  "auth/user-disabled",
+  "auth/user-not-found",
+]);
+
+export function isFatalAuthError(err) {
+  return FATAL_AUTH_CODES.has(String(err?.code || ""));
+}
+
+let googleSignInLock = null;
 
 const LOGIN_NOTICE_KEY = "paperpilot.loginNotice";
 const PASSWORD_CHANGED_KEY = "paperpilot.passwordChanged";
@@ -84,9 +101,44 @@ export async function registerWithEmail(auth, email, password, displayName) {
   return credential;
 }
 
+/**
+ * Google sign-in via popup. If the popup is blocked, fall back to full-page redirect.
+ * Concurrent clicks reuse the same in-flight promise (avoids auth/cancelled-popup-request).
+ */
 export async function signInWithGoogle(auth, remember) {
-  await setPersistence(auth, remember ? indexedDBLocalPersistence : browserSessionPersistence);
-  return signInWithPopup(auth, new GoogleAuthProvider());
+  if (googleSignInLock) return googleSignInLock;
+  googleSignInLock = (async () => {
+    await setPersistence(auth, remember ? indexedDBLocalPersistence : browserSessionPersistence);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
+    try {
+      return await signInWithPopup(auth, provider);
+    } catch (err) {
+      const code = String(err?.code || "");
+      // Second click while the first popup is open — ignore, don't show "cancelled".
+      if (code === "auth/cancelled-popup-request" && googleSignInLock) {
+        throw err;
+      }
+      if (code === "auth/popup-blocked") {
+        await signInWithRedirect(auth, provider);
+        return null;
+      }
+      throw err;
+    }
+  })().finally(() => {
+    googleSignInLock = null;
+  });
+  return googleSignInLock;
+}
+
+/** Complete a Google redirect sign-in if the page just returned from Google. */
+export async function completeGoogleRedirect(authInstance) {
+  if (!authInstance) return null;
+  try {
+    return await getRedirectResult(authInstance);
+  } catch {
+    return null;
+  }
 }
 
 /**
