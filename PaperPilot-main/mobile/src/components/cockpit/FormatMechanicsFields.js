@@ -8,10 +8,12 @@ import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors } from "../../theme";
 import SelectField from "../ui/SelectField";
 import { ChevronDownIcon, CloseIcon, TrashIcon } from "../shell/icons";
-import { supportedCitationStyle } from "../../lib/formatMechanicsForm";
+import { isIgnoreFormValue, supportedCitationStyle } from "../../lib/formatMechanicsForm";
 import {
   BODY_NUMBERING_OPTIONS,
   CHAPTER_FIRST_PAGE_OPTIONS,
+  CHAPTER_MARKER_OPTIONS,
+  FONT_FAMILIES,
   HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
   MAX_HEADING_LEVELS,
@@ -24,17 +26,19 @@ import {
 } from "../../lib/mechanicsOptions";
 
 const ORIENTATION_OPTIONS = [
+  { value: "IGNORE", label: "IGNORE" },
   { value: "Portrait", label: "Portrait" },
   { value: "Landscape", label: "Landscape" },
 ];
 const ALIGNMENT_OPTIONS = [
-  { value: "", label: "Left or justified (not specified)" },
+  { value: "IGNORE", label: "IGNORE" },
   { value: "Justified", label: "Justified" },
   { value: "Left", label: "Left" },
   { value: "Center", label: "Center" },
   { value: "Right", label: "Right" },
 ];
 const CITATION_OPTIONS = [
+  { value: "IGNORE", label: "IGNORE" },
   { value: "APA", label: "APA" },
   { value: "MLA", label: "MLA" },
   { value: "IEEE", label: "IEEE" },
@@ -45,9 +49,7 @@ const LINE_SPACING_OPTIONS = [
   { value: "1.5", label: "1.5 (One and a half)" },
   { value: "2", label: "2 (Double)" },
 ];
-const FONT_FAMILY_OPTIONS = ["Times New Roman", "Arial", "Calibri", "Cambria", "Georgia", "Garamond"].map(
-  (value) => ({ value })
-);
+const FONT_FAMILY_OPTIONS = FONT_FAMILIES.map((value) => ({ value }));
 const FONT_COLOR_OPTIONS = ["Black/Automatic", "Black", "Automatic"].map((value) => ({ value }));
 const MARGINS = [
   ["marginTop", "Top"],
@@ -135,20 +137,24 @@ function ComboInput({ value, onChange, options, disabled }) {
   );
 }
 
-/** Select with a "Not checked" choice; a saved value outside the list stays selectable. */
-function ChoiceSelect({ value, onChange, options, disabled, title, emptyLabel = "Not checked" }) {
+/** Select with an IGNORE (no rule) choice; a saved value outside the list stays selectable. */
+function ChoiceSelect({ value, onChange, options, disabled, title, emptyLabel = "IGNORE" }) {
   const items = options.map((option) =>
     typeof option === "string" ? { value: option, label: option } : { ...option, label: option.label || option.value }
   );
   const current = String(value ?? "");
-  if (current && !items.some((item) => item.value === current)) {
+  if (current && current !== "IGNORE" && !items.some((item) => item.value === current)) {
     items.push({ value: current, label: `${current} (custom)` });
+  }
+  const selectOptions = [{ value: "IGNORE", label: emptyLabel }, ...items];
+  if (current === "") {
+    selectOptions.unshift({ value: "", label: "Choose…" });
   }
   return (
     <SelectField
       title={title}
       value={current}
-      options={[{ value: "", label: emptyLabel }, ...items]}
+      options={selectOptions}
       onChange={onChange}
       disabled={disabled}
     />
@@ -225,8 +231,12 @@ export default function FormatMechanicsFields({
           <Field label="Orientation">
             <SelectField
               title="Orientation"
-              value={form.paperOrientation || "Portrait"}
-              options={ORIENTATION_OPTIONS}
+              value={form.paperOrientation || ""}
+              options={
+                String(form.paperOrientation || "") === ""
+                  ? [{ value: "", label: "Choose…" }, ...ORIENTATION_OPTIONS]
+                  : ORIENTATION_OPTIONS
+              }
               onChange={(v) => set("paperOrientation", v)}
               disabled={disabled}
             />
@@ -254,11 +264,15 @@ export default function FormatMechanicsFields({
           <Field label="Indention" hint="e.g. 0.5 inch, 1/2 inch, 1.27 cm">
             {input("indention")}
           </Field>
-          <Field label="Alignment" hint="Body text alignment">
+          <Field label="Alignment" hint="Body text alignment — IGNORE skips this check">
             <SelectField
               title="Alignment"
               value={form.alignment || ""}
-              options={ALIGNMENT_OPTIONS}
+              options={
+                String(form.alignment || "") === ""
+                  ? [{ value: "", label: "Choose…" }, ...ALIGNMENT_OPTIONS]
+                  : ALIGNMENT_OPTIONS
+              }
               onChange={(v) => set("alignment", v)}
               disabled={disabled}
             />
@@ -307,7 +321,8 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Headings">
-          {headings.length ? null : <Text style={styles.hint}>No heading rules in this format.</Text>}
+          <Text style={styles.hint}>Filled from your uploaded format. Edit only if a value does not match your guide.</Text>
+          {headings.length ? null : <Text style={styles.hint}>No heading rules were found in this format yet. Add a level only if your guide defines one.</Text>}
           {headings.map((heading, index) => {
             const label = headingLabel(index);
             const shown = HEADING_RULE_FIELDS.filter((field) => heading.fields?.includes(field.key));
@@ -444,6 +459,42 @@ export default function FormatMechanicsFields({
               options={BODY_NUMBERING_OPTIONS}
             />
           </Field>
+          <Field
+            label="Chapter starts"
+            hint="How chapter headings are written — set IGNORE if your guide does not specify this"
+          >
+            <SelectField
+              title="Chapter starts"
+              value={
+                isIgnoreFormValue(form.paginationChapterMarkers)
+                  ? "IGNORE"
+                  : Array.isArray(form.paginationChapterMarkers) && form.paginationChapterMarkers.length
+                    ? form.paginationChapterMarkers.join(",")
+                    : ""
+              }
+              onChange={(v) => {
+                if (v === "IGNORE") set("paginationChapterMarkers", "IGNORE");
+                else if (!v) set("paginationChapterMarkers", []);
+                else set(
+                  "paginationChapterMarkers",
+                  String(v).split(",").map((part) => part.trim()).filter(Boolean)
+                );
+              }}
+              options={[
+                { value: "IGNORE", label: "IGNORE" },
+                {
+                  value: "chapter_roman,chapter_arabic",
+                  label: "CHAPTER I… and Chapter 1… (both)",
+                },
+                ...CHAPTER_MARKER_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                })),
+              ]}
+              placeholder="Choose…"
+              disabled={disabled}
+            />
+          </Field>
         </Section>
 
         <Section title="Page breaks">
@@ -459,11 +510,19 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Citation format">
-          <Field label="Citation style">
+          <Field label="Citation style" hint="IGNORE skips citation checks">
             <SelectField
               title="Citation style"
-              value={supportedCitationStyle(form.citationFormat)}
-              options={CITATION_OPTIONS}
+              value={
+                /^ignore$/i.test(String(form.citationFormat || "").trim())
+                  ? "IGNORE"
+                  : supportedCitationStyle(form.citationFormat)
+              }
+              options={
+                String(form.citationFormat || "") === ""
+                  ? [{ value: "", label: "Choose…" }, ...CITATION_OPTIONS]
+                  : CITATION_OPTIONS
+              }
               onChange={(v) => set("citationFormat", v)}
               disabled={disabled}
             />

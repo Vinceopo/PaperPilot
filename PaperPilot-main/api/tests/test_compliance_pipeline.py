@@ -6,6 +6,8 @@ from app import compliance_db, emailer, otp, profiles
 from app.compliance import run_compliance_scan
 from app.documents import (
     DocumentError,
+    _mechanics_rule_count,
+    assert_mechanics_guide,
     build_sample_mechanics_docx,
     derive_mechanics_rules,
     normalize_mechanics_rules,
@@ -259,17 +261,65 @@ class MechanicsExtractionTests(unittest.TestCase):
             parsed, {"font": {"families": ["Times New Roman"], "sizes_points": [12]}}, "free"
         )
         self.assertEqual(result["issues"][0]["severity"], "critical")
-        self.assertEqual(
-            result["issues"][0]["locations"],
-            [{"page": 2, "line": 1, "section": "Fonts", "excerpt": "Example line",
-              "page_width": 612, "page_height": 792}],
-        )
+        loc0 = result["issues"][0]["locations"][0]
+        self.assertEqual(loc0["page"], 2)
+        self.assertEqual(loc0["line"], 1)
+        self.assertEqual(loc0["section"], "Fonts")
+        self.assertEqual(loc0["excerpt"], "Example line")
+        self.assertEqual(loc0.get("page_width"), 612)
+        self.assertEqual(loc0.get("page_height"), 792)
+        self.assertIn("explanation", loc0)
         self.assertEqual([item["section"] for item in result["sections"]], [
             "Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination",
         ])
         fonts = next(item for item in result["sections"] if item["section"] == "Fonts")
         self.assertEqual(fonts["formatting_score"], 0)
         self.assertEqual(result["overall_score"], fonts["formatting_score"])
+
+    def test_sample_guide_is_accepted_as_mechanics(self):
+        text = parse_document(build_sample_mechanics_docx(), "docx")["text"]
+        rules = derive_mechanics_rules(text)
+        assert_mechanics_guide(text, rules)
+
+    def test_manuscript_text_is_rejected_as_mechanics(self):
+        manuscript = (
+            "Chapter 1 Introduction\n"
+            "Acknowledgements\n"
+            "The completion of this research study would not have been possible without support. "
+            * 80
+            + "\nTable of Contents\nReview of Related Literature\nMethodology\n"
+            "Findings and Discussion\nReferences\n"
+        )
+        rules = derive_mechanics_rules(manuscript)
+        with self.assertRaises(DocumentError) as raised:
+            assert_mechanics_guide(manuscript, rules)
+        self.assertIn("manuscript", str(raised.exception).lower())
+
+    def test_outline_school_guide_without_sample_titles_is_accepted(self):
+        """Real school mechanics PDFs rarely use our sample section titles."""
+        guide = (
+            "Capstone Project Manuscript Mechanics\n"
+            "Please refer to the following document formatting standards:\n"
+            "a. Paper\n"
+            "i. Size : 8.5 x 11\n"
+            "ii. Orientation : Portrait\n"
+            "iii. Substance : 20\n"
+            "b. Spacing : Double\n"
+            "c. Margins\n"
+            "i. Top : 1 inch\n"
+            "ii. Bottom : 1 inch\n"
+            "iii. Left : 1.5 inches\n"
+            "iv. Right : 1 inch\n"
+            "d. Font\n"
+            "i. Type : Times New Roman\n"
+            "ii. Body text size : 12 pt\n"
+            "iii. Heading 1 size : 14 pt\n"
+            "e. Pagination : Top right\n"
+            "f. Citation style : APA\n"
+        )
+        rules = derive_mechanics_rules(guide)
+        assert_mechanics_guide(guide, rules)
+        self.assertGreaterEqual(_mechanics_rule_count(rules), 3)
 
     def test_sample_guide_fills_every_mechanics_field(self):
         from app.documents import build_sample_mechanics_docx, normalize_mechanics_rules
@@ -513,7 +563,7 @@ class MechanicsExtractionTests(unittest.TestCase):
         }
 
     def test_heading_one_only_does_not_invent_heading_two(self):
-        parsed = self._heading_doc("Related Work", bold=True)
+        parsed = self._heading_doc("Related Work", style="Heading 1", bold=True)
         rules = normalize_mechanics_rules({
             "font": {
                 "families": ["Times New Roman"],
@@ -526,6 +576,30 @@ class MechanicsExtractionTests(unittest.TestCase):
         types = {issue["issue_type"] for issue in run_compliance_scan(parsed, rules, "free")["issues"]}
         self.assertIn("heading1_style", types)
         self.assertNotIn("heading2_style", types)
+
+    def test_bold_body_at_shared_size_is_not_heading1(self):
+        """Bold Normal paragraphs must stay body when heading and body sizes match."""
+        parsed = self._heading_doc(
+            "The completion of this research study would not have been possible.",
+            style="Normal",
+            size=12,
+            bold=True,
+            body="Ordinary following paragraph with enough words for the scan.",
+        )
+        # Shorten first line to the heuristic length window while remaining prose.
+        parsed["paragraphs"][0]["text"] = "Support from advisers made this possible."
+        parsed["paragraphs"][0]["lines"][0]["text"] = "Support from advisers made this possible."
+        parsed["paragraphs"][0]["runs"][0]["text"] = "Support from advisers made this possible."
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading1_size": 12,
+                "body_size": 12,
+                "heading_levels": 1,
+            }
+        })
+        titles = {issue["title"] for issue in run_compliance_scan(parsed, rules, "free")["issues"]}
+        self.assertFalse(any("Heading 1" in title for title in titles))
 
     def test_no_heading_rules_do_not_flag_heading_issues(self):
         parsed = self._heading_doc("Related Work", style="Heading 2", bold=True)
@@ -715,7 +789,9 @@ class MechanicsExtractionTests(unittest.TestCase):
         for issue in result["issues"]:
             if not str(issue["issue_type"]).startswith("font_size"):
                 continue
-            self.assertNotIn("Measured 12", issue["explanation"].replace("12.0", "12"))
+            explanation = issue["explanation"].replace("12.0", "12")
+            self.assertNotIn("Measured 12", explanation)
+            self.assertNotIn("measured font size is 12", explanation.lower())
 
     def test_correct_docx_margins_score_100(self):
         parsed = {
@@ -1095,12 +1171,603 @@ class LayoutAndPageTests(unittest.TestCase):
         self.assertNotIn("title page", h2["title"].lower())
         self.assertIn("14 pt", h1["explanation"])
         self.assertIn("12 pt", h2["explanation"])
-        self.assertNotIn("11", h1["explanation"].split("specifies", 1)[-1])
-        self.assertNotIn("14", h2["explanation"].split("specifies", 1)[-1])
+        self.assertIn("measured font size", h1["explanation"].lower())
+        self.assertNotIn("11", h1["explanation"].split("require", 1)[-1])
+        self.assertNotIn("14", h2["explanation"].split("require", 1)[-1])
         for loc in h1["locations"]:
             self.assertNotIn("title page", (loc.get("excerpt") or "").lower())
         excerpts = " ".join(loc.get("excerpt") or "" for loc in h1["locations"])
         self.assertIn("CHAPTER 1", excerpts)
+
+    def test_body_size_does_not_flag_heading_styles_when_heading_sizes_unset(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "CHAPTER 1 INTRODUCTION", style="Heading 1", size=16, bold=True),
+            _mechanics_paragraph(1, "Related Work", style="Heading 2", size=14, bold=True),
+            _mechanics_paragraph(
+                2,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = normalize_mechanics_rules({"font": {"families": ["Times New Roman"], "body_size": 12}})
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        titles = {issue["title"] for issue in issues}
+        self.assertFalse(any("Heading" in title and "font size" in title for title in titles))
+        self.assertNotIn("body text font size differs", titles)
+
+    def test_sizes_points_alone_does_not_flag_title_when_headings_unset(self):
+        """No heading rules + sizes_points body fallback must not flag a larger title line."""
+        paragraphs = [
+            _mechanics_paragraph(
+                0,
+                "PAPERPILOT: AN AI-POWERED ACADEMIC DOCUMENT ANALYSIS AND COMPLIANCE CHECKING SYSTEM",
+                size=14,
+                bold=True,
+            ),
+            _mechanics_paragraph(
+                1,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=11,
+            ),
+        ]
+        rules = normalize_mechanics_rules(
+            {"font": {"families": ["Arial"], "sizes_points": [11.0], "color": "Automatic"}}
+        )
+        self.assertNotIn("heading1_size", rules.get("font") or {})
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        types = {issue["issue_type"] for issue in issues}
+        titles = {issue["title"] for issue in issues}
+        self.assertNotIn("font_size_heading1", types)
+        self.assertFalse(any("Heading" in title and "font size" in title for title in titles))
+        # Title must not be reported as a body-size failure either.
+        body_issues = [issue for issue in issues if issue.get("issue_type") == "font_size"]
+        for issue in body_issues:
+            excerpts = " ".join(loc.get("excerpt") or "" for loc in issue.get("locations") or [])
+            self.assertNotIn("PAPERPILOT", excerpts.upper())
+
+    def test_empty_heading1_slot_is_not_flagged_by_sizes_points(self):
+        """UI may show an empty Heading 1 card when only Heading 2 has rules.
+        sizes_points must not invent an H1 size requirement."""
+        paragraphs = [
+            _mechanics_paragraph(
+                0,
+                "PAPERPILOT: AN AI-POWERED ACADEMIC DOCUMENT",
+                style="Heading 1",
+                size=14,
+                bold=True,
+            ),
+            _mechanics_paragraph(1, "Methods", style="Heading 2", size=12, bold=True),
+            _mechanics_paragraph(
+                2,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=11,
+            ),
+        ]
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading2_size": 12,
+                "heading_levels": 2,
+                "sizes_points": [11.0, 12.0],
+                "color": "Black/Automatic",
+            }
+        })
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        types = {issue["issue_type"] for issue in issues}
+        titles = {issue["title"] for issue in issues}
+        self.assertNotIn("font_size_heading1", types)
+        self.assertFalse(any("Heading 1" in title and "font size" in title for title in titles))
+        # sizes_points alone also must not label unset H1 as wrong
+        only_listed = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading_levels": 2,
+                "sizes_points": [11.0, 12.0],
+            }
+        })
+        listed_issues = run_compliance_scan(self._doc(paragraphs), only_listed, "free")["issues"]
+        listed_types = {issue["issue_type"] for issue in listed_issues}
+        self.assertNotIn("font_size_heading1", listed_types)
+        self.assertFalse(
+            any("Heading 1" in issue["title"] and "font size" in issue["title"] for issue in listed_issues)
+        )
+
+    def test_heading2_and_heading3_sizes_do_not_flag_unset_heading1(self):
+        """Only H2=11 and H3=12 set — a 14pt Heading 1 must pass (no H1 size rule)."""
+        paragraphs = [
+            _mechanics_paragraph(
+                0,
+                "PAPERPILOT: AN AI-POWERED ACADEMIC DOCUMENT",
+                style="Heading 1",
+                size=14,
+                bold=True,
+            ),
+            _mechanics_paragraph(1, "Methods", style="Heading 2", size=11, bold=True),
+            _mechanics_paragraph(2, "Instruments", style="Heading 3", size=12, bold=True),
+            _mechanics_paragraph(
+                3,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading2_size": 11,
+                "heading3_size": 12,
+                "heading_levels": 3,
+                # Stale client payloads used to dump heading sizes into sizes_points.
+                "sizes_points": [11.0, 12.0],
+            }
+        })
+        self.assertNotIn("sizes_points", rules.get("font") or {})
+        self.assertNotIn("heading1_size", rules.get("font") or {})
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        self.assertNotIn("font_size_heading1", {issue["issue_type"] for issue in issues})
+        self.assertFalse(
+            any("Heading 1" in (issue.get("title") or "") and "font size" in (issue.get("title") or "")
+                for issue in issues)
+        )
+
+    def test_heading2_mismatch_still_flags_when_heading1_unset(self):
+        """H1 unset passes; wrong H2 size still appears on Issues."""
+        paragraphs = [
+            _mechanics_paragraph(
+                0,
+                "PAPERPILOT: AN AI-POWERED ACADEMIC DOCUMENT",
+                style="Heading 1",
+                size=14,
+                bold=True,
+            ),
+            _mechanics_paragraph(1, "Methods", style="Heading 2", size=14, bold=True),
+            _mechanics_paragraph(2, "Instruments", style="Heading 3", size=12, bold=True),
+            _mechanics_paragraph(
+                3,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading2_size": 11,
+                "heading3_size": 12,
+                "heading_levels": 3,
+                "sizes_points": [11.0, 12.0],
+            }
+        })
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        types = {issue["issue_type"] for issue in issues}
+        self.assertNotIn("font_size_heading1", types)
+        self.assertIn("font_size_heading2", types)
+        h2 = next(issue for issue in issues if issue["issue_type"] == "font_size_heading2")
+        self.assertIn("Heading 2", h2["title"])
+        self.assertNotIn("Heading 1", h2["title"])
+
+    def test_heading1_rule_does_not_flag_heading2_or_heading3(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "CHAPTER 1", style="Heading 1", size=12, bold=True),
+            _mechanics_paragraph(1, "Methods", style="Heading 2", size=12, bold=True),
+            _mechanics_paragraph(2, "Instruments", style="Heading 3", size=12, bold=True),
+            _mechanics_paragraph(
+                3,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading1_size": 14,
+                "heading2_size": 12,
+                "heading3_size": 12,
+                "body_size": 12,
+                "heading_levels": 3,
+            }
+        })
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        by_type = {issue["issue_type"]: issue for issue in issues}
+        self.assertIn("font_size_heading1", by_type)
+        self.assertNotIn("font_size_heading2", by_type)
+        self.assertNotIn("font_size_heading3", by_type)
+        excerpts = " ".join(
+            loc.get("excerpt") or ""
+            for loc in by_type["font_size_heading1"].get("locations") or []
+        )
+        self.assertIn("CHAPTER 1", excerpts)
+        self.assertNotIn("Methods", excerpts)
+        self.assertNotIn("Instruments", excerpts)
+
+    def test_acknowledgement_body_lines_are_not_heading1(self):
+        """Title + multi-line indented body: only ACKNOWLEDGEMENT is a heading."""
+        body = (
+            "I would like to express my sincere gratitude to the panel members whose insightful "
+            "suggestions and helpful comments contributed greatly to the refinement and quality of this study."
+        )
+        paragraphs = [
+            _mechanics_paragraph(0, "ACKNOWLEDGEMENT", style="Heading 1", size=14, bold=True),
+            _mechanics_paragraph(1, body, size=14, bold=True),
+        ]
+        paragraphs[1]["formatting"] = {
+            "line_spacing": 2.0,
+            "alignment": "justify",
+            "first_line_indent_inches": 0.5,
+        }
+        # Soft-wrap the bold body under Heading 1 style as well (false style on prose).
+        long_h1 = (body + " ") * 2
+        paragraphs.append(
+            _mechanics_paragraph(2, long_h1, style="Heading 1", size=14, bold=False)
+        )
+        paragraphs[2]["formatting"] = {
+            "line_spacing": 2.0,
+            "alignment": "justify",
+            "first_line_indent_inches": 0.5,
+        }
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "families": ["Times New Roman"],
+                    "heading1_size": 30,
+                    "body_size": 14,
+                    "heading_levels": 1,
+                }
+            }
+        )
+        result = run_compliance_scan(self._doc(paragraphs), rules, "free")
+        heading_issues = [
+            issue
+            for issue in result["issues"]
+            if issue.get("issue_type") == "font_size_heading1"
+        ]
+        self.assertEqual(len(heading_issues), 1)
+        excerpts = " ".join(
+            loc.get("excerpt") or "" for loc in heading_issues[0].get("locations") or []
+        )
+        self.assertIn("ACKNOWLEDGEMENT", excerpts)
+        self.assertNotIn("helpful comments", excerpts)
+        self.assertIn("30", heading_issues[0]["explanation"])
+
+    def test_real_heading1_wrong_size_is_one_issue_on_that_line(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "CHAPTER 1", style="Heading 1", size=12, bold=True),
+            _mechanics_paragraph(
+                1,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "families": ["Times New Roman"],
+                    "heading1_size": 16,
+                    "body_size": 12,
+                    "heading_levels": 1,
+                }
+            }
+        )
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        h1 = [issue for issue in issues if issue.get("issue_type") == "font_size_heading1"]
+        self.assertEqual(len(h1), 1)
+        self.assertEqual(len(h1[0]["locations"]), 1)
+        self.assertIn("16 pt", h1[0]["explanation"])
+        self.assertIn("CHAPTER 1", h1[0]["locations"][0].get("excerpt") or "")
+
+    def test_numbered_and_chapter_titles_still_detected(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "1.1 Background of the Study", size=12, bold=True),
+            _mechanics_paragraph(1, "CHAPTER 2", size=12, bold=True),
+            _mechanics_paragraph(2, "REFERENCES", size=12, bold=True),
+            _mechanics_paragraph(
+                3,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "families": ["Times New Roman"],
+                    "heading1_size": 14,
+                    "body_size": 12,
+                    "heading_levels": 1,
+                }
+            }
+        )
+        from app.compliance import _annotate_roles, _document_units
+
+        units = _document_units(self._doc(paragraphs), rules)
+        _annotate_roles(units, rules)
+        roles = {
+            (unit.get("text") or "").strip(): unit.get("role")
+            for unit in units
+            if (unit.get("text") or "").strip()
+        }
+        self.assertEqual(roles.get("1.1 Background of the Study"), "heading1")
+        self.assertEqual(roles.get("CHAPTER 2"), "heading1")
+        self.assertEqual(roles.get("REFERENCES"), "heading1")
+
+    def test_multiline_all_caps_prose_is_not_a_heading(self):
+        prose = (
+            "THE COMPLETION OF THIS RESEARCH STUDY WOULD NOT HAVE BEEN POSSIBLE WITHOUT THE "
+            "GUIDANCE AND SUPPORT OF MANY PEOPLE WHO CONTRIBUTED HELPFUL COMMENTS."
+        )
+        paragraphs = [
+            _mechanics_paragraph(0, prose, size=12, bold=True),
+            _mechanics_paragraph(
+                1,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        paragraphs[0]["formatting"] = {
+            "line_spacing": 2.0,
+            "alignment": "justify",
+            "first_line_indent_inches": 0.5,
+        }
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "families": ["Times New Roman"],
+                    "heading1_size": 30,
+                    "body_size": 12,
+                    "heading_levels": 1,
+                }
+            }
+        )
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        self.assertFalse(
+            any(issue.get("issue_type") == "font_size_heading1" for issue in issues)
+        )
+
+    def test_no_heading1_size_means_zero_heading_size_issues(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "ACKNOWLEDGEMENT", style="Heading 1", size=14, bold=True),
+            _mechanics_paragraph(
+                1,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = normalize_mechanics_rules(
+            {"font": {"families": ["Times New Roman"], "body_size": 12, "heading_levels": 1}}
+        )
+        result = run_compliance_scan(self._doc(paragraphs), rules, "free")
+        issues = result["issues"]
+        self.assertFalse(
+            any(
+                "Heading" in (issue.get("title") or "") and "font size" in (issue.get("title") or "")
+                for issue in issues
+            )
+        )
+        sections = {item["section"]: item for item in result.get("sections") or []}
+        fonts = sections.get("Fonts") or {}
+        if fonts.get("units_checked"):
+            self.assertGreaterEqual(fonts["units_checked"], fonts.get("units_failed") or 0)
+
+    def test_arialmt_reported_as_arial_with_detected_font_wording(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "This paragraph uses a PDF PostScript Arial face on purpose.", size=12),
+        ]
+        paragraphs[0]["runs"][0]["font"] = "ArialMT"
+        rules = normalize_mechanics_rules({"font": {"families": ["Times New Roman"], "body_size": 12}})
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        family = next(issue for issue in issues if issue["issue_type"] == "font_family")
+        self.assertIn("detected font is Arial", family["explanation"])
+        self.assertNotIn("ArialMT", family["explanation"])
+        self.assertNotIn("Measured font", family["explanation"])
+
+    def test_string_table_layout_rule_still_flags_caption_case(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "Table 1. Sensor readings"),
+            _mechanics_paragraph(1, "Year Value", source="table", size=10),
+        ]
+        rules = {
+            "font": {"families": ["Times New Roman"], "body_size": 12},
+            # Legacy / client payloads sometimes store a plain string instead of a list.
+            "table_layout_requirements": (
+                "Each table must be labeled Table number with its title in capital letters, "
+                "both placed above the table."
+            ),
+        }
+        types = {issue["issue_type"] for issue in run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]}
+        self.assertIn("table_caption", types)
+
+    def test_heading_only_rules_do_not_invent_body_size(self):
+        rules = normalize_mechanics_rules({
+            "font": {
+                "families": ["Times New Roman"],
+                "heading1_size": 19,
+                "heading2_size": 14,
+                "heading3_size": 12,
+                "sizes_points": [19, 14, 12],
+                "heading3_content_size": 19,
+            }
+        })
+        font = rules.get("font") or {}
+        self.assertNotIn("body_size", font)
+        self.assertNotIn("heading3_content_size", font)
+
+    def test_list_valued_heading1_size_is_unset_and_never_prints_brackets(self):
+        """Stale payloads may store heading1_size as [11.0]; that must not create an issue."""
+        paragraphs = [
+            _mechanics_paragraph(
+                0,
+                "PAPERPILOT: AN AI-POWERED ACADEMIC DOCUMENT ANALYSIS AND COMPLIANCE CHECKING SYSTEM",
+                style="Heading 1",
+                size=14,
+                bold=True,
+            ),
+            _mechanics_paragraph(
+                1,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=11,
+            ),
+        ]
+        # Bypass normalize so the list shape reaches the checker (legacy / hand-edited JSON).
+        rules = {
+            "font": {
+                "families": ["Arial"],
+                "heading1_size": [11.0],
+                "sizes_points": [11.0],
+                "color": "Black/Automatic",
+            }
+        }
+        from app.compliance import (
+            _filter_unset_heading_font_issues,
+            _format_expected_pt,
+            _heading_sizes,
+            _scalar_pt,
+        )
+
+        self.assertEqual(_heading_sizes(rules["font"]), {})
+        self.assertIsNone(_scalar_pt([11.0]))
+        # Issue text may join list items as scalars — never as "[11.0]".
+        self.assertEqual(_format_expected_pt([11.0]), "11")
+        self.assertNotIn("[", _format_expected_pt([11.0]) or "")
+        result = run_compliance_scan(self._doc(paragraphs), rules, "free")
+        types = {issue["issue_type"] for issue in result["issues"]}
+        self.assertNotIn("font_size_heading1", types)
+        for issue in result["issues"]:
+            blob = " ".join(
+                str(issue.get(key) or "")
+                for key in ("title", "explanation", "recommendation", "summary")
+            )
+            self.assertNotIn("[11.0]", blob)
+            self.assertNotIn("[11]", blob)
+        # Enrichment-style list leak is stripped by the post-filter.
+        leaked = [
+            {
+                "issue_type": "font_size",
+                "title": "body text font size differs",
+                "explanation": "Measured 14 pt; the format specifies [11.0] pt for Heading 1.",
+                "recommendation": "Set to [11.0] pt.",
+                "summary": "Heading 1 size wrong",
+                "locations": [],
+            }
+        ]
+        cleaned = _filter_unset_heading_font_issues(leaked, rules)
+        self.assertEqual(len(cleaned), 1)
+        self.assertNotIn("[11.0]", cleaned[0]["explanation"])
+        self.assertNotIn("Heading 1", cleaned[0]["explanation"])
+
+    def test_ignore_heading1_size_counts_as_pass(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "CHAPTER 1", style="Heading 1", size=14, bold=True),
+            _mechanics_paragraph(
+                1,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = {
+            "font": {
+                "families": ["Times New Roman"],
+                "heading1_size": "IGNORE",
+                "body_size": 12,
+            }
+        }
+        result = run_compliance_scan(self._doc(paragraphs), rules, "free")
+        self.assertNotIn(
+            "font_size_heading1",
+            {issue["issue_type"] for issue in result["issues"]},
+        )
+        fonts = next(
+            item for item in result["scoring"]["categories"] if item["category"] == "Fonts"
+        )
+        self.assertGreater(fonts["units_checked"], 0)
+        self.assertEqual(fonts["units_checked"], fonts["units_passed"] + fonts["units_failed"])
+
+    def test_heading1_set_to_16_wrong_size_says_16_pt(self):
+        paragraphs = [
+            _mechanics_paragraph(0, "CHAPTER 1", style="Heading 1", size=12, bold=True),
+            _mechanics_paragraph(
+                1,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        rules = normalize_mechanics_rules(
+            {"font": {"families": ["Times New Roman"], "heading1_size": 16, "body_size": 12}}
+        )
+        issues = run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]
+        h1 = [issue for issue in issues if issue["issue_type"] == "font_size_heading1"]
+        self.assertEqual(len(h1), 1)
+        self.assertIn("16 pt", h1[0]["explanation"])
+        self.assertNotIn("[", h1[0]["explanation"])
+
+    def test_black_automatic_color_is_enforced_not_unset(self):
+        paragraphs = [
+            _mechanics_paragraph(
+                0,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        paragraphs[0]["runs"][0]["color"] = "0000FF"
+        rules = normalize_mechanics_rules(
+            {"font": {"families": ["Times New Roman"], "body_size": 12, "color": "Black/Automatic"}}
+        )
+        types = {issue["issue_type"] for issue in run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]}
+        self.assertIn("font_color", types)
+
+    def test_zero_indent_rule_is_enforced(self):
+        paragraphs = [
+            _mechanics_paragraph(
+                0,
+                "This paragraph explains the method in enough detail to count as ordinary body text "
+                "and continues onto a second visual line for indentation measurement.",
+                size=12,
+            ),
+            _mechanics_paragraph(
+                1,
+                "Second line of the same paragraph for layout.",
+                size=12,
+            ),
+        ]
+        # Same paragraph_index so they form one prose paragraph with 2+ lines.
+        paragraphs[0]["paragraph_index"] = 0
+        paragraphs[1]["paragraph_index"] = 0
+        paragraphs[0]["formatting"] = {
+            "first_line_indent_inches": 0.5,
+            "left_indent_inches": 0.0,
+            "alignment": "left",
+            "line_spacing": 2.0,
+        }
+        paragraphs[1]["formatting"] = {
+            "first_line_indent_inches": 0.0,
+            "left_indent_inches": 0.0,
+            "alignment": "left",
+            "line_spacing": 2.0,
+        }
+        paragraphs[0]["bbox"] = [72, 72, 500, 86]
+        paragraphs[1]["bbox"] = [72, 100, 500, 114]
+        rules = normalize_mechanics_rules(
+            {"font": {"families": ["Times New Roman"], "body_size": 12}, "first_line_indent_inches": 0}
+        )
+        self.assertEqual(rules.get("first_line_indent_inches"), 0.0)
+        types = {issue["issue_type"] for issue in run_compliance_scan(self._doc(paragraphs), rules, "free")["issues"]}
+        self.assertIn("first_line_indent", types)
+
+    def test_ignore_line_spacing_skips_spacing_check(self):
+        paragraphs = [
+            _mechanics_paragraph(
+                0,
+                "This paragraph explains the method in enough detail to count as ordinary body text.",
+                size=12,
+            ),
+        ]
+        paragraphs[0]["formatting"] = {"line_spacing": 1.0, "alignment": "left"}
+        result = run_compliance_scan(
+            self._doc(paragraphs),
+            {"font": {"body_size": 12}, "line_spacing": "IGNORE"},
+            "free",
+        )
+        spacing = next(
+            item for item in result["scoring"]["categories"] if item["category"] == "Spacing"
+        )
+        self.assertEqual(spacing["status"], "not_applicable")
+        self.assertNotIn("line_spacing", {issue["issue_type"] for issue in result["issues"]})
 
 
 class PersistenceTests(FirebaseTestCase):

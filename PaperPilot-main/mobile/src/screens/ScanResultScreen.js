@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Animated, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import { Alert, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { useAppData } from "../context/AppDataContext";
@@ -10,10 +10,14 @@ import TraceDocumentViewer from "../components/cockpit/TraceDocumentViewer";
 import PrimaryButton from "../components/ui/PrimaryButton";
 import {
   CATEGORY_STATUS_LABEL,
+  compliancePercentFromUnits,
+  formatCategoryIssuesDetail,
   formatCount,
   formatPct,
   hasValue,
   plural,
+  reconcileDisplayedUnits,
+  resolveCategoryUnitDisplays,
   roundSharesToTotal,
 } from "../lib/scoreFormat";
 import { APP_TIME_ZONE } from "../lib/timeZone";
@@ -28,16 +32,11 @@ function scoreBand(score) {
   return { label: "CRITICAL ISSUES", text: "#e11d48", ring: "#ef4444", border: "#fecdd3", bg: "#fff1f2" };
 }
 
-function barColor(score) {
-  if (score >= 80) return "#10b981";
-  if (score >= 50) return "#fbbf24";
-  return "#f43f5e";
-}
-
-function scoreTextColor(score) {
-  if (score >= 80) return "#059669";
-  if (score >= 50) return "#d97706";
-  return "#f43f5e";
+function ringStroke(score) {
+  if (!hasValue(score)) return "#cbd5e1";
+  if (score >= 80) return "#157347";
+  if (score >= 50) return "#B57200";
+  return "#B02A37";
 }
 
 function CircularScore({ score, categoryCount = null }) {
@@ -83,7 +82,7 @@ function CircularScore({ score, categoryCount = null }) {
         </Svg>
         <View style={styles.circleCenter}>
           <Text style={styles.circleValue}>{evaluated ? Math.round(progress) : "—"}</Text>
-          <Text style={styles.circleOutOf}>/100</Text>
+          {evaluated ? <Text style={styles.circleOutOf}>%</Text> : null}
         </View>
       </View>
       <View style={[styles.bandPill, { backgroundColor: band.bg, borderColor: band.border }]}>
@@ -100,64 +99,56 @@ function CircularScore({ score, categoryCount = null }) {
   );
 }
 
-function ScoreBar({ metric, score, status, unitsChecked, unitsFailed, issueCount = 0 }) {
-  const evaluated = hasValue(score);
-  const safe = evaluated ? Math.max(0, Math.min(100, Number(score))) : 0;
-  const width = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(width, {
-      toValue: safe,
-      duration: 700,
-      delay: 60,
-      useNativeDriver: false,
-    }).start();
-  }, [safe, width]);
+function CategoryScoreCard({ metric, score, status, displayTotal, displayNonCompliant, displayScore }) {
+  const fromUnits = compliancePercentFromUnits(displayTotal, displayNonCompliant);
+  const pct =
+    fromUnits != null
+      ? fromUnits
+      : hasValue(displayScore)
+        ? Number(displayScore)
+        : hasValue(score)
+          ? Number(score)
+          : null;
+  const evaluated = hasValue(pct);
+  const safe = evaluated ? Math.max(0, Math.min(100, Number(pct))) : 0;
+  const name = String(metric || "Category").trim() || "Category";
+  const radius = 26;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (safe / 100) * circumference;
+  const stroke = ringStroke(evaluated ? safe : null);
+  const detail = formatCategoryIssuesDetail(displayNonCompliant, displayTotal)
+    || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
+    || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
   return (
-    <View style={styles.barBlock}>
-      <View style={styles.barHead}>
-        <Text style={styles.barLabel}>
-          {metric}
-          {!evaluated ? (
-            <Text style={styles.barMeta}>
-              {"  "}· {CATEGORY_STATUS_LABEL[status] || "Not evaluated"}
-            </Text>
-          ) : hasValue(unitsChecked) ? (
-            <Text style={unitsFailed ? styles.barMeta : styles.barPass}>
-              {"  "}· {formatCount(unitsFailed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")} failed
-            </Text>
-          ) : null}
-        </Text>
-        <Text style={[styles.barScore, { color: evaluated ? scoreTextColor(safe) : "#94a3b8" }]}>
-          {evaluated ? formatPct(safe) : "N/A"}
-        </Text>
+    <View style={styles.catCard}>
+      <View style={styles.catRingWrap}>
+        <Svg width={64} height={64} viewBox="0 0 64 64" style={{ transform: [{ rotate: "-90deg" }] }}>
+          <Circle cx={32} cy={32} r={radius} fill="none" stroke="#e2e8f0" strokeWidth={5.5} />
+          <Circle
+            cx={32}
+            cy={32}
+            r={radius}
+            fill="none"
+            stroke={stroke}
+            strokeWidth={5.5}
+            strokeLinecap="round"
+            strokeDasharray={`${circumference}`}
+            strokeDashoffset={evaluated ? offset : circumference}
+          />
+        </Svg>
+        <View style={styles.catRingCenter}>
+          <Text style={[styles.catRingValue, { color: evaluated ? stroke : "#94a3b8", fontSize: 11 }]}>
+            {evaluated ? formatPct(safe, 2) : "—"}
+          </Text>
+        </View>
       </View>
-      <View style={styles.barTrack}>
-        <Animated.View
-          style={[
-            styles.barFill,
-            {
-              backgroundColor: barColor(safe),
-              width: width.interpolate({ inputRange: [0, 100], outputRange: ["0%", "100%"] }),
-            },
-          ]}
-        />
-      </View>
-      {issueCount > 0 ? (
-        <Text style={styles.barIssues}>
-          {formatCount(issueCount)} {plural(issueCount, "issue")} found in this category
+      <View style={styles.catCopy}>
+        <Text style={styles.catTitle} numberOfLines={1}>
+          {name}
         </Text>
-      ) : null}
-    </View>
-  );
-}
-
-function LegendDot({ color, label }) {
-  return (
-    <View style={styles.legendItem}>
-      <View style={[styles.legendDot, { backgroundColor: color }]} />
-      <Text style={styles.legendText}>{label}</Text>
+        <Text style={styles.catDetail}>{detail}</Text>
+      </View>
     </View>
   );
 }
@@ -182,7 +173,7 @@ export default function ScanResultScreen({ navigation }) {
 
   const goBack = useCallback(() => {
     handleBackToDashboard();
-    navigation.navigate("Upload");
+    navigation.navigate("Library");
   }, [handleBackToDashboard, navigation]);
 
   // Android back would otherwise land on Upload while the scan is still on "results" (a blank page).
@@ -199,6 +190,7 @@ export default function ScanResultScreen({ navigation }) {
 
   return (
     <AppShell
+      active="results"
       breadcrumb="Dashboard"
       title="Scan Results"
       onBack={hasResult ? goBack : undefined}
@@ -209,13 +201,7 @@ export default function ScanResultScreen({ navigation }) {
 }
 
 function ScanResultBody({ navigation }) {
-  const {
-    scanFlow,
-    resetUploadWizard,
-    setManuscriptReady,
-    setFileDetailsNotice,
-    selectedMechanicsId,
-  } = useAppData();
+  const { scanFlow } = useAppData();
   const result = scanFlow?.result;
 
   if (!result) {
@@ -256,13 +242,32 @@ function ScanResultBody({ navigation }) {
     unitsFailed,
     issueTotals = null,
     scoringConsistency = null,
-    scoringVersion = null,
   } = result;
 
-  const [shownRight, shownWrong] = roundSharesToTotal([rightPct, wrongPct]);
-  const criticalTypes = formatChecks.filter((c) => c.result === "FAIL").length;
-  const warningTypes = formatChecks.filter((c) => c.result === "REVIEW").length;
-  const issueTypes = formatChecks.length;
+  const issueTypes = formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
+  const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
+  // Header totals = sum of category cards so they always match what the user adds up.
+  const {
+    total: totalUnits,
+    compliant: compliantUnits,
+    nonCompliant: nonCompliantUnits,
+  } = reconcileDisplayedUnits(
+    { unitsChecked, unitsPassed, unitsFailed },
+    categoryDisplays,
+  );
+  const fromOverallUnits =
+    hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
+      ? [
+          compliancePercentFromUnits(totalUnits, nonCompliantUnits),
+          (Number(nonCompliantUnits) / Number(totalUnits)) * 100,
+        ]
+      : [rightPct, wrongPct];
+  const [shownRight, shownWrong] = roundSharesToTotal(fromOverallUnits, 2);
+  const issuesFound = hasValue(nonCompliantUnits)
+    ? Number(nonCompliantUnits)
+    : hasValue(issueTotals?.occurrences)
+      ? Number(issueTotals.occurrences)
+      : issueTypes;
 
   const scannedDate = scannedAt
     ? new Date(scannedAt).toLocaleDateString("en-US", {
@@ -289,30 +294,35 @@ function ScanResultBody({ navigation }) {
     navigation.navigate("DocumentReference");
   }
 
-  function backToSummary() {
-    scanFlow.backToSummary();
-    navigation.navigate("Upload");
-  }
-
-  function onUploadNewVersion() {
-    scanFlow.uploadNewVersion();
-    setManuscriptReady(false);
-    setFileDetailsNotice("");
-    resetUploadWizard(selectedMechanicsId ? 2 : 1);
-    navigation.navigate("Upload");
-  }
-
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
       <View style={styles.hero}>
-        <View style={styles.heroLinks}>
-          <Pressable onPress={backToSummary} hitSlop={6}>
-            <Text style={styles.heroBack}>← Back to summary</Text>
-          </Pressable>
-          <Pressable onPress={openReferenceTracing} hitSlop={6}>
-            <Text style={styles.heroTrace}>Open reference tracing</Text>
+        <View style={styles.heroTopRow}>
+          <View style={styles.heroLinks}>
+            <Pressable onPress={openReferenceTracing} hitSlop={6}>
+              <Text style={styles.heroTrace}>Open reference tracing</Text>
+            </Pressable>
+          </View>
+          <Pressable
+            onPress={onDownload}
+            disabled={scanFlow.downloadBusy}
+            style={({ pressed }) => [
+              styles.downloadBtnTop,
+              pressed && { backgroundColor: "#f1f5f9" },
+              scanFlow.downloadBusy && { opacity: 0.5 },
+            ]}
+          >
+            <DownloadIcon />
+            <Text style={styles.downloadTextTop}>
+              {scanFlow.downloadBusy ? "Generating PDF…" : `Download · ${versionLabel}`}
+            </Text>
           </Pressable>
         </View>
+        {scanFlow.downloadError ? (
+          <Text style={styles.downloadError} accessibilityRole="alert">
+            {scanFlow.downloadError}
+          </Text>
+        ) : null}
         <Text style={styles.scope}>SCOPE: FORMATTING ONLY</Text>
         <Text style={styles.heroTitle}>{documentTitle}</Text>
         {campus || college ? (
@@ -339,42 +349,25 @@ function ScanResultBody({ navigation }) {
 
       <View style={{ gap: 12 }}>
         <View style={[styles.dualCard, styles.dualRight]}>
-          <Text style={[styles.dualLabel, { color: "#047857" }]}>Right (passed units)</Text>
-          <Text style={[styles.dualValue, { color: "#047857" }]}>{formatPct(shownRight)}</Text>
-          {hasValue(unitsPassed) && hasValue(unitsChecked) ? (
+          <Text style={[styles.dualLabel, { color: "#047857" }]}>Compliant</Text>
+          <Text style={[styles.dualValue, { color: "#047857" }]}>{formatPct(shownRight, 2)}</Text>
+          {hasValue(compliantUnits) ? (
             <Text style={[styles.dualSub, { color: "rgba(4,120,87,0.8)" }]}>
-              {formatCount(unitsPassed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")}
+              {formatCount(compliantUnits)} {plural(compliantUnits, "unit")} compliant
+              {hasValue(totalUnits) ? ` of ${formatCount(totalUnits)}` : ""}
             </Text>
           ) : null}
         </View>
         <View style={[styles.dualCard, styles.dualWrong]}>
-          <Text style={[styles.dualLabel, { color: "#be123c" }]}>Wrong (failed units)</Text>
-          <Text style={[styles.dualValue, { color: "#be123c" }]}>{formatPct(shownWrong)}</Text>
-          {hasValue(unitsFailed) && hasValue(unitsChecked) ? (
-            <Text style={[styles.dualSub, { color: "rgba(190,18,60,0.8)" }]}>
-              {formatCount(unitsFailed)} of {formatCount(unitsChecked)} {plural(unitsChecked, "unit")}
-            </Text>
-          ) : null}
-        </View>
-        {hasValue(unitsChecked) ? (
-          <Text style={styles.unitsNote}>
-            {Number(unitsChecked) === 0
-              ? "No formatting unit could be measured in this document."
-              : `Based on ${formatCount(unitsChecked)} measured formatting ${plural(unitsChecked, "unit")}`}
-            {issueTotals
-              ? ` · ${formatCount(issueTotals.occurrences)} ${plural(issueTotals.occurrences, "issue")} found (one failed unit can break more than one rule)`
-              : ""}
+          <Text style={[styles.dualLabel, { color: "#be123c" }]}>Non-Compliant</Text>
+          <Text style={[styles.dualValue, { color: "#be123c" }]}>{formatPct(shownWrong, 2)}</Text>
+          <Text style={[styles.dualSub, { color: "rgba(190,18,60,0.8)" }]}>
+            {formatCount(issuesFound)} {plural(issuesFound, "issue")}
           </Text>
-        ) : null}
+        </View>
         {scoringConsistency && !scoringConsistency.ok ? (
           <Text style={styles.consistencyWarn} accessibilityRole="alert">
             These results failed an internal consistency check. Re-run the analysis before relying on them.
-          </Text>
-        ) : null}
-        {!scoringVersion ? (
-          <Text style={styles.unitsNote}>
-            This scan was saved without the full scoring breakdown. Re-analyse the manuscript to generate
-            checked, passed, and failed unit counts. Stored scores are shown as saved.
           </Text>
         ) : null}
       </View>
@@ -388,77 +381,50 @@ function ScanResultBody({ navigation }) {
       </View>
 
       <View style={styles.card}>
-        <View style={styles.cardHeadRow}>
-          <Text style={styles.cardKicker}>Score Breakdown</Text>
-          <Text style={styles.cardAside}>Passed units ÷ checked units</Text>
-        </View>
-        <View style={{ marginTop: 20, gap: 16 }}>
-          {scoreBreakdown.map((item) => (
-            <ScoreBar
+        <Text style={styles.cardKicker}>Score Breakdown</Text>
+        <View style={styles.catGrid}>
+          {categoryDisplays.map((item) => (
+            <CategoryScoreCard
               key={item.metric || item.section}
               metric={item.metric || item.section}
-              score={item.score}
+              score={item.displayScore ?? item.score}
               status={item.status}
-              unitsChecked={item.unitsChecked}
-              unitsFailed={item.unitsFailed}
-              issueCount={item.issueCount}
+              displayTotal={item.displayTotal}
+              displayNonCompliant={item.displayNonCompliant}
+              displayScore={item.displayScore}
             />
           ))}
-        </View>
-        <View style={styles.legend}>
-          <LegendDot color="#10b981" label="Good (≥80%)" />
-          <LegendDot color="#fbbf24" label="Needs review (50–79%)" />
-          <LegendDot color="#f43f5e" label="Critical (<50%)" />
         </View>
       </View>
 
       <View style={styles.card}>
         <Text style={styles.cardKicker}>Scan Summary</Text>
         <View style={styles.statGrid}>
-          <View style={[styles.stat, { backgroundColor: "#fff1f2" }]}>
-            <Text style={[styles.statNum, { color: "#e11d48" }]}>{criticalTypes}</Text>
-            <Text style={[styles.statLabel, { color: "#f43f5e" }]}>Errors</Text>
-          </View>
-          <View style={[styles.stat, { backgroundColor: "#fffbeb" }]}>
-            <Text style={[styles.statNum, { color: "#d97706" }]}>{warningTypes}</Text>
-            <Text style={[styles.statLabel, { color: "#f59e0b" }]}>Warnings</Text>
-          </View>
           <View style={[styles.stat, { backgroundColor: "#f8fafc" }]}>
-            <Text style={[styles.statNum, { color: "#334155" }]}>{issueTypes}</Text>
-            <Text style={[styles.statLabel, { color: "#64748b" }]}>Issue types</Text>
+            <Text style={[styles.statNum, { color: "#334155" }]}>{formatCount(totalUnits)}</Text>
+            <Text style={[styles.statLabel, { color: "#64748b" }]}>Total Units</Text>
+          </View>
+          <View style={[styles.stat, { backgroundColor: "#ecfdf5" }]}>
+            <Text style={[styles.statNum, { color: "#059669" }]}>{formatCount(compliantUnits)}</Text>
+            <Text style={[styles.statLabel, { color: "#10b981" }]}>Compliant Units</Text>
+          </View>
+          <View style={[styles.stat, { backgroundColor: "#fff1f2" }]}>
+            <Text style={[styles.statNum, { color: "#e11d48" }]}>{formatCount(nonCompliantUnits)}</Text>
+            <Text style={[styles.statLabel, { color: "#f43f5e" }]}>Non-Compliant Units</Text>
           </View>
         </View>
         <Text style={styles.statNote}>
-          Errors are critical issue types; warnings are moderate or minor issue types.
+          Compliant Units + Non-Compliant Units equals Total Units checked.
         </Text>
         <View style={styles.tagRow}>
-          {hasValue(unitsPassed) ? (
+          {hasValue(compliantUnits) ? (
             <Text style={[styles.tag, styles.tagPass]}>
-              {formatCount(unitsPassed)} {plural(unitsPassed, "unit")} passed
+              {formatCount(compliantUnits)} {plural(compliantUnits, "unit")} passed
             </Text>
           ) : null}
           <Text style={styles.tag}>{citationStyle}</Text>
           <Text style={styles.tag}>Format only</Text>
         </View>
-        {scanFlow.downloadError ? (
-          <Text style={styles.downloadError} accessibilityRole="alert">
-            {scanFlow.downloadError}
-          </Text>
-        ) : null}
-        <Pressable
-          onPress={onDownload}
-          disabled={scanFlow.downloadBusy}
-          style={({ pressed }) => [
-            styles.downloadBtn,
-            pressed && { backgroundColor: "#243049" },
-            scanFlow.downloadBusy && { opacity: 0.5 },
-          ]}
-        >
-          <DownloadIcon />
-          <Text style={styles.downloadText}>
-            {scanFlow.downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
-          </Text>
-        </Pressable>
       </View>
 
       <View style={styles.previewCard}>
@@ -512,14 +478,6 @@ function ScanResultBody({ navigation }) {
         <IssuesDetectedPanel formatChecks={formatChecks} pageCount={pageCount} pagination={pagination} />
       </View>
 
-      <View style={styles.footerRow}>
-        <Pressable
-          style={({ pressed }) => [styles.newVersionBtn, pressed && { backgroundColor: "#12ae99" }]}
-          onPress={onUploadNewVersion}
-        >
-          <Text style={styles.newVersionText}>Upload New Version</Text>
-        </Pressable>
-      </View>
     </ScrollView>
   );
 }
@@ -543,9 +501,28 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   hero: { borderRadius: 12, backgroundColor: "#172033", padding: 20 },
-  heroLinks: { flexDirection: "row", flexWrap: "wrap", gap: 14, marginBottom: 8 },
-  heroBack: { fontSize: 11, fontWeight: "600", color: colors.accent },
+  heroTopRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 8,
+  },
+  heroLinks: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
   heroTrace: { fontSize: 11, fontWeight: "600", color: "#cbd5e1" },
+  downloadBtnTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.45)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  downloadTextTop: { fontSize: 11, fontWeight: "700", color: "#e2e8f0" },
   scope: {
     alignSelf: "flex-start",
     overflow: "hidden",
@@ -594,7 +571,32 @@ const styles = StyleSheet.create({
     color: "#92400e",
     textAlign: "center",
   },
-  barIssues: { fontSize: 10, color: "#94a3b8" },
+  catGrid: { marginTop: 16, gap: 10 },
+  catCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#f4f6f8",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  catRingWrap: { width: 64, height: 64, alignItems: "center", justifyContent: "center" },
+  catRingCenter: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  catRingValue: { fontSize: 12, fontWeight: "800" },
+  catCopy: { flex: 1, minWidth: 0 },
+  catTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
+  catDetail: { marginTop: 2, fontSize: 11, lineHeight: 15, color: "#64748b" },
   statNote: { marginTop: 8, fontSize: 10, lineHeight: 14, color: "#94a3b8" },
   card: {
     borderRadius: 12,
@@ -638,18 +640,6 @@ const styles = StyleSheet.create({
   bandPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 6 },
   bandText: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8 },
   circleHint: { fontSize: 12, color: "#94a3b8", textAlign: "center" },
-  barBlock: { gap: 6 },
-  barHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  barLabel: { flex: 1, fontSize: 12, fontWeight: "500", color: "#475569" },
-  barMeta: { fontWeight: "400", color: "#94a3b8" },
-  barPass: { fontWeight: "400", color: "#059669" },
-  barScore: { fontSize: 12, fontWeight: "700" },
-  barTrack: { height: 8, borderRadius: 999, backgroundColor: "#f1f5f9", overflow: "hidden" },
-  barFill: { height: 8, borderRadius: 999 },
-  legend: { marginTop: 20, flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 4 },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: { fontSize: 10, color: "#94a3b8" },
   statGrid: { marginTop: 16, flexDirection: "row", gap: 8 },
   stat: { flex: 1, borderRadius: 8, padding: 12, alignItems: "center" },
   statNum: { fontSize: 24, fontWeight: "800" },
@@ -736,12 +726,4 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
-  footerRow: { flexDirection: "row", justifyContent: "flex-end", paddingBottom: 8 },
-  newVersionBtn: {
-    borderRadius: 8,
-    backgroundColor: colors.accent,
-    paddingHorizontal: 24,
-    paddingVertical: 11,
-  },
-  newVersionText: { fontSize: 12, fontWeight: "700", color: colors.white },
 });

@@ -5,13 +5,31 @@
 /** Cloudinary rejects raw uploads above 10 MB (10,485,760 bytes) on the current plan. */
 export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
-/** The API can only validate and parse these formats. */
-export const ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
-export const ACCEPTED_MIME_TYPES = [
+/** Mechanics guides: PDF or DOCX. */
+export const MECHANICS_ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
+export const MECHANICS_ACCEPTED_MIME_TYPES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
-export const ACCEPT_ATTRIBUTE = [...ACCEPTED_EXTENSIONS, ...ACCEPTED_MIME_TYPES].join(",");
+export const MECHANICS_ACCEPT_ATTRIBUTE = [
+  ...MECHANICS_ACCEPTED_EXTENSIONS,
+  ...MECHANICS_ACCEPTED_MIME_TYPES,
+].join(",");
+
+/** Manuscripts for analysis: DOCX only. */
+export const MANUSCRIPT_ACCEPTED_EXTENSIONS = [".docx"];
+export const MANUSCRIPT_ACCEPTED_MIME_TYPES = [
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+];
+export const MANUSCRIPT_ACCEPT_ATTRIBUTE = [
+  ...MANUSCRIPT_ACCEPTED_EXTENSIONS,
+  ...MANUSCRIPT_ACCEPTED_MIME_TYPES,
+].join(",");
+
+/** @deprecated Prefer MECHANICS_* or MANUSCRIPT_* — kept for shared helpers. */
+export const ACCEPTED_EXTENSIONS = MECHANICS_ACCEPTED_EXTENSIONS;
+export const ACCEPTED_MIME_TYPES = MECHANICS_ACCEPTED_MIME_TYPES;
+export const ACCEPT_ATTRIBUTE = MECHANICS_ACCEPT_ATTRIBUTE;
 
 const PDF_SIGNATURE = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
 const ZIP_SIGNATURE = [0x50, 0x4b, 0x03, 0x04]; // "PK\x03\x04" (DOCX container)
@@ -44,14 +62,19 @@ async function hasExpectedSignature(file, ext) {
  * Checks the extension, the browser-reported type, and the file's actual contents,
  * since drag-and-drop and renamed files bypass the picker's `accept` filter.
  * @param {File} file
+ * @param {"manuscript"|"mechanics"} [kind="mechanics"]
  * @returns {Promise<"type"|"size"|"">}
  */
-export async function getFileRejection(file) {
+export async function getFileRejection(file, kind = "mechanics") {
   if (!file) return "";
+  const allowedExt =
+    kind === "manuscript" ? MANUSCRIPT_ACCEPTED_EXTENSIONS : MECHANICS_ACCEPTED_EXTENSIONS;
+  const allowedMime =
+    kind === "manuscript" ? MANUSCRIPT_ACCEPTED_MIME_TYPES : MECHANICS_ACCEPTED_MIME_TYPES;
   const ext = fileExtension(file);
-  if (!ACCEPTED_EXTENSIONS.includes(ext)) return "type";
+  if (!allowedExt.includes(ext)) return "type";
   const mime = String(file.type || "").toLowerCase();
-  if (mime && mime !== "application/octet-stream" && !ACCEPTED_MIME_TYPES.includes(mime)) {
+  if (mime && mime !== "application/octet-stream" && !allowedMime.includes(mime)) {
     return "type";
   }
   if (!(await hasExpectedSignature(file, ext))) return "type";

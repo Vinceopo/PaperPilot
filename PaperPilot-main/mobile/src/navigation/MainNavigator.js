@@ -15,6 +15,7 @@ const Stack = createNativeStackNavigator();
 function MainTabs() {
   return (
     <Tab.Navigator
+      initialRouteName="Library"
       tabBar={() => null}
       screenOptions={{
         headerShown: false,
@@ -22,12 +23,12 @@ function MainTabs() {
         sceneStyle: { backgroundColor: colors.pageBg },
       }}
     >
-      <Tab.Screen name="Upload" component={UploadScreen} />
       <Tab.Screen
         name="Library"
         component={ManuscriptsScreen}
-        options={{ title: "Library" }}
+        options={{ title: "My Manuscripts" }}
       />
+      <Tab.Screen name="Upload" component={UploadScreen} />
       <Tab.Screen
         name="Results"
         component={ScanResultScreen}

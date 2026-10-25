@@ -12,6 +12,19 @@ import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 
 export const REMEMBER_ME_KEY = "paperpilot.rememberMe";
 
+/** Only these mean the session is truly dead — never sign out on network blips. */
+const FATAL_AUTH_CODES = new Set([
+  "auth/user-token-expired",
+  "auth/invalid-user-token",
+  "auth/id-token-revoked",
+  "auth/user-disabled",
+  "auth/user-not-found",
+]);
+
+export function isFatalAuthError(err) {
+  return FATAL_AUTH_CODES.has(String(err?.code || ""));
+}
+
 export async function setRememberMe(remember) {
   await AsyncStorage.setItem(REMEMBER_ME_KEY, remember ? "true" : "false");
 }
@@ -43,8 +56,8 @@ export async function enforceAuthSession(authInstance) {
     try {
       await authInstance.currentUser.getIdToken(true);
     } catch (err) {
-      // Offline at launch is not a revoked session; keep the user signed in.
-      if (err?.code === "auth/network-request-failed") return authInstance.currentUser;
+      // Network / transient failures must NOT wipe the session.
+      if (!isFatalAuthError(err)) return authInstance.currentUser;
       await signOut(authInstance);
       await clearRememberMe();
       return null;

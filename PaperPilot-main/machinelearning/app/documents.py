@@ -24,6 +24,7 @@ from app.mechanics_options import (
     canonical_word_spacing,
     normalize_heading_styles,
     normalize_pagination_rules,
+    rule_unset,
 )
 
 
@@ -38,7 +39,10 @@ def validate_document(filename: str, data: bytes, max_bytes: int) -> str:
     if not data:
         raise DocumentError("The uploaded file is empty.")
     if len(data) > max_bytes:
-        raise DocumentError(f"The uploaded file exceeds the {max_bytes}-byte limit.")
+        mb = max(1, round(max_bytes / (1024 * 1024)))
+        raise DocumentError(
+            f"The uploaded file exceeds the {mb} MB limit for your plan."
+        )
     if suffix == ".pdf":
         if not data[:1024].lstrip().startswith(b"%PDF-"):
             raise DocumentError("The file extension is .pdf but its signature is not a PDF.")
@@ -86,9 +90,13 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
             lines: list[dict] = []
             line_index = 0
             image_count = 0
+            images: list[dict] = []
             for block in raw.get("blocks", []):
                 if block.get("type") == 1:
                     image_count += 1
+                    bbox = block.get("bbox")
+                    if bbox and len(bbox) >= 4:
+                        images.append({"bbox": [round(float(value), 2) for value in bbox]})
                 if block.get("type") != 0:
                     continue
                 for source_line in block.get("lines", []):
@@ -132,6 +140,7 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                     "height_points": round(float(page.rect.height), 2),
                     "rotation": page.rotation,
                     "image_count": image_count,
+                    "images": images,
                     "lines": lines,
                 }
             )
@@ -984,7 +993,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     if font_type:
         font_out["type"] = font_type
     color = str(font.get("color") or raw.get("font_color") or "").strip()
-    if color:
+    if color and not rule_unset(color):
         font_out["color"] = color[:80]
     heading_styles = normalize_heading_styles(font.get("heading_styles") or raw.get("heading_styles"))
     if heading_styles:
@@ -997,20 +1006,40 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
             continue
         if 6 <= number <= 72:
             font_out[key] = number
-            if isinstance(sizes, list):
-                sizes = [*list(sizes), number]
-            else:
-                sizes = [number]
+            # sizes_points is a body-size fallback only — do not merge headingN_size into it.
+            if key in {"body_size", "heading3_content_size"}:
+                if isinstance(sizes, list):
+                    sizes = [*list(sizes), number]
+                else:
+                    sizes = [number]
     if "body_size" in font_out:
         # Analysis services that predate body_size read the combined key.
         font_out["heading3_content_size"] = font_out["body_size"]
+    elif "heading3_content_size" in font_out:
+        # Drop a stale combined value that only echoes a heading level size (H1→body leak).
+        # Keep distinct values — legacy payloads still use this key as the body size.
+        combined = font_out["heading3_content_size"]
+        level_sizes = {
+            font_out[key]
+            for key in font_out
+            if re.fullmatch(r"heading\d+_size", key)
+        }
+        if combined in level_sizes:
+            font_out.pop("heading3_content_size", None)
     try:
         levels = int(font.get("heading_levels") or 0)
     except (TypeError, ValueError):
         levels = 0
     if 1 <= levels <= MAX_HEADING_LEVELS:
         font_out["heading_levels"] = levels
-    if sizes:
+    heading_size_values = {
+        float(font_out[key])
+        for key in font_out
+        if re.fullmatch(r"heading\d+_size", key)
+    }
+    if "body_size" in font_out:
+        font_out["sizes_points"] = [float(font_out["body_size"])]
+    elif sizes:
         cleaned = []
         for value in sizes:
             try:
@@ -1026,7 +1055,11 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
                 if number not in seen:
                     seen.add(number)
                     unique.append(number)
-            font_out["sizes_points"] = unique[:8]
+            body_fallback = [number for number in unique if number not in heading_size_values]
+            if body_fallback:
+                font_out["sizes_points"] = body_fallback[:8]
+            elif not heading_size_values:
+                font_out["sizes_points"] = unique[:8]
     if font_out:
         rules["font"] = font_out
 
@@ -1034,7 +1067,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     paper_out: dict = {}
     for key in ("size", "orientation", "substance"):
         value = str(paper_in.get(key) or raw.get(f"paper_{key}") or "").strip()
-        if value:
+        if value and not rule_unset(value):
             paper_out[key] = value[:120]
     landscape = canonical_landscape_pages(paper_in.get("landscape_pages") or raw.get("landscape_pages"))
     if landscape:

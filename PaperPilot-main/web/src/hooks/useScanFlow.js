@@ -5,23 +5,22 @@
  *   "idle"         – no file selected
  *   "fileSelected" – valid file ready to analyse
  *   "analyzing"    – analysis in flight (progress polling)
- *   "summary"      – compact score modal after scan
- *   "tracing"      – document + issue reference tracing
- *   "results"      – full ScanResultsScreen
+ *   "tracing"      – document + issue reference tracing (legacy; opens full results)
+ *   "results"      – full ScanResultsScreen (entered when analysis completes)
  *   "error"        – analysis failed; user can retry
  */
 
 import { useCallback, useRef, useState } from "react";
 import { analyzeDocument, downloadReport as downloadReportFn } from "../lib/mockAnalysis";
-import { ACCEPTED_EXTENSIONS, MAX_FILE_SIZE_BYTES } from "../lib/uploadLimits.js";
+import { MANUSCRIPT_ACCEPTED_EXTENSIONS, MAX_FILE_SIZE_BYTES } from "../lib/uploadLimits.js";
 import { formatFileSize } from "../lib/formatFileSize.js";
 import { isServerId } from "../lib/scanMapper";
 
 function validateFile(file) {
   if (!file) return "";
   const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
-  if (!ACCEPTED_EXTENSIONS.includes(ext))
-    return `Only ${ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
+  if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(ext))
+    return `Only ${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
   if (file.size > MAX_FILE_SIZE_BYTES)
     return `File must be ${formatFileSize(MAX_FILE_SIZE_BYTES)} or smaller.`;
   return "";
@@ -152,9 +151,10 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
 
+  /** After analyzing UI finishes, go straight to the full results page (no summary modal). */
   const revealSummary = useCallback(() => {
     if (!resultRef.current) return;
-    setStep((current) => (current === "analyzing" ? "summary" : current));
+    setStep((current) => (current === "analyzing" ? "results" : current));
   }, []);
 
   const openReferenceTracing = useCallback(() => {
@@ -166,7 +166,7 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   }, [result]);
 
   const backToSummary = useCallback(() => {
-    if (result) setStep("summary");
+    if (result) setStep("results");
   }, [result]);
 
   const retry = useCallback(() => {

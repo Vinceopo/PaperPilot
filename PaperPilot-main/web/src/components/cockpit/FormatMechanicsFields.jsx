@@ -9,6 +9,7 @@ import { ChevronDown, Plus, Trash2, X } from "lucide-react";
 import {
   BODY_NUMBERING_OPTIONS,
   CHAPTER_FIRST_PAGE_OPTIONS,
+  CHAPTER_MARKER_OPTIONS,
   FONT_FAMILIES,
   HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
@@ -20,6 +21,7 @@ import {
   emptyHeading,
   headingLabel,
 } from "../../lib/mechanicsOptions";
+import { isIgnoreFormValue } from "../../lib/formatMechanicsForm.js";
 
 const LINE_SPACING_OPTIONS = [
   { value: "1", label: "1 (Single)" },
@@ -152,16 +154,17 @@ function ComboInput({ value, onChange, options, disabled }) {
   );
 }
 
-/** Select with an "NA" (no rule) choice; a saved value outside the list stays selectable. */
-function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "NA" }) {
+/** Select with an IGNORE (no rule) choice; a saved value outside the list stays selectable. */
+function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "IGNORE" }) {
   const items = options.map((option) => (typeof option === "string" ? { value: option } : option));
   const current = String(value ?? "");
-  if (current && !items.some((item) => item.value === current)) {
+  if (current && current !== "IGNORE" && !items.some((item) => item.value === current)) {
     items.push({ value: current, label: `${current} (custom)` });
   }
   return (
     <select disabled={disabled} value={current} onChange={(e) => onChange(e.target.value)} className={inputClass}>
-      <option value="">{emptyLabel}</option>
+      {current === "" ? <option value="">Choose…</option> : null}
+      <option value="IGNORE">{emptyLabel}</option>
       {items.map((item) => (
         <option key={item.value} value={item.value}>
           {item.label || item.value}
@@ -248,7 +251,8 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               onChange={set("paperOrientation")}
               className={inputClass}
             >
-              <option value="">NA</option>
+              {String(form.paperOrientation || "") === "" ? <option value="">Choose…</option> : null}
+              <option value="IGNORE">IGNORE</option>
               <option value="Portrait">Portrait</option>
               <option value="Landscape">Landscape</option>
             </select>
@@ -285,14 +289,15 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               className={inputClass}
             />
           </Field>
-          <Field label="Alignment" hint="Body text alignment — NA skips this check">
+          <Field label="Alignment" hint="Body text alignment — IGNORE skips this check">
             <select
               disabled={disabled}
               value={form.alignment || ""}
               onChange={set("alignment")}
               className={inputClass}
             >
-              <option value="">NA</option>
+              {String(form.alignment || "") === "" ? <option value="">Choose…</option> : null}
+              <option value="IGNORE">IGNORE</option>
               <option value="Justified">Justified</option>
               <option value="Left">Left</option>
               <option value="Center">Center</option>
@@ -514,6 +519,51 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               options={BODY_NUMBERING_OPTIONS}
             />
           </Field>
+          <Field
+            label="Chapter starts"
+            hint="How chapter headings are written — set IGNORE if your guide does not specify this"
+          >
+            <select
+              disabled={disabled}
+              className={inputClass}
+              value={
+                isIgnoreFormValue(form.paginationChapterMarkers)
+                  ? "IGNORE"
+                  : Array.isArray(form.paginationChapterMarkers) && form.paginationChapterMarkers.length
+                    ? form.paginationChapterMarkers.join(",")
+                    : ""
+              }
+              onChange={(e) => {
+                const next = e.target.value;
+                if (next === "IGNORE") {
+                  onChange?.({ ...form, paginationChapterMarkers: "IGNORE" });
+                } else if (!next) {
+                  onChange?.({ ...form, paginationChapterMarkers: [] });
+                } else {
+                  onChange?.({
+                    ...form,
+                    paginationChapterMarkers: next.split(",").map((part) => part.trim()).filter(Boolean),
+                  });
+                }
+              }}
+            >
+              {!(
+                isIgnoreFormValue(form.paginationChapterMarkers) ||
+                (Array.isArray(form.paginationChapterMarkers) && form.paginationChapterMarkers.length)
+              ) ? (
+                <option value="">Choose…</option>
+              ) : null}
+              <option value="IGNORE">IGNORE</option>
+              <option value="chapter_roman,chapter_arabic">
+                CHAPTER I… and Chapter 1… (both)
+              </option>
+              {CHAPTER_MARKER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
         </div>
       </Section>
 
@@ -551,14 +601,19 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
       </Section>
 
       <Section title="Citation format">
-        <Field label="Citation style" hint="NA skips citation checks">
+        <Field label="Citation style" hint="IGNORE skips citation checks">
           <select
             disabled={disabled}
-            value={supportedCitationStyle(form.citationFormat)}
+            value={
+              /^ignore$/i.test(String(form.citationFormat || "").trim())
+                ? "IGNORE"
+                : supportedCitationStyle(form.citationFormat)
+            }
             onChange={set("citationFormat")}
             className={inputClass}
           >
-            <option value="">NA</option>
+            {String(form.citationFormat || "") === "" ? <option value="">Choose…</option> : null}
+            <option value="IGNORE">IGNORE</option>
             <option value="APA">APA</option>
             <option value="MLA">MLA</option>
             <option value="IEEE">IEEE</option>

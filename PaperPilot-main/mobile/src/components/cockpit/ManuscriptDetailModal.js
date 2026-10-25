@@ -1,16 +1,79 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import Svg, { Circle } from "react-native-svg";
 import { colors } from "../../theme";
 import { bandTone, scoreBand } from "../../lib/scoreBand";
 import { downloadReport } from "../../lib/mockAnalysis";
 import { versionToScanResult } from "../../lib/scannedLibrary";
-import { CATEGORY_STATUS_LABEL, formatCount, formatScore, hasValue, plural } from "../../lib/scoreFormat";
+import {
+  CATEGORY_STATUS_LABEL,
+  formatCount,
+  formatPct,
+  formatScore,
+  hasValue,
+  plural,
+} from "../../lib/scoreFormat";
 import { APP_TIME_ZONE } from "../../lib/timeZone";
 import { isPaidTier } from "../../lib/plans";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import UpgradePrompt from "../ui/UpgradePrompt";
-import { ClockIcon, CloseIcon, DownloadIcon, LockIcon, TrashIcon } from "../shell/icons";
+import { ClockIcon, DownloadIcon, LockIcon, TrashIcon } from "../shell/icons";
+
+function ringStroke(score) {
+  if (!hasValue(score)) return "#cbd5e1";
+  if (score >= 80) return "#157347";
+  if (score >= 50) return "#B57200";
+  return "#B02A37";
+}
+
+/** Matches web / Scan Results category cards. */
+function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, issueCount }) {
+  const evaluated = hasValue(score);
+  const safe = evaluated ? Math.max(0, Math.min(100, Number(score))) : 0;
+  const radius = 26;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (safe / 100) * circumference;
+  const stroke = ringStroke(evaluated ? safe : null);
+  const detail = hasValue(unitsChecked)
+    ? `Checked ${formatCount(unitsChecked)}${hasValue(unitsFailed) ? ` · failed ${formatCount(unitsFailed)}` : ""}`
+    : hasValue(issueCount) && Number(issueCount) > 0
+      ? `${formatCount(issueCount)} ${plural(issueCount, "issue")} found`
+      : evaluated
+        ? null
+        : CATEGORY_STATUS_LABEL[status] || "Not evaluated";
+
+  return (
+    <View style={styles.ringCard}>
+      <View style={styles.ringWrap}>
+        <Svg width={64} height={64} style={{ transform: [{ rotate: "-90deg" }] }}>
+          <Circle cx={32} cy={32} r={radius} stroke="#e2e8f0" strokeWidth={5.5} fill="none" />
+          <Circle
+            cx={32}
+            cy={32}
+            r={radius}
+            stroke={stroke}
+            strokeWidth={5.5}
+            fill="none"
+            strokeLinecap="round"
+            strokeDasharray={`${circumference} ${circumference}`}
+            strokeDashoffset={evaluated ? offset : circumference}
+          />
+        </Svg>
+        <View style={styles.ringLabel}>
+          <Text style={[styles.ringPct, { color: evaluated ? stroke : "#94a3b8" }]}>
+            {evaluated ? formatPct(safe, 1) : "—"}
+          </Text>
+        </View>
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.ringTitle} numberOfLines={1}>
+          {section}
+        </Text>
+        {detail ? <Text style={styles.ringDetail}>{detail}</Text> : null}
+      </View>
+    </View>
+  );
+}
 
 const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
@@ -121,8 +184,9 @@ function IssueCard({ issue }) {
 }
 
 /**
- * Read-only version detail sheet for one manuscript.
+ * Dedicated manuscript detail page (versions + score breakdown).
  * Free plan: only the latest scanned version is accessible. Premium: all versions.
+ * Selecting a version updates this short summary in place; "View full results" opens Scan Results.
  */
 export default function ManuscriptDetailModal({
   manuscript,
@@ -131,9 +195,7 @@ export default function ManuscriptDetailModal({
   onDeleteVersion,
   onOpenResult,
   resolveResult,
-  onClose,
 }) {
-  const insets = useSafeAreaInsets();
   const isPremium = isPaidTier(tier);
 
   const versionsDesc = useMemo(() => {
@@ -147,6 +209,7 @@ export default function ManuscriptDetailModal({
   const [selectedId, setSelectedId] = useState(latestId);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
+  const [openingResult, setOpeningResult] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -166,6 +229,16 @@ export default function ManuscriptDetailModal({
   const tone = bandTone(band);
   const versionLabel = selected ? `v${selected.versionNumber}.0` : "—";
 
+  async function openFullResult(ver) {
+    if (!ver || !onOpenResult || openingResult) return;
+    setOpeningResult(true);
+    try {
+      await onOpenResult(ver);
+    } finally {
+      setOpeningResult(false);
+    }
+  }
+
   function selectVersion(ver) {
     const isLatest = ver.id === latestId;
     if (!isPremium && !isLatest) {
@@ -174,8 +247,8 @@ export default function ManuscriptDetailModal({
       );
       return;
     }
+    // Short summary only — full Scan Results open via "View full results".
     setSelectedId(ver.id);
-    onOpenResult?.(ver);
   }
 
   async function onDownload() {
@@ -200,8 +273,7 @@ export default function ManuscriptDetailModal({
   );
 
   return (
-    <Modal visible animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
-      <View style={[styles.root, { paddingTop: insets.top }]}>
+    <View style={styles.root}>
         <View style={styles.header}>
           <View style={styles.headerText}>
             <Text style={styles.kicker}>Manuscript detail</Text>
@@ -220,12 +292,8 @@ export default function ManuscriptDetailModal({
               <View style={[styles.pill, styles.pillNeutral]}>
                 <Text style={[styles.pillText, styles.pillNeutralText]}>{versionLabel}</Text>
               </View>
-              <Text style={styles.readOnly}>Read-only checker view</Text>
             </View>
           </View>
-          <Pressable style={styles.closeBtn} onPress={onClose} accessibilityLabel="Close detail" hitSlop={6}>
-            <CloseIcon size={16} />
-          </Pressable>
         </View>
 
         <View style={styles.aside}>
@@ -254,9 +322,6 @@ export default function ManuscriptDetailModal({
                         v{ver.versionNumber}.0
                       </Text>
                       {locked ? <LockIcon size={14} /> : null}
-                      {isLatest ? (
-                        <Text style={[styles.latest, { color: active ? colors.accent : "#059669" }]}>Latest</Text>
-                      ) : null}
                     </View>
                     <Text style={[styles.versionDate, active && styles.versionMutedActive]}>
                       {formatDateTime(ver.scannedAt || ver.scannedDate)}
@@ -291,7 +356,7 @@ export default function ManuscriptDetailModal({
           ) : null}
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={[styles.bodyContent, { paddingBottom: insets.bottom + 28 }]}>
+        <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
           {!selected ? (
             <Text style={styles.emptyText}>No versions available.</Text>
           ) : (
@@ -309,90 +374,24 @@ export default function ManuscriptDetailModal({
                 </View>
               </View>
 
-              <Text style={styles.sectionTitle}>Score breakdown</Text>
-              {(selected.breakdown || []).length > 0 &&
-              (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
-                <Text style={styles.breakdownNote}>
-                  Unit counts were not stored with this scan. Re-analyse the manuscript to generate the full
-                  scoring breakdown.
-                </Text>
-              ) : null}
-              <View style={styles.breakdown}>
-                {(selected.breakdown || []).map((row) => {
-                  const rt = bandTone(scoreBand(row.score));
-                  return (
-                    <View key={row.section}>
-                      <View style={styles.barHead}>
-                        <Text style={styles.barLabel}>{row.section}</Text>
-                        <Text style={[styles.barScore, { color: rt.text }]}>
-                          {row.score == null
-                            ? CATEGORY_STATUS_LABEL[row.status] || "Not evaluated"
-                            : formatScore(row.score)}
-                        </Text>
-                      </View>
-                      <View style={styles.barTrack}>
-                        <View
-                          style={[
-                            styles.barFill,
-                            {
-                              backgroundColor: rt.bar,
-                              width: `${Math.min(100, Math.max(0, Number(row.score) || 0))}%`,
-                            },
-                          ]}
-                        />
-                      </View>
-                      {hasValue(row.unitsChecked) ? (
-                        <Text style={styles.barMetaLine}>
-                          Checked {formatCount(row.unitsChecked)}
-                          {hasValue(row.unitsPassed) ? ` · passed ${formatCount(row.unitsPassed)}` : ""}
-                          {hasValue(row.unitsFailed) ? ` · failed ${formatCount(row.unitsFailed)}` : ""}
-                        </Text>
-                      ) : null}
-                      {hasValue(row.issueCount) && Number(row.issueCount) > 0 ? (
-                        <Text style={styles.barMetaLine}>
-                          {formatCount(row.issueCount)} {plural(row.issueCount, "issue")} found in this category
-                        </Text>
-                      ) : null}
-                    </View>
-                  );
-                })}
-              </View>
-
-              <Text style={[styles.sectionTitle, styles.issuesTitle]}>
-                Detected issues <Text style={styles.issuesCount}>({issues.length})</Text>
-              </Text>
-              <Text style={styles.issuesHint}>
-                Each card is one rule finding — expand locations to see every page/line hit.
-              </Text>
-
-              {issues.length === 0 && selected.trimmed && onOpenResult ? (
-                <View style={{ marginTop: 12 }}>
-                  <Text style={styles.emptyText}>
-                    This version was scanned on another device. Open it to load its issues.
-                  </Text>
+              <View style={styles.footerTop}>
+                {downloadError ? <Text style={styles.downloadError}>{downloadError}</Text> : null}
+                {onOpenResult ? (
                   <Pressable
-                    onPress={() => selectVersion(selected)}
+                    onPress={() => void openFullResult(selected)}
+                    disabled={openingResult}
                     style={({ pressed }) => [
                       styles.downloadBtn,
-                      { marginTop: 10 },
+                      { backgroundColor: "#16bfa8" },
                       pressed && styles.downloadBtnPressed,
+                      openingResult && styles.downloadBtnBusy,
                     ]}
                   >
-                    <Text style={styles.downloadText}>View full results</Text>
+                    <Text style={[styles.downloadText, { color: "#fff" }]}>
+                      {openingResult ? "Opening…" : "View full results"}
+                    </Text>
                   </Pressable>
-                </View>
-              ) : issues.length === 0 ? (
-                <Text style={[styles.emptyText, { marginTop: 12 }]}>No issues recorded for this version.</Text>
-              ) : (
-                <View style={styles.issueList}>
-                  {issues.map((issue, idx) => (
-                    <IssueCard key={`${issue.category}-${idx}`} issue={issue} />
-                  ))}
-                </View>
-              )}
-
-              <View style={styles.footer}>
-                {downloadError ? <Text style={styles.downloadError}>{downloadError}</Text> : null}
+                ) : null}
                 <Pressable
                   onPress={onDownload}
                   disabled={downloadBusy}
@@ -408,6 +407,68 @@ export default function ManuscriptDetailModal({
                   </Text>
                 </Pressable>
               </View>
+
+              <Text style={styles.sectionTitle}>Score Breakdown</Text>
+              {(selected.breakdown || []).length > 0 &&
+              (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
+                <Text style={styles.breakdownNote}>
+                  Unit counts were not stored with this scan. Re-analyse the manuscript to generate the full
+                  scoring breakdown.
+                </Text>
+              ) : null}
+              <View style={styles.ringGrid}>
+                {(selected.breakdown || []).map((row) => (
+                  <CategoryRingCard
+                    key={row.section}
+                    section={row.section}
+                    score={row.score}
+                    status={row.status}
+                    unitsChecked={row.unitsChecked}
+                    unitsFailed={row.unitsFailed}
+                    issueCount={row.issueCount}
+                  />
+                ))}
+              </View>
+
+              <Text style={[styles.sectionTitle, styles.issuesTitle]}>
+                Detected issues <Text style={styles.issuesCount}>({issues.length})</Text>
+              </Text>
+              <Text style={styles.issuesHint}>
+                Each card is one rule finding — expand locations to see every page/line hit.
+              </Text>
+
+              {issues.length === 0 && selected.trimmed ? (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={styles.emptyText}>
+                    This version was scanned on another device. Open full results to load every issue.
+                  </Text>
+                  {onOpenResult ? (
+                    <Pressable
+                      onPress={() => void openFullResult(selected)}
+                      disabled={openingResult}
+                      style={({ pressed }) => [
+                        styles.downloadBtn,
+                        { marginTop: 10, backgroundColor: "#16bfa8" },
+                        pressed && styles.downloadBtnPressed,
+                        openingResult && styles.downloadBtnBusy,
+                      ]}
+                    >
+                      <Text style={[styles.downloadText, { color: "#fff" }]}>
+                        {openingResult ? "Opening…" : "View full results"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : issues.length === 0 ? (
+                <Text style={[styles.emptyText, { marginTop: 12 }]}>No issues recorded for this version.</Text>
+              ) : (
+                <View style={styles.issueList}>
+                  {issues.map((issue, idx) => (
+                    <IssueCard key={`${issue.category}-${idx}`} issue={issue} />
+                  ))}
+                </View>
+              )}
+
             </>
           )}
         </ScrollView>
@@ -449,24 +510,25 @@ export default function ManuscriptDetailModal({
           onClose={() => setUpgradeMessage("")}
           onUpgrade={onUpgrade}
         />
-      </View>
-    </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.white },
+  root: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    overflow: "hidden",
+  },
   header: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: 16,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
     paddingHorizontal: 20,
     paddingVertical: 16,
   },
-  headerText: { flex: 1, minWidth: 0 },
+  headerText: { minWidth: 0 },
   kicker: {
     fontSize: 10,
     fontWeight: "600",
@@ -481,16 +543,6 @@ const styles = StyleSheet.create({
   pillText: { fontSize: 10, fontWeight: "700" },
   pillNeutral: { borderColor: colors.border, backgroundColor: "#f8fafc" },
   pillNeutralText: { color: "#475569" },
-  readOnly: { fontSize: 11, color: colors.muted },
-  closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   aside: { borderBottomWidth: 1, borderBottomColor: "#f1f5f9", backgroundColor: "#F8FAFC" },
   asideLabelRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 12 },
   asideLabel: {
@@ -523,7 +575,6 @@ const styles = StyleSheet.create({
   versionTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   versionNum: { fontSize: 12, fontWeight: "500", color: colors.muted },
   versionMutedActive: { color: "#cbd5e1" },
-  latest: { fontSize: 9, fontWeight: "600", letterSpacing: 0.5, textTransform: "uppercase" },
   versionDate: { marginTop: 2, fontSize: 11, color: colors.muted },
   versionScore: { marginTop: 4, fontSize: 10, fontWeight: "600" },
   versionDelete: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
@@ -537,7 +588,7 @@ const styles = StyleSheet.create({
     color: colors.slate,
   },
   body: { flex: 1 },
-  bodyContent: { paddingHorizontal: 20, paddingTop: 20 },
+  bodyContent: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 28 },
   emptyText: { fontSize: 14, color: colors.muted },
   selectedRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 12 },
   selectedLabel: { fontSize: 12, fontWeight: "600", color: colors.slate },
@@ -607,7 +658,24 @@ const styles = StyleSheet.create({
   chipText: { fontFamily: MONO, fontSize: 10, fontWeight: "600" },
   chipMore: { borderRadius: 6, backgroundColor: "rgba(255,255,255,0.6)", paddingHorizontal: 8, paddingVertical: 4 },
   chipMoreText: { fontSize: 10, fontWeight: "600" },
-  footer: { marginTop: 32, borderTopWidth: 1, borderTopColor: "#f1f5f9", paddingTop: 20 },
+  footerTop: { marginTop: 16, marginBottom: 8 },
+  ringGrid: { marginTop: 12, gap: 10 },
+  ringCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#f4f6f8",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  ringWrap: { width: 64, height: 64, alignItems: "center", justifyContent: "center" },
+  ringLabel: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
+  ringPct: { fontSize: 12, fontWeight: "800" },
+  ringTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
+  ringDetail: { marginTop: 2, fontSize: 11, lineHeight: 15, color: colors.muted },
   downloadError: { marginBottom: 8, fontSize: 12, color: "#f43f5e" },
   downloadBtn: {
     alignSelf: "flex-start",

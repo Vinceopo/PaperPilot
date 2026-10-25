@@ -21,7 +21,8 @@ import { isPaidTier, planName } from "../lib/plans";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import OtpStep from "../components/auth/OtpStep";
-import { CameraIcon, ChevronLeftIcon, EyeIcon, PadlockIcon, PencilIcon } from "../components/shell/icons";
+import BackToDashboardButton from "../components/ui/BackToDashboardButton";
+import { CameraIcon, EyeIcon, PadlockIcon, PencilIcon } from "../components/shell/icons";
 
 function digitsOnly(value, max = 11) {
   return (value || "").replace(/\D/g, "").slice(0, max);
@@ -157,12 +158,7 @@ function PwField({ label, value, onChangeText, show, onToggle }) {
 }
 
 function BackLink({ onPress, label = "Back to account" }) {
-  return (
-    <Pressable onPress={onPress} style={styles.backLink} hitSlop={6}>
-      <ChevronLeftIcon size={16} color={colors.slate} />
-      <Text style={styles.backLinkText}>{label}</Text>
-    </Pressable>
-  );
+  return <BackToDashboardButton onPress={onPress} label={label} style={styles.backLink} />;
 }
 
 export default function AccountScreen({ navigation }) {
@@ -304,6 +300,7 @@ export default function AccountScreen({ navigation }) {
   }
 
   async function handleStartChangePassword() {
+    if (isGoogleAccount) return;
     setSendingOtp(true);
     setSendOtpError("");
     try {
@@ -474,7 +471,7 @@ export default function AccountScreen({ navigation }) {
       );
     }
 
-    if (view === "pwOtp") {
+    if (view === "pwOtp" && !isGoogleAccount) {
       const back = () => {
         setView("summary");
         setSendOtpError("");
@@ -502,7 +499,7 @@ export default function AccountScreen({ navigation }) {
       );
     }
 
-    if (view === "pwNew") {
+    if (view === "pwNew" && !isGoogleAccount) {
       const hints = [
         { ok: pw.newPw.length >= 8, label: "8+ characters" },
         { ok: /[a-zA-Z]/.test(pw.newPw), label: "One letter" },
@@ -629,33 +626,26 @@ export default function AccountScreen({ navigation }) {
               <Text style={styles.editText}>Edit profile</Text>
             </Pressable>
 
-            <Pressable
-              onPress={handleStartChangePassword}
-              disabled={sendingOtp}
-              style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed, sendingOtp && styles.pwBtnBusy]}
-            >
-              {sendingOtp ? (
-                <>
-                  <ActivityIndicator size="small" color={colors.white} />
-                  <Text style={styles.pwBtnText}>Sending code…</Text>
-                </>
-              ) : (
-                <>
-                  <PadlockIcon size={16} />
-                  <Text style={styles.pwBtnText}>
-                    {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
-                  </Text>
-                </>
-              )}
-      </Pressable>
+            {!isGoogleAccount ? (
+              <Pressable
+                onPress={handleStartChangePassword}
+                disabled={sendingOtp}
+                style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed, sendingOtp && styles.pwBtnBusy]}
+              >
+                {sendingOtp ? (
+                  <>
+                    <ActivityIndicator size="small" color={colors.white} />
+                    <Text style={styles.pwBtnText}>Sending code…</Text>
+                  </>
+                ) : (
+                  <>
+                    <PadlockIcon size={16} />
+                    <Text style={styles.pwBtnText}>Change password</Text>
+                  </>
+                )}
+              </Pressable>
+            ) : null}
     </View>
-
-          {isGoogleAccount ? (
-            <Text style={styles.googleNote}>
-              You sign in with Google. Setting a password is optional and only needed if you also want email login — no
-              username is required.
-            </Text>
-          ) : null}
 
           <Pressable
             onPress={() => navigation.navigate("Subscription")}
@@ -833,8 +823,7 @@ const styles = StyleSheet.create({
   manageText: { fontSize: 14, fontWeight: "600", color: "#334155" },
   errorText: { marginTop: 12, fontSize: 12, color: "#f43f5e" },
   successText: { marginTop: 12, fontSize: 12, fontWeight: "600", color: "#059669" },
-  backLink: { marginBottom: 20, flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start" },
-  backLinkText: { fontSize: 14, fontWeight: "500", color: colors.slate },
+  backLink: { marginBottom: 20 },
   formCard: {
     borderRadius: 16,
     borderWidth: 1,

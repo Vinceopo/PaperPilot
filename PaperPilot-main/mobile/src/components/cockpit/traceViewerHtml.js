@@ -34,7 +34,13 @@ const SCRIPT = String.raw`
   function hitPaint(sev) {
     return HIT[String(sev || "").toLowerCase()] || HIT.minor;
   }
-  function marginSide(text) {
+  function marginSide(text, extras) {
+    extras = extras || {};
+    var explicit = String(extras.margin_side || extras.marginSide || "").toLowerCase();
+    if (explicit === "top" || explicit === "bottom" || explicit === "left" || explicit === "right") return explicit;
+    var issueType = String(extras.issue_type || extras.issueType || "").toLowerCase();
+    var m = issueType.match(/^(top|bottom|left|right)_margin$/);
+    if (m) return m[1];
     var v = String(text || "").toLowerCase();
     if (v.indexOf("right margin") >= 0) return "right";
     if (v.indexOf("left margin") >= 0) return "left";
@@ -42,8 +48,19 @@ const SCRIPT = String.raw`
     if (v.indexOf("bottom margin") >= 0) return "bottom";
     return "";
   }
+  function pageRegion(t) {
+    var explicit = String((t && (t.page_region || t.pageRegion)) || "").toLowerCase();
+    if (explicit === "top" || explicit === "bottom") return explicit;
+    var text = String((t && (t.finding || "")) + " " + (t && (t.recommendation || ""))).toLowerCase();
+    if (text.indexOf("bottom") >= 0) return "bottom";
+    if (text.indexOf("top") >= 0) return "top";
+    return "top";
+  }
   function isMarginTarget(t) {
     return String(t.section || "").toLowerCase() === "margins";
+  }
+  function isPaginationTarget(t) {
+    return String(t.section || "").toLowerCase() === "pagination";
   }
   function marginRegion(side) {
     if (side === "bottom") return { start: 0.93, size: 0.07 };
@@ -225,38 +242,59 @@ const SCRIPT = String.raw`
     });
   }
   function tracePdf(t) {
-    var pageNumber = Math.min(state.specs.length, Math.max(1, Number(t.page) || 1));
+    // Never invent page 1 when the issue has no page pin.
+    if (t.page == null || t.page === "") return;
+    var pageNumber = Math.min(state.specs.length, Math.max(1, Number(t.page)));
+    if (!isFinite(pageNumber) || pageNumber < 1) return;
     var spec = state.specs[pageNumber - 1];
     if (!spec) return;
     var pageEl = spec.el;
     var pageHeight = pageEl.clientHeight;
     clearMarks();
-    if (isMarginTarget(t)) {
-      var side = marginSide(t.finding);
+    if (isMarginTarget(t) || (isPaginationTarget(t) && !(t.bbox && isFinite(Number(t.bbox.y))))) {
+      var side = isMarginTarget(t)
+        ? (marginSide(t.finding, t) || pageRegion(t))
+        : pageRegion(t);
       paintMargin(pageEl, side, t.severity);
       scrollToPageRegion(pageEl, side);
       return;
     }
     var bbox = t.bbox;
-    if (bbox && isFinite(Number(bbox.y))) {
-      var h = Math.max(0.012, Number(bbox.h) || 0.025);
-      paintBox(pageEl, {
-        top: Number(bbox.y) * 100 + "%",
-        left: Number(bbox.x) * 100 + "%",
-        width: Math.max(0.02, Number(bbox.w) || 0.84) * 100 + "%",
-        height: h * 100 + "%"
-      }, t.severity);
-      scrollMarkIntoView(elementTopIn(pageEl, Number(bbox.y) * pageHeight), h * pageHeight);
-      return;
-    }
     pdfLineYs(spec).then(function (ys) {
       var line = Number(t.line) || 0;
-      var y = line && ys[line - 1] != null ? ys[line - 1] : 0;
-      var next = ys[line];
-      var markHeight = next != null && next > y ? Math.max(14, next - y) : Math.max(18, pageHeight * 0.03);
+      var bboxY = bbox && isFinite(Number(bbox.y)) ? Number(bbox.y) * pageHeight : null;
+      var lineY = line && ys.length
+        ? ys[Math.min(ys.length, Math.max(1, Math.round(line))) - 1]
+        : null;
+      var useLine = lineY != null && isFinite(Number(lineY));
+      if (useLine && bboxY != null) {
+        var tolerance = Math.max(12, pageHeight * 0.02);
+        if (Math.abs(bboxY - lineY) <= tolerance) useLine = false;
+      }
       clearMarks();
-      paintBox(pageEl, { top: y + "px", left: "8%", width: "84%", height: markHeight + "px" }, t.severity);
-      scrollMarkIntoView(elementTopIn(pageEl, y), markHeight);
+      if (useLine) {
+        var next = ys[Math.min(ys.length, Math.max(1, Math.round(line)))];
+        var markHeight = next != null && next > lineY ? Math.max(14, next - lineY) : Math.max(18, pageHeight * 0.03);
+        paintBox(pageEl, { top: lineY + "px", left: "8%", width: "84%", height: markHeight + "px" }, t.severity);
+        scrollMarkIntoView(elementTopIn(pageEl, lineY), markHeight);
+        return;
+      }
+      if (bbox && isFinite(Number(bbox.y))) {
+        var h = Math.max(0.012, Number(bbox.h) || 0.025);
+        paintBox(pageEl, {
+          top: Number(bbox.y) * 100 + "%",
+          left: Number(bbox.x) * 100 + "%",
+          width: Math.max(0.02, Number(bbox.w) || 0.84) * 100 + "%",
+          height: h * 100 + "%"
+        }, t.severity);
+        scrollMarkIntoView(elementTopIn(pageEl, Number(bbox.y) * pageHeight), h * pageHeight);
+        return;
+      }
+      var y = 0;
+      var fallbackNext = ys[1];
+      var fallbackH = fallbackNext != null ? Math.max(14, fallbackNext - y) : Math.max(18, pageHeight * 0.03);
+      paintBox(pageEl, { top: y + "px", left: "8%", width: "84%", height: fallbackH + "px" }, t.severity);
+      scrollMarkIntoView(elementTopIn(pageEl, y), fallbackH);
     });
   }
 
@@ -289,13 +327,17 @@ const SCRIPT = String.raw`
   }
   function excerptNeedles(excerpt) {
     var full = normalizeNeedle(excerpt);
-    if (full.length < 8) return [];
+    if (full.length < 2) return [];
     var needles = [full];
     if (full.length > 48) {
       needles.push(full.slice(0, 40).trim());
       needles.push(full.slice(-40).trim());
     }
-    return needles.filter(function (v, i, list) { return v.length >= 8 && list.indexOf(v) === i; });
+    if (full.length >= 12) {
+      var words = full.split(" ").filter(Boolean);
+      if (words.length >= 3) needles.push(words.slice(0, 3).join(" "));
+    }
+    return needles.filter(function (v, i, list) { return v.length >= 2 && list.indexOf(v) === i; });
   }
   function pagesByDistance(page, total) {
     var count = Math.max(0, total);
@@ -337,20 +379,23 @@ const SCRIPT = String.raw`
     };
   }
   function readDocxBlocks(section) {
-    return Array.prototype.map.call(docxBody(section).querySelectorAll("p"), function (el) {
-      var style = getComputedStyle(el);
-      var fontSize = parseFloat(style.fontSize) || 16;
-      var lineHeight = style.lineHeight === "normal" ? fontSize * 1.15 : parseFloat(style.lineHeight) || fontSize * 1.15;
-      var mt = parseFloat(style.marginTop) || 0;
-      var mb = parseFloat(style.marginBottom) || 0;
-      return {
-        el: el,
-        lineHeight: lineHeight,
-        height: el.offsetHeight || lineHeight,
-        leadingLines: Math.max(0, Math.round(mt / Math.max(lineHeight, 1))),
-        trailingLines: Math.max(0, Math.round(mb / Math.max(lineHeight, 1)))
-      };
-    });
+    return Array.prototype.map.call(
+      docxBody(section).querySelectorAll("p, h1, h2, h3, h4, h5, h6, li"),
+      function (el) {
+        var style = getComputedStyle(el);
+        var fontSize = parseFloat(style.fontSize) || 16;
+        var lineHeight = style.lineHeight === "normal" ? fontSize * 1.15 : parseFloat(style.lineHeight) || fontSize * 1.15;
+        var mt = parseFloat(style.marginTop) || 0;
+        var mb = parseFloat(style.marginBottom) || 0;
+        return {
+          el: el,
+          lineHeight: lineHeight,
+          height: el.offsetHeight || lineHeight,
+          leadingLines: Math.max(0, Math.round(mt / Math.max(lineHeight, 1))),
+          trailingLines: Math.max(0, Math.round(mb / Math.max(lineHeight, 1)))
+        };
+      }
+    );
   }
   function visualLineTarget(blocks, lineNumber) {
     if (!blocks.length) return { index: -1, delta: 0 };
@@ -359,34 +404,64 @@ const SCRIPT = String.raw`
       var b = blocks[i];
       var lh = Math.max(1, b.lineHeight);
       var leading = b.leadingLines;
-      if (remaining <= leading) return { index: i, delta: -(leading - remaining + 1) * lh };
+      // Never paint blank margin gaps — snap onto content lines.
+      if (remaining <= leading) return { index: i, delta: 0 };
       remaining -= leading;
       var height = b.height || lh;
       var lines = Math.max(1, Math.round(height / lh));
       if (remaining <= lines) return { index: i, delta: (remaining - 1) * lh };
       remaining -= lines;
       var trailing = b.trailingLines;
-      if (remaining <= trailing) return { index: i, delta: height + (remaining - 1) * lh };
+      if (remaining <= trailing) return { index: i, delta: Math.max(0, lines - 1) * lh };
       remaining -= trailing;
     }
     return { index: blocks.length - 1, delta: 0 };
+  }
+  function rangeToRects(range) {
+    var client = Array.prototype.filter.call(range.getClientRects(), function (r) {
+      return r.width > 1 && r.height > 1;
+    });
+    if (client.length) return mergeLineRects(Array.prototype.map.call(client, contentBox));
+    var node = range.startContainer && range.startContainer.nodeType === 1
+      ? range.startContainer
+      : range.startContainer && range.startContainer.parentElement;
+    var el = (node && node.closest && node.closest("p, h1, h2, h3, h4, h5, h6, li, td, th, div")) || node;
+    if (!el || !el.getBoundingClientRect) return [];
+    var rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return [];
+    return [contentBox(rect)];
   }
   function lineCountBox(section, line) {
     var blocks = readDocxBlocks(section);
     if (!blocks.length) return null;
     var hit = visualLineTarget(blocks, line || 1);
-    var block = blocks[hit.index];
-    if (!block) return null;
+    var index = hit.index;
+    if (index < 0) return null;
+    function hasText(block) { return !!(block && block.el && String(block.el.textContent || "").trim()); }
+    if (!hasText(blocks[index])) {
+      var found = -1;
+      for (var step = 0; step < blocks.length; step += 1) {
+        var after = index + step;
+        var before = index - step;
+        if (after < blocks.length && hasText(blocks[after])) { found = after; break; }
+        if (step && before >= 0 && hasText(blocks[before])) { found = before; break; }
+      }
+      if (found < 0) return null;
+      index = found;
+    }
+    var block = blocks[index];
     var rect = block.el.getBoundingClientRect();
     var scale = block.el.offsetHeight ? rect.height / block.el.offsetHeight : 1;
     var base = contentBox(rect);
-    var top = base.top + hit.delta * scale;
-    var height = Math.max(12, block.lineHeight * scale);
-    return { rects: [{ top: top, left: base.left, width: base.width, height: height }], top: top, height: height };
+    var delta = index === hit.index ? hit.delta : 0;
+    var top = base.top + Math.max(0, delta) * scale;
+    var height = Math.max(12, Math.min(block.lineHeight * scale, base.height || block.lineHeight * scale));
+    return { rects: [{ top: top, left: base.left, width: Math.max(base.width, 24), height: height }], top: top, height: height };
   }
   function textRangesIn(section, needle) {
     var ranges = [];
-    docxBody(section).querySelectorAll("p").forEach(function (paragraph) {
+    if (!needle) return ranges;
+    docxBody(section).querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, td, th").forEach(function (paragraph) {
       var walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
       var nodes = [];
       var raw = "";
@@ -397,10 +472,6 @@ const SCRIPT = String.raw`
       }
       if (!raw.trim()) return;
       var idx = normalizedIndex(raw);
-      var index = idx.text.indexOf(needle);
-      if (index < 0) return;
-      var startRaw = idx.map[index];
-      var endRaw = idx.map[index + needle.length - 1] + 1;
       function locate(rawIndex, isEnd) {
         for (var i = nodes.length - 1; i >= 0; i -= 1) {
           var within = isEnd ? rawIndex > nodes[i].start : rawIndex >= nodes[i].start;
@@ -408,35 +479,72 @@ const SCRIPT = String.raw`
         }
         return [nodes[0].node, 0];
       }
-      var range = document.createRange();
-      var s = locate(startRaw, false);
-      var e = locate(endRaw, true);
-      range.setStart(s[0], s[1]);
-      range.setEnd(e[0], e[1]);
-      ranges.push(range);
+      var searchFrom = 0;
+      while (searchFrom < idx.text.length) {
+        var index = idx.text.indexOf(needle, searchFrom);
+        if (index < 0 || idx.map[index] == null) break;
+        var startRaw = idx.map[index];
+        var endRaw = (idx.map[index + needle.length - 1] != null ? idx.map[index + needle.length - 1] : startRaw) + 1;
+        var range = document.createRange();
+        var s = locate(startRaw, false);
+        var e = locate(endRaw, true);
+        range.setStart(s[0], s[1]);
+        range.setEnd(e[0], e[1]);
+        ranges.push(range);
+        searchFrom = index + Math.max(1, needle.length);
+      }
     });
     return ranges;
+  }
+  function pickBestRects(candidates, estimateTop) {
+    var list = (candidates || []).filter(function (rects) {
+      return rects && rects.length && isFinite(Number(rects[0].top));
+    });
+    if (!list.length) return null;
+    if (!isFinite(Number(estimateTop))) return list[0];
+    var target = Number(estimateTop);
+    return list.reduce(function (best, rects) {
+      return Math.abs(Number(rects[0].top) - target) <= Math.abs(Number(best[0].top) - target) ? rects : best;
+    });
   }
   function locateDocxBox(sections, pageNumber, line, excerpt) {
     var reported = sections[pageNumber - 1];
     var estimate = reported ? lineCountBox(reported, line) : null;
     var needles = excerptNeedles(excerpt);
+    var hasLine = line != null && line !== "" && isFinite(Number(line));
+    function pack(rects) {
+      if (!rects || !rects.length) return null;
+      var last = rects[rects.length - 1];
+      return { rects: rects, top: rects[0].top, height: last.top + last.height - rects[0].top };
+    }
+    var allCandidates = [];
     for (var n = 0; n < needles.length; n += 1) {
       var order = pagesByDistance(pageNumber, sections.length);
       for (var p = 0; p < order.length; p += 1) {
-        var ranges = textRangesIn(sections[order[p] - 1], needles[n]);
+        var page = order[p];
+        if (page !== pageNumber && Math.abs(page - pageNumber) > 1) continue;
+        var ranges = textRangesIn(sections[page - 1], needles[n]);
         if (!ranges.length) continue;
-        var candidates = ranges.map(function (range) {
-          return mergeLineRects(Array.prototype.map.call(range.getClientRects(), contentBox));
-        }).filter(function (rects) { return rects.length; });
-        if (!candidates.length) continue;
-        var best = estimate
-          ? candidates.reduce(function (a, b) {
-              return Math.abs(a[0].top - estimate.top) <= Math.abs(b[0].top - estimate.top) ? a : b;
-            })
-          : candidates[0];
-        var last = best[best.length - 1];
-        return { rects: best, top: best[0].top, height: last.top + last.height - best[0].top };
+        var candidates = ranges.map(rangeToRects).filter(function (rects) { return rects.length; });
+        for (var c = 0; c < candidates.length; c += 1) {
+          allCandidates.push({ page: page, rects: candidates[c], needleLen: needles[n].length });
+        }
+      }
+    }
+    if (allCandidates.length) {
+      var reportedHits = allCandidates.filter(function (item) { return item.page === pageNumber; });
+      var pool = reportedHits.length ? reportedHits : allCandidates;
+      var maxLen = Math.max.apply(null, pool.map(function (item) { return item.needleLen; }));
+      var bestNeedle = pool.filter(function (item) { return item.needleLen === maxLen; });
+      var best = hasLine && estimate
+        ? pickBestRects(bestNeedle.map(function (item) { return item.rects; }), estimate.top)
+        : bestNeedle[0].rects;
+      var boxed = pack(best);
+      if (boxed) {
+        if (hasLine && estimate && Math.abs(boxed.top - estimate.top) > Math.max(28, estimate.height * 2)) {
+          return estimate;
+        }
+        return boxed;
       }
     }
     return estimate;
@@ -485,10 +593,15 @@ const SCRIPT = String.raw`
     var sections = state.docxSections;
     if (!sections.length) return;
     clearMarks();
-    var pageNumber = Math.min(sections.length, Math.max(1, Number(t.page) || 1));
-    if (isMarginTarget(t)) {
+    // Never invent page 1 when the issue has no page pin.
+    if (t.page == null || t.page === "") return;
+    var pageNumber = Math.min(sections.length, Math.max(1, Number(t.page)));
+    if (!isFinite(pageNumber) || pageNumber < 1) return;
+    if (isMarginTarget(t) || (isPaginationTarget(t) && !t.bbox && !t.excerpt)) {
       var pageEl = sections[pageNumber - 1];
-      var side = marginSide(t.finding);
+      var side = isMarginTarget(t)
+        ? (marginSide(t.finding, t) || pageRegion(t))
+        : pageRegion(t);
       paintMargin(pageEl, side, t.severity);
       scrollToPageRegion(pageEl, side);
       return;

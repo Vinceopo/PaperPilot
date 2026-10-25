@@ -5,11 +5,11 @@ import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import ManuscriptDetailModal from "../components/cockpit/ManuscriptDetailModal";
+import PaperPlaneLoader from "../components/ui/PaperPlaneLoader";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
   FilterIcon,
-  LockIcon,
   SearchIcon,
   TrashIcon,
   UploadIcon,
@@ -67,6 +67,7 @@ export default function ManuscriptsScreen({ navigation }) {
     resolveSavedResult,
     handleBackToDashboard,
     tier,
+    loading,
   } = useAppData();
   const items = Array.isArray(scannedLibrary) ? scannedLibrary : [];
   const [query, setQuery] = useState("");
@@ -137,14 +138,74 @@ export default function ManuscriptsScreen({ navigation }) {
   }
 
   function onUploadNew() {
+    // Clear any open results first, then open Upload at step 1 (Format Mechanics).
     handleBackToDashboard();
-    navigation.navigate("Upload");
+    navigation.navigate("Upload", { fresh: true });
   }
 
   async function onOpenResult(manuscript, version) {
     if (!(await openSavedResult(manuscript, version))) return;
     setViewId(null);
     navigation.navigate("Results");
+  }
+
+  if (loading) {
+    return (
+      <AppShell active="manuscripts" breadcrumb="Dashboard / My Manuscripts" title="My Manuscripts">
+        <View style={styles.loadingBox}>
+          <PaperPlaneLoader />
+          <Text style={styles.loadingText}>Loading your compliance workspace…</Text>
+        </View>
+      </AppShell>
+    );
+  }
+
+  if (viewing) {
+    return (
+      <AppShell
+        active="manuscripts"
+        breadcrumb="Dashboard / My Manuscripts"
+        title="Manuscript Detail"
+        onBack={() => setViewId(null)}
+      >
+        <ScrollView
+          style={styles.root}
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          <ManuscriptDetailModal
+            manuscript={viewing}
+            tier={tier}
+            onUpgrade={() => {
+              setViewId(null);
+              navigation.navigate("Subscription");
+            }}
+            onDeleteVersion={deleteVersion}
+            onOpenResult={(version) => onOpenResult(viewing, version)}
+            resolveResult={resolveSavedResult}
+          />
+        </ScrollView>
+        <ConfirmDialog
+          open={Boolean(pendingDelete)}
+          title="Delete manuscript?"
+          message={
+            deleteError ||
+            (pendingDelete
+              ? `“${pendingDelete.title}” and all of its versions will be removed permanently. Uploading this title again starts at version 1.`
+              : "")
+          }
+          confirmLabel="Delete"
+          tone="danger"
+          busy={deleteBusy}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeleteError("");
+            setDeleteId(null);
+          }}
+          onConfirm={confirmDelete}
+        />
+      </AppShell>
+    );
   }
 
   return (
@@ -379,28 +440,7 @@ export default function ManuscriptsScreen({ navigation }) {
           </View>
         </View>
 
-        <View style={styles.lockNote}>
-          <View style={styles.lockIcon}>
-            <LockIcon size={14} />
-          </View>
-          <Text style={styles.lockText}>This system is a checker only. Documents cannot be edited here.</Text>
-        </View>
       </ScrollView>
-
-      {viewing ? (
-        <ManuscriptDetailModal
-          manuscript={viewing}
-          tier={tier}
-          onUpgrade={() => {
-            setViewId(null);
-            navigation.navigate("Subscription");
-          }}
-          onDeleteVersion={deleteVersion}
-          onOpenResult={(version) => onOpenResult(viewing, version)}
-          resolveResult={resolveSavedResult}
-          onClose={() => setViewId(null)}
-        />
-      ) : null}
 
       <ConfirmDialog
         open={Boolean(pendingDelete)}
@@ -435,6 +475,19 @@ const cardShadow = {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.pageBg },
+  loadingBox: {
+    flex: 1,
+    minHeight: 280,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    margin: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+  },
+  loadingText: { fontSize: 14, color: colors.muted },
   scroll: { padding: 16, paddingBottom: 40 },
   statGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   statCard: {
@@ -609,7 +662,4 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
   legendSwatch: { width: 10, height: 10, borderRadius: 2 },
   legendText: { fontSize: 11, color: colors.slate },
-  lockNote: { marginTop: 16, flexDirection: "row", alignItems: "flex-start", gap: 8 },
-  lockIcon: { marginTop: 1 },
-  lockText: { flex: 1, fontSize: 11, lineHeight: 17, color: colors.muted },
 });

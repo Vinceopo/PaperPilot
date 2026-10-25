@@ -68,8 +68,10 @@ def _feature_tier(tier: str) -> str:
     return "premium" if is_paid_tier(tier) else "free"
 
 
-def _scan_rules(rules: dict) -> dict:
-    out = dict(rules or {})
+def _scan_rules(rules: dict, ignored_fields: list[str] | None = None) -> dict:
+    from app.mechanics_validate import apply_ignored_fields_to_rules
+
+    out = apply_ignored_fields_to_rules(rules or {}, ignored_fields)
     style = str(out.get("citation_style") or "").strip().upper()
     if style == "CHICAGO":
         out["citation_style"] = "APA"
@@ -121,7 +123,9 @@ def _try_requeue_ml_job(owner_uid: str, scan: dict) -> bool:
             document_url=None,
             document_base64=base64.b64encode(raw_bytes).decode("ascii"),
             filename=version.get("source_filename") or "document.pdf",
-            mechanics_rules=_scan_rules(mechanics.get("rules") or {}),
+            mechanics_rules=_scan_rules(
+                mechanics.get("rules") or {}, mechanics.get("ignored_fields")
+            ),
             tier=tier,
         )
         logger.info("Requeued ML job %s for scan %s", job_id, scan_id)

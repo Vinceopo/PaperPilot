@@ -104,6 +104,9 @@ function issuesFromScore(total, score) {
  * Per-category display counts from the backend unit fields.
  * Ring % is (total − issues) / total × 100 from those same counts
  * (e.g. 66 of 218 → 30.28% non-compliant → 69.72% on the ring).
+ *
+ * Never invent unit totals from score alone (that made category sums diverge
+ * from the header Total Units). Missing counts stay null → N/A on the card.
  */
 export function resolveCategoryUnitDisplays(rows = []) {
   const list = Array.isArray(rows) ? rows : [];
@@ -111,7 +114,8 @@ export function resolveCategoryUnitDisplays(rows = []) {
   return list.map((row) => {
     let { total, compliant, nonCompliant } = resolveUnitCounts(rowUnitFields(row));
 
-    // Recover units when only score + issue count were stored (legacy scans).
+    // Legacy scans: recover only when we have both a score and an issue count,
+    // and never invent a fake "1 unit" for a perfect score with no counts.
     if (total == null && hasValue(row.score)) {
       const issues = hasValue(row.issueCount) ? Math.max(0, Math.round(Number(row.issueCount))) : 0;
       const score = Math.max(0, Math.min(100, Number(row.score)));
@@ -120,10 +124,6 @@ export function resolveCategoryUnitDisplays(rows = []) {
         total = Math.max(issues, Math.round(issues / failRate));
         nonCompliant = Math.min(total, issues);
         compliant = total - nonCompliant;
-      } else if (issues === 0 && score >= 100) {
-        total = 1;
-        nonCompliant = 0;
-        compliant = 1;
       }
     }
 
@@ -147,12 +147,52 @@ export function resolveCategoryUnitDisplays(rows = []) {
   });
 }
 
+/** Sum of per-category checked units (same totals shown on each card). */
+export function sumCategoryChecked(rows = []) {
+  return (Array.isArray(rows) ? rows : []).reduce((acc, row) => {
+    if (!hasValue(row?.displayTotal)) return acc;
+    return acc + Math.max(0, Math.round(Number(row.displayTotal)));
+  }, 0);
+}
+
 /** Sum of per-category non-compliant units (same figures shown on each card). */
 export function sumCategoryNonCompliant(rows = []) {
   return (Array.isArray(rows) ? rows : []).reduce((acc, row) => {
     if (!hasValue(row?.displayNonCompliant)) return acc;
     return acc + Math.max(0, Math.round(Number(row.displayNonCompliant)));
   }, 0);
+}
+
+/**
+ * Header Total / Compliant / Non-Compliant must equal the sum of category cards.
+ * Prefer category sums whenever any category reports units; otherwise use overall.
+ */
+export function reconcileDisplayedUnits(overall = {}, categoryDisplays = []) {
+  const fromOverall = resolveUnitCounts(overall);
+  const categoryTotal = sumCategoryChecked(categoryDisplays);
+  const categoryFailed = sumCategoryNonCompliant(categoryDisplays);
+  const hasCategoryUnits = categoryDisplays.some(
+    (row) => hasValue(row?.displayTotal) && Number(row.displayTotal) >= 0,
+  );
+  const anyChecked = categoryDisplays.some(
+    (row) => hasValue(row?.displayTotal) && Number(row.displayTotal) > 0,
+  );
+
+  if (hasCategoryUnits && (anyChecked || categoryTotal === 0)) {
+    const total = categoryTotal;
+    const nonCompliant = Math.min(total, Math.max(0, categoryFailed));
+    return {
+      total,
+      nonCompliant,
+      compliant: Math.max(0, total - nonCompliant),
+    };
+  }
+
+  return {
+    total: fromOverall.total,
+    compliant: fromOverall.compliant,
+    nonCompliant: fromOverall.nonCompliant,
+  };
 }
 
 export function formatCategoryIssuesDetail(nonCompliant, total) {

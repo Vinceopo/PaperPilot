@@ -6,14 +6,15 @@ import { useAppData } from "../../context/AppDataContext";
 import { auth } from "../../firebase";
 import { signOutUser } from "../../services/auth";
 import { colors } from "../../theme";
-import { isPaidTier, resetWindow } from "../../lib/plans";
+import { resetWindow } from "../../lib/plans";
+import BackToDashboardButton from "../ui/BackToDashboardButton";
 import Sidebar from "./Sidebar";
 import NotificationsPanel from "./NotificationsPanel";
-import { ArrowLeftIcon, BellIcon, MenuIcon } from "./icons";
+import { BellIcon, MenuIcon } from "./icons";
 
 /**
- * Dashboard chrome shared by the main screens: the header (menu toggle, plan,
- * subscription button, notifications) and the slide-in sidebar.
+ * Dashboard chrome shared by the main screens: the header (menu toggle, plan
+ * summary, notifications) and the slide-in sidebar.
  */
 export default function AppShell({ active, breadcrumb, title, onBack, backLabel, children }) {
   const navigation = useNavigation();
@@ -77,6 +78,8 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
             <MenuIcon size={16} />
           </Pressable>
 
+          <View style={styles.headerSpacer} />
+
           <View style={styles.planWrap}>
             <Text style={styles.plan} numberOfLines={1}>
               {tier} plan
@@ -85,16 +88,6 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
               {remaining} of {limit} scans remaining this {resetWindow(tier)}
             </Text>
           </View>
-
-          <Pressable
-            style={({ pressed }) => [styles.subscribeBtn, pressed && styles.subscribeBtnPressed]}
-            onPress={() => navigation.navigate("Subscription")}
-            accessibilityRole="button"
-          >
-            <Text style={styles.subscribeText} numberOfLines={1}>
-              {isPaidTier(tier) ? "Manage subscription" : "Subscribe to Premium"}
-            </Text>
-          </Pressable>
 
           <Pressable
             ref={bellRef}
@@ -124,14 +117,11 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
             {breadcrumb ? <Text style={styles.breadcrumb}>{breadcrumb}</Text> : null}
             <Text style={styles.title}>{title}</Text>
             {onBack ? (
-              <Pressable
-                style={({ pressed }) => [styles.backBtn, pressed && styles.backBtnPressed]}
+              <BackToDashboardButton
                 onPress={onBack}
-                hitSlop={6}
-              >
-                <ArrowLeftIcon size={14} />
-                <Text style={styles.backText}>{backLabel || "Back to Dashboard"}</Text>
-              </Pressable>
+                label={backLabel || "Back to Dashboard"}
+                style={styles.backBtn}
+              />
             ) : null}
           </View>
         ) : null}
@@ -167,16 +157,21 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
         visible={menuOpen}
         active={active}
         onClose={() => setMenuOpen(false)}
+        showComplianceResult={Boolean(scanFlow?.result)}
         onUpload={() => {
           // Leave results and analysis, and don't resume File details after the manuscript is gone.
           if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
             handleBackToDashboard();
-          } else if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file))) {
+            navigation.navigate("Upload", { fresh: true });
+            return;
+          }
+          if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file))) {
             resetUploadWizard(1);
           }
           navigation.navigate("Upload");
         }}
         onManuscripts={() => navigation.navigate("Library")}
+        onComplianceResult={() => navigation.navigate("Results")}
         onAccount={() => navigation.navigate("Account")}
         onSignOut={() => signOutUser(auth)}
       />
@@ -210,7 +205,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
-  planWrap: { flex: 1, minWidth: 0, alignItems: "flex-end" },
+  headerSpacer: { flex: 1 },
+  planWrap: { maxWidth: 160, alignItems: "flex-end" },
   plan: {
     fontSize: 12,
     fontWeight: "600",
@@ -219,19 +215,6 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   remaining: { fontSize: 10, color: colors.muted, textAlign: "right" },
-  subscribeBtn: {
-    borderRadius: 6,
-    backgroundColor: colors.accent,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    shadowColor: "#0f172a",
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  subscribeBtnPressed: { backgroundColor: colors.accentHover },
-  subscribeText: { fontSize: 11, fontWeight: "700", color: "#092823" },
   bellBtn: {
     width: 36,
     height: 36,
@@ -276,25 +259,5 @@ const styles = StyleSheet.create({
     color: colors.muted,
   },
   title: { marginTop: 2, fontSize: 20, fontWeight: "700", letterSpacing: -0.3, color: colors.text },
-  backBtn: {
-    marginTop: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    alignSelf: "flex-start",
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "#bfeee5",
-    backgroundColor: "#f0fbf9",
-    paddingVertical: 6,
-    paddingLeft: 10,
-    paddingRight: 14,
-    shadowColor: "#0f172a",
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  backBtnPressed: { borderColor: colors.accent, backgroundColor: "#dcf7f2" },
-  backText: { fontSize: 12, fontWeight: "700", color: "#109b89" },
+  backBtn: { marginTop: 8 },
 });

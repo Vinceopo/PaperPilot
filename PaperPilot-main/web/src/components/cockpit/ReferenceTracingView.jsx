@@ -3,6 +3,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import BackToDashboardButton from "../BackToDashboardButton.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { normalizeDetectedIssues } from "./IssuesDetectedPanel.jsx";
 import { normalizeIssueLocation } from "../../lib/scanMapper.js";
@@ -35,12 +36,27 @@ export default function ReferenceTracingView({
     (entry) => {
       if (entry.location) {
         const own = normalizeIssueLocation(entry.location);
-        if (own.page != null || own.line != null) return own;
+        if (
+          own.page != null ||
+          own.line != null ||
+          own.bbox ||
+          own.excerpt ||
+          own.margin_side ||
+          own.page_region
+        ) {
+          return own;
+        }
       }
       for (const check of result?.formatChecks || []) {
+        if (entry.issue_type && check.issue_type && entry.issue_type !== check.issue_type) continue;
+        if (entry.section && check.section && entry.section !== check.section) continue;
         for (const loc of check.locations || []) {
-          // Locations are already normalized by scanMapper.
-          if (loc.page === entry.page && (entry.line == null || loc.line === entry.line)) {
+          const samePage = loc.page === entry.page;
+          const sameLine =
+            entry.line == null
+              ? loc.line == null || loc.line === undefined
+              : loc.line === entry.line;
+          if (samePage && sameLine) {
             return loc;
           }
         }
@@ -49,6 +65,8 @@ export default function ReferenceTracingView({
         page: entry.page,
         line: entry.line,
         section: entry.section,
+        margin_side: entry.margin_side,
+        page_region: entry.page_region,
       });
     },
     [result]
@@ -61,11 +79,27 @@ export default function ReferenceTracingView({
       const marked = {
         ...loc,
         severity: entry.severity,
-        finding: entry.finding,
+        finding: entry.finding || entry.title || "",
+        explanation: entry.explanation || loc.explanation || "",
+        recommendation: entry.recommendation || loc.recommendation || "",
         section: entry.section || loc.section,
+        issue_type: entry.issue_type || "",
+        margin_side: loc.margin_side || loc.marginSide || entry.margin_side || "",
+        page_region: loc.page_region || loc.pageRegion || entry.page_region || "",
       };
       setHighlight({ id: entry.id, ...marked });
-      setScrollTarget({ ...marked, token: Date.now() });
+      // Pin only when we have a real page (or bbox/excerpt on that page) — never invent page 1.
+      const canLocate =
+        loc.page != null ||
+        loc.bbox ||
+        loc.excerpt ||
+        loc.margin_side ||
+        loc.page_region;
+      if (canLocate && loc.page != null) {
+        setScrollTarget({ ...marked, token: Date.now() });
+      } else {
+        setScrollTarget(null);
+      }
     },
     [resolveLocation]
   );
@@ -81,23 +115,7 @@ export default function ReferenceTracingView({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <button
-            type="button"
-            onClick={onBack}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#16bfa8] bg-white px-3.5 py-2 text-sm font-semibold text-[#109b89] shadow-sm transition hover:bg-[#eefbf8]"
-          >
-            <svg viewBox="0 0 16 16" aria-hidden="true" className="h-3.5 w-3.5">
-              <path
-                d="M10.5 3.5 6 8l4.5 4.5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.75"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            Back to summary
-          </button>
+          <BackToDashboardButton onClick={onBack} label="Back to summary" />
           <h2 className="mt-3 text-lg font-bold text-[#172033]">Reference tracing</h2>
           <p className="text-xs text-slate-500">
             Click an issue to jump to the matching page and line in your document.

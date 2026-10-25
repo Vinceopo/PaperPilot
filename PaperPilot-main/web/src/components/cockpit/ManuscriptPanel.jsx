@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { normalizeTitle } from "../../lib/scannedLibrary.js";
 import {
-  ACCEPT_ATTRIBUTE,
-  ACCEPTED_EXTENSIONS,
+  MANUSCRIPT_ACCEPT_ATTRIBUTE,
+  MANUSCRIPT_ACCEPTED_EXTENSIONS,
   MAX_FILE_SIZE_BYTES,
   getFileRejection,
 } from "../../lib/uploadLimits.js";
@@ -17,7 +17,7 @@ import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 function validateFile(file) {
   if (!file) return "Choose a manuscript.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
-  if (!ACCEPTED_EXTENSIONS.includes(ext)) return "type";
+  if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(ext)) return "type";
   if (file.size > MAX_FILE_SIZE_BYTES) return "size";
   return "";
 }
@@ -25,7 +25,7 @@ function validateFile(file) {
 function rejectionMessage(rejection) {
   if (!rejection) return "";
   if (rejection.kind === "type") {
-    return `'${rejection.name}' isn't a supported file type. Please upload a PDF or Word document (${ACCEPTED_EXTENSIONS.join(", ")}).`;
+    return `'${rejection.name}' isn't a supported file type. Please upload a Word document (${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(", ")}).`;
   }
   const max = formatFileSize(MAX_FILE_SIZE_BYTES);
   let actual = formatFileSize(rejection.size);
@@ -222,7 +222,7 @@ export default function ManuscriptPanel({
     if (!canPickFile && next) return;
     if (inputRef.current) inputRef.current.value = "";
     const pickId = ++pickRequest.current;
-    const issue = next ? await getFileRejection(next) : "";
+    const issue = next ? await getFileRejection(next, "manuscript") : "";
     if (pickRequest.current !== pickId) return;
     if (issue) {
       rejectFile(next, issue);
@@ -318,7 +318,7 @@ export default function ManuscriptPanel({
                     : previewUploading
                       ? `${formatFileSize(file.size)} · Uploading — see progress beside this panel`
                       : `${formatFileSize(file.size)} · Preview appears beside this panel — confirm Upload when ready`
-                  : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
+                  : `Drag & drop or browse · .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
               </p>
               <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                 Browse files
@@ -328,7 +328,7 @@ export default function ManuscriptPanel({
               ref={inputRef}
               type="file"
               disabled={!canPickFile}
-              accept={ACCEPT_ATTRIBUTE}
+              accept={MANUSCRIPT_ACCEPT_ATTRIBUTE}
               className="sr-only"
               onChange={(e) => {
                 const next = e.target.files?.[0] || null;

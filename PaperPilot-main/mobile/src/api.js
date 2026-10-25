@@ -130,7 +130,23 @@ async function authorizedFetch(path, options = {}) {
   };
   try {
     let res = await send(false);
-    if (res.status === 401) res = await send(true);
+    // Retry once with a fresh token. Never sign out on API 401 — only the
+    // caller / auth listener should clear the session for fatal Firebase errors.
+    if (res.status === 401) {
+      try {
+        res = await send(true);
+      } catch (err) {
+        const code = String(err?.code || "");
+        const fatal =
+          code === "auth/user-token-expired" ||
+          code === "auth/invalid-user-token" ||
+          code === "auth/id-token-revoked" ||
+          code === "auth/user-disabled" ||
+          code === "auth/user-not-found";
+        if (!fatal) throw networkError(err);
+        throw err;
+      }
+    }
     return await responseData(res);
   } catch (err) {
     throw networkError(err);
@@ -312,6 +328,7 @@ export function saveMechanicsProfile({
   sourceFilename,
   fileType,
   extractedText,
+  ignoredFields,
 }) {
   return authorizedFetch("/mechanics/save", {
     method: "POST",
@@ -321,6 +338,7 @@ export function saveMechanicsProfile({
       source_filename: sourceFilename || undefined,
       file_type: fileType || undefined,
       extracted_text: extractedText || undefined,
+      ignored_fields: Array.isArray(ignoredFields) ? ignoredFields : undefined,
     }),
   });
 }
@@ -338,10 +356,11 @@ export function renameMechanics(mechanicsId, name) {
   });
 }
 
-export function updateMechanicsProfile(mechanicsId, { name, rules }) {
+export function updateMechanicsProfile(mechanicsId, { name, rules, ignoredFields }) {
   const body = {};
   if (name != null) body.name = String(name).trim();
   if (rules != null) body.rules = rules;
+  if (Array.isArray(ignoredFields)) body.ignored_fields = ignoredFields;
   return authorizedFetch(`/mechanics/${encodeURIComponent(mechanicsId)}`, {
     method: "PATCH",
     body: JSON.stringify(body),

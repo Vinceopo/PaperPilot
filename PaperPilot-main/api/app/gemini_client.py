@@ -89,8 +89,15 @@ def enrich_compliance_issues(
     prompt = f"""You enrich already-detected academic document formatting issues.
 Do not perform grammar, plagiarism, source-validity, or citation-content analysis.
 Keep each issue_type separate. Do not merge Heading 1, Heading 2, body, or title-page font issues.
+Never rename the heading level in the title/summary (font_size_heading2 stays Heading 2, never Heading 1).
 Use measured_explanation numbers as ground truth; do not invent different measurements.
+When locations list different measured sizes, do not pick one size for the whole issue —
+say sizes vary by location, and never claim every line measures the first location's size.
 Do not list every font size from the mechanics — only the size named in measured_explanation for that issue.
+Never print list/array brackets such as [11.0]; always write a scalar with a unit (e.g. 11 pt).
+Do not invent issues for heading levels that have no headingN_size in MECHANICS RULES.
+If issue_type is font_size (body text), never rewrite the explanation to say Heading 1/2/3 —
+titles without a headingN_size rule are not heading findings.
 {COMPLIANCE_SEVERITY_RUBRIC}
 {depth}
 

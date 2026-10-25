@@ -38,13 +38,29 @@ async function readDocumentBase64({ file, url, name }) {
   return downloaded.base64();
 }
 
-function marginSide(text) {
+function marginSide(text, extras = {}) {
+  const explicit = String(extras.margin_side || extras.marginSide || "").toLowerCase();
+  if (explicit === "top" || explicit === "bottom" || explicit === "left" || explicit === "right") {
+    return explicit;
+  }
+  const issueType = String(extras.issue_type || extras.issueType || "").toLowerCase();
+  const fromType = issueType.match(/^(top|bottom|left|right)_margin$/);
+  if (fromType) return fromType[1];
   const value = String(text || "").toLowerCase();
   if (value.includes("right margin")) return "right";
   if (value.includes("left margin")) return "left";
   if (value.includes("top margin")) return "top";
   if (value.includes("bottom margin")) return "bottom";
   return "";
+}
+
+function pageRegion(target = {}) {
+  const explicit = String(target.page_region || target.pageRegion || "").toLowerCase();
+  if (explicit === "top" || explicit === "bottom") return explicit;
+  const text = `${target.finding || ""} ${target.recommendation || ""}`.toLowerCase();
+  if (/\bbottom\b/.test(text)) return "bottom";
+  if (/\btop\b/.test(text)) return "top";
+  return "top";
 }
 
 function MarginBand({ side, severity }) {
@@ -73,14 +89,19 @@ function TextTrace({ preview, pageCount, formatChecks, highlight, emptyLabel }) 
     [preview, pageCount, formatChecks]
   );
   const marginTrace = String(highlight?.section || "").toLowerCase() === "margins";
+  const paginationBand =
+    String(highlight?.section || "").toLowerCase() === "pagination" &&
+    !highlight?.bbox &&
+    highlight?.line == null;
 
   useEffect(() => {
     if (!highlight?.page || !scrollRef.current) return;
     const pageY = pageOffsets.current[highlight.page];
     if (typeof pageY !== "number") return;
-    const lineY = marginTrace ? 0 : lineOffsets.current[`${highlight.page}:${highlight.line}`] || 0;
+    const lineY =
+      marginTrace || paginationBand ? 0 : lineOffsets.current[`${highlight.page}:${highlight.line}`] || 0;
     scrollRef.current.scrollTo({ y: Math.max(0, pageY + lineY - 80), animated: true });
-  }, [highlight, pages.length, marginTrace]);
+  }, [highlight, pages.length, marginTrace, paginationBand]);
 
   if (!pages.length) {
     return (
@@ -95,7 +116,8 @@ function TextTrace({ preview, pageCount, formatChecks, highlight, emptyLabel }) 
   return (
     <ScrollView ref={scrollRef} contentContainerStyle={styles.textContent}>
       {pages.map((page) => {
-        const showMargin = marginTrace && Number(highlight?.page) === page.page;
+        const showEdge =
+          (marginTrace || paginationBand) && Number(highlight?.page) === page.page;
         return (
           <View
             key={`page-${page.page}`}
@@ -104,13 +126,23 @@ function TextTrace({ preview, pageCount, formatChecks, highlight, emptyLabel }) 
               pageOffsets.current[page.page] = e.nativeEvent.layout.y;
             }}
           >
-            {showMargin ? (
-              <MarginBand side={marginSide(highlight.finding)} severity={highlight.severity} />
+            {showEdge ? (
+              <MarginBand
+                side={
+                  marginTrace
+                    ? marginSide(highlight.finding, highlight) || pageRegion(highlight)
+                    : pageRegion(highlight)
+                }
+                severity={highlight.severity}
+              />
             ) : null}
             <Text style={styles.pageLabel}>Page {page.page}</Text>
             {(page.lines || []).map((line, index) => {
               const lineNum = index + 1;
-              const hit = !marginTrace && lineMatchesHighlight(page.page, lineNum, highlight);
+              const hit =
+                !marginTrace &&
+                !paginationBand &&
+                lineMatchesHighlight(page.page, lineNum, highlight);
               const paint = hit ? hitPaint(highlight.severity) : null;
               return (
                 <Text

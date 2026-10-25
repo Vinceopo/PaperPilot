@@ -77,11 +77,28 @@ export default function IssueTracingSection({
     (entry) => {
       if (entry.location) {
         const own = normalizeIssueLocation(entry.location);
-        if (own.page != null || own.line != null) return own;
+        if (
+          own.page != null ||
+          own.line != null ||
+          own.bbox ||
+          own.excerpt ||
+          own.margin_side ||
+          own.page_region
+        ) {
+          return own;
+        }
       }
       for (const check of formatChecks) {
+        // Match the same rule — do not reuse another category's highlight at the same page/line.
+        if (entry.issue_type && check.issue_type && entry.issue_type !== check.issue_type) continue;
+        if (entry.section && check.section && entry.section !== check.section) continue;
         for (const loc of check.locations || []) {
-          if (loc.page === entry.page && (entry.line == null || loc.line === entry.line)) {
+          const samePage = loc.page === entry.page;
+          const sameLine =
+            entry.line == null
+              ? loc.line == null || loc.line === undefined
+              : loc.line === entry.line;
+          if (samePage && sameLine) {
             return loc;
           }
         }
@@ -90,6 +107,8 @@ export default function IssueTracingSection({
         page: entry.page,
         line: entry.line,
         section: entry.section,
+        margin_side: entry.margin_side,
+        page_region: entry.page_region,
       });
     },
     [formatChecks]
@@ -98,17 +117,32 @@ export default function IssueTracingSection({
   const onSelectIssue = useCallback(
     (entry) => {
       const loc = resolveLocation(entry);
-      const canLocate = loc.page != null || loc.line != null || loc.bbox || loc.excerpt;
+      // Pin only when we have a real page — never invent page 1 from a missing pin.
+      const canLocate =
+        loc.page != null &&
+        (loc.line != null ||
+          loc.bbox ||
+          loc.excerpt ||
+          loc.margin_side ||
+          loc.page_region ||
+          entry.section);
       setActiveIssueId(entry.id);
       const marked = {
         ...loc,
         severity: entry.severity,
-        finding: entry.finding,
+        finding: entry.finding || entry.title || "",
+        explanation: entry.explanation || loc.explanation || "",
+        recommendation: entry.recommendation || loc.recommendation || "",
         section: entry.section || loc.section,
+        issue_type: entry.issue_type || "",
+        margin_side: loc.margin_side || loc.marginSide || "",
+        page_region: loc.page_region || loc.pageRegion || "",
       };
       setHighlight({ id: entry.id, ...marked });
       if (canLocate) {
         setScrollTarget({ ...marked, token: Date.now() });
+      } else {
+        setScrollTarget(null);
       }
     },
     [resolveLocation]

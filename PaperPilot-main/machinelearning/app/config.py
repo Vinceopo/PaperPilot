@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
     max_document_bytes: int = 25 * 1024 * 1024
+    # PDF pages processed per analysis chunk (progress + memory-friendly batches).
+    analysis_page_chunk: int = 20
     job_ttl_seconds: int = 3600
     job_store_dir: str = "/tmp/paperpilot-jobs"
     host: str = "0.0.0.0"

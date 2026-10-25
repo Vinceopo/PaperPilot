@@ -11,11 +11,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "../../theme";
 import PaperPilotLogo from "./PaperPilotLogo";
-import { MenuIcon } from "./icons";
+import { MenuIcon, UploadIcon } from "./icons";
 
 const SIDEBAR_MAX_WIDTH = 320;
 
-function NavItem({ icon, iconAccent, label, active, onPress, tone = "dashboard", first }) {
+function NavItem({ icon, iconNode, iconAccent, label, active, onPress, tone = "dashboard", first }) {
   const idle = tone === "settings" ? styles.itemTextSettings : styles.itemTextIdle;
   return (
     <Pressable
@@ -29,15 +29,19 @@ function NavItem({ icon, iconAccent, label, active, onPress, tone = "dashboard",
         pressed && !active && styles.itemPressed,
       ]}
     >
-      <Text
-        style={[
-          styles.itemIcon,
-          tone === "settings" && styles.itemTextSettings,
-          iconAccent ? styles.itemIconAccent : active && styles.itemTextActive,
-        ]}
-      >
-        {icon}
-      </Text>
+      {iconNode ? (
+        <View style={styles.itemIconWrap}>{iconNode}</View>
+      ) : (
+        <Text
+          style={[
+            styles.itemIcon,
+            tone === "settings" && styles.itemTextSettings,
+            iconAccent ? styles.itemIconAccent : active && styles.itemTextActive,
+          ]}
+        >
+          {icon}
+        </Text>
+      )}
       <Text style={[styles.itemText, active ? styles.itemTextActive : idle]}>{label}</Text>
     </Pressable>
   );
@@ -49,6 +53,8 @@ export default function Sidebar({
   onClose,
   onUpload,
   onManuscripts,
+  onComplianceResult,
+  showComplianceResult = false,
   onAccount,
   onSignOut,
 }) {
@@ -102,8 +108,8 @@ export default function Sidebar({
           <View style={styles.brandRow}>
             <Pressable
               style={styles.brandBtn}
-              onPress={() => select(onUpload)}
-              accessibilityLabel="PaperPilot, go to upload mechanics"
+              onPress={() => select(onManuscripts)}
+              accessibilityLabel="PaperPilot, go to My Manuscripts"
             >
               <PaperPilotLogo tone="dark" />
             </Pressable>
@@ -121,18 +127,29 @@ export default function Sidebar({
             <Text style={styles.sectionLabel}>Dashboard</Text>
             <NavItem
               first
-              icon="↑"
-              iconAccent
-              label="Upload & Analyze"
-              active={active === "upload"}
-              onPress={() => select(onUpload)}
-            />
-            <NavItem
               icon="▣"
               label="My Manuscripts"
               active={active === "manuscripts"}
               onPress={() => select(onManuscripts)}
             />
+            <NavItem
+              iconAccent
+              iconNode={
+                <UploadIcon size={16} color={active === "upload" ? "#ffffff" : "#22c9b4"} />
+              }
+              label="Upload & Analyze"
+              active={active === "upload"}
+              onPress={() => select(onUpload)}
+            />
+            {showComplianceResult ? (
+              <NavItem
+                iconAccent
+                icon="≡"
+                label="Compliance Result"
+                active={active === "results"}
+                onPress={() => select(onComplianceResult)}
+              />
+            ) : null}
           </View>
 
           <View style={styles.navBottom}>
@@ -213,6 +230,7 @@ const styles = StyleSheet.create({
   itemActive: { borderLeftColor: colors.accent, backgroundColor: colors.sidebarActive },
   itemPressed: { backgroundColor: "rgba(255, 255, 255, 0.05)" },
   itemIcon: { fontSize: 14, color: "#94a3b8" },
+  itemIconWrap: { width: 18, alignItems: "center", justifyContent: "center" },
   itemIconAccent: { color: "#22c9b4" },
   itemText: { fontSize: 14, fontWeight: "600" },
   itemTextIdle: { color: "#94a3b8" },

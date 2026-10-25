@@ -202,6 +202,32 @@ export async function downloadReport(result, opts = {}) {
     if (Y + neededMm > PH - 18) addPage();
   }
 
+  /**
+   * Pill / capsule bar segment. Oval caps are drawn with circles so thin bars
+   * stay rounded in PDF viewers (roundedRect often looks square at this size).
+   */
+  function fillPill(x, y, w, h, rgb, { roundLeft = true, roundRight = true } = {}) {
+    if (!(w > 0) || !(h > 0)) return;
+    doc.setFillColor(...rgb);
+    const r = h / 2;
+    if (w <= h && roundLeft && roundRight) {
+      doc.circle(x + w / 2, y + r, Math.min(r, w / 2), "F");
+      return;
+    }
+    let rectX = x;
+    let rectW = w;
+    if (roundLeft) {
+      doc.circle(x + r, y + r, r, "F");
+      rectX += r;
+      rectW -= r;
+    }
+    if (roundRight) {
+      doc.circle(x + w - r, y + r, r, "F");
+      rectW -= r;
+    }
+    if (rectW > 0) doc.rect(rectX, y, rectW, h, "F");
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // HEADER — logo + PAPERPILOT * RESULTS
   // ══════════════════════════════════════════════════════════════════════════
@@ -281,15 +307,19 @@ export async function downloadReport(result, opts = {}) {
 
   const rightW = Math.max(0, Math.min(barW, ((Number(rightPct) || 0) / 100) * barW));
   const wrongW = Math.max(0, barW - rightW);
-  doc.setFillColor(...TRACK);
-  doc.roundedRect(barX, Y + 12.5, barW, BAR_H, 0.6, 0.6, "F");
+  // One continuous oval: round only the outer ends of the stacked segments.
+  fillPill(barX, Y + 12.5, barW, BAR_H, TRACK);
   if (rightW > 0) {
-    doc.setFillColor(...PASS_C);
-    doc.roundedRect(barX, Y + 12.5, rightW, BAR_H, 0.6, 0.6, "F");
+    fillPill(barX, Y + 12.5, rightW, BAR_H, PASS_C, {
+      roundLeft: true,
+      roundRight: !(wrongW > 0 && Number(wrongPct) > 0),
+    });
   }
   if (wrongW > 0 && Number(wrongPct) > 0) {
-    doc.setFillColor(...FAIL_C);
-    doc.roundedRect(barX + rightW, Y + 12.5, wrongW, BAR_H, 0.6, 0.6, "F");
+    fillPill(barX + rightW, Y + 12.5, wrongW, BAR_H, FAIL_C, {
+      roundLeft: !(rightW > 0),
+      roundRight: true,
+    });
   }
 
   const stats = [
@@ -330,12 +360,11 @@ export async function downloadReport(result, opts = {}) {
       doc.setFontSize(8).setFont(undefined, "normal").setTextColor(50, 65, 85);
       doc.text(item.metric || item.section || "", ML, Y + barH + 0.5);
       const trackX = ML + 42;
-      doc.setFillColor(...TRACK);
-      doc.roundedRect(trackX, Y, barTrackW, barH, 0.6, 0.6, "F");
+      fillPill(trackX, Y, barTrackW, barH, TRACK);
       if (evaluated) {
-        const fillW = Math.max(1.2, (score / 100) * barTrackW);
-        doc.setFillColor(...barColor);
-        doc.roundedRect(trackX, Y, fillW, barH, 0.6, 0.6, "F");
+        // Keep a visible capsule even at low %; never narrower than a full oval.
+        const fillW = Math.max(barH, (score / 100) * barTrackW);
+        fillPill(trackX, Y, Math.min(fillW, barTrackW), barH, barColor);
       }
       doc.setFontSize(7.5).setFont(undefined, "bold").setTextColor(...barColor);
       doc.text(

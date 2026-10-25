@@ -182,7 +182,7 @@ def init_db() -> None:
 
 
 def _mechanics_public(item: dict) -> dict:
-    return {
+    out = {
         "id": item["id"],
         "name": item["name"],
         "source_filename": item["source_filename"],
@@ -190,6 +190,10 @@ def _mechanics_public(item: dict) -> dict:
         "rules": item.get("rules") or {},
         "created_at": item["created_at"],
     }
+    ignored = item.get("ignored_fields")
+    if isinstance(ignored, list) and ignored:
+        out["ignored_fields"] = [str(value) for value in ignored if str(value or "").strip()]
+    return out
 
 
 def _slim_version_payload(value: dict) -> dict:
@@ -212,7 +216,14 @@ def _slim_version_payload(value: dict) -> dict:
 
 
 def create_mechanics(
-    owner_uid: str, name: str, filename: str, file_type: str, text: str, parsed: dict, rules: dict
+    owner_uid: str,
+    name: str,
+    filename: str,
+    file_type: str,
+    text: str,
+    parsed: dict,
+    rules: dict,
+    ignored_fields: list[str] | None = None,
 ) -> dict:
     item_id, created, clean_name = str(uuid.uuid4()), _iso(_now()), name.strip()
     key = _name_key(clean_name)
@@ -233,6 +244,10 @@ def create_mechanics(
         "rules": rules,
         "created_at": created,
     }
+    if ignored_fields:
+        item["ignored_fields"] = [
+            str(value).strip() for value in ignored_fields if str(value or "").strip()
+        ]
     # Prefer Cloudinary sidecars so RTDB list/get of mechanics never pulls multi-MB parse trees.
     if artifacts_enabled():
         url = try_upload_json_artifact(
@@ -264,6 +279,7 @@ def update_mechanics(
     mechanics_id: str,
     name: str | None = None,
     rules: dict | None = None,
+    ignored_fields: list[str] | None = None,
 ) -> dict | None:
     ref = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}")
     row = ref.get()
@@ -301,6 +317,10 @@ def update_mechanics(
     }
     if rules is not None:
         updates["rules"] = rules
+    if ignored_fields is not None:
+        updates["ignored_fields"] = [
+            str(value).strip() for value in ignored_fields if str(value or "").strip()
+        ]
     ref.update(updates)
     updated = ref.get() or {**row, **updates}
     return _mechanics_public(updated)
@@ -1836,32 +1856,9 @@ def _assert_scan_inputs(
     return sub, manuscript, version, mechanics
 
 
-# Pagination only flags wrong position. Drop legacy issue types from older ML builds /
-# saved scans so "missing page 1" never surfaces again.
-_PAGINATION_POSITION_ISSUE = "pagination_position"
-_LEGACY_PAGINATION_ISSUES = frozenset(
-    {
-        "pagination_missing",
-        "pagination_title_page",
-        "pagination_chapter_first",
-        "pagination_style",
-        "pagination_sequence",
-        "pagination_extra_characters",
-    }
-)
-
-
 def sanitize_pagination_issues(issues: list | None) -> list:
-    """Keep only position mismatches for Pagination; drop missing/style/sequence flags."""
-    out: list = []
-    for issue in issues or []:
-        if not isinstance(issue, dict):
-            continue
-        issue_type = str(issue.get("issue_type") or "")
-        if issue_type in _LEGACY_PAGINATION_ISSUES:
-            continue
-        out.append(issue)
-    return out
+    """Pass through pagination issues from the analyzer (position, title, chapter, style, …)."""
+    return [issue for issue in (issues or []) if isinstance(issue, dict)]
 
 
 def _sanitize_pagination_sections(sections: list | None, issues: list) -> list:
@@ -1881,10 +1878,11 @@ def _sanitize_pagination_sections(sections: list | None, issues: list) -> list:
         row = dict(section)
         count = len(pag_issues)
         row["issue_count"] = count
-        if count == 0:
-            row["formatting_score"] = 100.0
-            row["status"] = "pass"
-            row["failed_units"] = 0
+        if count == 0 and int(row.get("units_failed") or 0) == 0:
+            # Keep analyzer unit counts; only clarify a clean pass when nothing failed.
+            row["formatting_score"] = 100.0 if row.get("units_checked") else row.get("formatting_score")
+            if row.get("units_checked"):
+                row["status"] = "pass"
         cleaned.append(row)
     return cleaned
 

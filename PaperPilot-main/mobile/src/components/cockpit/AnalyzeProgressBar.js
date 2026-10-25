@@ -10,7 +10,7 @@ const MAX_HOLD_MS = 2500;
 
 /**
  * "Analysing your document" screen: paper-roll animation and step progress, then the
- * page flies off on a paper plane before the summary opens (calls onReveal).
+ * page flies off on a paper plane before full results open (calls onReveal).
  */
 export default function AnalyzeProgressBar({ progress, resultReady = false, onReveal }) {
   const target = Math.min(100, Math.max(0, Number(progress?.percent) || 0));

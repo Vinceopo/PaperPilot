@@ -1,9 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
   Filter,
-  Lock,
   Search,
   Trash2,
   Upload,
@@ -61,6 +60,8 @@ export default function MyManuscriptsScreen({
   onPermanentDelete,
   onOpenSavedResult,
   resolveSavedResult,
+  onDetailOpenChange,
+  closeDetailRef,
 }) {
   const items = Array.isArray(itemsProp) ? itemsProp : [];
   const [query, setQuery] = useState("");
@@ -71,6 +72,19 @@ export default function MyManuscriptsScreen({
   const [deleteId, setDeleteId] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+
+  useEffect(() => {
+    onDetailOpenChange?.(Boolean(viewId));
+    return () => onDetailOpenChange?.(false);
+  }, [viewId, onDetailOpenChange]);
+
+  useEffect(() => {
+    if (!closeDetailRef) return undefined;
+    closeDetailRef.current = () => setViewId(null);
+    return () => {
+      closeDetailRef.current = null;
+    };
+  }, [closeDetailRef]);
 
   function setItems(updater) {
     const next = typeof updater === "function" ? updater(items) : updater;
@@ -134,6 +148,40 @@ export default function MyManuscriptsScreen({
     } finally {
       setDeleteBusy(false);
     }
+  }
+
+  if (viewing) {
+    return (
+      <div>
+        <ManuscriptDetailModal
+          manuscript={viewing}
+          tier={tier}
+          onUpgrade={onUpgrade}
+          onDeleteVersion={deleteVersion}
+          onOpenResult={(version) => onOpenSavedResult?.(viewing, version)}
+          resolveResult={resolveSavedResult}
+        />
+        {pendingDelete && (
+          <ConfirmDialog
+            open
+            title="Delete manuscript?"
+            message={
+              deleteError ||
+              `“${pendingDelete.title}” and all of its versions will be removed permanently. Uploading this title again starts at version 1.`
+            }
+            confirmLabel="Delete"
+            tone="danger"
+            busy={deleteBusy}
+            onCancel={() => {
+              if (deleteBusy) return;
+              setDeleteError("");
+              setDeleteId(null);
+            }}
+            onConfirm={confirmDelete}
+          />
+        )}
+      </div>
+    );
   }
 
   return (
@@ -361,23 +409,6 @@ export default function MyManuscriptsScreen({
           </span>
         </div>
       </div>
-
-      <p className="mt-4 flex items-start gap-2 text-[11px] leading-relaxed text-slate-400">
-        <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        This system is a checker only. Documents cannot be edited here.
-      </p>
-
-      {viewing && (
-        <ManuscriptDetailModal
-          manuscript={viewing}
-          tier={tier}
-          onUpgrade={onUpgrade}
-          onDeleteVersion={deleteVersion}
-          onOpenResult={(version) => onOpenSavedResult?.(viewing, version)}
-          resolveResult={resolveSavedResult}
-          onClose={() => setViewId(null)}
-        />
-      )}
 
       {pendingDelete && (
         <ConfirmDialog

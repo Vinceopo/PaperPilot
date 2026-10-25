@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Svg, { Path } from "react-native-svg";
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
 import { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
 import TraceDocumentViewer from "../components/cockpit/TraceDocumentViewer";
+import BackToDashboardButton from "../components/ui/BackToDashboardButton";
 import PrimaryButton from "../components/ui/PrimaryButton";
 
 const ACTIVE_TONE = {
@@ -31,7 +31,12 @@ function toTarget(entry) {
     excerpt: entry.excerpt || loc.excerpt || "",
     severity: entry.severity || "minor",
     finding: entry.finding || "",
+    explanation: entry.explanation || loc.explanation || "",
+    recommendation: entry.recommendation || loc.recommendation || "",
     section: entry.section || loc.section || "",
+    issue_type: entry.issue_type || "",
+    margin_side: entry.margin_side || loc.margin_side || loc.marginSide || "",
+    page_region: entry.page_region || loc.page_region || loc.pageRegion || "",
   };
 }
 
@@ -63,7 +68,7 @@ export default function DocumentReferenceScreen({ navigation }) {
 
   useEffect(() => {
     return navigation.addListener("beforeRemove", () => {
-      if (!leavingRef.current && stepRef.current === "documentTrace") scanFlow.backToSummary();
+      if (!leavingRef.current && stepRef.current === "documentTrace") scanFlow.openFullResult();
     });
   }, [navigation, scanFlow]);
 
@@ -76,10 +81,10 @@ export default function DocumentReferenceScreen({ navigation }) {
     [scanFlow]
   );
 
-  function backToSummary() {
+  function backToResults() {
     leavingRef.current = true;
-    scanFlow.backToSummary();
-    navigation.navigate("MainTabs", { screen: "Upload" });
+    scanFlow.openFullResult();
+    navigation.navigate("MainTabs", { screen: "Results" });
   }
 
   function viewFullResult() {
@@ -106,23 +111,7 @@ export default function DocumentReferenceScreen({ navigation }) {
     <SafeAreaView style={styles.root} edges={["top", "left", "right"]}>
       <View style={styles.toolbar}>
         <View style={styles.toolbarRow}>
-          <Pressable
-            style={({ pressed }) => [styles.backBtn, pressed && { backgroundColor: "#eefbf8" }]}
-            onPress={backToSummary}
-            hitSlop={6}
-          >
-            <Svg width={14} height={14} viewBox="0 0 16 16">
-              <Path
-                d="M10.5 3.5 6 8l4.5 4.5"
-                fill="none"
-                stroke="#109b89"
-                strokeWidth={1.75}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </Svg>
-            <Text style={styles.backText}>Back to summary</Text>
-          </Pressable>
+          <BackToDashboardButton onPress={backToResults} label="Back to results" />
           <Pressable
             style={({ pressed }) => [styles.fullBtn, pressed && { backgroundColor: "#047857" }]}
             onPress={viewFullResult}
@@ -193,18 +182,6 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 16, fontWeight: "700", color: colors.text, marginBottom: 12 },
   toolbar: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 },
   toolbarRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  backBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    borderWidth: 1,
-    borderColor: "#16bfa8",
-    backgroundColor: colors.white,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  backText: { fontSize: 13, fontWeight: "600", color: "#109b89" },
   fullBtn: {
     backgroundColor: "#059669",
     borderRadius: 8,

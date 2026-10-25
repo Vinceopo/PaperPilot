@@ -1,11 +1,13 @@
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
 import {
+  compliancePercentFromUnits,
   formatCount,
   formatPct as pctLabel,
   formatScore,
   hasValue,
   plural,
+  resolveUnitCounts,
   roundSharesToTotal,
 } from "../../lib/scoreFormat";
 
@@ -27,7 +29,21 @@ export default function ScanSummaryModal({
 }) {
   if (!result) return null;
 
-  const [rightPct, wrongPct] = roundSharesToTotal([result.rightPct, result.wrongPct]);
+  const overallUnits = resolveUnitCounts({
+    unitsChecked: result.unitsChecked,
+    unitsPassed: result.unitsPassed,
+    unitsFailed: result.unitsFailed,
+  });
+  const fromUnits =
+    hasValue(overallUnits.total) && overallUnits.total > 0
+      ? [
+          compliancePercentFromUnits(overallUnits.total, overallUnits.nonCompliant),
+          hasValue(overallUnits.nonCompliant)
+            ? (Number(overallUnits.nonCompliant) / Number(overallUnits.total)) * 100
+            : null,
+        ]
+      : [result.rightPct, result.wrongPct];
+  const [rightPct, wrongPct] = roundSharesToTotal(fromUnits, 2);
   const overall = result.overallScore;
   const clusterRows = (result.categoryWrongPct || [])
     .filter((row) => hasValue(row.pct) && row.failedUnits > 0)
@@ -71,12 +87,12 @@ export default function ScanSummaryModal({
                 </Text>
               </View>
               <View style={[styles.scoreBox, styles.scoreRight]}>
-                <Text style={[styles.scoreLabel, { color: "#047857" }]}>Right</Text>
-                <Text style={[styles.scoreValue, { color: "#047857" }]}>{pctLabel(rightPct)}</Text>
+                <Text style={[styles.scoreLabel, { color: "#047857" }]}>Compliant</Text>
+                <Text style={[styles.scoreValue, { color: "#047857" }]}>{pctLabel(rightPct, 2)}</Text>
               </View>
               <View style={[styles.scoreBox, styles.scoreWrong]}>
-                <Text style={[styles.scoreLabel, { color: "#be123c" }]}>Wrong</Text>
-                <Text style={[styles.scoreValue, { color: "#be123c" }]}>{pctLabel(wrongPct)}</Text>
+                <Text style={[styles.scoreLabel, { color: "#be123c" }]}>Non-Compliant</Text>
+                <Text style={[styles.scoreValue, { color: "#be123c" }]}>{pctLabel(wrongPct, 2)}</Text>
               </View>
             </View>
             {hasValue(result.unitsChecked) ? (

@@ -225,11 +225,24 @@ def run_analyze_job(
         job_store.set_stage(job_id, JobStage.parsing, 12, "Checking the file")
         file_type = validate_document(filename, raw, settings.max_document_bytes)
 
+        page_chunk = max(1, int(getattr(settings, "analysis_page_chunk", 20) or 20))
+
         def on_page(done: int, total: int) -> None:
             span = 28
             percent = 16 + int(span * done / max(total, 1))
-            noun = "page" if total == 1 else "pages"
-            job_store.set_stage(job_id, JobStage.parsing, percent, f"Parsing {done} of {total} {noun}")
+            if total <= page_chunk:
+                noun = "page" if total == 1 else "pages"
+                message = f"Parsing {done} of {total} {noun}"
+            else:
+                chunk_i = (max(done, 1) - 1) // page_chunk + 1
+                chunk_n = (total + page_chunk - 1) // page_chunk
+                start = (chunk_i - 1) * page_chunk + 1
+                end = min(chunk_i * page_chunk, total)
+                message = (
+                    f"Parsing chunk {chunk_i} of {chunk_n} "
+                    f"(pages {start}–{end}, {done}/{total})"
+                )
+            job_store.set_stage(job_id, JobStage.parsing, percent, message)
 
         parsed = parse_document(raw, file_type, on_progress=on_page)
 
@@ -237,27 +250,23 @@ def run_analyze_job(
 
         def on_check(done: int, total: int, label: str) -> None:
             percent = 48 + int(36 * done / max(total, 1))
-            job_store.set_stage(job_id, JobStage.checking, min(percent, 84), label)
+            if total > 1:
+                message = f"{label} · check {done} of {total}"
+            else:
+                message = label
+            job_store.set_stage(job_id, JobStage.checking, min(percent, 84), message)
 
         feature_tier = "premium" if str(tier or "").lower() in ("premium", "pro") else "free"
+        job_store.set_stage(
+            job_id,
+            JobStage.checking,
+            48,
+            "Running format checks in chunks across the document",
+        )
         scan = run_compliance_scan(parsed, rules, tier=feature_tier, on_progress=on_check)
 
         job_store.set_stage(job_id, JobStage.scoring, 92, "Computing scores and summaries")
         scan["document_format"] = file_type
-        # Defense in depth: never return legacy pagination issue types.
-        scan["issues"] = [
-            issue
-            for issue in (scan.get("issues") or [])
-            if str((issue or {}).get("issue_type") or "")
-            not in {
-                "pagination_missing",
-                "pagination_title_page",
-                "pagination_chapter_first",
-                "pagination_style",
-                "pagination_sequence",
-                "pagination_extra_characters",
-            }
-        ]
         job_store.complete(job_id, scan)
     except DocumentError as exc:
         job_store.fail(job_id, str(exc))

@@ -242,6 +242,7 @@ function versionPartsFromResult(scanResult) {
       .filter((c) => c.result === "FAIL" || c.result === "REVIEW")
       .map((c) => ({
         category: c.name || "Format",
+        issue_type: c.issue_type || c.id || "",
         severity:
           c.severity === "minor"
             ? "minor"
@@ -462,8 +463,21 @@ export function versionToScanResult(manuscript, version) {
       issueCount: b.issueCount == null ? null : Number(b.issueCount),
       failedShare: b.failedShare == null ? null : Number(b.failedShare),
     })),
+    unitsChecked: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsChecked == null ? 0 : Number(b.unitsChecked) || 0),
+      0,
+    ),
+    unitsPassed: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsPassed == null ? 0 : Number(b.unitsPassed) || 0),
+      0,
+    ),
+    unitsFailed: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsFailed == null ? 0 : Number(b.unitsFailed) || 0),
+      0,
+    ),
     formatChecks: issues.map((issue, idx) => ({
-      id: `issue-${idx}`,
+      id: issue.issue_type || `issue-${idx}`,
+      issue_type: issue.issue_type || "",
       name: issue.category || "Format",
       description: issue.description || issue.category || "",
       details: issue.finding || issue.description || "",
@@ -472,6 +486,7 @@ export function versionToScanResult(manuscript, version) {
       recommendation: issue.recommendation || "",
       severity: issue.severity || "moderate",
       locations: Array.isArray(issue.locations) ? issue.locations : [],
+      count: issue.count,
       result: issue.severity === "critical" || issue.severity === "major" ? "FAIL" : "REVIEW",
     })),
     pageCount: Math.max(

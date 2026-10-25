@@ -258,6 +258,7 @@ export function saveMechanicsProfile({
   sourceFilename,
   fileType,
   extractedText,
+  ignoredFields,
 }) {
   return authorizedFetch("/mechanics/save", {
     method: "POST",
@@ -267,6 +268,7 @@ export function saveMechanicsProfile({
       source_filename: sourceFilename || undefined,
       file_type: fileType || undefined,
       extracted_text: extractedText || undefined,
+      ignored_fields: Array.isArray(ignoredFields) ? ignoredFields : undefined,
     }),
   });
 }
@@ -290,10 +292,11 @@ export function renameMechanics(mechanicsId, name) {
   });
 }
 
-export function updateMechanicsProfile(mechanicsId, { name, rules }) {
+export function updateMechanicsProfile(mechanicsId, { name, rules, ignoredFields }) {
   const body = {};
   if (name != null) body.name = String(name).trim();
   if (rules != null) body.rules = rules;
+  if (Array.isArray(ignoredFields)) body.ignored_fields = ignoredFields;
   return authorizedFetch(`/mechanics/${encodeURIComponent(mechanicsId)}`, {
     method: "PATCH",
     body: JSON.stringify(body),

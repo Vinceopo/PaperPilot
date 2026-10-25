@@ -81,10 +81,12 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
   const entries = [];
   let maxPage = Math.max(0, Number(pageCountHint) || 0);
   let hiddenLocations = 0;
+  const seenCards = new Set();
 
   formatChecks.forEach((check, checkIdx) => {
     if (!check || check.result === "PASS") return;
     const severity = normalizeSeverity(check.severity, check.result);
+    const issueType = check.issue_type || check.id || "";
     const rawLocs =
       Array.isArray(check.locations) && check.locations.length
         ? check.locations
@@ -101,29 +103,50 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
       const line =
         normalized.line == null || Number.isNaN(normalized.line) ? null : normalized.line;
       if (page != null) maxPage = Math.max(maxPage, page);
+      const bbox = normalized.bbox;
+      const bboxKey = bbox
+        ? [bbox.x, bbox.y, bbox.w, bbox.h].map((n) => Number(n || 0).toFixed(3)).join(",")
+        : "";
+      const excerpt = String(normalized.excerpt || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80)
+        .toLowerCase();
+      const cardKey = `${issueType}|${page ?? ""}|${line ?? ""}|${bboxKey}|${excerpt}`;
+      if (seenCards.has(cardKey)) return;
+      seenCards.add(cardKey);
+      const locSummary = typeof loc?.summary === "string" ? loc.summary.trim() : "";
+      const locExplanation = typeof loc?.explanation === "string" ? loc.explanation.trim() : "";
+      const locRecommendation =
+        typeof loc?.recommendation === "string" ? loc.recommendation.trim() : "";
       entries.push({
         id: `${check.id || check.issue_type || "chk"}-${checkIdx}-${locIdx}`,
+        issue_type: issueType,
         page,
         line,
         section: normalized.section || check.section || "General",
         severity,
         title: check.name || check.title || check.issue_type || "Formatting issue",
         finding:
+          locSummary ||
           check.finding ||
           check.details ||
           check.description ||
           check.name ||
           "Formatting discrepancy detected",
         explanation:
+          locExplanation ||
           check.explanation ||
           check.details ||
           check.description ||
           "This formatting rule does not match the confirmed mechanics.",
-        recommendation: check.recommendation || "",
+        recommendation: locRecommendation || check.recommendation || "",
         result: check.result,
         location: normalized,
         bbox: normalized.bbox,
         excerpt: normalized.excerpt,
+        margin_side: loc?.margin_side || loc?.marginSide || normalized.margin_side || "",
+        page_region: loc?.page_region || loc?.pageRegion || normalized.page_region || "",
       });
     });
   });

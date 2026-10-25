@@ -57,7 +57,7 @@ export const CHAPTER_MARKER_OPTIONS = [
 
 export const WORD_SPACING_OPTIONS = ["One space between words and after periods", "Two spaces after periods"];
 
-export const LANDSCAPE_OPTIONS = ["Not allowed", "Allowed for tables and figures", "Allowed on any page"];
+export const LANDSCAPE_OPTIONS = ["Allowed for tables and figures", "Allowed on any page"];
 
 /** Word supports Heading 1–9; a format shows as many levels as it defines. */
 export const MAX_HEADING_LEVELS = 9;
@@ -157,9 +157,10 @@ export function canonicalWordSpacing(value) {
 export function canonicalLandscapePages(value) {
   const text = lower(value);
   if (!text) return "";
-  if (/\b(not|never|no)\b/.test(text)) return LANDSCAPE_OPTIONS[0];
-  if (/table|figure|chart|wide/.test(text)) return LANDSCAPE_OPTIONS[1];
-  if (/\b(any|all|allowed|yes)\b/.test(text)) return LANDSCAPE_OPTIONS[2];
+  // "Not allowed" / prohibit language → NA (no special landscape exception).
+  if (/\b(not|never|no)\b/.test(text)) return "";
+  if (/table|figure|chart|wide/.test(text)) return LANDSCAPE_OPTIONS[0];
+  if (/\b(any|all|allowed|yes)\b/.test(text)) return LANDSCAPE_OPTIONS[1];
   return "";
 }
 
@@ -206,6 +207,11 @@ export function headingsFromRules(font = {}) {
   });
 }
 
+function isIgnoreOrEmpty(value) {
+  const text = String(value ?? "").trim();
+  return !text || /^ignore$/i.test(text);
+}
+
 /** Form headings → `heading{n}_size`, `heading_styles`, and `heading_levels` for `rules.font`. */
 export function headingsToRules(headings) {
   const list = (Array.isArray(headings) ? headings : []).slice(0, MAX_HEADING_LEVELS);
@@ -214,16 +220,21 @@ export function headingsToRules(headings) {
   let highest = 0;
   list.forEach((heading, index) => {
     const level = index + 1;
+    const sizeRaw = String(heading?.size ?? "").trim();
+    if (/^ignore$/i.test(sizeRaw)) return;
     const size = Number(heading?.size);
-    const hasSize = String(heading?.size ?? "").trim() !== "" && !Number.isNaN(size);
+    const hasSize = sizeRaw !== "" && !Number.isNaN(size);
     if (hasSize) out[`heading${level}_size`] = size;
     const style = {};
     for (const flag of ["bold", "italic"]) {
       if (heading?.[flag] === "yes") style[flag] = true;
       else if (heading?.[flag] === "no") style[flag] = false;
+      // IGNORE / blank → omit (no style rule for this flag)
     }
-    if (heading?.case) style.case = heading.case;
-    if (heading?.alignment) style.alignment = heading.alignment;
+    // Never persist IGNORE as a case/alignment value — that faked coverage client-side
+    // then disappeared after server normalize and blocked save.
+    if (!isIgnoreOrEmpty(heading?.case)) style.case = heading.case;
+    if (!isIgnoreOrEmpty(heading?.alignment)) style.alignment = heading.alignment;
     if (Object.keys(style).length) styles[`heading${level}`] = style;
     if (hasSize || Object.keys(style).length) highest = level;
   });

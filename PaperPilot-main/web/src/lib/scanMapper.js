@@ -64,6 +64,39 @@ export function normalizeBbox(raw, pageWidth = 612, pageHeight = 792) {
   return null;
 }
 
+/** Stable key for one violation occurrence (post-normalize locations). */
+export function locationDedupKey(loc = {}, issueType = "") {
+  const page = loc?.page ?? "";
+  const line = loc?.line ?? "";
+  const bbox = loc?.bbox;
+  const bboxKey = bbox
+    ? [bbox.x, bbox.y, bbox.w, bbox.h].map((n) => Number(n || 0).toFixed(3)).join(",")
+    : "";
+  const excerpt = String(loc?.excerpt || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80)
+    .toLowerCase();
+  return `${issueType}|${page}|${line}|${bboxKey}|${excerpt}`;
+}
+
+/** Keep first occurrence of each location; preserve truncated-count extras in `count`. */
+export function dedupeIssueLocations(locations, issueType, reportedCount) {
+  const list = Array.isArray(locations) ? locations : [];
+  const seen = new Set();
+  const unique = [];
+  for (const loc of list) {
+    const key = locationDedupKey(loc, issueType);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(loc);
+  }
+  const rawLen = list.length;
+  const reported = Number(reportedCount);
+  const hidden = Number.isFinite(reported) && reported > rawLen ? reported - rawLen : 0;
+  return { locations: unique, count: unique.length + hidden };
+}
+
 /** Normalize API / ML location payloads to 1-based page & line + optional bbox. */
 export function normalizeIssueLocation(loc = {}) {
   if (!loc || typeof loc !== "object") {
@@ -86,6 +119,11 @@ export function normalizeIssueLocation(loc = {}) {
   const rawBbox = loc.bbox || loc.highlight?.bbox || null;
   const bbox = normalizeBbox(rawBbox, pageWidth || 612, pageHeight || 792);
 
+  const summary = String(loc.summary || "").trim();
+  const explanation = String(loc.explanation || "").trim();
+  const recommendation = String(loc.recommendation || "").trim();
+  const marginSide = String(loc.margin_side || loc.marginSide || "").trim().toLowerCase();
+  const pageRegion = String(loc.page_region || loc.pageRegion || "").trim().toLowerCase();
   return {
     page,
     line,
@@ -94,6 +132,11 @@ export function normalizeIssueLocation(loc = {}) {
     excerpt: String(loc.excerpt || loc.text || "").trim(),
     pageWidth: pageWidth != null ? Number(pageWidth) : null,
     pageHeight: pageHeight != null ? Number(pageHeight) : null,
+    ...(summary ? { summary } : {}),
+    ...(explanation ? { explanation } : {}),
+    ...(recommendation ? { recommendation } : {}),
+    ...(marginSide ? { margin_side: marginSide, marginSide } : {}),
+    ...(pageRegion ? { page_region: pageRegion, pageRegion } : {}),
   };
 }
 
@@ -217,9 +260,11 @@ export function mapComplianceScanToResult(scan, meta = {}) {
 
   const formatChecks = issues.map((issue, index) => {
     const severity = String(issue.severity || "moderate").toLowerCase();
-    const locations = (Array.isArray(issue.locations) ? issue.locations : []).map(normalizeIssueLocation);
+    const issueType = issue.issue_type || `issue-${index}`;
+    const normalized = (Array.isArray(issue.locations) ? issue.locations : []).map(normalizeIssueLocation);
+    const { locations, count } = dedupeIssueLocations(normalized, issueType, issue.count);
     return {
-      id: issue.issue_type || `issue-${index}`,
+      id: issueType,
       name: issue.title || issue.issue_type || "Formatting issue",
       description: issue.summary || issue.message || "",
       result: severity === "critical" ? "FAIL" : "REVIEW",
@@ -229,7 +274,7 @@ export function mapComplianceScanToResult(scan, meta = {}) {
       recommendation: issue.recommendation || "",
       locations,
       issue_type: issue.issue_type,
-      count: issue.count == null ? null : Number(issue.count),
+      count,
       section: locations[0]?.section || issue.section || "",
     };
   });
@@ -244,9 +289,28 @@ export function mapComplianceScanToResult(scan, meta = {}) {
   const overallScore = numberOrNull(scoring ? scoring.overall?.value : scan?.overall_score);
   const rightPct = numberOrNull(scoring ? scoring.passed_pct?.value : scan?.right_pct);
   const wrongPct = numberOrNull(scoring ? scoring.failed_pct?.value : scan?.wrong_pct);
-  const unitsChecked = numberOrNull(scoring ? scoring.units?.checked : scan?.units_checked);
-  const unitsFailed = numberOrNull(scoring ? scoring.units?.failed : scan?.units_failed);
-  const unitsPassed = numberOrNull(scoring ? scoring.units?.passed : scan?.units_passed);
+  // Prefer the sum of category unit fields so header totals always match the breakdown.
+  const fromCategories = scoreBreakdown.reduce(
+    (acc, row) => {
+      const checked = numberOrNull(row.unitsChecked);
+      const passed = numberOrNull(row.unitsPassed);
+      const failed = numberOrNull(row.unitsFailed);
+      if (checked != null) acc.checked += checked;
+      if (passed != null) acc.passed += passed;
+      if (failed != null) acc.failed += failed;
+      if (checked != null || passed != null || failed != null) acc.any = true;
+      return acc;
+    },
+    { checked: 0, passed: 0, failed: 0, any: false },
+  );
+  let unitsChecked = numberOrNull(scoring ? scoring.units?.checked : scan?.units_checked);
+  let unitsFailed = numberOrNull(scoring ? scoring.units?.failed : scan?.units_failed);
+  let unitsPassed = numberOrNull(scoring ? scoring.units?.passed : scan?.units_passed);
+  if (fromCategories.any) {
+    unitsChecked = fromCategories.checked;
+    unitsPassed = fromCategories.passed;
+    unitsFailed = fromCategories.failed;
+  }
   const categoryWrongPct = failedUnitDistribution(scan, scoreBreakdown);
   const { severityPct, severityCounts } = severityBreakdown(scan);
   const issueTotals = scoring?.issues

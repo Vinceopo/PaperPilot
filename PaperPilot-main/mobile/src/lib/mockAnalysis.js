@@ -89,16 +89,19 @@ export async function downloadReport(result, opts = {}) {
   const title = result?.documentTitle || "Untitled";
   const fmt = (value, suffix = "") =>
     value != null && Number.isFinite(Number(value)) ? `${Math.round(Number(value) * 10) / 10}${suffix}` : "—";
-  const checks = Array.isArray(result?.formatChecks) ? result.formatChecks : [];
-  const errors = checks.filter((c) => c.result === "FAIL").length;
-  const warnings = checks.filter((c) => c.result === "REVIEW").length;
+  const total = result?.unitsChecked;
+  const passed = result?.unitsPassed;
+  const failed =
+    total != null && passed != null && Number.isFinite(Number(total)) && Number.isFinite(Number(passed))
+      ? Math.max(0, Math.round(Number(total)) - Math.min(Math.round(Number(passed)), Math.round(Number(total))))
+      : result?.unitsFailed;
   const summary = [
     "PaperPilot compliance report",
     `Title: ${title}`,
     `Version: v${versionNumber}.0`,
-    `Score: ${fmt(result?.overallScore)} / 100`,
-    `Right: ${fmt(result?.rightPct, "%")} · Wrong: ${fmt(result?.wrongPct, "%")}`,
-    `Errors: ${errors} · Warnings: ${warnings} · Issue types: ${checks.length}`,
+    `Score: ${fmt(result?.overallScore)}`,
+    `Compliant: ${fmt(result?.rightPct, "%")} · Non-Compliant: ${fmt(result?.wrongPct, "%")}`,
+    `Total Units: ${fmt(total)} · Compliant Units: ${fmt(passed)} · Non-Compliant Units: ${fmt(failed)}`,
     "",
     "Full PDF download is available on the web app.",
   ].join("\n");

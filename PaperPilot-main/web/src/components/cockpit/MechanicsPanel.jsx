@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import FormatMechanicsFields from "./FormatMechanicsFields.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
@@ -11,6 +11,12 @@ import {
   rulesToForm,
   sampleMechanicsForm,
 } from "../../lib/formatMechanicsForm.js";
+import {
+  applyIgnoredFieldsToForm,
+  filterValidationForForm,
+  highlightFromIssue,
+  ignoredFieldsFromForm,
+} from "../../lib/mechanicsValidation.js";
 import { downloadSampleMechanics } from "../../api.js";
 import { MAX_FILE_SIZE_BYTES } from "../../lib/uploadLimits.js";
 import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
@@ -33,10 +39,15 @@ function validateFile(file) {
 
 function formFromSaved(item) {
   if (!item) return emptyMechanicsForm();
-  const mapped = rulesToForm(item.rules || {}, item.name || item.source_filename || "");
+  const ignored = Array.isArray(item.ignored_fields) ? item.ignored_fields : [];
+  const mapped = applyIgnoredFieldsToForm(
+    rulesToForm(item.rules || {}, item.name || item.source_filename || ""),
+    ignored
+  );
   // If the profile has almost no stored rules, seed editable sample values
-  // so the side panel is never a blank placeholder wall.
-  if (!formHasAnyRule(mapped)) {
+  // so the side panel is never a blank placeholder wall — but never overwrite
+  // intentional IGNORE choices from ignored_fields.
+  if (!formHasAnyRule(mapped) && !ignored.length) {
     return sampleMechanicsForm(item.name || "Saved Format");
   }
   return mapped;
@@ -79,6 +90,7 @@ export default function MechanicsPanel({
   const [dragOver, setDragOver] = useState(false);
   const [oversizeBytes, setOversizeBytes] = useState(null);
   const [dropPulse, setDropPulse] = useState(false);
+  const [activeIssueId, setActiveIssueId] = useState(null);
   const selected = items.find((item) => item.id === selectedId);
 
   const form =
@@ -86,7 +98,23 @@ export default function MechanicsPanel({
   const setForm =
     mode === "upload" ? setUploadForm : mode === "customize" ? setCustomizeForm : setSavedForm;
 
-  const selectedRulesKey = JSON.stringify(selected?.rules || {});
+  const liveValidation = useMemo(() => {
+    if (mode !== "upload" || !extractMeta) return { ok: true, issues: [] };
+    // Always re-check form state (e.g. style chips left on Choose…) even when
+    // the document itself already validated.
+    return filterValidationForForm(extractMeta.validation || { ok: true, issues: [] }, uploadForm);
+  }, [mode, extractMeta, uploadForm]);
+
+  const activeIssue = useMemo(
+    () => liveValidation.issues.find((item) => item.id === activeIssueId) || liveValidation.issues[0] || null,
+    [liveValidation.issues, activeIssueId]
+  );
+  const previewHighlight = useMemo(() => highlightFromIssue(activeIssue), [activeIssue]);
+
+  const selectedRulesKey = JSON.stringify({
+    rules: selected?.rules || {},
+    ignored_fields: selected?.ignored_fields || [],
+  });
 
   // Keep Format Fields in sync with the selected saved mechanics.
   useEffect(() => {
@@ -102,6 +130,7 @@ export default function MechanicsPanel({
   function clearUploadDraft() {
     setFile(null);
     setExtractMeta(null);
+    setActiveIssueId(null);
     setUploadForm(emptyMechanicsForm());
     if (inputRef.current) inputRef.current.value = "";
   }
@@ -150,8 +179,14 @@ export default function MechanicsPanel({
     }
     setError(issue === "oversize" ? "" : issue);
     setSuccess("");
+    const fileChanged = file !== nextFile;
     setFile(nextFile);
-    setExtractMeta(null);
+    // Keep the previous preview mounted while a new extract runs so the PDF/DOCX
+    // does not unmount and reload from scratch. Clear meta only when switching files.
+    if (fileChanged) {
+      setExtractMeta(null);
+      setActiveIssueId(null);
+    }
     if (issue || !nextFile) return;
     setExtracting(true);
     try {
@@ -160,6 +195,7 @@ export default function MechanicsPanel({
         setError("Could not extract format mechanics from this file.");
         return;
       }
+      const validation = data.validation || { ok: true, issues: [] };
       setExtractMeta({
         source_filename: data.source_filename,
         file_type: data.file_type,
@@ -167,11 +203,19 @@ export default function MechanicsPanel({
         text_preview: data.text_preview || "",
         page_count: data.page_count || (data.pages || []).length || 0,
         pages: Array.isArray(data.pages) ? data.pages : [],
+        validation,
       });
+      setActiveIssueId(validation.issues?.[0]?.id || null);
       setUploadForm(
         rulesToForm(data.rules || {}, data.name || nextFile.name.replace(/\.(pdf|docx)$/i, ""))
       );
-      setSuccess("Format fields extracted from your guide — review and edit below, then save.");
+      if (validation.ok) {
+        setSuccess("Mechanics validated. Review Format Fields below, then save.");
+      } else {
+        setSuccess(
+          "Format fields extracted — fix the highlighted guide issues (or set IGNORE in Format Fields), then save."
+        );
+      }
     } catch (err) {
       setError(err.message || "Extraction failed.");
     } finally {
@@ -215,6 +259,17 @@ export default function MechanicsPanel({
       setError("Add at least one format rule before saving.");
       return null;
     }
+    if (mode === "upload" && extractMeta) {
+      const remaining = filterValidationForForm(extractMeta.validation || { ok: true, issues: [] }, form);
+      if (!remaining.ok) {
+        setError(
+          remaining.issues[0]?.message ||
+            "Fix the highlighted mechanics issues (or set IGNORE on those fields) before saving."
+        );
+        setActiveIssueId(remaining.issues[0]?.id || null);
+        return null;
+      }
+    }
     return {
       name,
       rules: formToRules(form),
@@ -224,6 +279,8 @@ export default function MechanicsPanel({
           : `${name}.docx`,
       file_type: mode === "upload" && extractMeta?.file_type ? extractMeta.file_type : "docx",
       extracted_text: mode === "upload" ? extractMeta?.extracted_text || "" : "",
+      // Empty / IGNORE Format Fields (including unset headings) must not become scan rules.
+      ignored_fields: ignoredFieldsFromForm(form),
     };
   }
 
@@ -249,7 +306,11 @@ export default function MechanicsPanel({
       setError("Add at least one format rule before saving.");
       return null;
     }
-    return { name, rules: formToRules(form) };
+    return {
+      name,
+      rules: formToRules(form),
+      ignored_fields: ignoredFieldsFromForm(form),
+    };
   }
 
   function requestSaveProfile(e) {
@@ -445,7 +506,7 @@ export default function MechanicsPanel({
       <ShowStepsRow step={1} onShowSteps={onShowSteps} />
       <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Format Mechanics</h2>
       <p className="mt-1 text-xs leading-relaxed text-slate-400">
-        Upload or select a format guide — Format Fields are filled from that file. Customize only
+        Upload or select a format guide (not your manuscript) — Format Fields are filled from that file. Customize only
         when a displayed value does not match your mechanics.
       </p>
 
@@ -453,7 +514,9 @@ export default function MechanicsPanel({
         <div>
           <p className="text-xs font-semibold text-slate-700">Don’t have a format guide yet?</p>
           <p className="mt-0.5 text-[11px] text-slate-400">
-            Download a sample DOCX, then upload it here or use Customize to edit the starter rules.
+            Download the sample DOCX. Keep every section and field label (like Margins and Top). Put a
+            real value, or type IGNORE to skip that check — don’t use N/A or delete labels. Then upload
+            it here or use Customize.
           </p>
         </div>
         <button
@@ -677,35 +740,91 @@ export default function MechanicsPanel({
                 }}
               />
             </label>
-            {extractMeta && !extracting && (
+            {file && (
               <div className="mt-3 flex min-h-[22rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
                 <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2.5">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     Mechanics preview
                   </p>
-                  {file?.name?.toLowerCase().endsWith(".pdf") && extractMeta.page_count ? (
-                    <span className="text-[10px] font-semibold text-slate-400">
-                      {extractMeta.page_count} page
-                      {extractMeta.page_count === 1 ? "" : "s"} · scroll to read
+                  {extracting ? (
+                    <span className="rounded-full bg-slate-200/80 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                      Extracting…
+                    </span>
+                  ) : !extractMeta ? (
+                    <span className="rounded-full bg-slate-200/80 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                      Ready
+                    </span>
+                  ) : liveValidation.ok ? (
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                      Validated
                     </span>
                   ) : (
-                    <span className="text-[10px] font-semibold text-slate-400">
-                      Original document · scroll to read
+                    <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                      {liveValidation.issues.length} issue
+                      {liveValidation.issues.length === 1 ? "" : "s"}
                     </span>
                   )}
                 </div>
-                <div
-                  className={`max-h-[min(36rem,72vh)] min-h-[20rem] flex-1 ${
-                    file?.name?.toLowerCase().endsWith(".pdf")
-                      ? "overflow-hidden bg-white"
-                      : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
-                  }`}
-                >
-                  <DocumentPagePreview
-                    file={file}
-                    preview={extractMeta}
-                    emptyLabel="No mechanics preview available yet."
-                  />
+                <div className="grid min-h-[20rem] max-h-[min(36rem,72vh)] flex-1 lg:grid-cols-[minmax(11rem,15rem)_minmax(0,1fr)]">
+                  <aside className="pp-scroll border-b border-slate-200/80 bg-white lg:border-b-0 lg:border-r">
+                    <p className="border-b border-slate-100 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Issues
+                    </p>
+                    {extracting && !extractMeta ? (
+                      <p className="px-3 py-3 text-[11px] leading-relaxed text-slate-500">
+                        Reading your guide and checking required labels…
+                      </p>
+                    ) : !extractMeta ? (
+                      <p className="px-3 py-3 text-[11px] leading-relaxed text-slate-500">
+                        Confirm extraction to check this guide against the format schema.
+                      </p>
+                    ) : liveValidation.ok ? (
+                      <p className="px-3 py-3 text-[11px] leading-relaxed text-emerald-700">
+                        Mechanics validated. Every required label has a value (or IGNORE).
+                      </p>
+                    ) : (
+                      <ul className="divide-y divide-slate-100">
+                        {liveValidation.issues.map((issue) => {
+                          const selectedIssue = (activeIssue?.id || liveValidation.issues[0]?.id) === issue.id;
+                          return (
+                            <li key={issue.id}>
+                              <button
+                                type="button"
+                                onClick={() => setActiveIssueId(issue.id)}
+                                className={`w-full px-3 py-2.5 text-left transition ${
+                                  selectedIssue ? "bg-rose-50" : "hover:bg-slate-50"
+                                }`}
+                              >
+                                <span className="block text-[11px] font-semibold leading-snug text-rose-700">
+                                  {issue.message}
+                                </span>
+                                {issue.category ? (
+                                  <span className="mt-0.5 block text-[10px] font-medium capitalize text-slate-400">
+                                    {String(issue.category).replaceAll("_", " ")}
+                                  </span>
+                                ) : null}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </aside>
+                  <div
+                    className={`relative min-h-[20rem] overflow-hidden ${
+                      file?.name?.toLowerCase().endsWith(".pdf")
+                        ? "bg-white"
+                        : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
+                    }`}
+                  >
+                    <DocumentPagePreview
+                      file={file}
+                      preview={extractMeta}
+                      highlight={extractMeta ? previewHighlight : null}
+                      scrollTarget={extractMeta ? previewHighlight : null}
+                      emptyLabel="No mechanics preview available yet."
+                    />
+                  </div>
                 </div>
               </div>
             )}

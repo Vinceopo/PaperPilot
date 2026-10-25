@@ -230,17 +230,21 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
         <FloatingLabelInput
           {...inputProps("lastName", "Last name", { icon: "user", autoComplete: "family-name", autoCapitalize: "words" })}
         />
-        <FloatingLabelInput
-          {...inputProps("username", "Username", {
-            icon: "at",
-            autoComplete: "username",
-            maxLength: 20,
-            hint: "3–20 characters: letters, numbers, underscore, or period.",
-          })}
-        />
-        <FloatingLabelInput
-          {...inputProps("email", "Email", { icon: "mail", keyboardType: "email-address", autoComplete: "email" })}
-        />
+        <View style={styles.identityRow}>
+          <FloatingLabelInput
+            {...inputProps("username", "Username", {
+              icon: "at",
+              autoComplete: "username",
+              maxLength: 20,
+              hint: "3–20 characters: letters, numbers, underscore, or period.",
+            })}
+            style={styles.identityCell}
+          />
+          <FloatingLabelInput
+            {...inputProps("email", "Email", { icon: "mail", keyboardType: "email-address", autoComplete: "email" })}
+            style={styles.identityCell}
+          />
+        </View>
         <View>
           <FloatingLabelInput
             {...inputProps("password", "Password", {
@@ -304,6 +308,7 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
           title={busy ? "Sending code…" : "Create account"}
           onPress={onSubmit}
           busy={busy}
+          style={styles.submit}
         />
       </View>
 
@@ -321,19 +326,21 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
 }
 
 const styles = StyleSheet.create({
-  form: { marginTop: 28, gap: 16 },
-  nameRow: { flexDirection: "row", gap: 16 },
-  nameStack: { gap: 16 },
+  form: { marginTop: 20, gap: 14 },
+  nameRow: { flexDirection: "row", gap: 14 },
+  nameStack: { gap: 14 },
   nameCell: { flex: 1, width: "auto" },
+  identityRow: { flexDirection: "row", gap: 14 },
+  identityCell: { flex: 1, width: "auto" },
   checks: { flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 4, marginTop: 8 },
-  check: { fontSize: 12.5, color: colors.muted },
+  check: { fontSize: 12.5, lineHeight: 16, color: colors.muted },
   checkMet: { color: colors.accent },
-  error: { fontSize: 14, color: colors.rose },
+  error: { fontSize: 14, lineHeight: 20, color: colors.rose },
   termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   checkbox: {
     marginTop: 1,
-    width: 18,
-    height: 18,
+    width: 16,
+    height: 16,
     borderRadius: 4,
     borderWidth: 1.5,
     borderColor: "#cbd5e1",
@@ -341,12 +348,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  checkboxChecked: { borderColor: colors.accent, backgroundColor: colors.accent },
+  checkboxChecked: { borderColor: colors.accent, backgroundColor: colors.white },
   checkboxError: { borderColor: colors.rose },
-  checkboxMark: { fontSize: 12, lineHeight: 14, fontWeight: "700", color: colors.white },
+  checkboxMark: { fontSize: 11, lineHeight: 13, fontWeight: "700", color: colors.accent },
   termsText: { flex: 1, fontSize: 14, lineHeight: 20, color: colors.slate },
   termsLink: { fontWeight: "600", color: colors.accent, textDecorationLine: "underline" },
-  termsError: { marginTop: 6, fontSize: 12.5, color: colors.rose },
-  footer: { marginTop: 24, textAlign: "center", fontSize: 14, color: colors.slate },
+  termsError: { marginTop: 6, fontSize: 13, lineHeight: 16, color: colors.rose },
+  submit: {
+    height: 52,
+    borderRadius: 10,
+    paddingVertical: 0,
+    minHeight: 52,
+  },
+  footer: { marginTop: 20, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
   footerLink: { fontWeight: "600", color: colors.accent },
 });

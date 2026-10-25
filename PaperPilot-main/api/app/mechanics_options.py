@@ -39,10 +39,9 @@ WORD_SPACING_SINGLE = "One space between words and after periods"
 WORD_SPACING_TWO = "Two spaces after periods"
 WORD_SPACING_OPTIONS = (WORD_SPACING_SINGLE, WORD_SPACING_TWO)
 
-LANDSCAPE_NOT_ALLOWED = "Not allowed"
 LANDSCAPE_TABLES_FIGURES = "Allowed for tables and figures"
 LANDSCAPE_ANY = "Allowed on any page"
-LANDSCAPE_OPTIONS = (LANDSCAPE_NOT_ALLOWED, LANDSCAPE_TABLES_FIGURES, LANDSCAPE_ANY)
+LANDSCAPE_OPTIONS = (LANDSCAPE_TABLES_FIGURES, LANDSCAPE_ANY)
 
 MAX_HEADING_LEVELS = 9
 HEADING_LEVELS = tuple(f"heading{n}" for n in range(1, MAX_HEADING_LEVELS + 1))
@@ -56,8 +55,49 @@ def _text(value) -> str:
     return " ".join(str(value or "").split()).lower()
 
 
+def _rule_unset(value) -> bool:
+    """True when the mechanics field is blank / IGNORE / NA — no rule to enforce."""
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        # False can be a real setting (e.g. "not bold"); never treat as unset.
+        return False
+    if isinstance(value, (int, float)):
+        # 0 can be a real measurement (e.g. gutter); never treat as unset.
+        return False
+    if isinstance(value, dict):
+        return not value or all(_rule_unset(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return not value or all(_rule_unset(item) for item in value)
+    text = _text(value)
+    return (not text) or text in {
+        "ignore",
+        "na",
+        "n/a",
+        "n.a.",
+        "n.a",
+        "not checked",
+        "not check",
+        "none",
+        "-",
+        "—",
+    }
+
+
+def rule_unset(value) -> bool:
+    """Public alias: blank / IGNORE / NA mechanics fields must not be scored."""
+    return _rule_unset(value)
+
+
+def rule_is_set(value) -> bool:
+    """True only when mechanics define a usable value for this field."""
+    return not _rule_unset(value)
+
+
 def page_position_parts(value) -> tuple[str | None, str | None]:
     """'Top right', 'upper-right corner', 'bottom centre of the footer' -> ('top', 'right')."""
+    if _rule_unset(value):
+        return None, None
     text = _text(value)
     vertical = (
         "top" if re.search(r"\b(top|upper|header)\b", text)
@@ -95,9 +135,9 @@ def page_number_only(value) -> bool:
 
 
 def canonical_chapter_first_page(value) -> str:
-    text = _text(value)
-    if not text:
+    if _rule_unset(value):
         return ""
+    text = _text(value)
     if re.search(r"\b(bottom|lower|footer)\b", text) and re.search(r"cent(?:er|re)|middle", text):
         return CHAPTER_FIRST_BOTTOM_CENTER
     if re.search(r"\b(no|not|without|hidden|hide|suppress\w*|omit\w*|none)\b", text):
@@ -108,7 +148,7 @@ def canonical_chapter_first_page(value) -> str:
 
 
 def chapter_first_page_rule(value) -> str | None:
-    """'hidden', 'same', 'bottom_center', or None when nothing is required."""
+    """'hidden', 'same', 'bottom_center', or None when nothing is required (NA / unset)."""
     canonical = canonical_chapter_first_page(value)
     if not canonical:
         return None
@@ -121,9 +161,9 @@ def chapter_first_page_rule(value) -> str | None:
 
 
 def canonical_title_page(value) -> str:
-    text = _text(value)
-    if not text:
+    if _rule_unset(value):
         return ""
+    text = _text(value)
     if re.search(r"not\s+(?:be\s+)?counted|uncounted|(?:does|do)\s+not\s+count|excluded", text):
         return TITLE_HIDDEN_NOT_COUNTED
     if re.search(r"\b(no|not|without|hidden|hide|suppress\w*|omit\w*|none)\b", text):
@@ -134,6 +174,7 @@ def canonical_title_page(value) -> str:
 
 
 def title_page_rule(value) -> str | None:
+    """None when the title-page field is NA / unset — do not score that rule."""
     return {
         TITLE_HIDDEN_COUNTED: "hidden_counted",
         TITLE_HIDDEN_NOT_COUNTED: "hidden_not_counted",
@@ -142,6 +183,8 @@ def title_page_rule(value) -> str | None:
 
 
 def canonical_preliminary_style(value) -> str:
+    if _rule_unset(value):
+        return ""
     text = _text(value)
     if re.search(r"roman|\bi\s*,\s*ii\b", text):
         return PRELIM_ROMAN
@@ -151,6 +194,8 @@ def canonical_preliminary_style(value) -> str:
 
 
 def canonical_body_numbering(value) -> str:
+    if _rule_unset(value):
+        return ""
     text = _text(value)
     if re.search(r"restart|re-start|(?:start|begin)s?\s+(?:again\s+)?(?:at|with|from)\s+(?:1|one)\b", text):
         return BODY_RESTART
@@ -204,8 +249,9 @@ def canonical_landscape_pages(value) -> str:
     text = _text(value)
     if not text:
         return ""
+    # "Not allowed" / prohibit language → NA (no special landscape exception).
     if re.search(r"\b(not|never|no)\b", text):
-        return LANDSCAPE_NOT_ALLOWED
+        return ""
     if re.search(r"table|figure|chart|wide", text):
         return LANDSCAPE_TABLES_FIGURES
     if re.search(r"\b(any|all|allowed|yes)\b", text):
@@ -284,6 +330,7 @@ def normalize_pagination_rules(pagination_in: dict, raw: dict) -> dict:
     position = pagination_in.get("position") or raw.get("pagination_position") or ""
     if str(position).strip():
         out["position"] = canonical_page_position(position)[:200]
+    # Prefer an explicit flag; otherwise read it from the position wording (e.g. "Top right, no extra characters").
     if page_number_only(
         pagination_in.get("number_only")
         if "number_only" in pagination_in

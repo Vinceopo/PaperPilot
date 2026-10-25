@@ -25,8 +25,8 @@ def health() -> dict:
         "status": "ok",
         "service": "paperpilot-machinelearning",
         # Bumped when pagination policy changes so deploys are easy to verify.
-        "pagination_policy": "position_only",
-        "build": "2026-10-17-pagination-position",
+        "pagination_policy": "mechanics_fields",
+        "build": "2026-10-23-pagination-full",
     }
 
 

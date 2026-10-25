@@ -28,7 +28,6 @@ import RegistrationSuccessScreen from "./components/auth/RegistrationSuccessScre
 import MechanicsPanel from "./components/cockpit/MechanicsPanel.jsx";
 import ManuscriptPanel from "./components/cockpit/ManuscriptPanel.jsx";
 import ScanResultsScreen from "./components/cockpit/ScanResultsScreen.jsx";
-import ScanSummaryModal from "./components/cockpit/ScanSummaryModal.jsx";
 import AnalysisProgress from "./components/cockpit/AnalysisProgress.jsx";
 import PaperCarryAway, { PAPER_CARRY_HOLD_MS } from "./components/cockpit/PaperCarryAway.jsx";
 import AccountSettingsScreen from "./components/cockpit/AccountSettingsScreen.jsx";
@@ -60,6 +59,7 @@ import {
   versionScanId,
   versionToScanResult,
 } from "./lib/scannedLibrary.js";
+import { loadCachedMechanics, saveCachedMechanics } from "./lib/mechanicsCache.js";
 import { latestVersion } from "./lib/scoreBand.js";
 import { formatFileSize } from "./lib/formatFileSize.js";
 import { supportedCitationStyle } from "./lib/formatMechanicsForm.js";
@@ -80,6 +80,25 @@ import {
 function itemsFrom(data, key) {
   if (Array.isArray(data)) return data;
   return data?.[key] || data?.items || [];
+}
+
+const DASHBOARD_PAGES = new Set(["manuscripts", "upload", "account", "subscription", "notifications"]);
+
+/** Hash routes so sidebar links support Open in new tab / middle-click. */
+function pageFromHash() {
+  try {
+    const raw = String(window.location.hash || "")
+      .replace(/^#\/?/, "")
+      .split(/[/?#]/)[0]
+      .trim();
+    return DASHBOARD_PAGES.has(raw) ? raw : "manuscripts";
+  } catch {
+    return "manuscripts";
+  }
+}
+
+function hashForPage(page) {
+  return `#/${DASHBOARD_PAGES.has(page) ? page : "manuscripts"}`;
 }
 
 const REGISTRATION_SUCCESS_KEY = "paperpilot.registrationSuccess";
@@ -141,7 +160,11 @@ export default function App() {
   const [manuscriptBusy, setManuscriptBusy] = useState(false);
   const [upgradeMessage, setUpgradeMessage] = useState("");
   const [registrationSuccess, setRegistrationSuccess] = useState(() => pendingRegistration());
-  const [activePage, setActivePage] = useState("manuscripts"); // "manuscripts" (dashboard) | "upload" | "account" | "subscription" | "notifications"
+  const [activePage, setActivePage] = useState(() =>
+    typeof window === "undefined" ? "manuscripts" : pageFromHash()
+  ); // "manuscripts" | "upload" | "account" | "subscription" | "notifications"
+  const [manuscriptDetailOpen, setManuscriptDetailOpen] = useState(false);
+  const closeManuscriptDetailRef = useRef(null);
   const [sidebarOpen, setSidebarOpen] = useState(
     () => typeof window === "undefined" || window.innerWidth >= 768
   );
@@ -157,6 +180,30 @@ export default function App() {
   const withoutDeletedMechanics = useCallback(
     (items) => items.filter((item) => !deletedMechanicsRef.current.has(item.id)),
     []
+  );
+
+  /** Apply a server/local mechanics list; never wipe a non-empty list with a transient empty reply. */
+  const applyMechanicsList = useCallback(
+    (items, { allowEmpty = false, preferId = "" } = {}) => {
+      const next = withoutDeletedMechanics(Array.isArray(items) ? items : []);
+      let applied = next;
+      setMechanics((current) => {
+        if (!next.length && current.length && !allowEmpty) {
+          applied = current;
+          return current;
+        }
+        const uid = auth?.currentUser?.uid;
+        if (uid) saveCachedMechanics(next, uid);
+        return next;
+      });
+      setSelectedMechanicsId((current) => {
+        if (preferId && applied.some((item) => item.id === preferId)) return preferId;
+        if (current && applied.some((item) => item.id === current)) return current;
+        return applied[0]?.id || "";
+      });
+      return applied;
+    },
+    [withoutDeletedMechanics]
   );
   // Plan replies can arrive out of order (a slow dashboard load finishing after a
   // checkout confirm), so a reply requested before the latest plan update is dropped.
@@ -209,17 +256,32 @@ export default function App() {
   const uploadSessionRef = useRef(0);
   const signedIn = Boolean(user);
 
-  function handleBackToDashboard() {
+  function clearUploadSession({ discardPending = true } = {}) {
     const step = scanFlowRef.current?.step;
-    if (!step || step === "idle" || step === "fileSelected" || step === "error") {
+    if (
+      discardPending &&
+      (!step || step === "idle" || step === "fileSelected" || step === "error")
+    ) {
       discardUnscannedVersion();
     }
     setManuscriptReady(false);
     setFileDetailsNotice("");
     setCurrentVersion(null);
+    setError("");
     resetUploadWizard(1);
     scanFlow.backToDashboard();
+  }
+
+  function handleBackToDashboard() {
+    clearUploadSession();
     setActivePage("manuscripts");
+  }
+
+  /** Always open Upload at Format Mechanics (step 1), leaving any prior results view. */
+  function beginFreshUpload() {
+    clearUploadSession();
+    closeManuscriptDetailRef.current?.();
+    setActivePage("upload");
   }
 
   const dismissJourney = useCallback(() => {
@@ -482,11 +544,28 @@ export default function App() {
       setBillingReturn(billing);
       setActivePage("subscription");
       params.delete("billing");
-      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${window.location.hash || ""}`;
+      const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}${hashForPage("subscription")}`;
       window.history.replaceState({}, "", next);
     } catch {
       // Ignore malformed URL params.
     }
+  }, []);
+
+  // Keep the URL hash in sync so dashboard links are real destinations.
+  useEffect(() => {
+    const wanted = hashForPage(activePage);
+    if (window.location.hash === wanted) return;
+    const next = `${window.location.pathname}${window.location.search}${wanted}`;
+    window.history.replaceState({}, "", next);
+  }, [activePage]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const page = pageFromHash();
+      setActivePage((current) => (current === page ? current : page));
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   useEffect(() => {
@@ -496,6 +575,16 @@ export default function App() {
     if (loaded.length) saveScannedManuscripts(loaded, user?.uid);
     lastSavedScanKey.current = "";
     setNotifications(loadNotifications(user?.uid));
+    // Show last-known Saved Mechanics immediately — never flash empty while the API warms.
+    const cachedMechanics = loadCachedMechanics(user?.uid);
+    if (cachedMechanics.length) {
+      setMechanics(cachedMechanics);
+      setSelectedMechanicsId((current) =>
+        current && cachedMechanics.some((item) => item.id === current)
+          ? current
+          : cachedMechanics[0]?.id || ""
+      );
+    }
   }, [user?.uid]);
 
   // Signing out (or into another account) must not leave the previous user's session on screen.
@@ -605,35 +694,6 @@ export default function App() {
     !scanFlow.file && savedDocument && savedDocument.scanId === scanFlow.result?.scanId ? savedDocument : null;
   const resultFile = scanFlow.file || savedDocumentForResult?.file || null;
   const resultDocumentLoading = Boolean(savedDocumentForResult?.loading);
-
-  // Stored versions can be trimmed (browser quota) or server-only; fetch the full scan when opened.
-  async function resolveSavedResult(manuscript, version) {
-    if (!version) return null;
-    const scanId = versionScanId(version);
-    if ((version.scanResult && !version.trimmed) || !isServerId(scanId)) {
-      return versionToScanResult(manuscript, version);
-    }
-    try {
-      const scan = await getComplianceScan(scanId);
-      const full = mapComplianceScanToResult(scan, {
-        documentId: manuscript?.id,
-        documentTitle: manuscript?.title,
-        citationStyle: manuscript?.citationStyle,
-        versionId: version.versionId || version.scanResult?.versionId,
-        documentName: version.scanResult?.documentName,
-        cloudinaryUrl: version.scanResult?.cloudinaryUrl,
-      });
-      const next = attachScanResult(scannedLibraryRef.current, manuscript.id, version.id, full);
-      scannedLibraryRef.current = next;
-      setScannedLibrary(next);
-      saveScannedManuscripts(next, user?.uid);
-      const updated = next.find((m) => m.id === manuscript.id);
-      const updatedVersion = updated?.versions?.find((v) => v.id === version.id);
-      return versionToScanResult(updated || manuscript, updatedVersion || version);
-    } catch {
-      return versionToScanResult(manuscript, version);
-    }
-  }
 
   const updateScannedLibrary = useCallback(
     (next) => {
@@ -794,13 +854,10 @@ export default function App() {
       // Formats changed on screen while this load was in flight; the on-screen list is newer.
       const mechanicsStale = mechanicsChange !== mechanicsChangeRef.current;
       if (mechanicsResult.status === "fulfilled" && !mechanicsStale) {
-        const nextMechanics = withoutDeletedMechanics(itemsFrom(mechanicsResult.value, "mechanics"));
-        setMechanics(nextMechanics);
-        setSelectedMechanicsId((current) =>
-          current && nextMechanics.some((item) => item.id === current)
-            ? current
-            : nextMechanics[0]?.id || ""
-        );
+        // Empty API replies during warm-up must not clear Saved Mechanics.
+        applyMechanicsList(itemsFrom(mechanicsResult.value, "mechanics"), {
+          allowEmpty: false,
+        });
       } else if (mechanicsResult.status === "rejected") {
         failures.push(mechanicsResult.reason?.message || "Could not load format mechanics.");
       }
@@ -822,7 +879,7 @@ export default function App() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [nextSubscriptionTicket, storeSubscription, withoutDeletedMechanics]);
+  }, [nextSubscriptionTicket, storeSubscription, applyMechanicsList]);
 
   useEffect(() => {
     if (signedIn) loadDashboard();
@@ -854,7 +911,7 @@ export default function App() {
     if (signedIn && activePage === "manuscripts") void loadDashboard({ silent: true });
   }, [signedIn, activePage, loadDashboard]);
 
-  // Stored versions can be server summaries only; fetch the full scan when opened.
+  // Stored versions can be trimmed / server summaries only; fetch the full scan when opened.
   async function resolveSavedResult(manuscript, version) {
     if (!version) return null;
     const scanId = versionScanId(version);
@@ -867,7 +924,9 @@ export default function App() {
         documentId: manuscript?.id,
         documentTitle: manuscript?.title,
         citationStyle: manuscript?.citationStyle,
-        versionId: version.versionId,
+        versionId: version.versionId || version.scanResult?.versionId,
+        documentName: version.scanResult?.documentName,
+        cloudinaryUrl: version.scanResult?.cloudinaryUrl,
       });
       const next = attachScanResult(scannedLibraryRef.current, manuscript.id, version.id, full);
       scannedLibraryRef.current = next;
@@ -918,35 +977,41 @@ export default function App() {
         sourceFilename: payload.source_filename,
         fileType: payload.file_type,
         extractedText: payload.extracted_text,
+        ignoredFields: payload.ignored_fields,
       });
       mechanicsChangeRef.current += 1;
       if (created?.id) {
-        setMechanics((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setMechanics((current) => {
+          const next = [created, ...current.filter((item) => item.id !== created.id)];
+          const uid = auth?.currentUser?.uid;
+          if (uid) saveCachedMechanics(next, uid);
+          return next;
+        });
         setSelectedMechanicsId(created.id);
       }
       try {
         const data = await listMechanics();
-        const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
-        if (!created?.id || next.some((item) => item.id === created.id)) {
-          setMechanics(next);
-          setSelectedMechanicsId(created?.id || next[0]?.id || "");
-        }
+        const listed = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
+        // Keep the just-saved profile even if the list endpoint lags behind the write.
+        const merged =
+          created?.id && !listed.some((item) => item.id === created.id)
+            ? [created, ...listed]
+            : listed;
+        applyMechanicsList(merged, { allowEmpty: false, preferId: created?.id || "" });
       } catch {
         // The saved format is already on screen; the next refresh brings the full list.
       }
       return true;
     } catch (err) {
-      // Name conflict usually means the profile is already in SQLite — refresh the
-      // list so Use a Saved Format shows it instead of looking empty.
+      // Name conflict usually means the profile is already saved — refresh the list.
       if (err?.status === 409 || /already exists/i.test(err?.message || "")) {
         try {
           const data = await listMechanics();
           const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
-          setMechanics(next);
           const match = next.find(
             (item) => item.name.toLowerCase() === String(payload.name || "").trim().toLowerCase()
           );
-          if (match) setSelectedMechanicsId(match.id);
+          applyMechanicsList(next, { allowEmpty: false, preferId: match?.id || "" });
         } catch {
           // Keep original save error.
         }
@@ -969,11 +1034,17 @@ export default function App() {
       const updated = await updateMechanicsProfile(mechanicsId, {
         name: payload.name,
         rules: payload.rules,
+        ignoredFields: payload.ignored_fields,
       });
       mechanicsChangeRef.current += 1;
-      setMechanics((current) =>
-        current.map((item) => (item.id === mechanicsId ? { ...item, ...updated } : item))
-      );
+      setMechanics((current) => {
+        const next = current.map((item) =>
+          item.id === mechanicsId ? { ...item, ...updated } : item
+        );
+        const uid = auth?.currentUser?.uid;
+        if (uid) saveCachedMechanics(next, uid);
+        return next;
+      });
       setSelectedMechanicsId(mechanicsId);
       return true;
     } catch (err) {
@@ -989,9 +1060,12 @@ export default function App() {
     try {
       const updated = await renameMechanicsRequest(mechanicsId, name);
       mechanicsChangeRef.current += 1;
-      setMechanics((current) =>
-        current.map((item) => (item.id === mechanicsId ? updated : item))
-      );
+      setMechanics((current) => {
+        const next = current.map((item) => (item.id === mechanicsId ? updated : item));
+        const uid = auth?.currentUser?.uid;
+        if (uid) saveCachedMechanics(next, uid);
+        return next;
+      });
       return true;
     } catch (err) {
       setError(err.message);
@@ -1014,9 +1088,12 @@ export default function App() {
       deletedMechanicsRef.current.add(mechanicsId);
       mechanicsChangeRef.current += 1;
       const remainingItems = mechanics.filter((item) => item.id !== mechanicsId);
-      setMechanics((current) => current.filter((item) => item.id !== mechanicsId));
+      // Deleting the last format is a real empty list — allow clearing cache/UI.
+      applyMechanicsList(remainingItems, {
+        allowEmpty: true,
+        preferId: selectedMechanicsId === mechanicsId ? "" : selectedMechanicsId,
+      });
       if (selectedMechanicsId === mechanicsId) {
-        setSelectedMechanicsId(remainingItems[0]?.id || "");
         setCurrentVersion(null);
         setCurrentManuscript(null);
       }
@@ -1218,16 +1295,16 @@ export default function App() {
         : activePage === "notifications"
           ? "Notifications"
           : activePage === "manuscripts"
-            ? "My Manuscripts"
+            ? manuscriptDetailOpen
+              ? "Manuscript Detail"
+              : "My Manuscripts"
             : activePage === "upload" && (scanFlow.step === "results" || scanFlow.step === "tracing")
               ? "Scan Results"
-              : activePage === "upload" && scanFlow.step === "summary"
-                ? "Scan Summary"
-                : activePage === "upload" && scanFlow.step === "analyzing"
-                  ? "Analysing Document"
-                  : activePage === "upload" && scanFlow.step === "error"
-                    ? "Analysis Failed"
-                    : "Dashboard";
+              : activePage === "upload" && scanFlow.step === "analyzing"
+                ? "Analysing Document"
+                : activePage === "upload" && scanFlow.step === "error"
+                  ? "Analysis Failed"
+                  : "Dashboard";
   const breadcrumb =
     activePage === "account"
       ? "Dashboard / Settings"
@@ -1236,20 +1313,25 @@ export default function App() {
         : activePage === "notifications"
           ? "Notification"
           : activePage === "manuscripts"
-            ? "Dashboard / My Manuscripts"
+            ? manuscriptDetailOpen
+              ? "Dashboard / My Manuscripts / Detail"
+              : "Dashboard / My Manuscripts"
             : "Dashboard";
+  // Manuscript detail is a full page under My Manuscripts; its own heading covers title + back.
   const hidePageHeading =
     activePage === "subscription" ||
+    (activePage === "manuscripts" && manuscriptDetailOpen) ||
     (activePage === "upload" &&
-      ["idle", "fileSelected", "analyzing", "summary"].includes(scanFlow.step));
+      ["idle", "fileSelected", "analyzing"].includes(scanFlow.step));
 
   function openUploadMechanics() {
-    setActivePage("upload");
-    // Leave results and analysis, and don't resume File details after the manuscript is gone.
+    // Leave results / analysis / error and start (or resume) the upload wizard.
+    // Do not bounce to My Manuscripts — sidebar "Upload & Analyze" must stay on Upload.
     if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
-      handleBackToDashboard();
+      beginFreshUpload();
       return;
     }
+    setActivePage("upload");
     if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file))) {
       resetUploadWizard(1);
     }
@@ -1257,6 +1339,18 @@ export default function App() {
 
   const showingUploadFace =
     activePage === "upload" && (scanFlow.step === "idle" || scanFlow.step === "fileSelected");
+  // After analysis (or opening a saved version), offer a sidebar jump back to results.
+  const hasComplianceResult = Boolean(scanFlow.result);
+  const viewingComplianceResult =
+    hasComplianceResult &&
+    activePage === "upload" &&
+    (scanFlow.step === "results" || scanFlow.step === "tracing" || scanFlow.step === "summary");
+
+  function openComplianceResult() {
+    if (!scanFlow.result) return;
+    setActivePage("upload");
+    scanFlow.openFullResults();
+  }
 
   return (
     <div className={`min-h-screen bg-[#f3f5f7] text-[#172033] transition-[padding] duration-300 ${sidebarOpen ? "md:pl-80" : "md:pl-0"}`}>
@@ -1267,18 +1361,22 @@ export default function App() {
         }`}
         onClick={(e) => {
           // On phones the sidebar covers the page, so close it after navigating.
-          if (window.innerWidth < 768 && e.target.closest?.("nav button")) setSidebarOpen(false);
+          if (window.innerWidth < 768 && e.target.closest?.("nav a, nav button")) setSidebarOpen(false);
         }}
       >
         <div className="relative px-2">
-          <button
-            type="button"
-            onClick={() => setActivePage("manuscripts")}
+          <a
+            href="#/manuscripts"
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              setActivePage("manuscripts");
+            }}
             className="flex w-full justify-center rounded-xl px-1 pb-2 pt-1 transition hover:bg-white/5"
             aria-label="PaperPilot, go to My Manuscripts"
           >
             <PaperPilotLogo tone="dark" />
-          </button>
+          </a>
           <button
             type="button"
             onClick={() => setSidebarOpen(false)}
@@ -1294,8 +1392,13 @@ export default function App() {
 
         <nav className="mt-10">
           <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Dashboard</p>
-          <button
-            onClick={() => setActivePage("manuscripts")}
+          <a
+            href="#/manuscripts"
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              setActivePage("manuscripts");
+            }}
             className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm transition ${
               activePage === "manuscripts"
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
@@ -1303,23 +1406,65 @@ export default function App() {
             }`}
           >
             <span>▣</span> My Manuscripts
-          </button>
-          <button
-            onClick={openUploadMechanics}
+          </a>
+          <a
+            href="#/upload"
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              openUploadMechanics();
+            }}
             className={`mt-1 flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold transition ${
-              activePage === "upload"
+              activePage === "upload" && !viewingComplianceResult
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
                 : "text-slate-400 hover:text-white"
             }`}
           >
-            <span className="text-[#22c9b4]">↑</span> Upload &amp; Analyze
-          </button>
+            <span className="inline-flex h-4 w-4 items-center justify-center text-[#22c9b4]" aria-hidden>
+              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v6h6" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-6" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="m9 15 3-3 3 3" />
+              </svg>
+            </span>{" "}
+            Upload &amp; Analyze
+          </a>
+          {hasComplianceResult ? (
+            <a
+              href="#/upload"
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                e.preventDefault();
+                openComplianceResult();
+              }}
+              className={`mt-1 flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold transition ${
+                viewingComplianceResult
+                  ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              <span className="inline-flex h-4 w-4 items-center justify-center text-[#22c9b4]" aria-hidden>
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6M9 16h4" />
+                </svg>
+              </span>{" "}
+              Compliance Result
+            </a>
+          ) : null}
         </nav>
 
         <nav className="mt-auto">
           <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Settings</p>
-          <button
-            onClick={() => setActivePage("account")}
+          <a
+            href="#/account"
+            onClick={(e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+              e.preventDefault();
+              setActivePage("account");
+            }}
             className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm transition ${
               activePage === "account" || activePage === "subscription"
                 ? "border-l-2 border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
@@ -1327,7 +1472,7 @@ export default function App() {
             }`}
           >
             <span>♟</span> Account
-          </button>
+          </a>
           <button
             className="mt-6 flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-rose-400 hover:text-rose-300"
             onClick={doSignOut}
@@ -1353,16 +1498,16 @@ export default function App() {
               </svg>
             </button>
           )}
-          {!hidePageHeading && (
+          {activePage === "manuscripts" && manuscriptDetailOpen ? (
+            <BackToDashboardButton
+              onClick={() => closeManuscriptDetailRef.current?.()}
+            />
+          ) : !hidePageHeading ? (
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{breadcrumb}</p>
             <div className="flex flex-wrap items-center gap-2.5">
               <div>
                 <h1 className="text-xl font-bold tracking-tight text-[#172033]">{pageTitle}</h1>
-                {activePage === "upload" &&
-                  (scanFlow.step === "results" || scanFlow.step === "tracing") && (
-                  <BackToDashboardButton onClick={handleBackToDashboard} className="mt-2" />
-                )}
               </div>
               {activePage === "notifications" && notificationUnread > 0 && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e8f3ff] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-[#2f6fed]">
@@ -1371,27 +1516,22 @@ export default function App() {
                 </span>
               )}
             </div>
+            {activePage === "upload" &&
+            (scanFlow.step === "results" || scanFlow.step === "tracing") ? (
+              <BackToDashboardButton onClick={handleBackToDashboard} className="mt-2" />
+            ) : null}
           </div>
-          )}
+          ) : null}
         </div>
-        <div className="flex items-center gap-4">
-          {activePage !== "notifications" && (
-            <>
-              <div className="hidden text-right lg:block">
-                <p className="text-xs font-semibold capitalize text-slate-700">{tier} plan</p>
-                <p className="text-[10px] text-slate-400">
-                  {remaining} of {limit} scans remaining this {resetWindow(tier)}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActivePage("subscription")}
-                className="rounded-md bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-[#092823] shadow-sm hover:bg-[#12ae99]"
-              >
-                {isPaidTier(tier) ? "Manage subscription" : "Subscribe to Premium"}
-              </button>
-            </>
-          )}
+        <div className="flex items-center gap-3 sm:gap-4">
+          {activePage !== "notifications" && activePage !== "subscription" ? (
+            <div className="text-right">
+              <p className="text-xs font-semibold capitalize text-slate-700">{tier} plan</p>
+              <p className="text-[10px] text-slate-400">
+                {remaining} of {limit} scans remaining this {resetWindow(tier)}
+              </p>
+            </div>
+          ) : null}
           <div className="relative" ref={notificationsRootRef}>
           <button
             type="button"
@@ -1493,16 +1633,15 @@ export default function App() {
             items={scannedLibrary}
             onItemsChange={updateScannedLibrary}
             tier={tier}
+            onDetailOpenChange={setManuscriptDetailOpen}
+            closeDetailRef={closeManuscriptDetailRef}
             onUpgrade={(message) =>
               setUpgradeMessage(
                 message ||
                   "Older manuscript versions are available on Premium. Upgrade to view full version history."
               )
             }
-            onUploadNew={() => {
-              resetUploadWizard(1);
-              setActivePage("upload");
-            }}
+            onUploadNew={beginFreshUpload}
             resolveSavedResult={resolveSavedResult}
             onOpenSavedResult={async (manuscript, version) => {
               const saved = await resolveSavedResult(manuscript, version);
@@ -1568,15 +1707,7 @@ export default function App() {
         {/* Kept mounted while on other pages so an in-progress upload (step, picked file, title) survives. */}
         <div hidden={activePage !== "upload"}>
 
-        {/* ── Results screen ─────────────────────────────────────────────── */}
-        <ScanSummaryModal
-          open={activePage === "upload" && scanFlow.step === "summary"}
-          result={scanFlow.result}
-          onViewDocument={scanFlow.openFullResults}
-          onViewFullResult={scanFlow.openFullResults}
-        />
-
-        {/* Legacy "tracing" step → full results (issue tracing & XAI are embedded there). */}
+        {/* ── Results screen (opened directly when analysis completes) ────── */}
         {(scanFlow.step === "results" || scanFlow.step === "tracing") && (
           <ScanResultsScreen
             result={scanFlow.result}
@@ -1586,7 +1717,6 @@ export default function App() {
             downloadBusy={scanFlow.downloadBusy}
             downloadError={scanFlow.downloadError}
             onDownload={scanFlow.downloadReport}
-            onBackToDashboard={handleBackToDashboard}
           />
         )}
 
@@ -1693,7 +1823,6 @@ export default function App() {
                 <ShowStepsRow step={3} onShowSteps={() => setJourneyOpen(true)} />
                 <div className="mt-1 border-b border-slate-100 pb-4">
                   <h2 className="text-lg font-bold text-[#172033]">File details</h2>
-                  <p className="text-xs text-slate-400">Review attached files then run compliance analysis</p>
                 </div>
 
                 {fileDetailsNotice && (
@@ -1784,11 +1913,6 @@ export default function App() {
                     <div className="mt-2 rounded-lg border border-slate-200 bg-[#f8f9fb] px-4 py-3 text-xs font-medium text-slate-400">
                       v{Number(currentVersion.version_number || scanFlow.versionNumber || 1)}.0
                     </div>
-                    {currentVersion.pending ? (
-                      <p className="mt-1 text-[11px] text-slate-400">
-                        Saved as this version only after the scan finishes. Cancel upload leaves the latest version unchanged.
-                      </p>
-                    ) : null}
                   </div>
                 )}
 

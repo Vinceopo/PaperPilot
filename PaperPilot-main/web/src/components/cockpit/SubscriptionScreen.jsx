@@ -73,7 +73,7 @@ function historyLabel(entry) {
   return action || "Update";
 }
 
-function PaidPlanCard({ plan, selected, billingPeriod, features, badge, onSelect }) {
+function PaidPlanCard({ plan, selected, isCurrent, billingPeriod, features, badge, onSelect }) {
   const annual = billingPeriod === "annual";
   return (
     <div
@@ -83,21 +83,22 @@ function PaidPlanCard({ plan, selected, billingPeriod, features, badge, onSelect
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") onSelect();
       }}
-      className={`cursor-pointer rounded-2xl border bg-white p-5 text-left shadow-sm transition ${
+      className={`flex h-full min-h-[22rem] cursor-pointer flex-col rounded-2xl border bg-white p-5 text-left shadow-sm transition ${
         selected ? "border-[#3b82f6] ring-2 ring-[#3b82f6]/20" : "border-slate-200 hover:border-slate-300"
       }`}
     >
-      {selected && (
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[#3b82f6]">
-          Selected plan ✓
-        </p>
-      )}
+      {/* Reserved row so Current Plan never shifts title/price vs other cards */}
+      <div className="mb-2 flex h-4 items-center">
+        {isCurrent ? (
+          <p className="text-[10px] font-bold uppercase tracking-wider text-[#3b82f6]">Current Plan ✓</p>
+        ) : null}
+      </div>
       <p className="text-sm font-semibold text-slate-700">{planName(plan)} Plan</p>
       <p className="mt-2 text-3xl font-bold text-[#172033]">
         {peso(planPrice(plan, billingPeriod))}
         <span className="ml-1 text-sm font-medium text-slate-400">/ {annual ? "year" : "month"}</span>
       </p>
-      <p className="mt-1 text-[11px] text-slate-400">
+      <p className="mt-1 min-h-[1.25rem] text-[11px] text-slate-400">
         {annual ? "Billed annually" : "Billed monthly"}
         {annual && (
           <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 font-bold text-emerald-700">
@@ -105,7 +106,7 @@ function PaidPlanCard({ plan, selected, billingPeriod, features, badge, onSelect
           </span>
         )}
       </p>
-      <ul className="mt-4 space-y-2 text-xs text-slate-500">
+      <ul className="mt-4 flex-1 space-y-2 text-xs text-slate-500">
         {features.map((f) => (
           <li key={f}>• {f}</li>
         ))}
@@ -605,7 +606,7 @@ export default function SubscriptionScreen({
               ))}
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid items-stretch gap-4 md:grid-cols-3">
               <div
                 role="button"
                 tabIndex={0}
@@ -613,20 +614,23 @@ export default function SubscriptionScreen({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") setSelectedPlan("free");
                 }}
-                className={`cursor-pointer rounded-2xl border bg-white p-5 text-left shadow-sm transition ${
+                className={`flex h-full min-h-[22rem] cursor-pointer flex-col rounded-2xl border bg-white p-5 text-left shadow-sm transition ${
                   selectedPlan === "free"
                     ? "border-[#3b82f6] ring-2 ring-[#3b82f6]/20"
                     : "border-slate-200 hover:border-slate-300"
                 }`}
               >
-                {selectedPlan === "free" && (
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[#3b82f6]">
-                    Selected plan ✓
-                  </p>
-                )}
+                <div className="mb-2 flex h-4 items-center">
+                  {tier === "free" ? (
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-[#3b82f6]">
+                      Current Plan ✓
+                    </p>
+                  ) : null}
+                </div>
                 <p className="text-sm font-semibold text-slate-700">Free Plan</p>
                 <p className="mt-2 text-3xl font-bold text-[#172033]">₱0</p>
-                <ul className="mt-4 space-y-2 text-xs text-slate-500">
+                <p className="mt-1 min-h-[1.25rem] text-[11px] text-slate-400">No billing</p>
+                <ul className="mt-4 flex-1 space-y-2 text-xs text-slate-500">
                   {FREE_FEATURES.map((f) => (
                     <li key={f}>• {f}</li>
                   ))}
@@ -636,6 +640,7 @@ export default function SubscriptionScreen({
               <PaidPlanCard
                 plan="premium"
                 selected={selectedPlan === "premium"}
+                isCurrent={tier === "premium"}
                 billingPeriod={billingPeriod}
                 features={PREMIUM_FEATURES}
                 badge="Best for thesis writers"
@@ -644,6 +649,7 @@ export default function SubscriptionScreen({
               <PaidPlanCard
                 plan="pro"
                 selected={selectedPlan === "pro"}
+                isCurrent={tier === "pro"}
                 billingPeriod={billingPeriod}
                 features={PRO_FEATURES}
                 badge="Best for heavy revision cycles"

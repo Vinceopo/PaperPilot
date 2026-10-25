@@ -41,7 +41,7 @@ function Checkbox({ checked, onChange, label }) {
           <Svg width={12} height={12} viewBox="0 0 24 24">
             <Path
               d="M5 12.5l4.5 4.5L19 7.5"
-              stroke={colors.white}
+              stroke={colors.accent}
               strokeWidth={3}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -214,6 +214,7 @@ export default function LoginScreen({
           title={busy ? "Please wait…" : "Sign in to PaperPilot"}
           onPress={onSubmit}
           busy={busy}
+          style={styles.submit}
         />
       </View>
 
@@ -223,17 +224,17 @@ export default function LoginScreen({
 }
 
 const styles = StyleSheet.create({
-  form: { marginTop: 28, gap: 16 },
+  form: { marginTop: 20, gap: 14 },
   row: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingTop: 2,
+    minHeight: 20,
   },
   remember: { flexDirection: "row", alignItems: "center", gap: 8 },
   box: {
-    width: 18,
-    height: 18,
+    width: 16,
+    height: 16,
     borderRadius: 4,
     borderWidth: 1,
     borderColor: "#cbd5e1",
@@ -241,11 +242,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  boxChecked: { backgroundColor: colors.accent, borderColor: colors.accent },
-  rememberLabel: { fontSize: 14, color: "#475569" },
-  forgot: { fontSize: 14, fontWeight: "500", color: colors.accent },
-  error: { fontSize: 14, color: colors.rose },
-  notice: { fontSize: 14, color: colors.accentText },
-  footer: { marginTop: 24, textAlign: "center", fontSize: 14, color: colors.slate },
+  boxChecked: { backgroundColor: colors.white, borderColor: colors.accent },
+  rememberLabel: { fontSize: 14, lineHeight: 20, color: "#475569" },
+  forgot: { fontSize: 14, lineHeight: 20, fontWeight: "700", color: colors.accent },
+  error: { fontSize: 14, lineHeight: 20, color: colors.rose },
+  notice: { fontSize: 14, lineHeight: 20, color: colors.accentText },
+  submit: {
+    height: 52,
+    borderRadius: 10,
+    paddingVertical: 0,
+    minHeight: 52,
+  },
+  footer: { marginTop: 20, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
   footerLink: { fontWeight: "600", color: colors.accent },
 });

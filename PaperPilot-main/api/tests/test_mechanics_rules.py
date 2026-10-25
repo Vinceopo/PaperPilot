@@ -305,6 +305,53 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
         self.assertEqual(alignment["status"], "not_applicable")
 
+    def test_blank_mechanics_fields_are_not_enforced(self):
+        """Any blank / NA mechanics field must not invent a rule or issue."""
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "color": "NA",
+                    "heading_levels": 2,
+                    "heading_styles": {"heading1": {}},
+                },
+                "alignment": "n/a",
+                "spacing": "",
+                "indention": "none",
+                "word_spacing": "",
+                "paper": {"orientation": "NA", "size": ""},
+                "pagination": {"position": "", "title_page": "not checked"},
+            }
+        )
+        font = rules.get("font") or {}
+        self.assertNotIn("color", font)
+        self.assertNotIn("alignment", rules)
+        self.assertNotIn("line_spacing", rules)
+        self.assertNotIn("first_line_indent_inches", rules)
+        self.assertNotIn("word_spacing", rules)
+        paper = rules.get("paper") or {}
+        self.assertNotIn("orientation", paper)
+        result = run_compliance_scan(self._body_doc(size=14, align=WD_ALIGN_PARAGRAPH.CENTER), rules)
+        self.assertEqual(result["issues"], [])
+
+    def test_rule_is_set_preserves_zero_false_and_black(self):
+        from app.mechanics_options import rule_is_set, rule_unset
+
+        self.assertTrue(rule_unset(None))
+        self.assertTrue(rule_unset(""))
+        self.assertTrue(rule_unset([]))
+        self.assertTrue(rule_unset({}))
+        self.assertTrue(rule_unset("IGNORE"))
+        self.assertTrue(rule_unset("none"))
+        self.assertTrue(rule_unset("n/a"))
+        self.assertTrue(rule_unset([None, ""]))
+        self.assertFalse(rule_unset(0))
+        self.assertFalse(rule_unset(False))
+        self.assertFalse(rule_unset("Black/Automatic"))
+        self.assertTrue(rule_is_set(0))
+        self.assertTrue(rule_is_set(False))
+        self.assertTrue(rule_is_set("Black/Automatic"))
+        self.assertFalse(rule_is_set("IGNORE"))
+
     def test_explicit_body_size_still_flags_mismatch(self):
         rules = normalize_mechanics_rules({"font": {"body_size": 12}})
         result = run_compliance_scan(self._body_doc(size=11), rules)

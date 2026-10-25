@@ -24,13 +24,23 @@ function starterHeading(values) {
 
 export const CITATION_STYLES = ["APA", "MLA", "IEEE"];
 
-/** Profiles saved with a style that is no longer offered (e.g. Chicago) fall back to APA. */
+/** Format Fields IGNORE choice — stored in the form, omitted from saved rules. */
+export function isIgnoreFormValue(value) {
+  return /^ignore$/i.test(String(value || "").trim());
+}
+
+/**
+ * Normalize a stored citation style for the form / scan gate.
+ * Empty / IGNORE means "not set" (citation checks are skipped). Unknown legacy
+ * styles (e.g. Chicago) map to APA; blank stays blank.
+ */
 export function supportedCitationStyle(value) {
   const style = String(value || "").trim().toUpperCase();
+  if (!style || style === "IGNORE") return "";
   return CITATION_STYLES.includes(style) ? style : "APA";
 }
 
-/** APA 7th edition starter values, matching the downloadable sample guide. */
+/** APA 7th edition starter values. */
 export function sampleMechanicsForm(name = "APA 7th Edition Format") {
   return {
     name: name || "APA 7th Edition Format",
@@ -76,7 +86,7 @@ export function emptyMechanicsForm(name = "") {
   return {
     name: name || "",
     paperSize: "",
-    paperOrientation: "Portrait",
+    paperOrientation: "",
     paperSubstance: "",
     paperLandscapePages: "",
     spacing: "",
@@ -92,7 +102,7 @@ export function emptyMechanicsForm(name = "") {
     marginFooter: "",
     bodySize: "",
     fontType: "",
-    fontColor: "Black/Automatic",
+    fontColor: "",
     headings: [],
     paginationPosition: "",
     paginationTitlePage: "",
@@ -103,7 +113,7 @@ export function emptyMechanicsForm(name = "") {
     pageBreaks: "",
     tableLayout: "",
     figureLayout: "",
-    citationFormat: "APA",
+    citationFormat: "",
   };
 }
 
@@ -194,12 +204,20 @@ function alignmentKey(value) {
 export function rulesToForm(rules = {}, name = "") {
   const font = rules.font || {};
   const families = Array.isArray(font.families) ? font.families : [];
-  const sizes = Array.isArray(font.sizes_points) ? font.sizes_points : [];
   const margins = rules.margins_inches || {};
   const paper = rules.paper || {};
   const pagination = rules.pagination || {};
 
-  const bodySize = font.body_size ?? font.heading3_content_size ?? sizes[0];
+  // Do not invent body size from heading sizes / sizes_points — unset means NA.
+  const hasHeadingSizes = [1, 2, 3, 4, 5, 6, 7, 8, 9].some(
+    (n) => font[`heading${n}_size`] != null && font[`heading${n}_size`] !== ""
+  );
+  const bodySize =
+    font.body_size != null && font.body_size !== ""
+      ? font.body_size
+      : hasHeadingSizes
+        ? null
+        : font.heading3_content_size;
 
   const spacing =
     rules.spacing != null
@@ -218,7 +236,7 @@ export function rulesToForm(rules = {}, name = "") {
   return {
     name: name || "",
     paperSize: paperSizeLabel(rules),
-    paperOrientation: String(paper.orientation || rules.orientation || "Portrait"),
+    paperOrientation: String(paper.orientation || rules.orientation || ""),
     paperSubstance: String(paper.substance || rules.substance || ""),
     paperLandscapePages: canonicalLandscapePages(paper.landscape_pages),
     spacing,
@@ -234,7 +252,7 @@ export function rulesToForm(rules = {}, name = "") {
     marginFooter: margins.footer != null ? String(margins.footer) : "",
     bodySize: bodySize != null ? String(bodySize) : "",
     fontType: String(font.type || families[0] || ""),
-    fontColor: String(font.color || "Black/Automatic"),
+    fontColor: String(font.color || ""),
     headings: headingsFromRules(font),
     paginationPosition: canonicalPagePosition(
       pagination.position || rules.pagination_position || asText(rules.pagination_requirements)
@@ -268,16 +286,21 @@ function inferPaperName(sizeText) {
   return "";
 }
 
+function formText(value) {
+  const text = String(value ?? "").trim();
+  return isIgnoreFormValue(text) ? "" : text;
+}
+
 export function formToRules(form) {
   const rules = {};
   const paper = {};
-  const sizeText = String(form.paperSize || "").trim();
+  const sizeText = formText(form.paperSize);
   if (sizeText) paper.size = sizeText;
-  const orientation = String(form.paperOrientation || "").trim();
+  const orientation = formText(form.paperOrientation);
   if (orientation) paper.orientation = orientation;
-  const substance = String(form.paperSubstance || "").trim();
+  const substance = formText(form.paperSubstance);
   if (substance) paper.substance = substance;
-  const landscapePages = String(form.paperLandscapePages || "").trim();
+  const landscapePages = formText(form.paperLandscapePages);
   if (landscapePages) paper.landscape_pages = landscapePages;
   if (Object.keys(paper).length) rules.paper = paper;
 
@@ -294,23 +317,23 @@ export function formToRules(form) {
     }
   }
 
-  const spacingText = String(form.spacing || "").trim();
+  const spacingText = formText(form.spacing);
   if (spacingText) {
     rules.spacing = spacingText;
     const spacingNum = parseLineSpacing(spacingText);
     if (spacingNum != null) rules.line_spacing = spacingNum;
   }
-  const wordSpacing = String(form.wordSpacing || "").trim();
+  const wordSpacing = formText(form.wordSpacing);
   if (wordSpacing) rules.word_spacing = wordSpacing;
 
-  const indentionText = String(form.indention || "").trim();
+  const indentionText = formText(form.indention);
   if (indentionText) {
     rules.indention = indentionText;
     const indentNum = parseLengthInches(indentionText);
     if (indentNum != null && indentNum <= 2) rules.first_line_indent_inches = indentNum;
   }
 
-  const alignment = alignmentKey(form.alignment);
+  const alignment = alignmentKey(formText(form.alignment));
   if (alignment) rules.alignment = alignment;
 
   const margins = {};
@@ -323,34 +346,35 @@ export function formToRules(form) {
     ["header", "marginHeader"],
     ["footer", "marginFooter"],
   ]) {
-    const value = Number(form[field]);
-    if (!Number.isNaN(value) && String(form[field] || "").trim() !== "") {
+    const raw = formText(form[field]);
+    const value = Number(raw);
+    if (!Number.isNaN(value) && raw !== "") {
       margins[key] = value;
     }
   }
   if (Object.keys(margins).length) rules.margins_inches = margins;
 
   const font = {};
-  const fontType = String(form.fontType || "").trim();
+  const fontType = formText(form.fontType);
   if (fontType) {
     font.type = fontType;
     font.families = [fontType];
   }
-  const fontColor = String(form.fontColor || "").trim();
-  if (fontColor) font.color = fontColor;
+  const fontColor = formText(form.fontColor);
+  // Blank / IGNORE means no color rule — do not invent Black/Automatic.
+  if (fontColor && !/^(na|n\/a|n\.a\.?|none|not checked|-|—)$/i.test(fontColor)) {
+    font.color = fontColor;
+  }
 
-  const sizes = [];
-  const bodySize = Number(form.bodySize);
-  if (!Number.isNaN(bodySize) && String(form.bodySize || "").trim() !== "") {
+  const bodyRaw = formText(form.bodySize);
+  const bodySize = Number(bodyRaw);
+  if (!Number.isNaN(bodySize) && bodyRaw !== "") {
     font.body_size = bodySize;
-    sizes.push(bodySize);
+    // sizes_points is body-only — never copy heading sizes into it (that invents H1 rules).
+    font.sizes_points = [bodySize];
   }
   const headingRules = headingsToRules(form.headings);
   Object.assign(font, headingRules);
-  for (const [key, value] of Object.entries(headingRules)) {
-    if (/^heading\d+_size$/.test(key)) sizes.push(value);
-  }
-  if (sizes.length) font.sizes_points = [...new Set(sizes)];
   // heading_styles are already included by headingsToRules(form.headings) above.
   if (Object.keys(font).length) rules.font = font;
 
@@ -362,10 +386,12 @@ export function formToRules(form) {
     ["paginationPreliminaryStyle", "preliminary_style"],
     ["paginationBodyNumbering", "body_numbering"],
   ]) {
-    const value = String(form[field] || "").trim();
+    const value = formText(form[field]);
     if (value) pagination[key] = value;
   }
-  const markers = canonicalChapterMarkers(form.paginationChapterMarkers);
+  const markers = isIgnoreFormValue(form.paginationChapterMarkers)
+    ? []
+    : canonicalChapterMarkers(form.paginationChapterMarkers);
   if (markers.length) pagination.chapter_markers = markers;
   if (Object.keys(pagination).length) {
     rules.pagination = pagination;
@@ -373,7 +399,7 @@ export function formToRules(form) {
   }
 
   const split = (text) =>
-    String(text || "")
+    formText(text)
       .split(/\n|;/)
       .map((part) => part.trim())
       .filter(Boolean);
@@ -385,7 +411,7 @@ export function formToRules(form) {
   if (tableLayout.length) rules.table_layout_requirements = tableLayout;
   if (figureLayout.length) rules.figure_layout_requirements = figureLayout;
 
-  const citation = String(form.citationFormat || "").trim().toUpperCase();
+  const citation = formText(form.citationFormat).toUpperCase();
   if (CITATION_STYLES.includes(citation)) {
     rules.citation_style = citation;
   }

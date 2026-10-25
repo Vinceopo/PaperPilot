@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { otpBypassToken, resetPasswordWithOtp, sendOtp } from "../../api";
+import { GOOGLE_PASSWORD_HINT } from "../../lib/messages";
 import {
   confirmPasswordError,
   emailError,
@@ -32,7 +33,6 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
 
   const backToLogin = (
     <Text style={styles.footer}>
-      Remembered it?{" "}
       <Text style={styles.footerLink} onPress={onGoToLogin}>
         Back to sign in
       </Text>
@@ -56,7 +56,8 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
       setOtpMeta({ expiresIn: res.expires_in, resendIn: res.resend_in, devCode: res.dev_code });
       setStep("otp");
     } catch (err2) {
-      setFormError(err2.message);
+      const msg = err2.message || "";
+      setFormError(msg.includes("Google") ? GOOGLE_PASSWORD_HINT : msg);
     } finally {
       setBusy(false);
     }
@@ -192,6 +193,7 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
             title={busy ? "Updating…" : "Update password"}
             onPress={onSetPassword}
             busy={busy}
+            style={styles.submit}
           />
         </View>
       </AuthShell>
@@ -227,6 +229,7 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
           title={busy ? "Sending code…" : "Send verification code"}
           onPress={onRequestCode}
           busy={busy}
+          style={styles.submit}
         />
       </View>
     </AuthShell>
@@ -236,9 +239,15 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
 const styles = StyleSheet.create({
   form: { marginTop: 20, gap: 14 },
   checks: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
-  check: { fontSize: 12.5, color: colors.muted },
+  check: { fontSize: 12.5, lineHeight: 16, color: colors.muted },
   checkMet: { color: colors.accentText },
-  error: { fontSize: 13, color: colors.rose },
-  footer: { marginTop: 22, textAlign: "center", fontSize: 14, color: colors.slate },
-  footerLink: { fontWeight: "700", color: colors.accentText },
+  error: { fontSize: 14, lineHeight: 20, color: colors.rose },
+  submit: {
+    height: 52,
+    borderRadius: 10,
+    paddingVertical: 0,
+    minHeight: 52,
+  },
+  footer: { marginTop: 20, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
+  footerLink: { fontWeight: "600", color: colors.accent },
 });

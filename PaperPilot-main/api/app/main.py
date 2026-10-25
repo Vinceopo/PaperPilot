@@ -64,11 +64,18 @@ from app.paymongo import (
 from app.paymongo_events import fulfill_checkout_paid, handle_paymongo_event
 from app.documents import (
     DocumentError,
+    assert_mechanics_guide,
     build_sample_mechanics_docx,
     derive_mechanics_rules,
     normalize_mechanics_rules,
     parse_document,
     validate_document,
+)
+from app.mechanics_validate import (
+    apply_ignored_fields_to_rules,
+    assert_mechanics_rules_ready,
+    filter_issues_for_rules,
+    validate_mechanics_document,
 )
 from app.emailer import email_delivery_configured, send_otp_email
 from app.firebase_admin_app import admin_auth
@@ -267,20 +274,28 @@ def _document_preview_pages(parsed: dict, text: str, limit: int = 500) -> list[d
         paragraphs = parsed.get("paragraphs") or []
         chunks: list[str] = []
         current: list[str] = []
+
+        def flush_preview_chunk() -> None:
+            chunk = "\n".join(current).strip()
+            if chunk:
+                chunks.append(chunk)
+            current.clear()
+
         for paragraph in paragraphs:
             if (paragraph.get("source") or "body") != "body":
                 continue
             runs = paragraph.get("runs") or []
+            if (paragraph.get("formatting") or {}).get("page_break_before") and current:
+                flush_preview_chunk()
             current.append(str(paragraph.get("text") or ""))
-            if any(int(run.get("page_breaks") or 0) > 0 for run in runs):
-                chunk = "\n".join(current).strip()
-                if chunk:
-                    chunks.append(chunk)
-                current = []
+            # Explicit Ctrl+Enter breaks and Word's lastRenderedPageBreak both start a new page.
+            if any(
+                int(run.get("page_breaks") or 0) > 0 or int(run.get("rendered_page_breaks") or 0) > 0
+                for run in runs
+            ):
+                flush_preview_chunk()
         if current:
-            chunk = "\n".join(current).strip()
-            if chunk:
-                chunks.append(chunk)
+            flush_preview_chunk()
         if not chunks:
             body = (text or "").strip()
             size = 2200
@@ -307,9 +322,9 @@ def _feature_tier(tier: str) -> str:
     return "premium" if is_paid_tier(tier) else "free"
 
 
-def _scan_rules(rules: dict) -> dict:
-    """Profiles saved before Chicago was removed are checked as APA (the default style)."""
-    out = dict(rules or {})
+def _scan_rules(rules: dict, ignored_fields: list[str] | None = None) -> dict:
+    """Normalize rules for a scan; strip IGNORE / empty Format Fields so they do not enforce."""
+    out = apply_ignored_fields_to_rules(rules or {}, ignored_fields)
     style = str(out.get("citation_style") or "").strip().upper()
     if style == "CHICAGO":
         out["citation_style"] = "APA"
@@ -339,7 +354,9 @@ async def mechanics_extract(
                 "Use a text-based PDF or DOCX (not a scanned image-only PDF)."
             )
         rules = derive_mechanics_rules(text)
+        assert_mechanics_guide(text, rules)
         pages = _document_preview_pages(parsed, text)
+        validation = validate_mechanics_document(text, pages=pages, rules=None)
         return {
             "name": Path(filename).stem[:200],
             "source_filename": filename,
@@ -351,6 +368,7 @@ async def mechanics_extract(
             or len(pages),
             "pages": pages,
             "rules": rules,
+            "validation": validation,
         }
     except CloudinaryFetchError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -364,7 +382,10 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="A mechanics name is required.")
-    rules = normalize_mechanics_rules(body.rules)
+    # Strip IGNORE / empty heading fields so they are never stored as active scan rules.
+    rules = apply_ignored_fields_to_rules(
+        normalize_mechanics_rules(body.rules), body.ignored_fields
+    )
     if not rules:
         raise HTTPException(
             status_code=400,
@@ -377,13 +398,39 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
     if not filename.lower().endswith((".pdf", ".docx")):
         filename = f"{Path(filename).stem}.docx"
     text = (body.extracted_text or "").strip()
+    # Uploaded guides must pass schema validation unless the user covered gaps via Format Fields.
+    if text and raw_type not in ("manual", "customize"):
+        validation = filter_issues_for_rules(
+            validate_mechanics_document(text, rules=None),
+            rules,
+            body.ignored_fields,
+        )
+        if not validation.get("ok"):
+            first = (validation.get("issues") or [{}])[0]
+            detail = first.get("message") or "Fix the highlighted mechanics issues before saving."
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": detail,
+                    "validation": validation,
+                },
+            )
     parsed = {
         "text": text,
         "pages": [],
         "source": "manual" if raw_type in ("manual", "customize") else "upload",
     }
     try:
-        return create_mechanics(uid, name[:200], filename, file_type, text, parsed, rules)
+        return create_mechanics(
+            uid,
+            name[:200],
+            filename,
+            file_type,
+            text,
+            parsed,
+            rules,
+            ignored_fields=body.ignored_fields,
+        )
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
@@ -421,8 +468,10 @@ async def mechanics_create(
         item_name = (body.name or Path(filename).stem).strip()
         if not item_name:
             raise DocumentError("A mechanics name is required.")
+        rules = derive_mechanics_rules(text)
+        assert_mechanics_guide(text, rules)
         item = create_mechanics(
-            uid, item_name[:200], filename, file_type, text, parsed, derive_mechanics_rules(text)
+            uid, item_name[:200], filename, file_type, text, parsed, rules
         )
         return item
     except CloudinaryFetchError as exc:
@@ -439,17 +488,27 @@ def mechanics_update(
     body: MechanicsUpdateRequest,
     uid: str = Depends(authenticated_uid),
 ):
-    if body.name is None and body.rules is None:
+    if body.name is None and body.rules is None and body.ignored_fields is None:
         raise HTTPException(status_code=400, detail="Provide a name and/or rules to update.")
     name = body.name.strip() if body.name is not None else None
-    rules = normalize_mechanics_rules(body.rules) if body.rules is not None else None
+    rules = (
+        apply_ignored_fields_to_rules(normalize_mechanics_rules(body.rules), body.ignored_fields)
+        if body.rules is not None
+        else None
+    )
     if body.rules is not None and not rules:
         raise HTTPException(
             status_code=400,
             detail="Add at least one format rule before saving.",
         )
     try:
-        item = update_mechanics(uid, mechanics_id, name=name, rules=rules)
+        item = update_mechanics(
+            uid,
+            mechanics_id,
+            name=name,
+            rules=rules,
+            ignored_fields=body.ignored_fields,
+        )
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
@@ -635,11 +694,18 @@ def compliance_scan_create(
     if not version or not mechanics:
         raise HTTPException(status_code=404, detail="Manuscript version or mechanics not found.")
     try:
+        # After save, rules are the source of truth (IGNORE fields are simply omitted).
+        assert_mechanics_rules_ready(mechanics.get("rules") or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    try:
         subscription = check_scan_eligibility(
             uid,
             manuscript_id,
             version_id,
-            citation_style=_scan_rules(mechanics.get("rules") or {}).get("citation_style"),
+            citation_style=_scan_rules(
+                mechanics.get("rules") or {}, mechanics.get("ignored_fields")
+            ).get("citation_style"),
         )
     except UpgradeRequired as exc:
         _raise_upgrade(exc)
@@ -678,7 +744,9 @@ def compliance_scan_create(
                 document_url=None,
                 document_base64=base64.b64encode(raw_bytes).decode("ascii"),
                 filename=version.get("source_filename") or "document.pdf",
-                mechanics_rules=_scan_rules(mechanics["rules"]),
+                mechanics_rules=_scan_rules(
+                    mechanics["rules"], mechanics.get("ignored_fields")
+                ),
                 tier=_feature_tier(subscription["tier"]),
             )
         except MLServiceError as exc:
@@ -706,7 +774,9 @@ def compliance_scan_create(
                 raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
 
     result = run_compliance_scan(
-        version["parsed_data"], _scan_rules(mechanics["rules"]), _feature_tier(subscription["tier"])
+        version["parsed_data"],
+        _scan_rules(mechanics["rules"], mechanics.get("ignored_fields")),
+        _feature_tier(subscription["tier"]),
     )
     extra = {
         "page_count": result.get("page_count") or 0,
@@ -1041,6 +1111,30 @@ def _email_registered(email: str) -> bool | None:
         return False
 
 
+GOOGLE_PASSWORD_HINT = (
+    "This account signs in with Google. Change your password in your Google Account "
+    "(myaccount.google.com), then sign in here with Google."
+)
+
+
+def _is_google_sign_in_only(email: str) -> bool | None:
+    """True when the account has Google and no email/password provider.
+
+    None when Admin SDK is unavailable (caller should not block).
+    """
+    fb = admin_auth()
+    if not fb:
+        return None
+    from firebase_admin.auth import UserNotFoundError
+
+    try:
+        user = fb.get_user_by_email(email)
+    except UserNotFoundError:
+        return False
+    providers = {p.provider_id for p in (user.provider_data or [])}
+    return "google.com" in providers and "password" not in providers
+
+
 @app.post("/auth/register/check")
 def auth_register_check(body: RegisterCheckRequest):
     email = normalize_email(body.email)
@@ -1252,6 +1346,8 @@ def auth_otp_send(body: OtpSendRequest):
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
     if body.purpose == "reset_password" and registered is False:
         raise HTTPException(status_code=404, detail="No account found for this email.")
+    if body.purpose == "reset_password" and _is_google_sign_in_only(email):
+        raise HTTPException(status_code=400, detail=GOOGLE_PASSWORD_HINT)
 
     # Local/dev bypass: skip email and return a challenge token immediately.
     # Password resets always require a real emailed code.
@@ -1387,6 +1483,8 @@ def auth_reset_password(body: ResetPasswordRequest):
     email = normalize_email(body.email)
     _require(email_error(email))
     _require(password_error(body.new_password))
+    if _is_google_sign_in_only(email):
+        raise HTTPException(status_code=400, detail=GOOGLE_PASSWORD_HINT)
     try:
         consume_challenge(body.reset_token, email, "reset_password")
     except ValueError as exc:
@@ -1401,7 +1499,12 @@ def auth_reset_password(body: ResetPasswordRequest):
 
     try:
         user = fb.get_user_by_email(email)
+        providers = {p.provider_id for p in (user.provider_data or [])}
+        if "google.com" in providers and "password" not in providers:
+            raise HTTPException(status_code=400, detail=GOOGLE_PASSWORD_HINT)
         fb.update_user(user.uid, password=body.new_password)
+    except HTTPException:
+        raise
     except UserNotFoundError:
         raise HTTPException(status_code=400, detail="No account found for this email.") from None
     except Exception as exc:

@@ -9,6 +9,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useRoute } from "@react-navigation/native";
 import * as DocumentPicker from "expo-document-picker";
 import * as WebBrowser from "expo-web-browser";
 import { useAppData } from "../context/AppDataContext";
@@ -35,10 +36,16 @@ import {
   sampleMechanicsForm,
   supportedCitationStyle,
 } from "../lib/formatMechanicsForm";
+import {
+  applyIgnoredFieldsToForm,
+  ignoredFieldsFromForm,
+} from "../lib/mechanicsValidation";
 import { formatFileSize, oversizeFileMessage } from "../lib/formatFileSize";
 import {
-  ACCEPTED_EXTENSIONS,
-  ACCEPTED_MIME_TYPES,
+  MANUSCRIPT_ACCEPTED_EXTENSIONS,
+  MANUSCRIPT_ACCEPTED_MIME_TYPES,
+  MECHANICS_ACCEPTED_EXTENSIONS,
+  MECHANICS_ACCEPTED_MIME_TYPES,
   MAX_FILE_SIZE_BYTES,
   fileExtension,
   getFileRejection,
@@ -47,8 +54,6 @@ import { isScanReady } from "../lib/scanMapper";
 import { normalizeTitle } from "../lib/scannedLibrary";
 import { isPaidTier, planName, resetWindow } from "../lib/plans";
 import AnalyzeProgressBar from "../components/cockpit/AnalyzeProgressBar";
-import ScanSummaryModal from "../components/cockpit/ScanSummaryModal";
-import { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
 import DocumentLoader from "../components/ui/DocumentLoader";
 import PaperPlaneLoader from "../components/ui/PaperPlaneLoader";
 import { TriangleAlertIcon } from "../components/shell/icons";
@@ -61,22 +66,28 @@ const MODES = [
 
 function validateMechanicsFile(file) {
   if (!file) return "Choose a mechanics document.";
-  if (!ACCEPTED_EXTENSIONS.includes(fileExtension(file))) return "Mechanics must be a PDF or DOCX file.";
+  if (!MECHANICS_ACCEPTED_EXTENSIONS.includes(fileExtension(file))) return "Mechanics must be a PDF or DOCX file.";
   if (file.size > MAX_FILE_SIZE_BYTES) return "oversize";
   return "";
 }
 
 function validateManuscriptFile(file) {
   if (!file) return "Choose a manuscript.";
-  if (!ACCEPTED_EXTENSIONS.includes(fileExtension(file))) return "type";
+  if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(fileExtension(file))) return "type";
   if (file.size > MAX_FILE_SIZE_BYTES) return "size";
   return "";
 }
 
-function rejectionMessage(rejection) {
+function rejectionMessage(rejection, kind = "mechanics") {
   if (!rejection) return "";
   if (rejection.kind === "type") {
-    return `'${rejection.name}' isn't a supported file type. Please upload a PDF or Word document (${ACCEPTED_EXTENSIONS.join(", ")}).`;
+    const allowed =
+      kind === "manuscript" ? MANUSCRIPT_ACCEPTED_EXTENSIONS : MECHANICS_ACCEPTED_EXTENSIONS;
+    const label =
+      kind === "manuscript"
+        ? `a Word document (${allowed.join(", ")})`
+        : `a PDF or Word document (${allowed.join(", ")})`;
+    return `'${rejection.name}' isn't a supported file type. Please upload ${label}.`;
   }
   const max = formatFileSize(MAX_FILE_SIZE_BYTES);
   let actual = formatFileSize(rejection.size);
@@ -86,15 +97,24 @@ function rejectionMessage(rejection) {
 
 function formFromSaved(item) {
   if (!item) return emptyMechanicsForm();
-  const mapped = rulesToForm(item.rules || {}, item.name || item.source_filename || "");
-  // Profiles with almost no stored rules get editable sample values instead of a blank form.
-  if (!formHasAnyRule(mapped)) return sampleMechanicsForm(item.name || "Saved Format");
+  const ignored = Array.isArray(item.ignored_fields) ? item.ignored_fields : [];
+  const mapped = applyIgnoredFieldsToForm(
+    rulesToForm(item.rules || {}, item.name || item.source_filename || ""),
+    ignored
+  );
+  // Profiles with almost no stored rules get editable sample values instead of a blank form —
+  // but never overwrite intentional IGNORE choices from ignored_fields.
+  if (!formHasAnyRule(mapped) && !ignored.length) {
+    return sampleMechanicsForm(item.name || "Saved Format");
+  }
   return mapped;
 }
 
-async function pickDocument() {
+async function pickDocument(kind = "mechanics") {
+  const types =
+    kind === "manuscript" ? MANUSCRIPT_ACCEPTED_MIME_TYPES : MECHANICS_ACCEPTED_MIME_TYPES;
   const res = await DocumentPicker.getDocumentAsync({
-    type: ACCEPTED_MIME_TYPES,
+    type: types,
     copyToCacheDirectory: true,
   });
   if (res.canceled || !res.assets?.length) return null;
@@ -108,6 +128,7 @@ async function pickDocument() {
 }
 
 export default function UploadScreen({ navigation }) {
+  const route = useRoute();
   const {
     mechanics,
     selectedMechanicsId,
@@ -128,12 +149,14 @@ export default function UploadScreen({ navigation }) {
     uploadWizardStep,
     advanceUploadWizard,
     goToUploadWizardStep,
+    resetUploadWizard,
     manuscriptReady,
     setManuscriptReady,
     fileDetailsNotice,
     setFileDetailsNotice,
     uploadCancelKey,
     cancelManuscriptUpload,
+    handleBackToDashboard,
     onExtractMechanics,
     onSaveMechanicsProfile,
     onMechanicsUpdateProfile,
@@ -188,7 +211,10 @@ export default function UploadScreen({ navigation }) {
   const form = mode === "upload" ? uploadForm : mode === "customize" ? customizeForm : savedForm;
   const setForm =
     mode === "upload" ? setUploadForm : mode === "customize" ? setCustomizeForm : setSavedForm;
-  const selectedRulesKey = JSON.stringify(selectedMechanics?.rules || {});
+  const selectedRulesKey = JSON.stringify({
+    rules: selectedMechanics?.rules || {},
+    ignored_fields: selectedMechanics?.ignored_fields || [],
+  });
   const mechBusy = extracting || mechanicsBusy || confirmBusy;
 
   const mechanicsSelected = Boolean(selectedMechanicsId);
@@ -227,14 +253,29 @@ export default function UploadScreen({ navigation }) {
     setEditing(false);
   }, [mode, selectedMechanicsId, selectedRulesKey]);
 
+  // Upload New / sidebar Upload pass { fresh: true } so we land on Format Mechanics
+  // instead of bouncing back to Results while scanFlow state is still flushing.
   useEffect(() => {
+    if (route.params?.fresh) {
+      handleBackToDashboard();
+      resetUploadWizard(1);
+      navigation.setParams({ fresh: undefined });
+      return;
+    }
     if (scanFlow.step === "results" && scanFlow.result) {
       navigation.navigate("Results");
     }
     if (scanFlow.step === "documentTrace" && scanFlow.result) {
       navigation.navigate("DocumentReference");
     }
-  }, [scanFlow.step, scanFlow.result, navigation]);
+  }, [
+    scanFlow.step,
+    scanFlow.result,
+    navigation,
+    route.params?.fresh,
+    handleBackToDashboard,
+    resetUploadWizard,
+  ]);
 
   const showingUploadFace = scanFlow.step === "idle" || scanFlow.step === "fileSelected";
 
@@ -368,7 +409,7 @@ export default function UploadScreen({ navigation }) {
   }
 
   async function pickMechanics() {
-    const file = await pickDocument();
+    const file = await pickDocument("mechanics");
     if (file) requestExtract(file);
   }
 
@@ -397,6 +438,7 @@ export default function UploadScreen({ navigation }) {
         fromUpload && extractMeta?.source_filename ? extractMeta.source_filename : `${name}.docx`,
       file_type: fromUpload && extractMeta?.file_type ? extractMeta.file_type : "docx",
       extracted_text: fromUpload ? extractMeta?.extracted_text || "" : "",
+      ignored_fields: ignoredFieldsFromForm(form),
     };
   }
 
@@ -447,7 +489,11 @@ export default function UploadScreen({ navigation }) {
       setMechError("Add at least one format rule before saving.");
       return null;
     }
-    return { name, rules: formToRules(savedForm) };
+    return {
+      name,
+      rules: formToRules(savedForm),
+      ignored_fields: ignoredFieldsFromForm(savedForm),
+    };
   }
 
   function requestUpdateSaved() {
@@ -545,15 +591,15 @@ export default function UploadScreen({ navigation }) {
     setPreviewBusy(false);
     setMsError("");
     setMsSuccess("");
-    setRejection({ kind, name: file.name, size: file.size });
+    setRejection({ kind, name: file.name, size: file.size, scope: "manuscript" });
   }
 
   async function pickManuscript() {
     if (!canPickManuscript) return;
-    const file = await pickDocument();
+    const file = await pickDocument("manuscript");
     if (!file) return;
     const pickId = ++pickRequest.current;
-    const issue = await getFileRejection(file);
+    const issue = await getFileRejection(file, "manuscript");
     if (pickRequest.current !== pickId) return;
     setManuscriptReady(false);
     setFileDetailsNotice("");
@@ -671,7 +717,7 @@ export default function UploadScreen({ navigation }) {
     setManuscriptId("");
     setMsTitle("");
     setTitleError("");
-    setTitleMode(uploadTargets.length ? "existing" : "new");
+    setTitleMode("new");
     setExistingId(uploadTargets[0]?.id || "");
     setTitleOpen(true);
   }
@@ -679,7 +725,7 @@ export default function UploadScreen({ navigation }) {
   function onAnalyse() {
     if (!scanReady || !selectedMechanicsId) return;
     const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
-    if (!isPaidTier(tier) && scanStyle !== "APA") {
+    if (!isPaidTier(tier) && scanStyle && scanStyle !== "APA") {
       setUpgradeMessage(
         `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
       );
@@ -1084,7 +1130,7 @@ export default function UploadScreen({ navigation }) {
                         : msUploading
                           ? `${formatFileSize(msFile.size)} · Uploading — see progress below`
                           : `${formatFileSize(msFile.size)} · Preview appears below — confirm Upload when ready`
-                      : `Tap to browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
+                      : `Tap to browse · .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
                   </Text>
                   <View style={styles.browsePill}>
                     <Text style={styles.browseText}>Browse files</Text>
@@ -1167,9 +1213,6 @@ export default function UploadScreen({ navigation }) {
                 <ShowStepsRow step={3} onShowSteps={() => setJourneyOpen(true)} />
                 <View style={styles.detailsHead}>
                   <Text style={[styles.cardTitle, { marginTop: 0 }]}>File details</Text>
-                  <Text style={styles.cardHint}>
-                    Review attached files then run compliance analysis
-                  </Text>
                 </View>
 
                 {fileDetailsNotice ? (
@@ -1410,27 +1453,11 @@ export default function UploadScreen({ navigation }) {
           </View>
         }
         title={rejection?.kind === "type" ? "Unsupported File Type" : "File Too Large"}
-        message={rejectionMessage(rejection)}
+        message={rejectionMessage(rejection, rejection?.scope || "manuscript")}
         confirmLabel="Choose Another File"
         cancelLabel=""
         onCancel={() => setRejection(null)}
         onConfirm={chooseAnotherFile}
-      />
-
-      <ScanSummaryModal
-        visible={scanFlow.step === "summary" && Boolean(scanFlow.result)}
-        result={scanFlow.result}
-        onViewDocument={() => {
-          const { entries } = normalizeDetectedIssues(
-            scanFlow.result?.formatChecks,
-            scanFlow.result?.pageCount
-          );
-          const first = entries[0];
-          if (first) scanFlow.selectTraceIssue(first);
-          scanFlow.openDocumentTrace(first || null);
-        }}
-        onViewFullResult={() => scanFlow.openFullResult()}
-        onDismiss={() => scanFlow.dismissSummary()}
       />
 
       <UploadJourneyModal open={journeyOpen} current={uploadWizardStep} onClose={dismissJourney} />

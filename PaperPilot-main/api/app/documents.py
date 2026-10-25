@@ -35,6 +35,7 @@ from app.mechanics_options import (
     normalize_pagination_rules,
     page_number_only,
     page_position_parts,
+    rule_unset,
 )
 
 
@@ -97,9 +98,13 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
             lines: list[dict] = []
             line_index = 0
             image_count = 0
+            images: list[dict] = []
             for block in raw.get("blocks", []):
                 if block.get("type") == 1:
                     image_count += 1
+                    bbox = block.get("bbox")
+                    if bbox and len(bbox) >= 4:
+                        images.append({"bbox": [round(float(value), 2) for value in bbox]})
                 if block.get("type") != 0:
                     continue
                 for source_line in block.get("lines", []):
@@ -143,6 +148,7 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                     "height_points": round(float(page.rect.height), 2),
                     "rotation": page.rotation,
                     "image_count": image_count,
+                    "images": images,
                     "lines": lines,
                 }
             )
@@ -163,6 +169,10 @@ PAGE_FIELD_RE = re.compile(r"(?<![A-Z])PAGE(?![A-Z])")
 
 
 def _has_page_field(element) -> bool:
+    # Word sometimes splits "PAGE" across adjacent instrText runs ("P"+"AGE").
+    joined = "".join(instr.text or "" for instr in element.iter(qn("w:instrText")))
+    if PAGE_FIELD_RE.search(joined):
+        return True
     for instr in element.iter(qn("w:instrText")):
         if PAGE_FIELD_RE.search(instr.text or ""):
             return True
@@ -217,9 +227,21 @@ def _anchor_alignment(field_el, section) -> str | None:
 
 
 def _page_field_elements(element):
-    for instr in element.iter(qn("w:instrText")):
-        if PAGE_FIELD_RE.search(instr.text or ""):
-            yield instr
+    joined = "".join(instr.text or "" for instr in element.iter(qn("w:instrText")))
+    if PAGE_FIELD_RE.search(joined):
+        # Prefer the first instrText that looks like part of PAGE, else the first run.
+        for instr in element.iter(qn("w:instrText")):
+            if PAGE_FIELD_RE.search(instr.text or "") or "PAGE" in (instr.text or "").upper():
+                yield instr
+                break
+        else:
+            first = next(element.iter(qn("w:instrText")), None)
+            if first is not None:
+                yield first
+    else:
+        for instr in element.iter(qn("w:instrText")):
+            if PAGE_FIELD_RE.search(instr.text or ""):
+                yield instr
     for fld in element.iter(qn("w:fldSimple")):
         if PAGE_FIELD_RE.search(fld.get(qn("w:instr")) or ""):
             yield fld
@@ -244,9 +266,29 @@ def _page_field_placement(header, footer, section) -> dict | None:
     return None
 
 
+def _section_header_footer_parts(section) -> list[tuple]:
+    """Default, first-page, and even-page header/footer pairs when Word exposes them."""
+    parts = [(section.header, section.footer)]
+    try:
+        if section.different_first_page_header_footer:
+            parts.append((section.first_page_header, section.first_page_footer))
+    except Exception:
+        pass
+    try:
+        # Odd/even page numbering often puts PAGE only on the even-page story.
+        parts.append((section.even_page_header, section.even_page_footer))
+    except Exception:
+        pass
+    return parts
+
+
 def _page_number_setup(section) -> dict | None:
     """Where and how Word prints the page number for this section (header/footer PAGE field)."""
-    placement = _page_field_placement(section.header, section.footer, section)
+    placement = None
+    for header, footer in _section_header_footer_parts(section):
+        placement = _page_field_placement(header, footer, section)
+        if placement is not None:
+            break
     try:
         different_first = bool(section.different_first_page_header_footer)
     except Exception:
@@ -1254,9 +1296,37 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
 
 
 KNOWN_FONTS = (
-    "Times New Roman", "Arial", "Calibri", "Cambria", "Georgia", "Helvetica",
-    "Courier New", "Garamond", "Verdana", "Book Antiqua", "Bookman Old Style",
-    "Century Gothic", "Palatino Linotype", "Tahoma", "Trebuchet MS",
+    "Times New Roman",
+    "Arial Black",
+    "Arial Narrow",
+    "Arial",
+    "Book Antiqua",
+    "Bookman Old Style",
+    "Calibri",
+    "Cambria",
+    "Candara",
+    "Century Gothic",
+    "Century Schoolbook",
+    "Century",
+    "Comic Sans MS",
+    "Consolas",
+    "Constantia",
+    "Corbel",
+    "Courier New",
+    "Franklin Gothic Medium",
+    "Garamond",
+    "Georgia",
+    "Helvetica",
+    "Impact",
+    "Lucida Console",
+    "Lucida Sans Unicode",
+    "Microsoft Sans Serif",
+    "Palatino Linotype",
+    "Rockwell",
+    "Segoe UI",
+    "Tahoma",
+    "Trebuchet MS",
+    "Verdana",
 )
 
 
@@ -1275,6 +1345,106 @@ def _font_families_in(text: str) -> list[str]:
                 found["Times New Roman"] = match.start()
                 break
     return sorted(found, key=found.get)
+
+
+MECHANICS_GUIDE_SIGNAL_RE = re.compile(
+    r"\b(?:"
+    r"margin(?:s)?|font\s*size|line\s*spacing|heading\s*[1-9]|page\s*number|"
+    r"paper\s*size|typeface|format\s*mechanics|indent(?:ion|ation)?|"
+    r"citation\s*style|times\s*new\s*roman|body\s*(?:text|font)\s*size|"
+    r"layout\s+for\s+(?:tables|figures)|pagination"
+    r")\b",
+    re.I,
+)
+MANUSCRIPT_SIGNAL_RE = re.compile(
+    r"\b(?:"
+    r"acknowledgements?|chapter\s+(?:\d+|[ivxlcdm]+)|table\s+of\s+contents|"
+    r"review\s+of\s+(?:related\s+)?literature|statement\s+of\s+the\s+problem|"
+    r"methodology|findings\s+and\s+discussion|scope\s+and\s+delimitation|"
+    r"significance\s+of\s+the\s+study|definition\s+of\s+terms|"
+    r"references|bibliography|appendi(?:x|ces)"
+    r")\b",
+    re.I,
+)
+
+
+def _mechanics_rule_count(rules: dict | None) -> int:
+    """How many concrete format fields were extracted (not nested containers alone)."""
+    if not isinstance(rules, dict):
+        return 0
+    count = 0
+    for key, value in rules.items():
+        if key == "font" and isinstance(value, dict):
+            count += sum(1 for item in value.values() if item not in (None, "", [], {}))
+        elif isinstance(value, dict):
+            count += sum(1 for item in value.values() if item not in (None, "", [], {}))
+        elif isinstance(value, list):
+            count += sum(1 for item in value if str(item).strip())
+        elif value not in (None, "", [], {}):
+            count += 1
+    return count
+
+
+def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
+    """Reject manuscript uploads in the format-mechanics extractor.
+
+    Raises DocumentError when the document looks like a thesis/paper rather than
+    an institutional format guide. School guides often omit our sample schema
+    titles (e.g. \"Margins (in inches)\"); scraped rules + format vocabulary are
+    enough to accept. Schema gaps are surfaced later via validation issues.
+    """
+    body = str(text or "")
+    words = len(body.split())
+    guide_hits = len(MECHANICS_GUIDE_SIGNAL_RE.findall(body[:20_000]))
+    manuscript_hits = len(MANUSCRIPT_SIGNAL_RE.findall(body[:12_000]))
+    rule_count = _mechanics_rule_count(rules)
+
+    # Schema categories (Margins, Paper, Font, …) present as labeled sections.
+    try:
+        from app.mechanics_validate import validate_mechanics_document
+
+        schema = validate_mechanics_document(body, rules=None)
+        missing_categories = sum(
+            1 for issue in schema.get("issues") or [] if issue.get("code") == "missing_category"
+        )
+    except Exception:
+        missing_categories = 9
+
+    categories_present = 9 - missing_categories
+    manuscript_msg = (
+        "This file looks like a manuscript, not a format mechanics guide. "
+        "Upload your institution’s formatting guidelines (margins, fonts, headings, pagination), "
+        "then upload the manuscript in Step 3 — Upload & Analyze."
+    )
+    sparse_msg = (
+        "No format mechanics rules were found in this document. "
+        "Upload a format guide that lists requirements such as margins, font, spacing, "
+        "or heading sizes — not the manuscript itself."
+    )
+
+    # Sample / school guides that already match our labeled schema.
+    if categories_present >= 3:
+        return
+
+    # Typical institutional outlines (Capstone, PLSU, Mapúa, …): extractable
+    # margin/font/spacing rules plus format vocabulary, even without our titles.
+    if rule_count >= 3 and guide_hits >= 2:
+        return
+
+    # Long thesis/paper bodies — deny unless the guide signals are strong.
+    if manuscript_hits >= 2 and words >= 400 and (guide_hits < 2 or rule_count < 3):
+        raise DocumentError(manuscript_msg)
+    if words >= 1200 and manuscript_hits >= 1 and guide_hits < 3:
+        raise DocumentError(manuscript_msg)
+
+    if guide_hits < 2 and rule_count < 2:
+        raise DocumentError(sparse_msg)
+
+    # Short outline-style guides with some format content.
+    if words < 800 and (guide_hits >= 2 or rule_count >= 2):
+        return
+
+    raise DocumentError(manuscript_msg)
 
 
 def derive_mechanics_rules(text: str) -> dict:
@@ -1431,19 +1601,52 @@ def derive_mechanics_rules(text: str) -> dict:
         "Body text size", "Body font size", "Body size", "Content size", "Text size",
         "Main body", "Main text", "Body text",
     )
-    size_sources = [
-        (_value_after_label(flat, _heading_labels(level), stop), f"heading{level}_size", _heading_labels(level))
-        for level in range(1, MAX_HEADING_LEVELS + 1)
-        if re.search(rf"(?i)\b(?:{'|'.join(map(re.escape, _heading_labels(level)))})\b", flat)
-    ]
+    # Heading sizes only when the guide ties Heading N to a size/pt — never from a
+    # bare mention of "Heading 1" next to unrelated numbers (margins, word counts).
+    size_sources: list[tuple[str, str, tuple[str, ...]]] = []
+    for level in range(1, MAX_HEADING_LEVELS + 1):
+        labels = _heading_labels(level)
+        label_alt = "|".join(re.escape(label) for label in labels)
+        if not re.search(
+            # "Heading 1: 16" / "Heading 1 size …" / "… 16 pt … Heading 1"
+            rf"(?i)\b(?:{label_alt})\b\s*[:：=]\s*\d{{1,2}}"
+            rf"|\b(?:{label_alt})\b.{{0,80}}?(?:size|pt|points?)\b"
+            rf"|\b(?:size|pt|points?)\b.{{0,60}}?\b(?:{label_alt})\b",
+            flat,
+        ):
+            continue
+        size_sources.append(
+            (_value_after_label(flat, labels, stop), f"heading{level}_size", labels)
+        )
     body_raw = _value_after_label(flat, body_labels, stop)
     if body_raw or not combined_h3:
         size_sources.append((body_raw, "body_size", body_labels))
 
+    def _explicit_pt(raw: str | None) -> float | None:
+        """Point size only when the guide states pt/points, or the value is bare like '16'.
+
+        Never treat '40 mm', '30 words', or '40 characters' as a font size — that invented
+        phantom heading1_size values (30.0 / 40.0) from unrelated guide numbers.
+        """
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        # "16 pt", "16pt", "16-point", "16 points"
+        with_unit = re.search(r"(?i)(\d{1,2}(?:\.\d+)?)\s*-?\s*(?:pt|points?)\b", text)
+        if with_unit:
+            number = float(with_unit.group(1))
+            return number if 6 <= number <= 72 else None
+        # "Heading 1: 16" / "16" — number alone, no other words/units.
+        if re.fullmatch(r"\d{1,2}(?:\.\d+)?", text):
+            number = float(text)
+            return number if 6 <= number <= 72 else None
+        return None
+
     def _nearby_pt(labels: tuple[str, ...]) -> float | None:
+        """Only 'Heading N … 16 pt' (unit required). Bare digits near the label are ignored."""
         label_alt = "|".join(re.escape(label) for label in labels)
         match = re.search(
-            rf"(?i)\b(?:{label_alt})\b.{{0,48}}?(\d{{1,2}}(?:\.\d+)?)\s*(?:pt|point)?s?\b",
+            rf"(?i)\b(?:{label_alt})\b.{{0,48}}?(\d{{1,2}}(?:\.\d+)?)\s*-?\s*(?:pt|points?)\b",
             flat,
         )
         if not match:
@@ -1458,14 +1661,15 @@ def derive_mechanics_rules(text: str) -> dict:
     if sizes:
         font["sizes_points"] = sizes
     for raw, key, labels in size_sources:
-        number = re.search(r"(\d+(?:\.\d+)?)", raw or "")
-        value = float(number.group(1)) if number and 6 <= float(number.group(1)) <= 72 else None
+        value = _explicit_pt(raw)
         if value is None:
             value = _nearby_pt(labels)
         if value is not None:
             font[key] = value
-            sizes = sorted(set([*sizes, value]))
-            font["sizes_points"] = sizes
+            # sizes_points is body fallback only — do not dump headingN sizes into it.
+            if key in {"body_size", "heading3_content_size"}:
+                sizes = sorted(set([*sizes, value]))
+                font["sizes_points"] = sizes
     if combined_h3 and "body_size" not in font and "heading3_size" in font:
         font["body_size"] = font["heading3_size"]
     if "body_size" not in font:
@@ -1491,13 +1695,12 @@ def derive_mechanics_rules(text: str) -> dict:
     if "body_size" in font:
         font["heading3_content_size"] = font["body_size"]
     font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
+    # Only store color when the guide names it — never invent Black/Automatic.
     if font_color:
         if re.search(r"black|automatic", font_color, re.I):
             font["color"] = "Black/Automatic"
         else:
             font["color"] = font_color[:40]
-    else:
-        font.setdefault("color", "Black/Automatic")
     if font:
         rules["font"] = font
 
@@ -1688,7 +1891,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     if font_type:
         font_out["type"] = font_type
     color = str(font.get("color") or raw.get("font_color") or "").strip()
-    if color:
+    if color and not rule_unset(color):
         font_out["color"] = color[:80]
     heading_styles = normalize_heading_styles(font.get("heading_styles") or raw.get("heading_styles"))
     if heading_styles:
@@ -1701,20 +1904,42 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
             continue
         if 6 <= number <= 72:
             font_out[key] = number
-            if isinstance(sizes, list):
-                sizes = [*list(sizes), number]
-            else:
-                sizes = [number]
+            # sizes_points is a body-size fallback only — do not merge headingN_size into it,
+            # or Heading 1 can be judged against Heading 2/3 sizes the user never set for H1.
+            if key in {"body_size", "heading3_content_size"}:
+                if isinstance(sizes, list):
+                    sizes = [*list(sizes), number]
+                else:
+                    sizes = [number]
     if "body_size" in font_out:
         # Analysis services that predate body_size read the combined key.
         font_out["heading3_content_size"] = font_out["body_size"]
+    elif "heading3_content_size" in font_out:
+        # Drop a stale combined value that only echoes a heading level size (H1→body leak).
+        # Keep distinct values — legacy payloads still use this key as the body size.
+        combined = font_out["heading3_content_size"]
+        level_sizes = {
+            font_out[key]
+            for key in font_out
+            if re.fullmatch(r"heading\d+_size", key)
+        }
+        if combined in level_sizes:
+            font_out.pop("heading3_content_size", None)
     try:
         levels = int(font.get("heading_levels") or 0)
     except (TypeError, ValueError):
         levels = 0
     if 1 <= levels <= MAX_HEADING_LEVELS:
         font_out["heading_levels"] = levels
-    if sizes:
+    heading_size_values = {
+        float(font_out[key])
+        for key in font_out
+        if re.fullmatch(r"heading\d+_size", key)
+    }
+    if "body_size" in font_out:
+        # Body fallback list must not include heading sizes from older clients.
+        font_out["sizes_points"] = [float(font_out["body_size"])]
+    elif sizes:
         cleaned = []
         for value in sizes:
             try:
@@ -1724,14 +1949,18 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
             if 6 <= number <= 72:
                 cleaned.append(number)
         if cleaned:
-            # Preserve order while unique-ing
             seen: set[float] = set()
             unique = []
             for number in cleaned:
                 if number not in seen:
                     seen.add(number)
                     unique.append(number)
-            font_out["sizes_points"] = unique[:8]
+            # Drop values that only exist as headingN_size — those are not body rules.
+            body_fallback = [number for number in unique if number not in heading_size_values]
+            if body_fallback:
+                font_out["sizes_points"] = body_fallback[:8]
+            elif not heading_size_values:
+                font_out["sizes_points"] = unique[:8]
     if font_out:
         rules["font"] = font_out
 
@@ -1739,7 +1968,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     paper_out: dict = {}
     for key in ("size", "orientation", "substance"):
         value = str(paper_in.get(key) or raw.get(f"paper_{key}") or "").strip()
-        if value:
+        if value and not rule_unset(value):
             paper_out[key] = value[:120]
     landscape = canonical_landscape_pages(paper_in.get("landscape_pages") or raw.get("landscape_pages"))
     if landscape:
@@ -1775,7 +2004,10 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["paper_size"] = paper_size_out
 
     # The text the user typed ("Double", "1/2 inch", "1.27 cm") is the source of truth over a pre-parsed number.
+    # Blank / NA fields are dropped — unset mechanics must not become enforceable rules.
     spacing_text = str(raw.get("spacing") or "").strip()
+    if rule_unset(spacing_text):
+        spacing_text = ""
     spacing = parse_line_spacing(spacing_text) if spacing_text else None
     if spacing is None:
         spacing = parse_line_spacing(raw.get("line_spacing"))
@@ -1786,6 +2018,8 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules.setdefault("spacing", f"{spacing:g}")
 
     indention = str(raw.get("indention") or "").strip()
+    if rule_unset(indention):
+        indention = ""
     if indention:
         rules["indention"] = indention[:120]
     indent = parse_length_inches(indention) if indention else None
@@ -1794,7 +2028,8 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     if indent is not None and indent <= 2:
         rules["first_line_indent_inches"] = indent
 
-    alignment = parse_alignment(raw.get("alignment") or raw.get("text_alignment"))
+    alignment_raw = raw.get("alignment") or raw.get("text_alignment")
+    alignment = None if rule_unset(alignment_raw) else parse_alignment(alignment_raw)
     if alignment:
         rules["alignment"] = alignment
 
@@ -1965,7 +2200,9 @@ def build_sample_mechanics_docx() -> bytes:
     intro = _add_sample_paragraph(doc, space_after=6, align=WD_ALIGN_PARAGRAPH.CENTER)
     _apply_sample_run_font(
         intro.add_run(
-            "Upload this guide, then review each extracted field and edit any value to match your school."
+            "Keep every section and field label (for example Margins and Top). "
+            "Put a real value next to each label, or type IGNORE to skip that check — "
+            "do not use N/A and do not delete labels. Upload this guide, review Format Fields, then save."
         )
     )
 

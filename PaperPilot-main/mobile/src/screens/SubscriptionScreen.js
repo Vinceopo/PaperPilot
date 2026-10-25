@@ -5,8 +5,8 @@ import { useAppData } from "../context/AppDataContext";
 import { cancelSubscription, confirmCheckoutPayment, subscribeToPlan } from "../api";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
+import BackToDashboardButton from "../components/ui/BackToDashboardButton";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
-import { ChevronLeftIcon } from "../components/shell/icons";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 import {
   ANNUAL_SAVINGS_LABEL,
@@ -75,7 +75,7 @@ function DetailRow({ label, value, last, uppercase, capitalize }) {
   );
 }
 
-function PlanCard({ selected, onPress, title, children }) {
+function PlanCard({ selected, isCurrent, onPress, title, children }) {
   return (
     <Pressable
       onPress={onPress}
@@ -83,17 +83,24 @@ function PlanCard({ selected, onPress, title, children }) {
       accessibilityRole="button"
       accessibilityState={{ selected }}
     >
-      {selected ? <Text style={styles.selectedTag}>Selected plan ✓</Text> : null}
+      <View style={styles.currentRow}>
+        {isCurrent ? <Text style={styles.selectedTag}>Current Plan ✓</Text> : null}
+      </View>
       <Text style={styles.planTitle}>{title}</Text>
       {children}
     </Pressable>
   );
 }
 
-function PaidPlanCard({ plan, selected, billingPeriod, features, badge, onPress }) {
+function PaidPlanCard({ plan, selected, isCurrent, billingPeriod, features, badge, onPress }) {
   const annual = billingPeriod === "annual";
   return (
-    <PlanCard selected={selected} onPress={onPress} title={`${planName(plan)} Plan`}>
+    <PlanCard
+      selected={selected}
+      isCurrent={isCurrent}
+      onPress={onPress}
+      title={`${planName(plan)} Plan`}
+    >
       <Text style={styles.planPrice}>
         {peso(planPrice(plan, billingPeriod))}
         <Text style={styles.planPer}> / {annual ? "year" : "month"}</Text>
@@ -350,16 +357,13 @@ export default function SubscriptionScreen({ navigation }) {
               </Pressable>
             ) : null}
             {paymentCanceled ? (
-              <Pressable
+              <BackToDashboardButton
                 onPress={() => {
                   handleBackToDashboard();
-                  navigation.navigate("MainTabs", { screen: "Upload" });
+                  navigation.navigate("MainTabs", { screen: "Library" });
                 }}
-                style={({ pressed }) => [styles.dashboardBtn, pressed && styles.accentPressed]}
-              >
-                <ChevronLeftIcon size={14} color={colors.white} />
-                <Text style={styles.dashboardText}>Back to Dashboard</Text>
-              </Pressable>
+                style={styles.dashboardBtn}
+              />
             ) : null}
           </View>
         ) : null}
@@ -473,8 +477,14 @@ export default function SubscriptionScreen({ navigation }) {
               ))}
             </View>
 
-            <PlanCard selected={selectedPlan === "free"} onPress={() => setSelectedPlan("free")} title="Free Plan">
+            <PlanCard
+              selected={selectedPlan === "free"}
+              isCurrent={tier === "free"}
+              onPress={() => setSelectedPlan("free")}
+              title="Free Plan"
+            >
               <Text style={styles.planPrice}>₱0</Text>
+              <Text style={styles.billedNote}>No billing</Text>
               <View style={styles.featureList}>
                 {FREE_FEATURES.map((f) => (
                   <Text key={f} style={styles.feature}>
@@ -487,6 +497,7 @@ export default function SubscriptionScreen({ navigation }) {
             <PaidPlanCard
               plan="premium"
               selected={selectedPlan === "premium"}
+              isCurrent={tier === "premium"}
               billingPeriod={billingPeriod}
               features={PREMIUM_FEATURES}
               badge="Best for thesis writers"
@@ -495,6 +506,7 @@ export default function SubscriptionScreen({ navigation }) {
             <PaidPlanCard
               plan="pro"
               selected={selectedPlan === "pro"}
+              isCurrent={tier === "pro"}
               billingPeriod={billingPeriod}
               features={PRO_FEATURES}
               badge="Best for heavy revision cycles"
@@ -663,18 +675,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   payAgainText: { fontSize: 12, fontWeight: "700", color: "#092823" },
-  dashboardBtn: {
-    marginTop: 12,
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    borderRadius: 8,
-    backgroundColor: colors.accent,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-  },
-  dashboardText: { fontSize: 12, fontWeight: "700", color: colors.white },
+  dashboardBtn: { marginTop: 12 },
   accentPressed: { backgroundColor: colors.accentHover },
   card: {
     borderRadius: 16,
@@ -757,6 +758,7 @@ const styles = StyleSheet.create({
   periodTextActive: { color: colors.white },
   planCard: {
     marginBottom: 16,
+    minHeight: 320,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
@@ -772,8 +774,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     elevation: 3,
   },
+  currentRow: { minHeight: 16, marginBottom: 8, justifyContent: "center" },
   selectedTag: {
-    marginBottom: 8,
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1,

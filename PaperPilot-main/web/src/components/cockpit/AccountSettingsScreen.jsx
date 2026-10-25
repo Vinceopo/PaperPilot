@@ -16,6 +16,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { sendOtp, resetPasswordWithOtp, getProfile, updateUserProfile, otpBypassToken } from "../../api.js";
 import { markPasswordChanged } from "../../services/auth.js";
+import BackToDashboardButton from "../BackToDashboardButton.jsx";
 import OtpStep from "../auth/OtpStep.jsx";
 import { nameError, phoneError, usernameError } from "../auth/validation.js";
 import { isPaidTier, planName } from "../../lib/plans.js";
@@ -185,19 +186,8 @@ function PwField({ label, id, value, onChange, show, onToggle, autoComplete }) {
   );
 }
 
-function BackLink({ onClick, label = "← Back to account" }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="mb-6 flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-800 transition"
-    >
-      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
-      </svg>
-      {label}
-    </button>
-  );
+function BackLink({ onClick, label = "Back to account" }) {
+  return <BackToDashboardButton onClick={onClick} label={label} className="mb-6" />;
 }
 
 // ─── main component ───────────────────────────────────────────────────────────

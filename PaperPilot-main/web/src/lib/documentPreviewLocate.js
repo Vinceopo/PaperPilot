@@ -11,13 +11,42 @@ export function hitPaint(severity) {
   return ISSUE_HIT[key] || ISSUE_HIT.minor;
 }
 
-export function marginSide(text) {
+/**
+ * Which page edge a margin (or pagination) highlight should paint.
+ * Prefer explicit scanner fields so we never guess from the wrong body line.
+ */
+export function marginSide(text, extras = {}) {
+  const explicit = String(extras.margin_side || extras.marginSide || "").toLowerCase();
+  if (explicit === "top" || explicit === "bottom" || explicit === "left" || explicit === "right") {
+    return explicit;
+  }
+  const issueType = String(extras.issue_type || extras.issueType || "").toLowerCase();
+  const fromType = issueType.match(/^(top|bottom|left|right)_margin$/);
+  if (fromType) return fromType[1];
   const value = String(text || "").toLowerCase();
   if (value.includes("right margin")) return "right";
   if (value.includes("left margin")) return "left";
   if (value.includes("top margin")) return "top";
   if (value.includes("bottom margin")) return "bottom";
   return "";
+}
+
+/** Header/footer band for pagination issues when no page-number bbox exists. */
+export function pageRegion(target = {}) {
+  const explicit = String(target.page_region || target.pageRegion || "").toLowerCase();
+  if (explicit === "top" || explicit === "bottom") return explicit;
+  const text = `${target.finding || ""} ${target.recommendation || ""} ${target.explanation || ""}`.toLowerCase();
+  if (/\bbottom\b/.test(text)) return "bottom";
+  if (/\btop\b/.test(text)) return "top";
+  return "top";
+}
+
+export function isMarginTarget(target = {}) {
+  return String(target.section || "").toLowerCase() === "margins";
+}
+
+export function isPaginationTarget(target = {}) {
+  return String(target.section || "").toLowerCase() === "pagination";
 }
 
 /** Tallest a single page may be drawn so the whole page fits on screen. */
@@ -60,8 +89,8 @@ export function frameScrollTop({ elementTop, padding = 16, maxScroll = Infinity 
 
 /**
  * Walk rendered blocks the way the scanner counts lines on one page.
- * `leadingLines` are blank gaps above a paragraph. `height / lineHeight`
- * is how many wrapped rows that paragraph paints.
+ * `leadingLines` / `trailingLines` are blank gaps — never paint those for
+ * text issues; snap onto the paragraph's first/last content line instead.
  */
 export function visualLineTarget(blocks, lineNumber) {
   const list = Array.isArray(blocks) ? blocks : [];
@@ -72,7 +101,8 @@ export function visualLineTarget(blocks, lineNumber) {
     const lineHeight = Math.max(1, Number(block.lineHeight) || 1);
     const leading = Math.max(0, Math.round(Number(block.leadingLines) || 0));
     if (remaining <= leading) {
-      return { index, delta: -(leading - remaining + 1) * lineHeight };
+      // Blank gap above the paragraph → highlight the first content line.
+      return { index, delta: 0 };
     }
     remaining -= leading;
     const height = Number(block.height) || lineHeight;
@@ -83,7 +113,8 @@ export function visualLineTarget(blocks, lineNumber) {
     remaining -= lines;
     const trailing = Math.max(0, Math.round(Number(block.trailingLines) || 0));
     if (remaining <= trailing) {
-      return { index, delta: height + (remaining - 1) * lineHeight };
+      // Blank gap below → highlight the last content line, not empty space.
+      return { index, delta: Math.max(0, lines - 1) * lineHeight };
     }
     remaining -= trailing;
   }
@@ -119,16 +150,89 @@ export function normalizedIndex(raw) {
   return { text, map };
 }
 
-/** Search strings to try, longest first, so short fragments only win as a fallback. */
+/** Search strings to try, longest first. Short titles (e.g. "By:") still locate. */
 export function excerptNeedles(excerpt) {
   const full = normalizeNeedle(excerpt);
-  if (full.length < 8) return [];
+  if (full.length < 2) return [];
   const needles = [full];
   if (full.length > 48) {
     needles.push(full.slice(0, 40).trim());
     needles.push(full.slice(-40).trim());
   }
-  return needles.filter((value, index, list) => value.length >= 8 && list.indexOf(value) === index);
+  if (full.length >= 12) {
+    const words = full.split(" ").filter(Boolean);
+    if (words.length >= 3) needles.push(words.slice(0, 3).join(" "));
+  }
+  return needles.filter((value, index, list) => value.length >= 2 && list.indexOf(value) === index);
+}
+
+/**
+ * Pick the excerpt hit closest to the scanner line estimate.
+ * Always prefer line when both exist — a unique excerpt on the page must not
+ * steal highlights from other issues on different lines.
+ */
+export function pickBestRects(candidates, estimateTop = null) {
+  const list = (Array.isArray(candidates) ? candidates : []).filter(
+    (rects) => Array.isArray(rects) && rects.length && Number.isFinite(Number(rects[0]?.top))
+  );
+  if (!list.length) return null;
+  if (!Number.isFinite(Number(estimateTop))) return list[0];
+  const target = Number(estimateTop);
+  return list.reduce((best, rects) =>
+    Math.abs(Number(rects[0].top) - target) <= Math.abs(Number(best[0].top) - target) ? rects : best
+  );
+}
+
+/**
+ * Resolve a DOCX highlight from excerpt candidates + line estimate.
+ * When `line` is set, line estimate always disambiguates — even for a single hit.
+ */
+export function resolveDocxHighlight({
+  candidateGroups = [],
+  estimateTop = null,
+  line = null,
+} = {}) {
+  const hasLine = line != null && line !== "" && Number.isFinite(Number(line));
+  const flat = [];
+  for (const group of candidateGroups) {
+    const page = Number(group?.page) || 0;
+    for (const rects of group?.candidates || []) {
+      if (Array.isArray(rects) && rects.length) flat.push({ page, rects });
+    }
+  }
+  if (!flat.length) return null;
+  if (hasLine && Number.isFinite(Number(estimateTop))) {
+    const best = pickBestRects(
+      flat.map((item) => item.rects),
+      estimateTop
+    );
+    return best;
+  }
+  // No line pin: prefer first candidate on the reported page, else first overall.
+  return flat[0].rects;
+}
+
+/**
+ * PDF / canvas Y for an issue. Prefer scanner line when available so adjacent
+ * lines (13, 14, 15) never collapse onto one shared bbox.
+ */
+export function resolvePdfMarkY({ line, ys = [], bboxY = null, pageHeight = 0 } = {}) {
+  const rows = Array.isArray(ys) ? ys : [];
+  const lineNum = Number(line);
+  const hasLine = Number.isFinite(lineNum) && lineNum >= 1;
+  const lineY =
+    hasLine && rows.length
+      ? rows[Math.min(rows.length, Math.max(1, Math.round(lineNum))) - 1]
+      : null;
+  const hasBbox = Number.isFinite(Number(bboxY));
+  if (lineY != null && Number.isFinite(Number(lineY))) {
+    if (!hasBbox) return Number(lineY);
+    const bbox = Number(bboxY);
+    const tolerance = Math.max(12, (Number(pageHeight) || 0) * 0.02);
+    // Shared/coarse bboxes must not override a precise line pin.
+    return Math.abs(bbox - Number(lineY)) > tolerance ? Number(lineY) : bbox;
+  }
+  return hasBbox ? Number(bboxY) : 0;
 }
 
 /** Page numbers ordered by distance from the reported page: p, p+1, p-1, p+2, … */

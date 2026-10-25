@@ -47,6 +47,7 @@ import {
   versionScanId,
   versionToScanResult,
 } from "../lib/scannedLibrary";
+import { loadCachedMechanics, saveCachedMechanics } from "../lib/mechanicsCache";
 import {
   loadNotifications,
   saveNotifications,
@@ -136,6 +137,30 @@ export function AppDataProvider({ children }) {
   const withoutDeletedMechanics = useCallback(
     (items) => items.filter((item) => !deletedMechanicsRef.current.has(item.id)),
     []
+  );
+
+  /** Apply a server/local mechanics list; never wipe a non-empty list with a transient empty reply. */
+  const applyMechanicsList = useCallback(
+    (items, { allowEmpty = false, preferId = "" } = {}) => {
+      const next = withoutDeletedMechanics(Array.isArray(items) ? items : []);
+      let applied = next;
+      setMechanics((current) => {
+        if (!next.length && current.length && !allowEmpty) {
+          applied = current;
+          return current;
+        }
+        const uid = auth?.currentUser?.uid;
+        if (uid) void saveCachedMechanics(next, uid);
+        return next;
+      });
+      setSelectedMechanicsId((current) => {
+        if (preferId && applied.some((item) => item.id === preferId)) return preferId;
+        if (current && applied.some((item) => item.id === current)) return current;
+        return applied[0]?.id || "";
+      });
+      return applied;
+    },
+    [withoutDeletedMechanics]
   );
   const notificationsRef = useRef([]);
   const uploadSessionRef = useRef(0);
@@ -307,6 +332,15 @@ export function AppDataProvider({ children }) {
       lastSavedScanKey.current = "";
       const notes = await loadNotifications(user?.uid);
       if (!cancelled) setNotifications(notes);
+      // Show last-known Saved Mechanics immediately — never flash empty while the API loads.
+      const cachedMechanics = await loadCachedMechanics(user?.uid);
+      if (cancelled || !cachedMechanics.length) return;
+      setMechanics(cachedMechanics);
+      setSelectedMechanicsId((current) =>
+        current && cachedMechanics.some((item) => item.id === current)
+          ? current
+          : cachedMechanics[0]?.id || ""
+      );
     })();
     return () => {
       cancelled = true;
@@ -374,13 +408,10 @@ export function AppDataProvider({ children }) {
       // Formats changed on screen while this load was in flight; the on-screen list is newer.
       const mechanicsStale = mechanicsChange !== mechanicsChangeRef.current;
       if (mechanicsResult.status === "fulfilled" && !mechanicsStale) {
-        const nextMechanics = withoutDeletedMechanics(itemsFrom(mechanicsResult.value, "mechanics"));
-        setMechanics(nextMechanics);
-        setSelectedMechanicsId((current) =>
-          current && nextMechanics.some((item) => item.id === current)
-            ? current
-            : nextMechanics[0]?.id || ""
-        );
+        // Empty API replies during warm-up must not clear Saved Mechanics.
+        applyMechanicsList(itemsFrom(mechanicsResult.value, "mechanics"), {
+          allowEmpty: false,
+        });
       } else if (mechanicsResult.status === "rejected") {
         failures.push(mechanicsResult.reason?.message || "Could not load format mechanics.");
       }
@@ -398,7 +429,7 @@ export function AppDataProvider({ children }) {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [nextSubscriptionTicket, storeSubscription, withoutDeletedMechanics]);
+  }, [nextSubscriptionTicket, storeSubscription, applyMechanicsList]);
 
   const refreshSubscription = useCallback(async () => {
     if (!auth?.currentUser) return null;
@@ -492,19 +523,26 @@ export function AppDataProvider({ children }) {
         sourceFilename: payload.source_filename || payload.sourceFilename,
         fileType: payload.file_type || payload.fileType,
         extractedText: payload.extracted_text || payload.extractedText,
+        ignoredFields: payload.ignored_fields || payload.ignoredFields,
       });
       mechanicsChangeRef.current += 1;
       if (created?.id) {
-        setMechanics((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setMechanics((current) => {
+          const next = [created, ...current.filter((item) => item.id !== created.id)];
+          const uid = auth?.currentUser?.uid;
+          if (uid) void saveCachedMechanics(next, uid);
+          return next;
+        });
         setSelectedMechanicsId(created.id);
       }
       try {
         const data = await listMechanics();
-        const next = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
-        if (!created?.id || next.some((item) => item.id === created.id)) {
-          setMechanics(next);
-          setSelectedMechanicsId(created?.id || next[0]?.id || "");
-        }
+        const listed = withoutDeletedMechanics(itemsFrom(data, "mechanics"));
+        const merged =
+          created?.id && !listed.some((item) => item.id === created.id)
+            ? [created, ...listed]
+            : listed;
+        applyMechanicsList(merged, { allowEmpty: false, preferId: created?.id || "" });
       } catch {
         // The saved format is already on screen; the next refresh brings the full list.
       }
@@ -532,11 +570,17 @@ export function AppDataProvider({ children }) {
       const updated = await updateMechanicsProfile(mechanicsId, {
         name: payload.name,
         rules: payload.rules,
+        ignoredFields: payload.ignored_fields || payload.ignoredFields,
       });
       mechanicsChangeRef.current += 1;
-      setMechanics((current) =>
-        current.map((item) => (item.id === mechanicsId ? { ...item, ...updated } : item))
-      );
+      setMechanics((current) => {
+        const next = current.map((item) =>
+          item.id === mechanicsId ? { ...item, ...updated } : item
+        );
+        const uid = auth?.currentUser?.uid;
+        if (uid) void saveCachedMechanics(next, uid);
+        return next;
+      });
       setSelectedMechanicsId(mechanicsId);
       return true;
     } finally {
@@ -550,9 +594,12 @@ export function AppDataProvider({ children }) {
     try {
       const updated = await renameMechanicsRequest(mechanicsId, name);
       mechanicsChangeRef.current += 1;
-      setMechanics((current) =>
-        current.map((item) => (item.id === mechanicsId ? updated : item))
-      );
+      setMechanics((current) => {
+        const next = current.map((item) => (item.id === mechanicsId ? updated : item));
+        const uid = auth?.currentUser?.uid;
+        if (uid) void saveCachedMechanics(next, uid);
+        return next;
+      });
       return true;
     } catch (err) {
       setError(err.message);
@@ -575,9 +622,11 @@ export function AppDataProvider({ children }) {
       deletedMechanicsRef.current.add(mechanicsId);
       mechanicsChangeRef.current += 1;
       const remainingItems = mechanics.filter((item) => item.id !== mechanicsId);
-      setMechanics((current) => current.filter((item) => item.id !== mechanicsId));
+      applyMechanicsList(remainingItems, {
+        allowEmpty: true,
+        preferId: selectedMechanicsId === mechanicsId ? "" : selectedMechanicsId,
+      });
       if (selectedMechanicsId === mechanicsId) {
-        setSelectedMechanicsId(remainingItems[0]?.id || "");
         setCurrentVersion(null);
         setCurrentManuscript(null);
       }

@@ -59,10 +59,12 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
   const entries = [];
   let maxPage = Math.max(0, Number(pageCountHint) || 0);
   let hiddenLocations = 0;
+  const seenCards = new Set();
 
   formatChecks.forEach((check, checkIdx) => {
     if (!check || check.result === "PASS") return;
     const severity = normalizeSeverity(check.severity, check.result);
+    const issueType = check.issue_type || check.id || "";
     const rawLocs =
       Array.isArray(check.locations) && check.locations.length
         ? check.locations
@@ -76,26 +78,48 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
       const page = loc?.page == null || loc.page === "" ? null : Number(loc.page);
       const line = loc?.line == null || loc.line === "" ? null : Number(loc.line);
       if (page != null && !Number.isNaN(page)) maxPage = Math.max(maxPage, page);
+      const bbox = loc?.bbox;
+      const bboxKey = bbox
+        ? [bbox.x, bbox.y, bbox.w, bbox.h].map((n) => Number(n || 0).toFixed(3)).join(",")
+        : "";
+      const excerpt = String(loc?.excerpt || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80)
+        .toLowerCase();
+      const cardKey = `${issueType}|${page ?? ""}|${line ?? ""}|${bboxKey}|${excerpt}`;
+      if (seenCards.has(cardKey)) return;
+      seenCards.add(cardKey);
+      // Prefer location-specific why/fix so PAGE N cards do not reuse page 1's text.
+      const locSummary = typeof loc?.summary === "string" ? loc.summary.trim() : "";
+      const locExplanation = typeof loc?.explanation === "string" ? loc.explanation.trim() : "";
+      const locRecommendation =
+        typeof loc?.recommendation === "string" ? loc.recommendation.trim() : "";
       entries.push({
         id: `${check.id || check.issue_type || "chk"}-${checkIdx}-${locIdx}`,
+        issue_type: issueType,
         page,
         line: line != null && !Number.isNaN(line) ? line : null,
         section: loc?.section || check.section || "General",
         location: loc && typeof loc === "object" ? loc : null,
         severity,
         finding:
+          locSummary ||
           check.finding ||
           check.details ||
           check.description ||
           check.name ||
           "Formatting discrepancy detected",
         explanation:
+          locExplanation ||
           check.explanation ||
           check.details ||
           check.description ||
           "This formatting rule does not match the confirmed mechanics.",
-        recommendation: check.recommendation || "",
+        recommendation: locRecommendation || check.recommendation || "",
         result: check.result,
+        margin_side: loc?.margin_side || loc?.marginSide || "",
+        page_region: loc?.page_region || loc?.pageRegion || "",
       });
     });
   });
