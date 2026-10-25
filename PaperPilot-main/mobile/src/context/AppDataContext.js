@@ -11,7 +11,7 @@ import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../firebase";
-import { enforceAuthSession } from "../services/auth";
+import { enforceAuthSession, signOutUser } from "../services/auth";
 import {
   deleteManuscript as deleteManuscriptRequest,
   deleteMechanics as deleteMechanicsRequest,
@@ -20,6 +20,7 @@ import {
   getProfile,
   getScanDocument,
   getSubscription,
+  isInvalidAuthTokenError,
   itemsFrom,
   listManuscripts,
   listMechanics,
@@ -425,7 +426,20 @@ export function AppDataProvider({ children }) {
       } else {
         failures.push(subscriptionResult.reason?.message || "Could not load subscription.");
       }
-      if (failures.length && !silent) setError(failures[0]);
+      const authFailure = [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult].find(
+        (result) => result.status === "rejected" && isInvalidAuthTokenError(result.reason)
+      );
+      if (authFailure) {
+        await signOutUser(auth);
+        if (!silent) {
+          setError(
+            authFailure.reason?.message ||
+              "Your session is out of date. Sign in again with the same account you use on the web."
+          );
+        }
+      } else if (failures.length && !silent) {
+        setError(failures[0]);
+      }
     } finally {
       if (!silent) setLoading(false);
     }

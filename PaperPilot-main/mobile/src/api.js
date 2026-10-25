@@ -29,12 +29,21 @@ export class ApiError extends Error {
   }
 }
 
-function detailMessage(data, fallback) {
+function detailMessage(data, fallback, status) {
   const detail = data?.detail;
-  if (typeof detail === "string") return detail;
-  if (detail && typeof detail.message === "string") return detail.message;
-  if (Array.isArray(detail) && detail[0]?.msg) return detail[0].msg;
-  return fallback || statusMessage(0);
+  const raw =
+    typeof detail === "string"
+      ? detail
+      : detail && typeof detail.message === "string"
+        ? detail.message
+        : Array.isArray(detail) && detail[0]?.msg
+          ? detail[0].msg
+          : "";
+  if (status === 401 || /firebase id token is invalid|invalid or expired/i.test(raw)) {
+    return "Your session is out of date. Sign out and sign in again with the same account you use on the web.";
+  }
+  if (raw) return raw;
+  return fallback || statusMessage(status || 0);
 }
 
 function statusMessage(status) {
@@ -50,6 +59,15 @@ function statusMessage(status) {
   }
   if (status) return "PaperPilot's server could not finish the request. Try again in a moment.";
   return "Could not reach PaperPilot. Check your internet connection, then try again.";
+}
+
+/** True when the API rejected the Firebase ID token (expired, revoked, or wrong project). */
+export function isInvalidAuthTokenError(err) {
+  const msg = String(err?.message || err?.detail || "");
+  return (
+    err?.status === 401 ||
+    /firebase id token is invalid|invalid or expired|session has expired|sign in again/i.test(msg)
+  );
 }
 
 /** fetch() rejects with a bare TypeError ("Network request failed") when the connection drops. */
@@ -97,7 +115,7 @@ function parseBody(body) {
 
 async function responseData(res) {
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(detailMessage(data, statusMessage(res.status)), res.status, data.detail);
+  if (!res.ok) throw new ApiError(detailMessage(data, statusMessage(res.status), res.status), res.status, data.detail);
   return data;
 }
 

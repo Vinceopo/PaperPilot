@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import { getApp, getApps, initializeApp } from "firebase/app";
 import { getAuth, getReactNativePersistence, initializeAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getDatabase } from "firebase/database";
 
 const config = Constants.expoConfig?.extra?.firebase || {};
 const configured = Boolean(config.apiKey && config.projectId && config.appId);
@@ -20,4 +20,5 @@ function createAuth(firebaseApp) {
 
 export const firebaseReady = configured;
 export const auth = app ? createAuth(app) : null;
-export const db = app ? getFirestore(app) : null;
+/** Realtime Database — same backend as the web app (not Firestore). */
+export const db = app ? getDatabase(app) : null;
