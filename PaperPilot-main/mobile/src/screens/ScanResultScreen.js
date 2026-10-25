@@ -283,6 +283,14 @@ function ScanResultBody({ navigation }) {
 
   async function onDownload() {
     const report = await scanFlow.downloadReport();
+    if (report?.shared) {
+      // Share sheet already presented the PDF (same report as web).
+      return;
+    }
+    if (scanFlow.downloadError) {
+      Alert.alert("Download failed", scanFlow.downloadError);
+      return;
+    }
     if (report?.summary) Alert.alert("Analysis report", report.summary);
   }
 

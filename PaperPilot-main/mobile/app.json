@@ -3,7 +3,7 @@
     "name": "PaperPilot",
     "slug": "paperpilot",
     "owner": "paperpilot",
-    "version": "0.2.1",
+    "version": "0.2.3",
     "scheme": "paperpilot",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -49,7 +49,9 @@
           "backgroundColor": "#f3f5f7"
         }
       ],
-      "expo-image"
+      "expo-image",
+      "@react-native-google-signin/google-signin",
+      "expo-sharing"
     ],
     "updates": {
       "url": "https://u.expo.dev/45e1cf04-e601-4357-aba5-09c75e874a04"

@@ -6,7 +6,7 @@ import { useAppData } from "../../context/AppDataContext";
 import { auth } from "../../firebase";
 import { signOutUser } from "../../services/auth";
 import { colors } from "../../theme";
-import { resetWindow } from "../../lib/plans";
+import { planName, resetWindow } from "../../lib/plans";
 import BackToDashboardButton from "../ui/BackToDashboardButton";
 import Sidebar from "./Sidebar";
 import NotificationsPanel from "./NotificationsPanel";
@@ -24,6 +24,7 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
   const [notificationsAnchor, setNotificationsAnchor] = useState(null);
   const bellRef = useRef(null);
   const {
+    subscription,
     tier,
     remaining,
     limit,
@@ -82,10 +83,12 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
 
           <View style={styles.planWrap}>
             <Text style={styles.plan} numberOfLines={1}>
-              {tier} plan
+              {subscription ? `${planName(tier)} plan` : "Loading plan…"}
             </Text>
             <Text style={styles.remaining} numberOfLines={2}>
-              {remaining} of {limit} scans remaining this {resetWindow(tier)}
+              {subscription
+                ? `${remaining} of ${limit} scans remaining this ${resetWindow(tier)}`
+                : "Fetching your account…"}
             </Text>
           </View>
 

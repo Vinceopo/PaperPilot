@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { useAppData } from "../context/AppDataContext";
 import { cancelSubscription, confirmCheckoutPayment, subscribeToPlan } from "../api";
@@ -21,7 +22,53 @@ import {
   resetWindow,
 } from "../lib/plans";
 
+WebBrowser.maybeCompleteAuthSession();
+
 const PAYMONGO_LOGO = require("../../assets/paymongo-logo.png");
+const BILLING_RETURN = "paperpilot://billing";
+
+/** Prefer openAuthSession success, but also accept a deep-link if Custom Tabs dismiss early. */
+function openBillingSession(checkoutUrl) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let sub = null;
+    const finish = (url) => {
+      if (settled) return;
+      settled = true;
+      if (sub) {
+        try {
+          sub.remove();
+        } catch {
+          // ignore
+        }
+      }
+      resolve(url || "");
+    };
+    sub = Linking.addEventListener("url", ({ url }) => {
+      if (url && String(url).startsWith("paperpilot://billing")) finish(url);
+    });
+    WebBrowser.openAuthSessionAsync(checkoutUrl, BILLING_RETURN)
+      .then((session) => {
+        if (session?.type === "success" && session.url) {
+          finish(session.url);
+          return;
+        }
+        setTimeout(() => {
+          if (!settled) finish("");
+        }, 1500);
+      })
+      .catch((err) => {
+        if (sub) {
+          try {
+            sub.remove();
+          } catch {
+            // ignore
+          }
+        }
+        reject(err);
+      });
+  });
+}
 
 function peso(amount) {
   return `₱${Number(amount).toLocaleString("en-PH", { minimumFractionDigits: 0 })}`;
@@ -198,8 +245,7 @@ export default function SubscriptionScreen({ navigation }) {
           "The PayMongo payment page could not be opened. You were not charged. Try again in a minute."
         );
       }
-      const session = await WebBrowser.openAuthSessionAsync(url, "paperpilot://billing");
-      const returnedUrl = session?.type === "success" ? String(session.url || "") : "";
+      const returnedUrl = String((await openBillingSession(url)) || "");
       if (returnedUrl.includes("status=canceled")) {
         setPaymentCanceled(true);
         setSelectedPlan(plan);
@@ -255,7 +301,7 @@ export default function SubscriptionScreen({ navigation }) {
     setSuccess("");
     try {
       const next = await subscribeToPlan({ plan: "free" });
-      applySubscription(next);
+      applySubscription(next, { allowDowngrade: true });
       setCheckoutOpen(false);
       setSuccess("Switched to Free plan.");
       setConfirmFreeOpen(false);
@@ -272,7 +318,7 @@ export default function SubscriptionScreen({ navigation }) {
     setSuccess("");
     try {
       const next = await cancelSubscription({ immediate: true });
-      applySubscription(next);
+      applySubscription(next, { allowDowngrade: true });
       setCheckoutOpen(true);
       setSelectedPlan("premium");
       setSuccess("Subscription canceled. You are on the Free plan — 3 scans this month.");

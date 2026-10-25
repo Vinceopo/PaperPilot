@@ -87,7 +87,21 @@
         var target = returnUrl + (returnUrl.indexOf("?") === -1 ? "?" : "&") + out.toString();
         link.href = target;
         link.hidden = false;
-        location.replace(target);
+        // Prefer an Android intent URL so Custom Tabs hand control back to the app
+        // even when location.replace(paperpilot://…) is ignored.
+        var intentTarget = target;
+        if (/^paperpilot:\/\//i.test(returnUrl)) {
+          var pathAndQuery = target.replace(/^paperpilot:\/\//i, "");
+          intentTarget =
+            "intent://" +
+            pathAndQuery +
+            "#Intent;scheme=paperpilot;package=com.paperpilot.app;end";
+        }
+        try {
+          location.replace(intentTarget);
+        } catch (e) {
+          location.replace(target);
+        }
       })();
     </script>
   </body>

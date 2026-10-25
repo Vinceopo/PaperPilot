@@ -4,9 +4,13 @@ import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { Platform } from "react-native";
 
+// Required so Android Custom Tabs hand the redirect back to openAuthSessionAsync.
+WebBrowser.maybeCompleteAuthSession();
+
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DEFAULT_BRIDGE_URL = "https://paperpilotph.vercel.app/mobile-auth.html";
+const APP_RETURN_PATH = "auth/google";
 
 function authError(message, code) {
   const err = new Error(message);
@@ -43,6 +47,30 @@ function verifyIdToken(idToken, clientId, hashedNonce) {
   }
 }
 
+function parseAuthParams(url) {
+  if (!url) return {};
+  try {
+    const parsed = Linking.parse(url);
+    const query = parsed.queryParams || {};
+    // Some bridges leave the token in the hash fragment.
+    const hash = String(url).includes("#") ? String(url).split("#")[1] : "";
+    const hashParams = hash ? Object.fromEntries(new URLSearchParams(hash)) : {};
+    return { ...hashParams, ...query };
+  } catch {
+    return {};
+  }
+}
+
+/** Stable app deep link for release builds; Expo Go still uses Linking.createURL. */
+function appReturnUrl() {
+  const created = Linking.createURL(APP_RETURN_PATH);
+  // Standalone / APK: prefer the custom scheme so Custom Tabs can hand off reliably.
+  if (created.startsWith("paperpilot://") || created.startsWith("exp://") || created.startsWith("exps://")) {
+    return created;
+  }
+  return `paperpilot://${APP_RETURN_PATH}`;
+}
+
 /**
  * iOS: uses an iOS OAuth client whose reversed-client-ID redirect is captured directly by
  * the system auth session, so no website is involved (works in Expo Go).
@@ -75,7 +103,7 @@ async function signInWithIosClient(clientId, hashedNonce) {
     throw authError("Google sign-in was cancelled.", "auth/popup-closed-by-user");
   }
 
-  const { queryParams = {} } = Linking.parse(result.url);
+  const queryParams = parseAuthParams(result.url);
   if (queryParams.error) {
     throw authError(`Google sign-in failed (${queryParams.error}).`);
   }
@@ -127,9 +155,64 @@ async function assertBridgeDeployed(bridgeUrl) {
   }
 }
 
+/**
+ * Wait for either openAuthSessionAsync success OR a Linking deep-link.
+ * Android Custom Tabs often dismiss the session before returning the URL; the deep link still arrives.
+ */
+function waitForAuthRedirect(returnUrl, openSession) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let sub = null;
+
+    const finish = (url, err) => {
+      if (settled) return;
+      settled = true;
+      if (sub) {
+        try {
+          sub.remove();
+        } catch {
+          // ignore
+        }
+      }
+      if (err) reject(err);
+      else resolve(url);
+    };
+
+    const acceptUrl = (url) => {
+      if (!url) return;
+      const params = parseAuthParams(url);
+      if (params.id_token || params.error || params.code) finish(url);
+    };
+
+    sub = Linking.addEventListener("url", ({ url }) => acceptUrl(url));
+
+    Linking.getInitialURL()
+      .then(acceptUrl)
+      .catch(() => {});
+
+    openSession()
+      .then((result) => {
+        if (result?.type === "success" && result.url) {
+          acceptUrl(result.url);
+          return;
+        }
+        // Give the deep-link a moment after Custom Tabs dismisses.
+        setTimeout(() => {
+          if (!settled) {
+            finish(
+              null,
+              authError("Google sign-in was cancelled.", "auth/popup-closed-by-user")
+            );
+          }
+        }, 1500);
+      })
+      .catch((err) => finish(null, err));
+  });
+}
+
 async function signInWithWebBridge(clientId, bridgeUrl, hashedNonce) {
   await assertBridgeDeployed(bridgeUrl);
-  const returnUrl = Linking.createURL("auth/google");
+  const returnUrl = appReturnUrl();
   const authUrl = `${GOOGLE_AUTH_URL}?${toQuery({
     client_id: clientId,
     redirect_uri: bridgeUrl,
@@ -140,12 +223,26 @@ async function signInWithWebBridge(clientId, bridgeUrl, hashedNonce) {
     prompt: "select_account",
   })}`;
 
-  const result = await WebBrowser.openAuthSessionAsync(authUrl, returnUrl);
-  if (result.type !== "success" || !result.url) {
-    throw authError("Google sign-in was cancelled.", "auth/popup-closed-by-user");
+  try {
+    await WebBrowser.warmUpAsync();
+  } catch {
+    // Optional.
   }
 
-  const { queryParams = {} } = Linking.parse(result.url);
+  let redirectUrl;
+  try {
+    redirectUrl = await waitForAuthRedirect(returnUrl, () =>
+      WebBrowser.openAuthSessionAsync(authUrl, returnUrl)
+    );
+  } finally {
+    try {
+      await WebBrowser.coolDownAsync();
+    } catch {
+      // Optional.
+    }
+  }
+
+  const queryParams = parseAuthParams(redirectUrl);
   if (queryParams.error) {
     throw authError(`Google sign-in failed (${queryParams.error}).`);
   }
@@ -153,6 +250,59 @@ async function signInWithWebBridge(clientId, bridgeUrl, hashedNonce) {
   if (!idToken) throw authError("Google sign-in did not return an identity token.");
   verifyIdToken(idToken, clientId, hashedNonce);
   return idToken;
+}
+
+/** Native Google Sign-In (Android / Play Services) — avoids the browser bridge. */
+async function signInWithNativeGoogle(webClientId) {
+  const {
+    GoogleSignin,
+    isSuccessResponse,
+    isCancelledResponse,
+    isErrorWithCode,
+    statusCodes,
+  } = await import("@react-native-google-signin/google-signin");
+
+  GoogleSignin.configure({
+    webClientId,
+    offlineAccess: false,
+    forceCodeForRefreshToken: false,
+  });
+
+  try {
+    await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+    const response = await GoogleSignin.signIn();
+
+    if (typeof isCancelledResponse === "function" && isCancelledResponse(response)) {
+      throw authError("Google sign-in was cancelled.", "auth/popup-closed-by-user");
+    }
+    if (typeof isSuccessResponse === "function" && !isSuccessResponse(response)) {
+      throw authError("Google sign-in was cancelled.", "auth/popup-closed-by-user");
+    }
+
+    const idToken =
+      response?.data?.idToken ||
+      response?.idToken ||
+      (await GoogleSignin.getTokens().then((t) => t.idToken).catch(() => ""));
+
+    if (!idToken) {
+      throw authError("Google sign-in did not return an identity token.");
+    }
+    return idToken;
+  } catch (err) {
+    if (err?.code === "auth/popup-closed-by-user") throw err;
+    if (isErrorWithCode?.(err)) {
+      if (err.code === statusCodes.SIGN_IN_CANCELLED) {
+        throw authError("Google sign-in was cancelled.", "auth/popup-closed-by-user");
+      }
+      if (err.code === statusCodes.IN_PROGRESS) {
+        throw authError("Google sign-in is already in progress. Please wait.");
+      }
+      if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        throw authError("Google Play Services is required for Google sign-in on this device.");
+      }
+    }
+    throw err;
+  }
 }
 
 export async function promptGoogleSignIn() {
@@ -169,6 +319,25 @@ export async function promptGoogleSignIn() {
   }
 
   if (!webClientId) throw authError("Google sign-in is not configured.");
+
+  // Android: prefer native Play Services sign-in (same Firebase web client as the site).
+  if (Platform.OS === "android") {
+    try {
+      const idToken = await signInWithNativeGoogle(webClientId);
+      // Native tokens are not nonce-bound; Firebase GoogleAuthProvider.credential(idToken) is enough.
+      return { idToken, rawNonce: undefined };
+    } catch (err) {
+      const code = String(err?.code || "");
+      const msg = String(err?.message || "");
+      // Missing SHA-1 / Android OAuth client → fall back to the HTTPS bridge.
+      const needsBridge =
+        code === "10" ||
+        code === "DEVELOPER_ERROR" ||
+        /DEVELOPER_ERROR|ApiException:\s*10|not configured|developer error/i.test(msg);
+      if (!needsBridge) throw err;
+    }
+  }
+
   const bridgeUrl = extra.googleAuthBridgeUrl || DEFAULT_BRIDGE_URL;
   const idToken = await signInWithWebBridge(webClientId, bridgeUrl, hashedNonce);
   return { idToken, rawNonce };

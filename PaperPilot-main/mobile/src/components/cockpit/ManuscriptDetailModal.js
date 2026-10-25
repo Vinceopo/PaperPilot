@@ -260,6 +260,7 @@ export default function ManuscriptDetailModal({
         ? await resolveResult(manuscript, selected)
         : versionToScanResult(manuscript, selected);
       const report = await downloadReport(payload, { versionNumber: selected.versionNumber });
+      if (report?.shared) return;
       if (report?.summary) Alert.alert("Analysis report", report.summary);
     } catch (err) {
       setDownloadError(err?.message || "Download failed.");

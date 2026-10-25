@@ -2,12 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import * as WebBrowser from "expo-web-browser";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import AuthScreen from "./src/components/AuthScreen";
 import RegistrationSuccessScreen from "./src/components/auth/RegistrationSuccessScreen";
 import { AppDataProvider, useAppData } from "./src/context/AppDataContext";
 import MainNavigator from "./src/navigation/MainNavigator";
 import { colors } from "./src/theme";
+
+// Completes Google OAuth when Android Custom Tabs redirects back into the app.
+WebBrowser.maybeCompleteAuthSession();
 
 const REGISTRATION_SUCCESS_KEY = "paperpilot.registrationSuccess";
 const THIRTY_MIN = 30 * 60 * 1000;

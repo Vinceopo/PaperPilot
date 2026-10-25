@@ -33,7 +33,7 @@ import {
 } from "../api";
 import { isServerId, mapComplianceScanToResult, scanTargetIds } from "../lib/scanMapper";
 import { supportedCitationStyle } from "../lib/formatMechanicsForm";
-import { planLimit } from "../lib/plans";
+import { isPaidTier, planLimit } from "../lib/plans";
 import { useScanFlow } from "../hooks/useScanFlow";
 import { latestVersion } from "../lib/scoreBand";
 import {
@@ -86,6 +86,11 @@ async function writeCachedSubscription(uid, next) {
   }
 }
 
+/** Prefer updated_at so a newer server snapshot can replace an older one. */
+function subscriptionStamp(sub) {
+  return String(sub?.updated_at || sub?.renews_at || sub?.billing_period_end || "");
+}
+
 const AppDataContext = createContext(null);
 
 export function AppDataProvider({ children }) {
@@ -117,12 +122,29 @@ export function AppDataProvider({ children }) {
   // after the checkout confirm), so a reply requested before the latest plan update is dropped.
   const subscriptionTicketRef = useRef(0);
   const subscriptionAppliedRef = useRef(0);
+  const subscriptionRef = useRef(null);
   const nextSubscriptionTicket = useCallback(() => ++subscriptionTicketRef.current, []);
-  const storeSubscription = useCallback((next, ticket) => {
+  const storeSubscription = useCallback((next, ticket, opts = {}) => {
     if (!next || typeof next !== "object") return false;
     const order = ticket ?? ++subscriptionTicketRef.current;
     if (order < subscriptionAppliedRef.current) return false;
+
+    const current = subscriptionRef.current;
+    const nextTier = String(next.tier || "free").toLowerCase();
+    const currentTier = String(current?.tier || "free").toLowerCase();
+    // After PayMongo confirm, an in-flight GET /subscription often still returns Free.
+    // That stale snapshot must not wipe the paid plan from the header / scan limits.
+    // A newer Free snapshot (explicit cancel, or period ended) is still allowed through.
+    if (!opts.allowDowngrade && isPaidTier(currentTier) && !isPaidTier(nextTier)) {
+      const curStamp = subscriptionStamp(current);
+      const nextStamp = subscriptionStamp(next);
+      if (!(curStamp && nextStamp && nextStamp > curStamp)) {
+        return false;
+      }
+    }
+
     subscriptionAppliedRef.current = order;
+    subscriptionRef.current = next;
     setSubscription(next);
     subscriptionLoadedRef.current = auth?.currentUser?.uid || "";
     void writeCachedSubscription(auth?.currentUser?.uid, next);
@@ -309,6 +331,8 @@ export function AppDataProvider({ children }) {
             if (cancelled || !cached) return;
             if (authUidRef.current !== uid) return;
             if (subscriptionLoadedRef.current === uid) return;
+            // Seed cache without a ticket so a live API reply can still replace it.
+            subscriptionRef.current = cached;
             setSubscription(cached);
           });
         }
@@ -458,8 +482,8 @@ export function AppDataProvider({ children }) {
   }, [nextSubscriptionTicket, storeSubscription]);
 
   /** Use a subscription snapshot returned by the API (cancel, confirm, switch) right away. */
-  function applySubscription(next) {
-    if (!storeSubscription(next)) return;
+  function applySubscription(next, opts = {}) {
+    if (!storeSubscription(next, undefined, opts)) return;
     const note = notificationFromSubscription(next);
     if (note) appendNotifications(note);
   }
@@ -471,6 +495,7 @@ export function AppDataProvider({ children }) {
     } else {
       subscriptionLoadedRef.current = "";
       subscriptionAppliedRef.current = ++subscriptionTicketRef.current;
+      subscriptionRef.current = null;
       setMechanics([]);
       setManuscripts([]);
       setSubscription(null);
