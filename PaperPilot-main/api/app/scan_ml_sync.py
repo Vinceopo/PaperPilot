@@ -6,7 +6,7 @@ import base64
 import logging
 from datetime import datetime, timedelta, timezone
 
-from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes
+from app.s3_storage import S3StorageError, fetch_s3_bytes
 from app.compliance_db import (
     finalize_scan_from_ml,
     get_mechanics,
@@ -109,8 +109,8 @@ def _try_requeue_ml_job(owner_uid: str, scan: dict) -> bool:
         return False
 
     try:
-        raw_bytes, _hint = fetch_cloudinary_bytes(document_url)
-    except (CloudinaryFetchError, Exception) as exc:
+        raw_bytes, _hint = fetch_s3_bytes(document_url)
+    except (S3StorageError, Exception) as exc:
         logger.warning("Requeue fetch failed for scan %s: %s", scan_id, exc)
         return False
 

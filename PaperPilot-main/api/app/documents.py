@@ -21,6 +21,8 @@ from app.mechanics_options import (
     FONT_SIZE_KEYS,
     MAX_HEADING_LEVELS,
     CHAPTER_FIRST_HIDDEN,
+    PRELIM_ROMAN,
+    TITLE_HIDDEN_COUNTED,
     WORD_SPACING_TWO,
     canonical_body_numbering,
     canonical_chapter_first_page,
@@ -50,7 +52,9 @@ def validate_document(filename: str, data: bytes, max_bytes: int) -> str:
     if not data:
         raise DocumentError("The uploaded file is empty.")
     if len(data) > max_bytes:
-        raise DocumentError(f"The uploaded file exceeds the {max_bytes}-byte limit.")
+        mb = max_bytes / (1024 * 1024)
+        label = f"{int(mb)}" if float(mb).is_integer() else f"{mb:g}"
+        raise DocumentError(f"The uploaded file exceeds the {label} MB limit for your plan.")
     if suffix == ".pdf":
         if not data[:1024].lstrip().startswith(b"%PDF-"):
             raise DocumentError("The file extension is .pdf but its signature is not a PDF.")
@@ -958,7 +962,39 @@ def _clip_value(value: str, stop_words: tuple[str, ...]) -> str:
     # Stop at the next outline/label boundary when the capture ran long.
     pattern = rf"(?i)\s+(?:{_stop_pattern(stop_words)})"
     parts = re.split(pattern, text, maxsplit=1)
-    return parts[0].strip(" \t-:;,.|/\\")[:200]
+    text = parts[0].strip(" \t-:;,.|/\\")
+    # Numbered sentence guides: "…period. 6. Case Styles" / "…chapter. 13. Tables"
+    parts = re.split(r"\s+\d{1,2}\.\s+(?=[A-Z])", text, maxsplit=1)
+    return parts[0].strip(" \t-:;,.|/\\")[:300]
+
+
+def _looks_like_layout_rule(value: str) -> bool:
+    """True when text is about table/figure captions or titles — not incidental mentions."""
+    return bool(
+        re.search(
+            r"(?i)\b(?:caption|title|heading|label|number(?:ed|ing)?|above|below|under|"
+            r"left[\s-]?align|right[\s-]?align|cent(?:er|re)|italic|bold|consecutive)\b",
+            value or "",
+        )
+    )
+
+
+def _prose_layout_sentence(flat: str, kind: str) -> str:
+    """Pull a caption/title sentence for tables or figures from prose guides."""
+    word = "tables?" if kind == "table" else "figures?"
+    match = re.search(
+        rf"(?i)((?:{word})\b[^.!?\n]{{0,40}}(?:caption|title|heading|number)[^.!?\n]{{5,200}}"
+        rf"|(?:(?:caption|title)\b[^.!?\n]{{0,80}}{word})[^.!?\n]{{0,120}})[.!?]?",
+        flat,
+    )
+    if not match:
+        return ""
+    value = _clip_value(match.group(1), (
+        "Size", "Orientation", "Spacing", "Margins", "Font", "Pagination", "Citation",
+        "Heading", "Alignment", "Layout for Tables", "Layout for Figures",
+        "a.", "b.", "c.", "d.", "e.", "f.", "g.", "h.", "i.", "j.",
+    ))
+    return value if _looks_like_layout_rule(value) else ""
 
 
 def _value_after_label(flat: str, labels: tuple[str, ...], stop_words: tuple[str, ...]) -> str:
@@ -1008,30 +1044,52 @@ def _parse_paper_size(value: str) -> dict:
     text = (value or "").strip()
     if not text:
         return {}
+    # "8 1/2 x 11" / "8½ x 11" — normalize before digit×digit matching (avoids "2 x 11").
+    text = re.sub(
+        r"\b(\d+)\s+(\d+)\s*/\s*(\d+)\b",
+        lambda match: str(int(match.group(1)) + int(match.group(2)) / int(match.group(3))),
+        text,
+    )
+    text = re.sub(r"\b(\d+)\s*½\b", lambda match: str(int(match.group(1)) + 0.5), text)
     upper = text.upper()
     out: dict = {}
-    if re.search(r"\bLEGAL\b", upper) or (re.search(r"8\.5", upper) and re.search(r"\b14\b", upper)):
+    # Require a dimension pair (8.5 x 14) — bare "14." from outline numbering is not Legal size.
+    if re.search(r"\bLEGAL\b", upper) or re.search(
+        r"8\.5\s*(?:inches?|in|[\"″])?\s*[x×by]\s*14\b", upper
+    ):
         out["name"] = "LEGAL"
         out["label"] = "8.5 x 14"
+        out["width_inches"] = 8.5
+        out["height_inches"] = 14.0
     elif re.search(r"\bA4\b", upper) or re.search(r"8\.27|210\s*[x×]\s*297", upper):
         out["name"] = "A4"
         out["label"] = "8.27 x 11.69"
+        out["width_inches"] = 8.27
+        out["height_inches"] = 11.69
     elif (
         re.search(r"\bLETTER\b", upper)
         or re.search(r"\bSHORT\s*BOND\b", upper)
-        or (re.search(r"8\.5", upper) and re.search(r"\b11\b", upper))
+        or re.search(r"8\.5\s*(?:inches?|in|[\"″])?\s*[x×by]\s*11\b", upper)
+        or (re.search(r"8\.5", upper) and re.search(r"\b11\b", upper)
+            and not re.search(r"8\.5\s*(?:inches?|in|[\"″])?\s*[x×by]\s*14\b", upper))
     ):
         out["name"] = "LETTER"
         out["label"] = "8.5 x 11"
+        out["width_inches"] = 8.5
+        out["height_inches"] = 11.0
     dims = re.search(
         r"(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?\s*[x×by]\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?",
         text,
         re.I,
     )
-    if dims:
-        out["width_inches"] = float(dims.group(1))
-        out["height_inches"] = float(dims.group(2))
-        out.setdefault("label", f"{dims.group(1)} x {dims.group(2)}")
+    if dims and "width_inches" not in out:
+        width = float(dims.group(1))
+        height = float(dims.group(2))
+        # Ignore scrap matches like "2 x 11" from a broken fraction parse.
+        if width >= 5 and height >= 5:
+            out["width_inches"] = width
+            out["height_inches"] = height
+            out.setdefault("label", f"{dims.group(1)} x {dims.group(2)}")
     elif out.get("label"):
         pass
     elif re.search(r"\b(?:A[3-5]|folio|executive|tabloid|bond)\b", text, re.I):
@@ -1253,12 +1311,16 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
     for side in MARGIN_SIDES:
         if side in margins:
             continue
-        side_raw = _value_after_label(
-            flat,
-            (f"{side.capitalize()} margin", f"{side} margin", side.capitalize(), side),
-            stop_words,
-        )
-        amount = _simple_margin_amount(side_raw) if side_raw else None
+        # Prefer "Top: 1" labels — incidental "Top" in intro prose must not win.
+        colon = re.search(rf"\b{side}\s*:\s*({MEASURE_PATTERN})", flat, re.I)
+        amount = parse_length_inches(colon.group(1)) if colon else None
+        if amount is None:
+            side_raw = _value_after_label(
+                flat,
+                (f"{side.capitalize()} margin", f"{side} margin", side.capitalize(), side),
+                stop_words,
+            )
+            amount = _simple_margin_amount(side_raw) if side_raw else None
         if amount is None:
             match = re.search(
                 rf"\b{side}\s+margins?\s*(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
@@ -1546,6 +1608,13 @@ def derive_mechanics_rules(text: str) -> dict:
         )
         if indent_match:
             indent_val = parse_length_inches(indent_match.group(1))
+        elif re.search(
+            r"(?i)(?:0\.5|½|1\s*/\s*2)\s*(?:[\"″]|inches?|in\b)?\s*TAB"
+            r"|\bTAB\b[^.]{0,40}?(?:0\.5|½|1\s*/\s*2)"
+            r"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{0,40}?(?:0\.5|½|1\s*/\s*2)",
+            flat,
+        ):
+            indent_val = 0.5
         elif re.search(r"\bone\s+tab\b|\bindent(?:ation|ion)?\s*(?:of|:)?\s*one\s+tab\b", flat, re.I):
             indent_val = 0.5
     if indent_val is not None:
@@ -1561,7 +1630,15 @@ def derive_mechanics_rules(text: str) -> dict:
             flat, ("Text alignment", "Paragraph alignment", "Alignment", "Justification", "Align"), stop
         )
     )
-    if alignment is None:
+    # Prefer the manuscript body rule ("generally … Justified format") over alignment
+    # examples listed earlier in the same guide (Flush left / Center / Flush right).
+    if re.search(
+        r"(?i)(?:generally|manuscript|body\s+text|encoded)\b[^.]{0,80}\bjustified\b"
+        r"|\bjustified\s+format\b",
+        flat,
+    ):
+        alignment = "justify"
+    elif alignment is None:
         phrase = re.search(
             r"\b(?:fully\s+|full[\s-])?justified\b|\bflush[\s-]left\b|\bleft[\s-](?:aligned|justified)\b"
             r"|\bragged[\s-]right\b",
@@ -1595,12 +1672,40 @@ def derive_mechanics_rules(text: str) -> dict:
         short = (f"H{level}",) if level <= 3 else ()
         return (f"Heading {level}", f"Heading{level}", *short)
 
-    # "Heading 3 and content size" (older guides) sets Heading 3 and body text together.
-    combined_h3 = re.search(r"(?i)\bheading\s*3\s+and\s+(?:content|body)", flat) is not None
+    # Body / Contents labels (Capstone outlines often use bare "Content: 11").
+    # Longer phrases first; bare Content/Contents handled via a dedicated regex so
+    # "Table of Contents" is not mistaken for body size.
     body_labels = (
-        "Body text size", "Body font size", "Body size", "Content size", "Text size",
-        "Main body", "Main text", "Body text",
+        "Body text size",
+        "Body font size",
+        "Body size",
+        "Contents Size",
+        "Contents size",
+        "Content Size",
+        "Content size",
+        "Text size",
+        "Main body",
+        "Main text",
+        "Body text",
     )
+    # Stop heading values from swallowing the following Content/Contents line.
+    stop_with_content = stop + ("Content", "Contents", "Body text size", "Body size")
+
+    # "Heading 3 and contents: 11" — one sentence assigns the SAME pt to Heading 3
+    # and body/contents; they remain separate rules that share the value.
+    combined_heading_body = re.finditer(
+        r"(?i)\bheading\s*(\d)\s+and\s+(?:contents?|body)(?:\s*size)?\s*[:：=]?\s*"
+        r"(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+        flat,
+    )
+    combined_sizes: dict[str, float] = {}
+    for match in combined_heading_body:
+        level = int(match.group(1))
+        number = float(match.group(2))
+        if 1 <= level <= MAX_HEADING_LEVELS and 6 <= number <= 72:
+            combined_sizes[f"heading{level}_size"] = number
+            combined_sizes["body_size"] = number
+
     # Heading sizes only when the guide ties Heading N to a size/pt — never from a
     # bare mention of "Heading 1" next to unrelated numbers (margins, word counts).
     size_sources: list[tuple[str, str, tuple[str, ...]]] = []
@@ -1616,11 +1721,14 @@ def derive_mechanics_rules(text: str) -> dict:
         ):
             continue
         size_sources.append(
-            (_value_after_label(flat, labels, stop), f"heading{level}_size", labels)
+            (
+                _value_after_label(flat, labels, stop_with_content),
+                f"heading{level}_size",
+                labels,
+            )
         )
     body_raw = _value_after_label(flat, body_labels, stop)
-    if body_raw or not combined_h3:
-        size_sources.append((body_raw, "body_size", body_labels))
+    size_sources.append((body_raw, "body_size", body_labels))
 
     def _explicit_pt(raw: str | None) -> float | None:
         """Point size only when the guide states pt/points, or the value is bare like '16'.
@@ -1636,19 +1744,51 @@ def derive_mechanics_rules(text: str) -> dict:
         if with_unit:
             number = float(with_unit.group(1))
             return number if 6 <= number <= 72 else None
+        # "size: 12" / "size 12" (label already consumed; value still says size)
+        size_labeled = re.search(r"(?i)\bsize\b\s*[:：=]?\s*(\d{1,2}(?:\.\d+)?)\b", text)
+        if size_labeled:
+            number = float(size_labeled.group(1))
+            return number if 6 <= number <= 72 else None
         # "Heading 1: 16" / "16" — number alone, no other words/units.
         if re.fullmatch(r"\d{1,2}(?:\.\d+)?", text):
             number = float(text)
             return number if 6 <= number <= 72 else None
+        # Clipped value may still start with the point size ("12 Font type…").
+        leading = re.match(r"^(\d{1,2}(?:\.\d+)?)\b(?!\s*(?:mm|cm|inch|inches|words?|characters?|%))", text, re.I)
+        if leading:
+            number = float(leading.group(1))
+            return number if 6 <= number <= 72 else None
         return None
 
     def _nearby_pt(labels: tuple[str, ...]) -> float | None:
-        """Only 'Heading N … 16 pt' (unit required). Bare digits near the label are ignored."""
+        """'Heading N … 16 pt' or 'Heading N: 16' / 'Heading N size: 16' (bare digits OK)."""
         label_alt = "|".join(re.escape(label) for label in labels)
         match = re.search(
             rf"(?i)\b(?:{label_alt})\b.{{0,48}}?(\d{{1,2}}(?:\.\d+)?)\s*-?\s*(?:pt|points?)\b",
             flat,
         )
+        if not match:
+            match = re.search(
+                rf"(?i)\b(?:{label_alt})\b(?:\s*size)?\s*[:：=]\s*(\d{{1,2}}(?:\.\d+)?)\b",
+                flat,
+            )
+        if not match:
+            return None
+        number = float(match.group(1))
+        return number if 6 <= number <= 72 else None
+
+    def _contents_body_pt() -> float | None:
+        """Bare Content/Contents: 11 — not 'Table of Contents'."""
+        match = re.search(
+            r"(?i)(?<!of )\bcontents?\b(?:\s*size)?\s*[:：=]\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+            flat,
+        )
+        if not match:
+            # Label alone on one outline line, value on the next token.
+            match = re.search(
+                r"(?i)(?<!of )\bcontents?\b(?:\s*size)?\s+(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+                flat,
+            )
         if not match:
             return None
         number = float(match.group(1))
@@ -1670,30 +1810,62 @@ def derive_mechanics_rules(text: str) -> dict:
             if key in {"body_size", "heading3_content_size"}:
                 sizes = sorted(set([*sizes, value]))
                 font["sizes_points"] = sizes
-    if combined_h3 and "body_size" not in font and "heading3_size" in font:
-        font["body_size"] = font["heading3_size"]
+    # Shared "Heading N and contents: 11" — apply both rules (same value, separate fields).
+    for key, value in combined_sizes.items():
+        font[key] = value
+        if key == "body_size":
+            sizes = sorted(set([*sizes, value]))
+            font["sizes_points"] = sizes
     if "body_size" not in font:
+        contents_pt = _contents_body_pt()
+        if contents_pt is not None:
+            font["body_size"] = contents_pt
+            sizes = sorted(set([*sizes, contents_pt]))
+            font["sizes_points"] = sizes
+    if "body_size" not in font:
+        # "Font Type and Size: … 12" / "Font size: 12" / "typeface size 12".
         typeface_size = re.search(
-            r"\b(?:typeface|font(?:\s*family|\s*type)?|type)\b[^.]{0,120}?\bsize\s*(?:=|:)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            r"\bfont\s*(?:type\s*)?(?:and|&|/)\s*size\b\s*:?\s*[^.\d]{0,60}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
+            r"|\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b"
+            r"|\b(?:typeface|font\s*(?:family|type)|type)\s+size\b\s*(?:=|:)?\s*(\d{1,2}(?:\.\d+)?)\b",
             flat,
             re.I,
         )
-        if not typeface_size:
-            # "Font Type and Size: Times New Roman; 12 points" / "Font size: 12".
-            typeface_size = re.search(
-                r"\bfont\s*(?:type\s*)?(?:and|&|/)\s*size\b\s*:?\s*[^.\d]{0,60}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
-                r"|\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b",
+        number = None
+        if typeface_size:
+            number = float(next(group for group in typeface_size.groups() if group))
+        else:
+            # Prose: "… font, size 12 …" — allow a short gap, but never across "Heading N".
+            spanned = re.search(
+                r"\b(?:typeface|font(?:\s*(?:family|type))?|type)\b(.{0,40}?)\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
                 flat,
                 re.I,
             )
-        if typeface_size:
-            number = float(next(group for group in typeface_size.groups() if group))
-            if 6 <= number <= 72:
-                font["body_size"] = number
-                sizes = sorted(set([*sizes, number]))
-                font["sizes_points"] = sizes
+            if spanned and not re.search(r"(?i)\bheading\b", spanned.group(1) or ""):
+                number = float(spanned.group(2))
+        # Institutional prose: "Times New Roman, font 12" / "Font style … font 12".
+        if number is None:
+            prose_font = re.search(
+                r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica|"
+                r"font\s*style|typeface)\b[^.]{0,80}?\bfont\s+(\d{1,2})\b"
+                r"|\bfont\s+style\b[^.]{0,100}?\b(\d{1,2})\b(?!\s*(?:inch|mm|cm|heading))",
+                flat,
+            )
+            if prose_font and not re.search(
+                r"(?i)\bheading\b.{0,30}\bfont\s+\d",
+                flat[
+                    max(0, (prose_font.start() - 40)) : prose_font.end() + 10
+                ],
+            ):
+                number = float(next(group for group in prose_font.groups() if group))
+        if number is not None and 6 <= number <= 72:
+            font["body_size"] = number
+            sizes = sorted(set([*sizes, number]))
+            font["sizes_points"] = sizes
     if "body_size" in font:
         font["heading3_content_size"] = font["body_size"]
+        # Keep sizes_points body-only — never leave heading pt values in the bag.
+        font["sizes_points"] = [float(font["body_size"])]
     font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
     # Only store color when the guide names it — never invent Black/Automatic.
     if font_color:
@@ -1729,23 +1901,59 @@ def derive_mechanics_rules(text: str) -> dict:
     title_page = canonical_title_page(
         _line_value(text, ("Title page", "First page of the document", "Document first page"))
     )
+    if not title_page and re.search(
+        r"(?i)\btitle\s+page\b.{0,60}(?:no|without|hide|hidden|omit)\s+page"
+        r"|(?:no|without|hide|hidden)\s+page\s+number.{0,40}\btitle\s+page\b",
+        flat,
+    ):
+        title_page = TITLE_HIDDEN_COUNTED
     if title_page:
         pagination["title_page"] = title_page
     # Only set preliminary / body numbering when those lines exist in the guide —
     # do not infer them from unrelated wording (avoids false pagination style checks).
-    preliminary = canonical_preliminary_style(
-        _line_value(text, ("Preliminary pages", "Preliminary page numbers", "Front matter"))
-    )
+    preliminary_raw = _line_value(text, ("Preliminary pages", "Preliminary page numbers", "Front matter"))
+    if not preliminary_raw:
+        prelim_sent = re.search(
+            r"(?i)((?:preliminary|front\s+matter)\s+pages?\b[^.!?\n]{0,100}"
+            r"(?:roman|arabic)[^.!?\n]{0,40})",
+            flat,
+        )
+        preliminary_raw = prelim_sent.group(1) if prelim_sent else ""
+    preliminary = canonical_preliminary_style(preliminary_raw)
+    if not preliminary and re.search(
+        r"(?i)\bpreliminary\b.{0,80}\b(?:lowercase\s+)?roman\b"
+        r"|\bromann?\s+numeral.{0,40}\bpreliminary\b",
+        flat,
+    ):
+        preliminary = PRELIM_ROMAN
     if preliminary:
         pagination["preliminary_style"] = preliminary
-    body_numbering = canonical_body_numbering(
-        _line_value(text, ("Body numbering", "Main body numbering", "Main text numbering", "Body pages"))
+    body_numbering_raw = _line_value(
+        text, ("Body numbering", "Main body numbering", "Main text numbering", "Body pages")
     )
+    if not body_numbering_raw:
+        body_sent = re.search(
+            r"(?i)((?:body|main\s+(?:text|body))\s+pages?\b[^.!?\n]{0,120}"
+            r"(?:restart|continuous|continu)[^.!?\n]{0,40})",
+            flat,
+        )
+        body_numbering_raw = body_sent.group(1) if body_sent else ""
+    body_numbering = canonical_body_numbering(body_numbering_raw)
     if body_numbering:
         pagination["body_numbering"] = body_numbering
     markers = canonical_chapter_markers(
         _line_value(text, ("Chapter starts", "Chapter start pages", "Chapter-like pages"))
     )
+    if not markers and re.search(
+        r"(?i)\bchapter\s+number\b.{0,50}\b(?:hindu[\s-]?arabic|arabic)\b",
+        flat,
+    ):
+        markers = ["chapter_arabic"]
+    elif not markers and re.search(
+        r"(?i)\bchapter\s+number\b.{0,50}\bromann?\b",
+        flat,
+    ):
+        markers = ["chapter_roman"]
     if markers:
         pagination["chapter_markers"] = markers
     if pagination:
@@ -1761,6 +1969,28 @@ def derive_mechanics_rules(text: str) -> dict:
         )
         if style:
             heading_styles[f"heading{number}"] = style
+    # Prose guides (no "Heading 1 style:" labels): Chapter Number/Title + side headings
+    # are still separate rules even when they share bold/center values.
+    if "heading1" not in heading_styles and re.search(
+        r"(?i)\bchapter\s+(?:number|title)\b.{0,40}\b(?:written|title\s*case|uppercase|bold)",
+        flat,
+    ):
+        h1: dict = {}
+        if re.search(r"(?i)\bchapter\s+title\b.{0,60}\b(?:upper\s*case|uppercase|all\s*caps)\b", flat):
+            h1["case"] = "upper"
+        elif re.search(r"(?i)\bchapter\s+number\b.{0,60}\btitle\s*case\b", flat):
+            h1["case"] = "title"
+        if re.search(r"(?i)\b(?:both|chapter)\b[^.]{0,100}\bbold(?:face)?\b", flat):
+            h1["bold"] = True
+        if re.search(r"(?i)\b(?:both|chapter)\b[^.]{0,120}\bcent(?:er|re)(?:ed|ed)?\b", flat):
+            h1["alignment"] = "center"
+        if h1:
+            heading_styles["heading1"] = h1
+    if "heading2" not in heading_styles and re.search(
+        r"(?i)\bside\s+headings?\b[^.]{0,80}\b(?:flush|left)\b",
+        flat,
+    ):
+        heading_styles["heading2"] = {"alignment": "left"}
     if heading_styles:
         rules.setdefault("font", {})["heading_styles"] = heading_styles
     font_rules = rules.get("font") or {}
@@ -1772,11 +2002,24 @@ def derive_mechanics_rules(text: str) -> dict:
     if defined_levels:
         font_rules["heading_levels"] = max(defined_levels)
 
-    word_spacing = canonical_word_spacing(
-        _line_value(text, ("Word spacing", "Spacing between words", "Spaces after periods", "Space after period"))
+    word_raw = _line_value(
+        text, ("Word spacing", "Spacing between words", "Spaces after periods", "Space after period")
+    ) or _value_after_label(
+        flat, ("Word spacing", "Word Spacing", "Spacing between words", "Spaces after periods"), stop
     )
-    if not word_spacing and re.search(r"\btwo\s+spaces\s+after\s+(?:each\s+|a\s+)?(?:period|sentence)", flat, re.I):
+    word_spacing = canonical_word_spacing(word_raw)
+    if not word_spacing and re.search(
+        r"(?i)\b(?:two|2)\s*(?:\(\s*2\s*\))?\s+spaces?\s+after\s+(?:each\s+|a\s+|an\s+)?"
+        r"(?:period|sentence|full\s+stop)",
+        flat,
+    ):
         word_spacing = WORD_SPACING_TWO
+    elif not word_spacing and re.search(
+        r"(?i)\b(?:one|1)\s*(?:\(\s*1\s*\))?\s+space\s+after\s+(?:each\s+|a\s+|an\s+)?"
+        r"(?:period|sentence|full\s+stop)",
+        flat,
+    ):
+        word_spacing = canonical_word_spacing("one space after period")
     if word_spacing:
         rules["word_spacing"] = word_spacing
 
@@ -1806,12 +2049,22 @@ def derive_mechanics_rules(text: str) -> dict:
         rules["page_break_requirements"] = ["Only when starting a new chapter"]
 
     def _section_value(long_labels: tuple[str, ...], word: str) -> str:
-        # A bare "Tables"/"Figures" only counts as a label when a colon follows it,
-        # so prose like "including tables, figures, appendices" is not a layout rule.
+        # Prefer explicit layout labels; never treat "including tables, figures" as a rule.
         value = _line_value(text, long_labels) or _value_after_label(flat, long_labels, stop)
-        if value or not re.search(rf"(?i)\b{word}s?\s*:", flat):
-            return value
-        return _line_value(text, (f"{word}s", word)) or _value_after_label(flat, (f"{word}s", word), stop)
+        if value and not _looks_like_layout_rule(value):
+            value = ""
+        if not value:
+            colon = re.search(
+                rf"(?i)\b{word}s?\s*:\s*(.+?)(?=\s+(?:{_stop_pattern(stop)})|\s+\d{{1,2}}\.\s+[A-Za-z]|$)",
+                flat,
+            )
+            if colon:
+                value = _clip_value(colon.group(1), stop)
+                if value and not _looks_like_layout_rule(value):
+                    value = ""
+        if not value:
+            value = _prose_layout_sentence(flat, word.lower())
+        return value
 
     # Guides often say "Layout for Tables" / "h. Layout for Tables" rather than "Table layout".
     table_layout = _section_value(

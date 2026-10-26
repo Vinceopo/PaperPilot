@@ -23,11 +23,11 @@ import { APP_TIME_ZONE } from "../lib/timeZone";
 const PAGE_SIZE = 8;
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
-  { id: "compliant", label: "Compliant" },
-  { id: "needs_revision", label: "Needs Revision" },
-  { id: "critical", label: "Critical" },
+  { id: "compliant", label: "Good Standing" },
+  { id: "needs_revision", label: "Under Review" },
+  { id: "critical", label: "Attention Required" },
 ];
-const COLUMNS = { title: 230, scanned: 112, score: 84, status: 140, actions: 96 };
+const COLUMNS = { title: 210, scanned: 112, score: 84, status: 160, actions: 96 };
 const TABLE_WIDTH = Object.values(COLUMNS).reduce((sum, w) => sum + w, 0);
 
 function formatDate(iso) {
@@ -222,19 +222,19 @@ export default function ManuscriptsScreen({ navigation }) {
             sub={{ text: `+${stats.addedThisMonth} this month`, color: "#059669" }}
           />
           <StatCard
+            label="Good Standing"
+            value={stats.compliant}
+            accent="#059669"
+            sub={{ text: "Good", color: "#059669" }}
+          />
+          <StatCard
             label="Under Review"
             value={stats.underReview}
             accent="#d97706"
             sub={{ text: "Needs attention", color: "#d97706" }}
           />
           <StatCard
-            label="Compliant"
-            value={stats.compliant}
-            accent="#059669"
-            sub={{ text: "≥80 score", color: "#059669" }}
-          />
-          <StatCard
-            label="Critical Issues"
+            label="Attention Required"
             value={stats.critical}
             accent="#e11d48"
             sub={{ text: "Requires fix", color: "#e11d48" }}
@@ -422,21 +422,6 @@ export default function ManuscriptsScreen({ navigation }) {
             >
               <ChevronRightIcon size={16} />
             </Pressable>
-          </View>
-
-          <View style={styles.legend}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendSwatch, { backgroundColor: "#10b981" }]} />
-              <Text style={styles.legendText}>Compliant ≥80</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendSwatch, { backgroundColor: "#f59e0b" }]} />
-              <Text style={styles.legendText}>Needs revision 50–79</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendSwatch, { backgroundColor: "#f43f5e" }]} />
-              <Text style={styles.legendText}>Critical &lt;50</Text>
-            </View>
           </View>
         </View>
 
@@ -658,8 +643,4 @@ const styles = StyleSheet.create({
   pageNumIdle: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.white },
   pageNumText: { fontSize: 12, fontWeight: "600", color: "#475569" },
   pageNumTextActive: { color: colors.white },
-  legend: { flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 8 },
-  legendItem: { flexDirection: "row", alignItems: "center", gap: 6 },
-  legendSwatch: { width: 10, height: 10, borderRadius: 2 },
-  legendText: { fontSize: 11, color: colors.slate },
 });

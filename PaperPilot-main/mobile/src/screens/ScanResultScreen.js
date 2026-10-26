@@ -26,10 +26,10 @@ function scoreBand(score) {
   if (!hasValue(score))
     return { label: "NOT EVALUATED", text: "#64748b", ring: "#cbd5e1", border: "#e2e8f0", bg: "#f8fafc" };
   if (score >= 80)
-    return { label: "COMPLIANT", text: "#059669", ring: "#16bfa8", border: "#a7f3d0", bg: "#ecfdf5" };
+    return { label: "GOOD STANDING", text: "#059669", ring: "#16bfa8", border: "#a7f3d0", bg: "#ecfdf5" };
   if (score >= 50)
-    return { label: "NEEDS REVISION", text: "#d97706", ring: "#f59e0b", border: "#fde68a", bg: "#fffbeb" };
-  return { label: "CRITICAL ISSUES", text: "#e11d48", ring: "#ef4444", border: "#fecdd3", bg: "#fff1f2" };
+    return { label: "UNDER REVIEW", text: "#d97706", ring: "#f59e0b", border: "#fde68a", bg: "#fffbeb" };
+  return { label: "ATTENTION REQUIRED", text: "#e11d48", ring: "#ef4444", border: "#fecdd3", bg: "#fff1f2" };
 }
 
 function ringStroke(score) {

@@ -238,9 +238,10 @@ def canonical_chapter_markers(value) -> list[str]:
 
 def canonical_word_spacing(value) -> str:
     text = _text(value)
-    if re.search(r"\b(two|2|double)\s+spaces?\b", text):
+    # "two (2) spaces after a period" / "2 spaces after periods"
+    if re.search(r"\b(?:two|2|double)\s*(?:\(\s*2\s*\))?\s+spaces?\b", text):
         return WORD_SPACING_TWO
-    if re.search(r"\b(one|1|single)\s+space\b|no\s+double\s+spac", text):
+    if re.search(r"\b(?:one|1|single)\s*(?:\(\s*1\s*\))?\s+space\b|no\s+double\s+spac", text):
         return WORD_SPACING_SINGLE
     return ""
 

@@ -1,11 +1,25 @@
 /**
- * Upload limits shared by every document picker and the Cloudinary upload.
+ * Upload limits shared by every document picker and the S3 upload path.
+ * Limits match subscription plans (Free 15 MB · Premium 45 MB · Pro 120 MB).
  */
 
 import { File } from "expo-file-system";
+import { normalizeTier } from "./plans";
 
-/** Cloudinary rejects raw uploads above 10 MB (10,485,760 bytes) on the current plan. */
-export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+/** Bytes per plan. Unknown / missing plan → Free. */
+export const PLAN_UPLOAD_LIMITS_BYTES = {
+  free: 15 * 1024 * 1024,
+  premium: 45 * 1024 * 1024,
+  pro: 120 * 1024 * 1024,
+};
+
+/** Absolute ceiling (Pro). Prefer maxUploadBytesForPlan(tier) at call sites. */
+export const MAX_FILE_SIZE_BYTES = PLAN_UPLOAD_LIMITS_BYTES.pro;
+
+/** @param {string} [tier] */
+export function maxUploadBytesForPlan(tier) {
+  return PLAN_UPLOAD_LIMITS_BYTES[normalizeTier(tier)] ?? PLAN_UPLOAD_LIMITS_BYTES.free;
+}
 
 /** Mechanics guides: PDF or DOCX. */
 export const MECHANICS_ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
@@ -67,9 +81,10 @@ function hasExpectedSignature(file, ext) {
  * since renamed files bypass the picker's type filter.
  * @param {{ uri: string, name: string, mimeType?: string, size?: number }} file
  * @param {"manuscript"|"mechanics"} [kind="mechanics"]
+ * @param {number} [maxBytes=MAX_FILE_SIZE_BYTES]
  * @returns {Promise<"type"|"size"|"">}
  */
-export async function getFileRejection(file, kind = "mechanics") {
+export async function getFileRejection(file, kind = "mechanics", maxBytes = MAX_FILE_SIZE_BYTES) {
   if (!file) return "";
   const allowedExt =
     kind === "manuscript" ? MANUSCRIPT_ACCEPTED_EXTENSIONS : MECHANICS_ACCEPTED_EXTENSIONS;
@@ -82,6 +97,7 @@ export async function getFileRejection(file, kind = "mechanics") {
     return "type";
   }
   if (!hasExpectedSignature(file, ext)) return "type";
-  if (Number(file.size) > MAX_FILE_SIZE_BYTES) return "size";
+  const limit = Number(maxBytes) > 0 ? Number(maxBytes) : MAX_FILE_SIZE_BYTES;
+  if (Number(file.size) > limit) return "size";
   return "";
 }

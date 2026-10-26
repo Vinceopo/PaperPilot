@@ -34,7 +34,7 @@ Alternatively send `document_base64` instead of `document_url`.
 | `ML_SERVICE_KEY` | Yes | Shared secret; send as header `ML-Service-Key` |
 | `GEMINI_API_KEY` | No | Optional issue wording/severity enrichment |
 | `GEMINI_MODEL` | No | Default `gemini-2.0-flash` |
-| `MAX_DOCUMENT_BYTES` | No | Default 25 MiB |
+| `MAX_DOCUMENT_BYTES` | No | Default 120 MiB (Pro upload ceiling) |
 | `JOB_TTL_SECONDS` | No | In-memory job retention (default 3600) |
 | `PORT` | No | Render sets this automatically |
 

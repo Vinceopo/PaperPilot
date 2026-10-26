@@ -4,33 +4,30 @@ import { normalizeTitle } from "../../lib/scannedLibrary.js";
 import {
   MANUSCRIPT_ACCEPT_ATTRIBUTE,
   MANUSCRIPT_ACCEPTED_EXTENSIONS,
-  MAX_FILE_SIZE_BYTES,
   getFileRejection,
+  maxUploadBytesForPlan,
 } from "../../lib/uploadLimits.js";
-import { formatFileSize } from "../../lib/formatFileSize.js";
+import { formatFileSize, namedOversizeFileMessage } from "../../lib/formatFileSize.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 import DocumentLoader from "../DocumentLoader.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
-function validateFile(file) {
+function validateFile(file, maxBytes) {
   if (!file) return "Choose a manuscript.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
   if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(ext)) return "type";
-  if (file.size > MAX_FILE_SIZE_BYTES) return "size";
+  if (file.size > maxBytes) return "size";
   return "";
 }
 
-function rejectionMessage(rejection) {
+function rejectionMessage(rejection, tier, maxBytes) {
   if (!rejection) return "";
   if (rejection.kind === "type") {
     return `'${rejection.name}' isn't a supported file type. Please upload a Word document (${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(", ")}).`;
   }
-  const max = formatFileSize(MAX_FILE_SIZE_BYTES);
-  let actual = formatFileSize(rejection.size);
-  if (actual === max) actual = formatFileSize(rejection.size, { roundUp: true });
-  return `Your file '${rejection.name}' is ${actual}, but we can only accept files up to ${max}. Please choose a smaller file and try again.`;
+  return namedOversizeFileMessage(rejection, tier, maxBytes);
 }
 
 /**
@@ -47,7 +44,9 @@ export default function ManuscriptPanel({
   onCancel,
   onShowSteps,
   busy,
+  tier = "free",
 }) {
+  const maxBytes = maxUploadBytesForPlan(tier);
   const inputRef = useRef(null);
   const dropRef = useRef(null);
   const pulseTimer = useRef(0);
@@ -107,7 +106,7 @@ export default function ManuscriptPanel({
 
   function requestUpload(e) {
     e.preventDefault();
-    const issue = validateFile(file);
+    const issue = validateFile(file, maxBytes);
     if ((issue === "type" || issue === "size") && file) {
       rejectFile(file, issue);
       return;
@@ -222,7 +221,7 @@ export default function ManuscriptPanel({
     if (!canPickFile && next) return;
     if (inputRef.current) inputRef.current.value = "";
     const pickId = ++pickRequest.current;
-    const issue = next ? await getFileRejection(next, "manuscript") : "";
+    const issue = next ? await getFileRejection(next, "manuscript", maxBytes) : "";
     if (pickRequest.current !== pickId) return;
     if (issue) {
       rejectFile(next, issue);
@@ -318,7 +317,7 @@ export default function ManuscriptPanel({
                     : previewUploading
                       ? `${formatFileSize(file.size)} · Uploading — see progress beside this panel`
                       : `${formatFileSize(file.size)} · Preview appears beside this panel — confirm Upload when ready`
-                  : `Drag & drop or browse · .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
+                  : `Drag & drop or browse · .docx · Max ${formatFileSize(maxBytes)}`}
               </p>
               <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                 Browse files
@@ -393,7 +392,6 @@ export default function ManuscriptPanel({
                     className="absolute inset-0 z-20 flex touch-none flex-col items-center justify-center gap-3 overflow-hidden overscroll-none bg-[#e8ecf1]/88 backdrop-blur-[2px]"
                     role="status"
                     aria-live="polite"
-                    onWheel={(e) => e.preventDefault()}
                   >
                     <DocumentLoader className="h-28 w-28" />
                     <p className="text-sm font-bold text-slate-800">
@@ -605,7 +603,7 @@ export default function ManuscriptPanel({
           </span>
         }
         title={rejection?.kind === "type" ? "Unsupported File Type" : "File Too Large"}
-        message={rejectionMessage(rejection)}
+        message={rejectionMessage(rejection, tier, maxBytes)}
         confirmLabel="Choose Another File"
         cancelLabel=""
         onCancel={() => setRejection(null)}

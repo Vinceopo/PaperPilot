@@ -5,18 +5,20 @@
 
 import { useCallback, useRef, useState } from "react";
 import { analyzeDocument, downloadReport as downloadReportFn } from "../lib/mockAnalysis";
-import { MANUSCRIPT_ACCEPTED_EXTENSIONS, MAX_FILE_SIZE_BYTES } from "../lib/uploadLimits";
+import { MANUSCRIPT_ACCEPTED_EXTENSIONS, maxUploadBytesForPlan } from "../lib/uploadLimits";
 import { formatFileSize } from "../lib/formatFileSize";
+import { planName } from "../lib/plans";
 import { isServerId } from "../lib/scanMapper";
 
-function validateFile(file) {
+function validateFile(file, tier) {
   if (!file) return "";
+  const maxBytes = maxUploadBytesForPlan(tier);
   const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
   if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(ext)) {
     return `Only ${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
   }
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return `File must be ${formatFileSize(MAX_FILE_SIZE_BYTES)} or smaller.`;
+  if (file.size > maxBytes) {
+    return `${planName(tier)} plans can upload up to ${formatFileSize(maxBytes)}.`;
   }
   return "";
 }
@@ -42,7 +44,13 @@ function traceTarget(entry) {
   };
 }
 
-export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript, getScanTarget } = {}) {
+export function useScanFlow({
+  mechanicsId,
+  resolveManuscript,
+  getActiveManuscript,
+  getScanTarget,
+  tier = "free",
+} = {}) {
   const [step, setStep] = useState("idle");
   const [file, setFileInner] = useState(null);
   const [fileError, setFileError] = useState("");
@@ -58,9 +66,11 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const resultRef = useRef(null);
   // Bumped whenever the user leaves a scan, so a late result cannot reopen it.
   const runRef = useRef(0);
+  const tierRef = useRef(tier);
+  tierRef.current = tier;
 
   const selectFile = useCallback((f) => {
-    const err = f ? validateFile(f) : "";
+    const err = f ? validateFile(f, tierRef.current) : "";
     setFileInner(f ?? null);
     setFileError(err);
     setError("");

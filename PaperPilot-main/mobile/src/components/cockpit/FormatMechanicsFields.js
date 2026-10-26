@@ -299,7 +299,7 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Font">
-          <Field label="Body text size" hint="Paragraph text, in points">
+          <Field label="Body text size" hint="Same as Contents Size — not heading size">
             {input("bodySize", { keyboardType: "decimal-pad" })}
           </Field>
           <Field label="Type" hint="Font family">
@@ -322,7 +322,11 @@ export default function FormatMechanicsFields({
 
         <Section title="Headings">
           <Text style={styles.hint}>Filled from your uploaded format. Edit only if a value does not match your guide.</Text>
-          {headings.length ? null : <Text style={styles.hint}>No heading rules were found in this format yet. Add a level only if your guide defines one.</Text>}
+          {headings.length ? null : (
+            <Text style={styles.hint}>
+              No heading rules — this check is skipped. Add a level only if your guide defines one.
+            </Text>
+          )}
           {headings.map((heading, index) => {
             const label = headingLabel(index);
             const shown = HEADING_RULE_FIELDS.filter((field) => heading.fields?.includes(field.key));
@@ -382,7 +386,9 @@ export default function FormatMechanicsFields({
                     ))}
                   </View>
                 ) : (
-                  <Text style={styles.hint}>No rules set for this heading.</Text>
+                  <Text style={styles.hint}>
+                    No rules set — this heading level is skipped (same as IGNORE).
+                  </Text>
                 )}
                 {!disabled && missing.length ? (
                   <View style={styles.chipRow}>

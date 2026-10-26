@@ -479,6 +479,118 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual((font["heading3_size"], font["body_size"]), (12.0, 12.0))
         self.assertEqual(font["heading_levels"], 3)
 
+    def test_contents_size_is_body_not_heading(self):
+        """Capstone guides label body as Contents Size — must not steal Heading 1 pt."""
+        font = derive_mechanics_rules(
+            "Font\n"
+            "Heading 1 size: 16 pt\n"
+            "Heading 2 size: 14 pt\n"
+            "Contents Size: 12 pt\n"
+            "Font type: Times New Roman\n"
+        )["font"]
+        self.assertEqual(font["heading1_size"], 16.0)
+        self.assertEqual(font["heading2_size"], 14.0)
+        self.assertEqual(font["body_size"], 12.0)
+        self.assertEqual(font["heading3_content_size"], 12.0)
+        # Flat "Font … Heading 1 size" must not invent body_size from the heading.
+        stolen = derive_mechanics_rules(
+            "Font Heading 1 size : 16 pt Heading 2 size : 14 pt Font type : Arial\n"
+        )["font"]
+        self.assertEqual(stolen.get("heading1_size"), 16.0)
+        self.assertNotEqual(stolen.get("body_size"), 16.0)
+
+    def test_bare_content_label_maps_to_body_text_size(self):
+        """Guides often write Content: 11 (no 'size' / no 'pt') for body text."""
+        font = derive_mechanics_rules(
+            "Heading 1 size: 12\n"
+            "Content: 11\n"
+            "Font type: Times New Roman\n"
+            "Font color: Black (Automatic)\n"
+        )["font"]
+        self.assertEqual(font["heading1_size"], 12.0)
+        self.assertEqual(font["body_size"], 11.0)
+        self.assertEqual(font["type"], "Times New Roman")
+
+        contents = derive_mechanics_rules("Heading 2: 12\nContents: 11\nFont type: Arial\n")["font"]
+        self.assertEqual(contents["heading2_size"], 12.0)
+        self.assertEqual(contents["body_size"], 11.0)
+
+    def test_heading_and_contents_share_value_but_stay_separate(self):
+        """'Heading 3 and contents: 11' sets both rules to 11 — same value, distinct fields."""
+        font = derive_mechanics_rules(
+            "Font\nHeading 3 and contents: 11\nFont type: Times New Roman\n"
+        )["font"]
+        self.assertEqual(font["heading3_size"], 11.0)
+        self.assertEqual(font["body_size"], 11.0)
+        self.assertEqual(font["heading3_content_size"], 11.0)
+        self.assertEqual(font["heading_levels"], 3)
+
+        sized = derive_mechanics_rules("Heading 1 and content size: 12 pt\n")["font"]
+        self.assertEqual(sized["heading1_size"], 12.0)
+        self.assertEqual(sized["body_size"], 12.0)
+
+    def test_prose_institutional_guide_sentence_rules(self):
+        """Sentence-style school guides fill every format category, not only fonts."""
+        rules = derive_mechanics_rules(
+            "General Format and Style in Writing Research Report.\n"
+            "1. The research manuscript must be encoded in a short bond paper (8 1/2 x 11).\n"
+            "2. Observe the following margins: Top - 1.3 inches Bottom - 1 inch "
+            "Left - 1.5 inches Right - 1 inch.\n"
+            "3. Font style to be used is Times New Roman, font 12.\n"
+            "4. Generally observe double spacing throughout the manuscript "
+            "including tables, figures, and appendices.\n"
+            "5. Word Spacing. Observe one (1) space after a comma; and two (2) spaces "
+            "after a period.\n"
+            "7. Observe the following alignment: Flush left Center Flush right. "
+            "The research manuscript is generally encoded in a Justified format.\n"
+            "8. Chapter Number is written in Title Case, Hindu-Arabic numeral. "
+            "Chapter Title is written in UPPERCASE. Both are written in boldface "
+            "and follow a center alignment.\n"
+            "9. All major parts of the research should appear as side headings "
+            "(flush to the left margin).\n"
+            "10. Set an automatic 0.5\" TAB (1/2 inch) for regular paragraph indention.\n"
+            "11. Page numbers appear at the bottom center of every page. "
+            "No page number on the first page of each chapter. "
+            "Title page has no page number. "
+            "Preliminary pages use lowercase Roman numerals. "
+            "Body pages restart at 1 with Arabic numerals on Chapter 1.\n"
+            "12. Insert a page break only when starting a new chapter.\n"
+            "13. Tables: Number consecutively; caption above the table, left-aligned.\n"
+            "14. Figures: Caption below the figure, centered.\n"
+            "15. Citation style: APA 7th edition.\n"
+        )
+        font = rules["font"]
+        self.assertEqual(font["type"], "Times New Roman")
+        self.assertEqual(font["body_size"], 12.0)
+        self.assertEqual(font["heading_styles"]["heading1"]["case"], "upper")
+        self.assertEqual(font["heading_styles"]["heading1"]["bold"], True)
+        self.assertEqual(font["heading_styles"]["heading1"]["alignment"], "center")
+        self.assertEqual(font["heading_styles"]["heading2"]["alignment"], "left")
+        self.assertNotIn("heading1_size", font)  # size was body rule only
+        self.assertEqual(rules["alignment"], "justify")
+        self.assertEqual(rules["first_line_indent_inches"], 0.5)
+        self.assertEqual(rules["margins_inches"]["top"], 1.3)
+        self.assertEqual(rules["margins_inches"]["left"], 1.5)
+        self.assertEqual(rules["paper_size"]["name"], "LETTER")
+        self.assertEqual(rules["paper_size"]["width_inches"], 8.5)
+        self.assertEqual(rules["line_spacing"], 2.0)
+        self.assertEqual(rules["word_spacing"], "Two spaces after periods")
+        pagination = rules["pagination"]
+        self.assertEqual(pagination["position"], "Bottom center")
+        self.assertEqual(pagination["first_page_of_chapter"], "No page number shown")
+        self.assertEqual(pagination["title_page"], "Hidden but counted")
+        self.assertEqual(pagination["preliminary_style"], "Lowercase Roman (i, ii, iii)")
+        self.assertEqual(pagination["body_numbering"], "Arabic, restart at 1 on Chapter 1")
+        self.assertEqual(pagination["chapter_markers"], ["chapter_arabic"])
+        self.assertIn("new chapter", rules["page_break_requirements"][0].lower())
+        self.assertRegex(rules["table_layout_requirements"][0], r"(?i)caption|number")
+        self.assertRegex(rules["figure_layout_requirements"][0], r"(?i)caption")
+        self.assertNotRegex(
+            rules["table_layout_requirements"][0],
+            r"(?i)appendices|word spacing",
+        )
+        self.assertEqual(rules["citation_style"], "APA")
+
     def test_saved_rules_keep_every_heading_level(self):
         rules = normalize_mechanics_rules(
             {"font": {"heading5_size": 10, "body_size": 12, "heading_levels": 5,

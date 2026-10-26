@@ -43,10 +43,6 @@ export function authMessage(err) {
 export const FIREBASE_MISSING =
   "Add Firebase keys to web/.env (see .env.example) to enable sign-in.";
 
-/** Shown when a Google Sign-In account tries forgot / change / set password. */
-export const GOOGLE_PASSWORD_HINT =
-  "This account signs in with Google. Change your password in your Google Account (myaccount.google.com), then sign in here with Google.";
-
 /** mm:ss for the OTP expiry countdown. */
 export function formatCountdown(totalSeconds) {
   const safe = Math.max(0, Math.floor(totalSeconds));

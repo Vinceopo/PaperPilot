@@ -4,7 +4,7 @@ import Svg, { Circle } from "react-native-svg";
 import { colors } from "../../theme";
 import { bandTone, scoreBand } from "../../lib/scoreBand";
 import { downloadReport } from "../../lib/mockAnalysis";
-import { versionToScanResult } from "../../lib/scannedLibrary";
+import { versionScanId, versionToScanResult } from "../../lib/scannedLibrary";
 import {
   CATEGORY_STATUS_LABEL,
   formatCount,
@@ -183,6 +183,15 @@ function IssueCard({ issue }) {
   );
 }
 
+/** Trimmed / server summaries need a refetch so Score Breakdown + issues can render here. */
+function needsScanHydration(version) {
+  if (!version || !versionScanId(version)) return false;
+  if (version.trimmed) return true;
+  if (!(version.breakdown || []).length) return true;
+  if ((version.issues || []).length) return false;
+  return (version.breakdown || []).some((row) => Number(row.issueCount) > 0);
+}
+
 /**
  * Dedicated manuscript detail page (versions + score breakdown).
  * Free plan: only the latest scanned version is accessible. Premium: all versions.
@@ -214,17 +223,59 @@ export default function ManuscriptDetailModal({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [upgradeMessage, setUpgradeMessage] = useState("");
+  const [hydrating, setHydrating] = useState(false);
+  const [hydrateError, setHydrateError] = useState("");
 
   useEffect(() => {
     setSelectedId(latestId);
   }, [manuscript?.id, latestId]);
 
-  if (!manuscript) return null;
-
-  const selected =
+  const selectedFromLibrary =
     versionsDesc.find((v) => v.id === selectedId) ||
     versionsDesc.find((v) => v.id === latestId) ||
-    versionsDesc[0];
+    versionsDesc[0] ||
+    null;
+
+  useEffect(() => {
+    if (!manuscript || !selectedFromLibrary || !resolveResult) return undefined;
+    if (!needsScanHydration(selectedFromLibrary)) {
+      setHydrating(false);
+      setHydrateError("");
+      return undefined;
+    }
+    let cancelled = false;
+    setHydrating(true);
+    setHydrateError("");
+    void (async () => {
+      try {
+        const payload = await resolveResult(manuscript, selectedFromLibrary);
+        if (cancelled) return;
+        if (!payload) {
+          setHydrateError("Could not load the full scan for this version. Check your connection, then try again.");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setHydrateError(err?.message || "Could not load the full scan for this version.");
+        }
+      } finally {
+        if (!cancelled) setHydrating(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    manuscript,
+    resolveResult,
+    selectedFromLibrary?.id,
+    selectedFromLibrary?.trimmed,
+    (selectedFromLibrary?.issues || []).length,
+    (selectedFromLibrary?.breakdown || []).length,
+  ]);
+
+  if (!manuscript) return null;
+
+  const selected = selectedFromLibrary;
   const band = scoreBand(selected?.score);
   const tone = bandTone(band);
   const versionLabel = selected ? `v${selected.versionNumber}.0` : "—";
@@ -410,6 +461,9 @@ export default function ManuscriptDetailModal({
               </View>
 
               <Text style={styles.sectionTitle}>Score Breakdown</Text>
+              {hydrating && !(selected.breakdown || []).length ? (
+                <Text style={[styles.emptyText, { marginTop: 8 }]}>Loading score breakdown…</Text>
+              ) : null}
               {(selected.breakdown || []).length > 0 &&
               (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
                 <Text style={styles.breakdownNote}>
@@ -430,6 +484,11 @@ export default function ManuscriptDetailModal({
                   />
                 ))}
               </View>
+              {!hydrating && !(selected.breakdown || []).length ? (
+                <Text style={[styles.emptyText, { marginTop: 8 }]}>
+                  No score breakdown recorded for this version.
+                </Text>
+              ) : null}
 
               <Text style={[styles.sectionTitle, styles.issuesTitle]}>
                 Detected issues <Text style={styles.issuesCount}>({issues.length})</Text>
@@ -438,28 +497,12 @@ export default function ManuscriptDetailModal({
                 Each card is one rule finding — expand locations to see every page/line hit.
               </Text>
 
-              {issues.length === 0 && selected.trimmed ? (
-                <View style={{ marginTop: 12 }}>
-                  <Text style={styles.emptyText}>
-                    This version was scanned on another device. Open full results to load every issue.
-                  </Text>
-                  {onOpenResult ? (
-                    <Pressable
-                      onPress={() => void openFullResult(selected)}
-                      disabled={openingResult}
-                      style={({ pressed }) => [
-                        styles.downloadBtn,
-                        { marginTop: 10, backgroundColor: "#16bfa8" },
-                        pressed && styles.downloadBtnPressed,
-                        openingResult && styles.downloadBtnBusy,
-                      ]}
-                    >
-                      <Text style={[styles.downloadText, { color: "#fff" }]}>
-                        {openingResult ? "Opening…" : "View full results"}
-                      </Text>
-                    </Pressable>
-                  ) : null}
-                </View>
+              {hydrateError ? (
+                <Text style={[styles.emptyText, { marginTop: 12, color: colors.rose }]}>{hydrateError}</Text>
+              ) : null}
+
+              {hydrating && issues.length === 0 ? (
+                <Text style={[styles.emptyText, { marginTop: 12 }]}>Loading detected issues…</Text>
               ) : issues.length === 0 ? (
                 <Text style={[styles.emptyText, { marginTop: 12 }]}>No issues recorded for this version.</Text>
               ) : (

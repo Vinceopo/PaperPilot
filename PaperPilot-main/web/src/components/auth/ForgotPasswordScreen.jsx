@@ -6,7 +6,6 @@ import { markPasswordChanged } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
 import AuthShell from "./AuthShell.jsx";
 import OtpStep from "./OtpStep.jsx";
-import { GOOGLE_PASSWORD_HINT } from "./messages.js";
 import { passwordChecks, confirmPasswordError, emailError, passwordError } from "./validation.js";
 
 /**
@@ -73,8 +72,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
     } catch (err2) {
       const wait = Number(err2.retryAfter) || 0;
       if (wait > 0) setCooldownUntil(Date.now() + wait * 1000);
-      const msg = err2.message || "";
-      setFormError(msg.includes("Google") ? GOOGLE_PASSWORD_HINT : msg);
+      setFormError(err2.message);
     } finally {
       setBusy(false);
     }

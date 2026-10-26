@@ -21,8 +21,6 @@
       "googleWebClientId": "226823540820-kqbhpbdn5d77qvmev717amvo08v6nv7s.apps.googleusercontent.com",
       "googleIosClientId": "",
       "googleAuthBridgeUrl": "https://paperpilotph.vercel.app/mobile-auth.html",
-      "cloudinaryCloudName": "vnyrjlil",
-      "cloudinaryUploadPreset": "uploaded_docs",
       "firebase": {
         "apiKey": "AIzaSyCS3voJcHKSjLUlX2Nl72wUtQyPcKEcV8Q",
         "authDomain": "paperpilot-cb289.firebaseapp.com",

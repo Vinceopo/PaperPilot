@@ -12,17 +12,19 @@
 
 import { useCallback, useRef, useState } from "react";
 import { analyzeDocument, downloadReport as downloadReportFn } from "../lib/mockAnalysis";
-import { MANUSCRIPT_ACCEPTED_EXTENSIONS, MAX_FILE_SIZE_BYTES } from "../lib/uploadLimits.js";
+import { MANUSCRIPT_ACCEPTED_EXTENSIONS, maxUploadBytesForPlan } from "../lib/uploadLimits.js";
 import { formatFileSize } from "../lib/formatFileSize.js";
+import { planName } from "../lib/plans.js";
 import { isServerId } from "../lib/scanMapper";
 
-function validateFile(file) {
+function validateFile(file, tier) {
   if (!file) return "";
+  const maxBytes = maxUploadBytesForPlan(tier);
   const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
   if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(ext))
     return `Only ${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
-  if (file.size > MAX_FILE_SIZE_BYTES)
-    return `File must be ${formatFileSize(MAX_FILE_SIZE_BYTES)} or smaller.`;
+  if (file.size > maxBytes)
+    return `${planName(tier)} plans can upload up to ${formatFileSize(maxBytes)}.`;
   return "";
 }
 
@@ -46,9 +48,16 @@ const INITIAL_PROGRESS = { percent: 0, stage: "queued", message: "Starting analy
  *     cloudinaryUrl?: string,
  *     preview?: object,
  *   }|null>,
+ *   tier?: string,
  * }} [opts]
  */
-export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscript, getScanTarget } = {}) {
+export function useScanFlow({
+  mechanicsId,
+  resolveManuscript,
+  getActiveManuscript,
+  getScanTarget,
+  tier = "free",
+} = {}) {
   const [step, setStep] = useState("idle");
 
   const [file, setFileInner] = useState(null);
@@ -67,12 +76,18 @@ export function useScanFlow({ mechanicsId, resolveManuscript, getActiveManuscrip
   const resultRef = useRef(null);
   // Bumped whenever the user leaves a scan, so a late result cannot reopen it.
   const runRef = useRef(0);
+  const tierRef = useRef(tier);
+  tierRef.current = tier;
 
   const selectFile = useCallback((f) => {
-    const tooBig = Boolean(f && f.size > MAX_FILE_SIZE_BYTES);
-    const err = f && !tooBig ? validateFile(f) : "";
+    const plan = tierRef.current;
+    const maxBytes = maxUploadBytesForPlan(plan);
+    const tooBig = Boolean(f && f.size > maxBytes);
+    const err = f && !tooBig ? validateFile(f, plan) : "";
     setFileInner(tooBig ? null : (f ?? null));
-    setFileError(tooBig ? `File must be ${formatFileSize(MAX_FILE_SIZE_BYTES)} or smaller.` : err);
+    setFileError(
+      tooBig ? `${planName(plan)} plans can upload up to ${formatFileSize(maxBytes)}.` : err
+    );
     setError("");
     setStep(!tooBig && f && !err ? "fileSelected" : "idle");
   }, []);

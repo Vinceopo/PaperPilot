@@ -107,7 +107,7 @@ function TextTrace({ preview, pageCount, formatChecks, highlight, emptyLabel }) 
     return (
       <View style={styles.center}>
         <Text style={styles.muted}>
-          {emptyLabel || "Document preview will appear when Cloudinary URL or upload is available."}
+          {emptyLabel || "Document preview will appear when a document URL or upload is available."}
         </Text>
       </View>
     );

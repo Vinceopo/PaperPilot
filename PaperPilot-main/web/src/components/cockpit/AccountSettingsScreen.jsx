@@ -338,9 +338,8 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
     setView("summary");
   }
 
-  // ── change-password handlers (email/password accounts only) ──────────────
+  // ── change-password handlers ─────────────────────────────────────────────
   async function handleStartChangePassword() {
-    if (isGoogleAccount) return;
     setSendingOtp(true);
     setSendOtpError("");
     try {
@@ -498,7 +497,7 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
   }
 
   // ══ VIEW: OTP STEP (change password) ══════════════════════════════════════
-  if (view === "pwOtp" && !isGoogleAccount) {
+  if (view === "pwOtp") {
     return (
       <div className="mx-auto max-w-sm">
         <BackLink onClick={() => { setView("summary"); setSendOtpError(""); }} />
@@ -523,7 +522,7 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
   }
 
   // ══ VIEW: NEW PASSWORD (after OTP verified) ════════════════════════════════
-  if (view === "pwNew" && !isGoogleAccount) {
+  if (view === "pwNew") {
     return (
       <div className="mx-auto max-w-sm">
         <BackLink onClick={() => setView("summary")} />
@@ -669,30 +668,34 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
             Edit profile
           </button>
 
-          {/* Change password — email/password accounts only */}
-          {!isGoogleAccount && (
-            <button
-              type="button"
-              onClick={handleStartChangePassword}
-              disabled={sendingOtp}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#16bfa8] px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {sendingOtp ? (
-                <>
-                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                  Sending code…
-                </>
-              ) : (
-                <>
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
-                  </svg>
-                  Change password
-                </>
-              )}
-            </button>
-          )}
+          {/* Change / set password (optional for Google accounts) */}
+          <button
+            type="button"
+            onClick={handleStartChangePassword}
+            disabled={sendingOtp}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#16bfa8] px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {sendingOtp ? (
+              <>
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                Sending code…
+              </>
+            ) : (
+              <>
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+                </svg>
+                {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
+              </>
+            )}
+          </button>
         </div>
+
+        {isGoogleAccount && (
+          <p className="mt-3 text-[11px] leading-relaxed text-slate-400">
+            You sign in with Google. Setting a password is optional and only needed if you also want email login — no username is required.
+          </p>
+        )}
 
         {onManageSubscription && (
           <button

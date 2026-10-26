@@ -1,0 +1,52 @@
+# Heavy local artifacts — not needed for Vercel web/API deploy
+PaperPilot-main/mobile/
+PaperPilot-main/builds/
+PaperPilot-main/.venv/
+PaperPilot-main/api/.venv/
+PaperPilot-main/api/venv/
+PaperPilot-main/api/data/
+**/*.db
+PaperPilot-main/machinelearning/
+PaperPilot-main/paperpilot-ml/
+PaperPilot-main/testdata/
+PaperPilot-main/docs/
+PaperPilot-main/scripts/
+PaperPilot-main/.pytest_cache/
+
+# Dependencies (Vercel installs these during build)
+**/node_modules/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/.expo/
+**/dist/
+**/.turbo/
+**/.cache/
+
+# Android / mobile build outputs
+**/*.apk
+**/*.aab
+**/android/.gradle/
+**/android/app/build/
+**/android/build/
+**/builds/
+
+# Local / secrets / diagnostics (keep out of upload)
+.runner/
+.vscode/
+.git/
+*.log
+.env
+.env.*
+!.env.example
+creds.json
+*firebase-adminsdk*
+*.pdf
+*.docx
+diag-*.mjs
+diag-*.json
+diag-*.png
+_rtdb_usage_raw.json
+FIREBASE_RTDB_DOWNLOADS_INVESTIGATION.md
+plan.md
+Sample_Format_Mechanics_preview.docx

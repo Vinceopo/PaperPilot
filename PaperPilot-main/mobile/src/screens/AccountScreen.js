@@ -300,7 +300,6 @@ export default function AccountScreen({ navigation }) {
   }
 
   async function handleStartChangePassword() {
-    if (isGoogleAccount) return;
     setSendingOtp(true);
     setSendOtpError("");
     try {
@@ -471,7 +470,7 @@ export default function AccountScreen({ navigation }) {
       );
     }
 
-    if (view === "pwOtp" && !isGoogleAccount) {
+    if (view === "pwOtp") {
       const back = () => {
         setView("summary");
         setSendOtpError("");
@@ -499,7 +498,7 @@ export default function AccountScreen({ navigation }) {
       );
     }
 
-    if (view === "pwNew" && !isGoogleAccount) {
+    if (view === "pwNew") {
       const hints = [
         { ok: pw.newPw.length >= 8, label: "8+ characters" },
         { ok: /[a-zA-Z]/.test(pw.newPw), label: "One letter" },
@@ -626,26 +625,33 @@ export default function AccountScreen({ navigation }) {
               <Text style={styles.editText}>Edit profile</Text>
             </Pressable>
 
-            {!isGoogleAccount ? (
-              <Pressable
-                onPress={handleStartChangePassword}
-                disabled={sendingOtp}
-                style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed, sendingOtp && styles.pwBtnBusy]}
-              >
-                {sendingOtp ? (
-                  <>
-                    <ActivityIndicator size="small" color={colors.white} />
-                    <Text style={styles.pwBtnText}>Sending code…</Text>
-                  </>
-                ) : (
-                  <>
-                    <PadlockIcon size={16} />
-                    <Text style={styles.pwBtnText}>Change password</Text>
-                  </>
-                )}
-              </Pressable>
-            ) : null}
-    </View>
+            <Pressable
+              onPress={handleStartChangePassword}
+              disabled={sendingOtp}
+              style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed, sendingOtp && styles.pwBtnBusy]}
+            >
+              {sendingOtp ? (
+                <>
+                  <ActivityIndicator size="small" color={colors.white} />
+                  <Text style={styles.pwBtnText}>Sending code…</Text>
+                </>
+              ) : (
+                <>
+                  <PadlockIcon size={16} />
+                  <Text style={styles.pwBtnText}>
+                    {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
+                  </Text>
+                </>
+              )}
+            </Pressable>
+          </View>
+
+          {isGoogleAccount ? (
+            <Text style={styles.googleNote}>
+              You sign in with Google. Setting a password is optional and only needed if you also want email login — no
+              username is required.
+            </Text>
+          ) : null}
 
           <Pressable
             onPress={() => navigation.navigate("Subscription")}

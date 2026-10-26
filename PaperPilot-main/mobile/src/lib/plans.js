@@ -16,16 +16,23 @@ export const PLAN_LIMITS = { free: 3, premium: 50, pro: 75 };
 export const ANNUAL_SAVINGS_PERCENT = Math.round((1 / 12) * 100);
 export const ANNUAL_SAVINGS_LABEL = `Save ${ANNUAL_SAVINGS_PERCENT}%`;
 
-export const FREE_FEATURES = ["3 scans / month", "View current version only", "APA style only"];
+export const FREE_FEATURES = [
+  "3 scans / month",
+  "View current version only",
+  "APA style only",
+  "Uploads up to 15 MB",
+];
 export const PREMIUM_FEATURES = [
   "Up to 50 scans / month",
   "Unlimited version history",
   "APA, MLA, & IEEE styles",
+  "Uploads up to 45 MB",
 ];
 export const PRO_FEATURES = [
   "Up to 75 scans / weekly",
   "Unlimited version history",
   "APA, MLA, & IEEE styles",
+  "Uploads up to 120 MB",
 ];
 
 export function normalizeTier(tier) {

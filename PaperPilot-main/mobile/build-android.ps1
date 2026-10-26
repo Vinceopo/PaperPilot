@@ -559,8 +559,7 @@ const fb = extra.firebase || {};
 const hasFirebase = !!(fb.apiKey && fb.projectId && fb.appId);
 out.push(hasFirebase ? "OK Firebase config present in app.json extra" : "WARN Firebase config missing in app.json extra");
 
-const cloud = (env.EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME || extra.cloudinaryCloudName) && (env.EXPO_PUBLIC_CLOUDINARY_UPLOAD_PRESET || extra.cloudinaryUploadPreset);
-out.push(cloud ? "OK Cloudinary uploads configured" : "WARN Cloudinary not configured - uploads may fail.");
+out.push("OK Document uploads use API-issued S3 presigned URLs (no Cloudinary/AWS keys in the app).");
 
 if (!(env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || extra.googleWebClientId || extra.googleAndroidClientId))
   out.push("WARN Google client id not set - Google sign-in may be unavailable (email login works).");

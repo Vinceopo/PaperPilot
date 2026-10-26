@@ -1,5 +1,5 @@
 import { auth } from "./firebase.js";
-import { uploadToCloudinary } from "./lib/cloudinaryUpload.js";
+import { uploadToS3 } from "./lib/s3Upload.js";
 import { isFatalAuthError } from "./services/auth.js";
 
 /**
@@ -83,7 +83,9 @@ function statusMessage(status) {
   if (status === 404) {
     return "That item was not found. It may have been deleted on another device — refresh and try again.";
   }
-  if (status === 413) return "This file is too large to upload. Use a file under 10 MB.";
+  if (status === 413) {
+    return "This file is too large for your plan. Free plans allow 15 MB, Premium 45 MB, and Pro 120 MB.";
+  }
   if (status === 429) return "Too many requests in a short time. Wait a minute, then try again.";
   return unreachableMessage(status);
 }
@@ -153,11 +155,22 @@ async function authorizedFetch(path, options = {}) {
   }
 }
 
+/** Presign via API, then PUT the file to S3. Returns { url } = public S3 URL. */
+async function uploadDocument(file) {
+  return uploadToS3(file, {
+    presign: (body) =>
+      authorizedFetch("/uploads/presign", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+  });
+}
+
 export async function analyzeManuscript({ title, abstract, text }) {
   return postJson("/analyze", { title, abstract, text });
 }
 export async function extractPdf(file) {
-  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  const uploaded = await uploadDocument(file);
   return postJson("/extract-pdf", {
     cloudinary_url: uploaded.url,
     filename: file.name || uploaded.originalFilename,
@@ -242,7 +255,7 @@ export async function warmApi({ attempts = 4, delayMs = 1500 } = {}) {
 export async function extractMechanics(file) {
   // Avoid racing a Python cold-start on the first authenticated call.
   await warmApi({ attempts: 2, delayMs: 1000 });
-  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  const uploaded = await uploadDocument(file);
   return authorizedFetch("/mechanics/extract", {
     method: "POST",
     body: JSON.stringify({
@@ -274,7 +287,7 @@ export function saveMechanicsProfile({
 }
 
 export async function uploadMechanics(file, name = "") {
-  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  const uploaded = await uploadDocument(file);
   return authorizedFetch("/mechanics", {
     method: "POST",
     body: JSON.stringify({
@@ -359,7 +372,7 @@ export function deleteManuscriptVersion({ manuscriptId, versionId } = {}) {
 }
 
 export async function previewManuscript(file) {
-  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  const uploaded = await uploadDocument(file);
   return authorizedFetch("/manuscripts/preview", {
     method: "POST",
     body: JSON.stringify({
@@ -393,7 +406,7 @@ async function withRetry(send, attempts = 3) {
 }
 
 export async function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
-  const uploaded = await uploadToCloudinary(file, { resourceType: "raw" });
+  const uploaded = await uploadDocument(file);
   // Same id on every retry, so a save whose reply was lost is not stored twice.
   const clientRequestId = newRequestId();
   const created = await withRetry(() =>
@@ -420,8 +433,7 @@ export function getScanDocument(scanId) {
 }
 
 /**
- * Downloads the original upload behind a saved scan through its signed link,
- * since Cloudinary refuses public delivery of PDFs on this account.
+ * Downloads the original upload behind a saved scan via its public document URL.
  * @param {{ download_url?: string, source_filename?: string }} doc from getScanDocument
  * @returns {Promise<File|null>}
  */

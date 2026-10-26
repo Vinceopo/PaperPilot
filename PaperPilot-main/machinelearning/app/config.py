@@ -7,7 +7,8 @@ class Settings(BaseSettings):
     ml_service_key: str = ""
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
-    max_document_bytes: int = 25 * 1024 * 1024
+    # Match API Pro upload ceiling (120 MB) so plan-sized manuscripts can analyze.
+    max_document_bytes: int = 120 * 1024 * 1024
     # PDF pages processed per analysis chunk (progress + memory-friendly batches).
     analysis_page_chunk: int = 20
     job_ttl_seconds: int = 3600

@@ -88,7 +88,7 @@ Document compliance scans run on a **Render** Web Service (`PaperPilot-main/mach
 | `ML_SERVICE_KEY` | Yes | Long random secret; must match Vercel `ML_SERVICE_KEY` |
 | `GEMINI_API_KEY` | No | Optional issue wording / severity enrichment |
 | `GEMINI_MODEL` | No | Default `gemini-2.0-flash` |
-| `MAX_DOCUMENT_BYTES` | No | Default 25 MiB |
+| `MAX_DOCUMENT_BYTES` | No | Default 120 MiB (match Pro upload ceiling) |
 | `JOB_TTL_SECONDS` | No | In-memory job retention (default 3600) |
 
 Copy the service public URL (e.g. `https://paperpilot-ml.onrender.com`) for Vercel.
@@ -105,18 +105,80 @@ copy .env.example .env
 uvicorn app.main:app --reload --port 8001
 ```
 
-### Vercel (api gateway)
+### Vercel (api gateway + web)
 
-In the Vercel project that deploys `PaperPilot-main/api`, set:
+Root `vercel.json` builds `web/` and routes `/api/*` to `api/index.py`. In the Vercel project dashboard (**Settings → Environment Variables**), set Production (and Preview if you use it):
 
 | Variable | Required | Notes |
 |----------|----------|--------|
 | `ML_SERVICE_URL` | Yes* | Render service URL, no trailing slash |
 | `ML_SERVICE_KEY` | Yes* | Same value as on Render |
+| `MAX_UPLOAD_BYTES` | Yes | `120000000` (Pro ceiling; Free 15 MB / Premium 45 MB / Pro 120 MB enforced by plan) |
+| `AWS_ACCESS_KEY_ID` | Yes | IAM user with S3 put/get on the bucket |
+| `AWS_SECRET_ACCESS_KEY` | Yes | Matching secret (never commit) |
+| `AWS_REGION` | Yes | e.g. `ap-southeast-2` |
+| `AWS_S3_BUCKET` | Yes | e.g. `paperpilot-storage` |
 
-\*If both are unset, scans fall back to in-process compliance on the gateway (local dev only).
+\*If both ML vars are unset, scans fall back to in-process compliance on the gateway (local dev only).
 
-Existing gateway vars (`FIREBASE_*`, `CLOUDINARY_*`, `GEMINI_API_KEY`, PayMongo, etc.) stay unchanged — see `api/.env.example`.
+Also keep existing gateway vars (`FIREBASE_CREDENTIALS`, `FIREBASE_DATABASE_URL`, `GEMINI_API_KEY`, PayMongo, Resend/SMTP, `APP_PUBLIC_URL`, etc.) — full list with placeholders in `api/.env.example`.
+
+Do **not** paste secrets into chat or commit them. Prefer the Vercel dashboard over `vercel env add` unless the CLI is already authenticated on your machine.
+
+After changing env vars, **redeploy** the Vercel project so the API picks them up.
+
+### S3 bucket CORS + public read (browser uploads / preview)
+
+Clients upload with `PUT` to an API-issued **presigned** URL (`upload_url`). That URL is **not** a document link — opening it in a tab issues `GET` and AWS returns `SignatureDoesNotMatch` XML. Preview/download must use `public_url` only.
+
+**CORS** — S3 console → bucket → Permissions → Cross-origin resource sharing (CORS):
+
+```json
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedOrigins": [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "http://localhost:5174",
+      "http://127.0.0.1:5174",
+      "https://paperpilotph.vercel.app"
+    ],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]
+```
+
+**Bucket policy** (public `GetObject` so `public_url` works in the browser). Replace the bucket name if yours differs. Block Public Access must allow this policy (turn off “Block public access to buckets and objects granted through new public bucket or access point policies” for this bucket, or the equivalent that blocks bucket policies):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublicReadGetObject",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::paperpilot-storage/*"
+    }
+  ]
+}
+```
+
+IAM user keys on the API still need `s3:PutObject` / `s3:GetObject` (and `s3:ListBucket` if you use console tooling). The API downloads via authenticated `GetObject`; browser preview needs the public policy above.
+
+### Upload size by plan
+
+| Plan | Max upload |
+|------|------------|
+| Free | 15 MB |
+| Premium | 45 MB |
+| Pro | 120 MB |
+
+On Render ML, raise `MAX_DOCUMENT_BYTES` to at least `120000000` so Pro manuscripts are not rejected during analyze.
 
 ### Scan API (clients poll via gateway)
 

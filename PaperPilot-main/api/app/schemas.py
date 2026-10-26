@@ -95,7 +95,10 @@ class MechanicsSaveRequest(BaseModel):
 
 
 class CloudinaryDocumentRequest(BaseModel):
-    """Document already uploaded to Cloudinary (avoids Vercel 4.5MB body limit)."""
+    """Document already uploaded to S3 (avoids Vercel 4.5MB body limit).
+
+    Field name `cloudinary_url` is retained for RTDB/API compatibility; value is an S3 HTTPS URL.
+    """
 
     cloudinary_url: str = Field(..., min_length=8, max_length=2000)
     filename: str | None = Field(default=None, max_length=300)
@@ -103,12 +106,21 @@ class CloudinaryDocumentRequest(BaseModel):
 
 
 class ManuscriptVersionCloudinaryRequest(BaseModel):
+    """Manuscript version create body. `cloudinary_url` holds the public S3 HTTPS URL."""
+
     cloudinary_url: str = Field(..., min_length=8, max_length=2000)
     filename: str | None = Field(default=None, max_length=300)
     mechanics_id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1, max_length=300)
     manuscript_id: str | None = Field(default=None, max_length=80)
     client_request_id: str | None = Field(default=None, max_length=120)
+
+
+class PresignUploadRequest(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=300)
+    content_type: str = Field(..., min_length=3, max_length=200)
+    # Optional early reject against the caller's plan limit (Free 15 / Premium 45 / Pro 120 MB).
+    content_length: int | None = Field(default=None, ge=0, le=500_000_000)
 
 
 class SubscribeRequest(BaseModel):

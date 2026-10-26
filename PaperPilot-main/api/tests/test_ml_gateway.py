@@ -31,7 +31,7 @@ class MLGatewayClientTests(unittest.TestCase):
 
         out = create_analyze_job(
             job_id="abc",
-            document_url="https://res.cloudinary.com/x/doc.pdf",
+            document_url="https://paperpilot-storage.s3.ap-southeast-2.amazonaws.com/paperpilot/x/doc.pdf",
             document_base64=None,
             filename="doc.pdf",
             mechanics_rules={"font": {}},

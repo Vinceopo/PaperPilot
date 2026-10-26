@@ -7,7 +7,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.cloudinary_artifacts import (
+from app.config import settings
+from app.s3_artifacts import (
     artifacts_enabled,
     download_json_artifact,
     mechanics_public_id,
@@ -15,8 +16,7 @@ from app.cloudinary_artifacts import (
     scan_public_id,
     try_upload_json_artifact,
 )
-from app.cloudinary_fetch import CloudinaryFetchError
-from app.config import settings
+from app.s3_storage import S3StorageError
 from app.firebase_admin_app import firebase_admin_app
 
 ROOT = "/paperpilot"
@@ -248,7 +248,7 @@ def create_mechanics(
         item["ignored_fields"] = [
             str(value).strip() for value in ignored_fields if str(value or "").strip()
         ]
-    # Prefer Cloudinary sidecars so RTDB list/get of mechanics never pulls multi-MB parse trees.
+    # Prefer S3 sidecars so RTDB list/get of mechanics never pulls multi-MB parse trees.
     if artifacts_enabled():
         url = try_upload_json_artifact(
             mechanics_public_id(owner_uid, item_id),
@@ -490,7 +490,7 @@ def get_mechanics(owner_uid: str, mechanics_id: str, conn=None) -> dict | None:
             text = text or (blob.get("extracted_text") or "")
             if not parsed:
                 parsed = blob.get("parsed_data") or {}
-        except CloudinaryFetchError:
+        except S3StorageError:
             pass
     return {
         **_mechanics_public(row),
@@ -741,7 +741,7 @@ def create_version(
         }
         if cloudinary_url:
             version["cloudinary_url"] = cloudinary_url.strip()
-        # Heavy parse trees live on Cloudinary when configured; RTDB keeps metadata + URL only.
+        # Heavy parse trees live on S3 when configured; RTDB keeps metadata + URL only.
         if artifacts_enabled():
             parsed_url = try_upload_json_artifact(
                 parsed_public_id(owner_uid, manuscript_id, version_id),
@@ -809,7 +809,7 @@ def list_manuscripts(owner_uid: str) -> list[dict]:
 
 
 def _hydrate_version_content(row: dict) -> tuple[str, dict]:
-    """Resolve extracted_text + parsed_data from RTDB legacy fields or Cloudinary sidecar."""
+    """Resolve extracted_text + parsed_data from RTDB legacy fields or S3 sidecar."""
     text = row.get("extracted_text") or ""
     parsed = row.get("parsed_data") or {}
     if not isinstance(parsed, dict):
@@ -822,7 +822,7 @@ def _hydrate_version_content(row: dict) -> tuple[str, dict]:
             if not parsed:
                 candidate = blob.get("parsed_data") or {}
                 parsed = candidate if isinstance(candidate, dict) else {}
-        except CloudinaryFetchError:
+        except S3StorageError:
             pass
     return text, parsed
 
@@ -1932,7 +1932,7 @@ def _section_row(item: dict) -> dict:
 
 
 def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) -> None:
-    """Store section score summaries only — full issue arrays live in scan.json on Cloudinary."""
+    """Store section score summaries only — full issue arrays live in scan.json on S3."""
     for index, section in enumerate(sections or []):
         if not isinstance(section, dict):
             continue
@@ -2209,7 +2209,7 @@ def get_scan(owner_uid: str, scan_id: str) -> dict | None:
                 row["pagination"] = blob.get("pagination")
             if blob.get("overall_score") is not None and row.get("overall_score") is None:
                 row["overall_score"] = blob.get("overall_score")
-        except CloudinaryFetchError:
+        except S3StorageError:
             pass
     if not section_items:
         embedded = row.get("sections") or []

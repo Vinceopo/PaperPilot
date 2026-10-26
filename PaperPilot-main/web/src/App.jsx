@@ -426,6 +426,7 @@ export default function App() {
     resolveManuscript,
     getActiveManuscript,
     getScanTarget,
+    tier: String(subscription?.tier || "free").toLowerCase(),
   });
 
   revealSummaryRef.current = scanFlow.revealSummary;
@@ -1782,6 +1783,7 @@ export default function App() {
                     onContinue={() => advanceUploadWizard(2)}
                     onShowSteps={() => setJourneyOpen(true)}
                     busy={mechanicsBusy}
+                    tier={tier}
                   />
                 )}
 
@@ -1807,6 +1809,7 @@ export default function App() {
                     }}
                     onShowSteps={() => setJourneyOpen(true)}
                     busy={manuscriptBusy}
+                    tier={tier}
                   />
                 )}
 

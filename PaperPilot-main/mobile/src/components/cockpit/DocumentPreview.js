@@ -62,10 +62,15 @@ export function PreviewPanel({
           <Text style={[styles.panelStatus, statusTone === "accent" && styles.panelStatusAccent]}>{status}</Text>
         ) : null}
       </View>
-      <View style={[styles.panelBody, { height }]}>
-        {children}
+      <View style={[styles.panelBody, { height }]} pointerEvents={overlayTitle ? "box-none" : "auto"}>
+        <View
+          style={overlayTitle ? styles.previewLocked : styles.previewFill}
+          pointerEvents={overlayTitle ? "none" : "auto"}
+        >
+          {children}
+        </View>
         {overlayTitle ? (
-          <View style={styles.overlay}>
+          <View style={styles.overlay} pointerEvents="auto">
             <DocumentLoader size={112} />
             <Text style={styles.overlayTitle}>{overlayTitle}</Text>
             {overlayBody ? <Text style={styles.overlayBody}>{overlayBody}</Text> : null}
@@ -106,7 +111,9 @@ const styles = StyleSheet.create({
   },
   panelStatus: { flexShrink: 1, fontSize: 10, fontWeight: "600", color: colors.muted, textAlign: "right" },
   panelStatusAccent: { color: "#0d9488" },
-  panelBody: { position: "relative" },
+  panelBody: { position: "relative", overflow: "hidden" },
+  previewFill: { flex: 1 },
+  previewLocked: { flex: 1, overflow: "hidden" },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 20,

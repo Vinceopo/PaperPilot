@@ -38,17 +38,18 @@ import {
 } from "../lib/formatMechanicsForm";
 import {
   applyIgnoredFieldsToForm,
+  fillEmptyFieldsWithIgnore,
   ignoredFieldsFromForm,
 } from "../lib/mechanicsValidation";
-import { formatFileSize, oversizeFileMessage } from "../lib/formatFileSize";
+import { formatFileSize, namedOversizeFileMessage, oversizeFileMessage } from "../lib/formatFileSize";
 import {
   MANUSCRIPT_ACCEPTED_EXTENSIONS,
   MANUSCRIPT_ACCEPTED_MIME_TYPES,
   MECHANICS_ACCEPTED_EXTENSIONS,
   MECHANICS_ACCEPTED_MIME_TYPES,
-  MAX_FILE_SIZE_BYTES,
   fileExtension,
   getFileRejection,
+  maxUploadBytesForPlan,
 } from "../lib/uploadLimits";
 import { isScanReady } from "../lib/scanMapper";
 import { normalizeTitle } from "../lib/scannedLibrary";
@@ -64,21 +65,21 @@ const MODES = [
   { id: "customize", label: "Customize a New Format" },
 ];
 
-function validateMechanicsFile(file) {
+function validateMechanicsFile(file, maxBytes) {
   if (!file) return "Choose a mechanics document.";
   if (!MECHANICS_ACCEPTED_EXTENSIONS.includes(fileExtension(file))) return "Mechanics must be a PDF or DOCX file.";
-  if (file.size > MAX_FILE_SIZE_BYTES) return "oversize";
+  if (file.size > maxBytes) return "oversize";
   return "";
 }
 
-function validateManuscriptFile(file) {
+function validateManuscriptFile(file, maxBytes) {
   if (!file) return "Choose a manuscript.";
   if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(fileExtension(file))) return "type";
-  if (file.size > MAX_FILE_SIZE_BYTES) return "size";
+  if (file.size > maxBytes) return "size";
   return "";
 }
 
-function rejectionMessage(rejection, kind = "mechanics") {
+function rejectionMessage(rejection, kind = "mechanics", tier = "free", maxBytes) {
   if (!rejection) return "";
   if (rejection.kind === "type") {
     const allowed =
@@ -89,10 +90,7 @@ function rejectionMessage(rejection, kind = "mechanics") {
         : `a PDF or Word document (${allowed.join(", ")})`;
     return `'${rejection.name}' isn't a supported file type. Please upload ${label}.`;
   }
-  const max = formatFileSize(MAX_FILE_SIZE_BYTES);
-  let actual = formatFileSize(rejection.size);
-  if (actual === max) actual = formatFileSize(rejection.size, { roundUp: true });
-  return `Your file '${rejection.name}' is ${actual}, but we can only accept files up to ${max}. Please choose a smaller file and try again.`;
+  return namedOversizeFileMessage(rejection, tier, maxBytes);
 }
 
 function formFromSaved(item) {
@@ -168,6 +166,7 @@ export default function UploadScreen({ navigation }) {
     selectUploadTarget,
     scanFlow,
   } = useAppData();
+  const maxBytes = maxUploadBytesForPlan(tier);
 
   const [mode, setMode] = useState(mechanics.length ? "saved" : "upload");
   const [mechError, setMechError] = useState("");
@@ -222,7 +221,7 @@ export default function UploadScreen({ navigation }) {
   const msPreparing = Boolean(previewBusy && msFile && !msUploading);
   const msPanelBusy = manuscriptBusy || previewBusy || confirmBusy;
   const canPickManuscript = mechanicsSelected && !msPanelBusy;
-  const showMsPreview = Boolean(msFile) && !validateManuscriptFile(msFile);
+  const showMsPreview = Boolean(msFile) && !validateManuscriptFile(msFile, maxBytes);
   const mechanicsOptions = mechanics.map((item) => ({
     value: item.id,
     label: item.name || item.source_filename,
@@ -371,8 +370,11 @@ export default function UploadScreen({ navigation }) {
         page_count: data.page_count || (data.pages || []).length || 0,
         pages: Array.isArray(data.pages) ? data.pages : [],
       });
+      // Fill found rules; any field the guide omits becomes IGNORE (auto-pass).
       setUploadForm(
-        rulesToForm(data.rules || {}, data.name || file.name.replace(/\.(pdf|docx)$/i, ""))
+        fillEmptyFieldsWithIgnore(
+          rulesToForm(data.rules || {}, data.name || file.name.replace(/\.(pdf|docx)$/i, ""))
+        )
       );
       setMechSuccess("Format fields extracted from your guide — review and edit below, then save.");
     } catch (err) {
@@ -384,7 +386,7 @@ export default function UploadScreen({ navigation }) {
 
   function requestExtract(file) {
     if (!file) return;
-    const issue = validateMechanicsFile(file);
+    const issue = validateMechanicsFile(file, maxBytes);
     if (issue === "oversize") {
       setMechFile(null);
       setMechError("");
@@ -599,7 +601,7 @@ export default function UploadScreen({ navigation }) {
     const file = await pickDocument("manuscript");
     if (!file) return;
     const pickId = ++pickRequest.current;
-    const issue = await getFileRejection(file, "manuscript");
+    const issue = await getFileRejection(file, "manuscript", maxBytes);
     if (pickRequest.current !== pickId) return;
     setManuscriptReady(false);
     setFileDetailsNotice("");
@@ -706,7 +708,7 @@ export default function UploadScreen({ navigation }) {
   }
 
   function requestManuscriptUpload() {
-    const issue = validateManuscriptFile(msFile);
+    const issue = validateManuscriptFile(msFile, maxBytes);
     if ((issue === "type" || issue === "size") && msFile) {
       rejectManuscript(msFile, issue);
       return;
@@ -1005,7 +1007,7 @@ export default function UploadScreen({ navigation }) {
                           <Text style={styles.dropSub}>
                             {mechFile
                               ? `${formatFileSize(mechFile.size)} · Confirm extraction to fill Format Fields below`
-                              : `Tap to browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
+                              : `Tap to browse · .pdf and .docx · Max ${formatFileSize(maxBytes)}`}
                           </Text>
                           <View style={styles.browsePill}>
                             <Text style={styles.browseText}>Browse files</Text>
@@ -1130,7 +1132,7 @@ export default function UploadScreen({ navigation }) {
                         : msUploading
                           ? `${formatFileSize(msFile.size)} · Uploading — see progress below`
                           : `${formatFileSize(msFile.size)} · Preview appears below — confirm Upload when ready`
-                      : `Tap to browse · .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
+                      : `Tap to browse · .docx · Max ${formatFileSize(maxBytes)}`}
                   </Text>
                   <View style={styles.browsePill}>
                     <Text style={styles.browseText}>Browse files</Text>
@@ -1438,7 +1440,7 @@ export default function UploadScreen({ navigation }) {
       <ConfirmDialog
         open={oversizeBytes != null}
         title="File Too Large"
-        message={oversizeFileMessage(oversizeBytes, MAX_FILE_SIZE_BYTES)}
+        message={oversizeFileMessage(oversizeBytes, maxBytes, tier)}
         confirmLabel="OK"
         cancelLabel=""
         onCancel={() => setOversizeBytes(null)}
@@ -1453,7 +1455,7 @@ export default function UploadScreen({ navigation }) {
           </View>
         }
         title={rejection?.kind === "type" ? "Unsupported File Type" : "File Too Large"}
-        message={rejectionMessage(rejection, rejection?.scope || "manuscript")}
+        message={rejectionMessage(rejection, rejection?.scope || "manuscript", tier, maxBytes)}
         confirmLabel="Choose Another File"
         cancelLabel=""
         onCancel={() => setRejection(null)}

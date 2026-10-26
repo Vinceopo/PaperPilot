@@ -1,5 +1,5 @@
 /**
- * Shows the original uploaded PDF/DOCX or Cloudinary URL.
+ * Shows the original uploaded PDF/DOCX or its public document URL.
  * Extracted text is a fallback when the source file is not available.
  *
  * `paged` keeps the window exactly one page tall, starting on page 1,
@@ -1089,6 +1089,12 @@ function DocxUrlPreview({ url, name, scrollTarget, highlight, paged }) {
   );
 }
 
+function isPresignedUploadUrl(url) {
+  // Presigned PUT URLs must never be used as iframe/src or fetch targets for preview.
+  // A browser GET against them returns SignatureDoesNotMatch XML.
+  return /[?&]X-Amz-Signature=/i.test(String(url || ""));
+}
+
 export default function DocumentPagePreview({
   file = null,
   documentUrl = "",
@@ -1100,7 +1106,8 @@ export default function DocumentPagePreview({
   paged = false,
   loading = false,
 }) {
-  const kind = fileKind(file) || fileKind({ name: documentName }) || urlKind(documentUrl);
+  const safeDocumentUrl = isPresignedUploadUrl(documentUrl) ? "" : documentUrl;
+  const kind = fileKind(file) || fileKind({ name: documentName }) || urlKind(safeDocumentUrl);
 
   if (loading && !file) {
     return (
@@ -1116,27 +1123,27 @@ export default function DocumentPagePreview({
       <PdfFilePreview file={file} scrollTarget={scrollTarget} highlight={highlight} paged={paged} />
     );
   }
-  if (kind === "pdf" && documentUrl) {
+  if (kind === "pdf" && safeDocumentUrl) {
     if (paged) {
       return (
         <PdfPagedPreview
-          source={documentUrl}
+          source={safeDocumentUrl}
           scrollTarget={scrollTarget}
           highlight={highlight}
         />
       );
     }
-    return <PdfFrame src={documentUrl} page={scrollTarget?.page ?? highlight?.page} />;
+    return <PdfFrame src={safeDocumentUrl} page={scrollTarget?.page ?? highlight?.page} />;
   }
   if (kind === "docx" && file) {
     return (
       <DocxFilePreview file={file} scrollTarget={scrollTarget} highlight={highlight} paged={paged} />
     );
   }
-  if (kind === "docx" && documentUrl) {
+  if (kind === "docx" && safeDocumentUrl) {
     return (
       <DocxUrlPreview
-        url={documentUrl}
+        url={safeDocumentUrl}
         name={documentName}
         scrollTarget={scrollTarget}
         highlight={highlight}

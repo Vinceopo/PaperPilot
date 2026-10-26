@@ -17,7 +17,7 @@ import {
   ignoredFieldsFromForm,
 } from "../../lib/mechanicsValidation.js";
 import { downloadSampleMechanics } from "../../api.js";
-import { MAX_FILE_SIZE_BYTES } from "../../lib/uploadLimits.js";
+import { maxUploadBytesForPlan } from "../../lib/uploadLimits.js";
 import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
 import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
@@ -28,11 +28,11 @@ const MODES = [
   { id: "customize", label: "Customize a New Format" },
 ];
 
-function validateFile(file) {
+function validateFile(file, maxBytes) {
   if (!file) return "Choose a mechanics document.";
   const ext = `.${file.name.split(".").pop()?.toLowerCase()}`;
   if (!ACCEPTED.includes(ext)) return "Mechanics must be a PDF or DOCX file.";
-  if (file.size > MAX_FILE_SIZE_BYTES) return "oversize";
+  if (file.size > maxBytes) return "oversize";
   return "";
 }
 
@@ -64,7 +64,9 @@ export default function MechanicsPanel({
   onContinue,
   onShowSteps,
   busy,
+  tier = "free",
 }) {
+  const maxBytes = maxUploadBytesForPlan(tier);
   const inputRef = useRef(null);
   const dropRef = useRef(null);
   const pulseTimer = useRef(0);
@@ -156,7 +158,7 @@ export default function MechanicsPanel({
   }
 
   async function runExtract(nextFile) {
-    const issue = validateFile(nextFile);
+    const issue = validateFile(nextFile, maxBytes);
     if (issue === "oversize") {
       rejectOversize(nextFile);
       return;
@@ -202,7 +204,7 @@ export default function MechanicsPanel({
 
   function requestExtract(nextFile) {
     if (!nextFile) return;
-    const issue = validateFile(nextFile);
+    const issue = validateFile(nextFile, maxBytes);
     if (issue === "oversize") {
       rejectOversize(nextFile);
       return;
@@ -686,7 +688,7 @@ export default function MechanicsPanel({
                   <span className="mt-1 text-[11px] text-slate-400">
                     {file
                       ? `${formatFileSize(file.size)} · Confirm extraction to fill Format Fields beside this panel`
-                      : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(MAX_FILE_SIZE_BYTES)}`}
+                      : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(maxBytes)}`}
                   </span>
                   <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                     Browse files
@@ -842,7 +844,7 @@ export default function MechanicsPanel({
       <ConfirmDialog
         open={oversizeBytes != null}
         title="File Too Large"
-        message={oversizeFileMessage(oversizeBytes, MAX_FILE_SIZE_BYTES)}
+        message={oversizeFileMessage(oversizeBytes, maxBytes, tier)}
         confirmLabel="OK"
         cancelLabel=""
         onCancel={() => setOversizeBytes(null)}

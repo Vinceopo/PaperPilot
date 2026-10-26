@@ -11,8 +11,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pypdf import PdfReader
 
-from app.cloudinary_fetch import CloudinaryFetchError, fetch_cloudinary_bytes, signed_download_url
-from app.config import document_byte_limit, settings
+from app.config import (
+    document_byte_limit,
+    plan_upload_byte_limit,
+    plan_upload_limit_label,
+    settings,
+)
+from app.s3_storage import (
+    S3StorageError,
+    fetch_s3_bytes,
+    presign_put,
+    public_object_url,
+    s3_configured,
+    upload_object_key,
+)
 from app.compliance import run_compliance_scan
 from app.compliance_db import (
     SCAN_RESULT_FIELDS,
@@ -74,8 +86,6 @@ from app.documents import (
 from app.mechanics_validate import (
     apply_ignored_fields_to_rules,
     assert_mechanics_rules_ready,
-    filter_issues_for_rules,
-    validate_mechanics_document,
 )
 from app.emailer import email_delivery_configured, send_otp_email
 from app.firebase_admin_app import admin_auth
@@ -121,6 +131,7 @@ from app.schemas import (
     ManuscriptVersionCloudinaryRequest,
     MechanicsSaveRequest,
     MechanicsUpdateRequest,
+    PresignUploadRequest,
     SubscribeRequest,
 )
 from app.validators import email_error, name_error, normalize_email, password_error, phone_error, username_error
@@ -165,7 +176,11 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "paperpilot-api"}
+    return {
+        "ok": True,
+        "service": "paperpilot-api",
+        "s3": s3_configured(),
+    }
 
 
 @app.get("/json/version")
@@ -202,10 +217,10 @@ def analyze(body: AnalyzeRequest, authorization: str | None = Header(default=Non
 
 @app.post("/extract-pdf")
 async def extract_pdf(body: CloudinaryDocumentRequest, authorization: str | None = Header(default=None)):
-    authenticated_uid(authorization)
+    uid = authenticated_uid(authorization)
     try:
-        data, hint = fetch_cloudinary_bytes(body.cloudinary_url)
-    except CloudinaryFetchError as exc:
+        data, hint = fetch_s3_bytes(body.cloudinary_url, max_bytes=_user_upload_byte_limit(uid))
+    except S3StorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     filename = (body.filename or hint or "document.pdf").strip()
     if not filename.lower().endswith(".pdf"):
@@ -241,18 +256,67 @@ def authenticated_uid(authorization: str | None = Header(default=None)) -> str:
         raise HTTPException(status_code=401, detail="The Firebase ID token is invalid or expired.") from None
 
 
-def _read_document_bytes(filename: str, data: bytes) -> tuple[str, str, dict]:
-    file_type = validate_document(filename, data, document_byte_limit())
+def _user_upload_byte_limit(uid: str) -> int:
+    snap = subscription_snapshot(uid)
+    return plan_upload_byte_limit(snap.get("tier"))
+
+
+@app.post("/uploads/presign")
+def uploads_presign(body: PresignUploadRequest, uid: str = Depends(authenticated_uid)):
+    """Issue a short-lived S3 PUT URL. Client uploads bytes, then sends public_url as cloudinary_url.
+
+    upload_url is PUT-only (presigned). Never open it in a browser tab or iframe —
+    that issues GET and yields SignatureDoesNotMatch. Use public_url for preview/download.
+    """
+    if not s3_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="File storage is not configured. Set AWS_* credentials on the API server.",
+        )
+    snap = subscription_snapshot(uid)
+    tier = str(snap.get("tier") or "free").lower()
+    limit = plan_upload_byte_limit(tier)
+    if body.content_length is not None and int(body.content_length) > limit:
+        raise HTTPException(status_code=413, detail=f"{plan_upload_limit_label(tier)}.")
+    filename = (body.filename or "document").strip()
+    content_type = (body.content_type or "application/octet-stream").strip() or "application/octet-stream"
+    key = upload_object_key(uid, filename)
+    try:
+        # Content-Type is returned in headers for the client to set on PUT, but is
+        # not included in the URL signature (avoids flaky SignatureDoesNotMatch).
+        upload_url = presign_put(key, content_type)
+    except S3StorageError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    return {
+        "upload_url": upload_url,
+        "public_url": public_object_url(key),
+        "key": key,
+        "headers": {"Content-Type": content_type},
+        "max_upload_bytes": limit,
+        "tier": tier if tier in ("premium", "pro") else "free",
+    }
+
+
+def _read_document_bytes(
+    filename: str, data: bytes, max_bytes: int | None = None
+) -> tuple[str, str, dict]:
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
+    file_type = validate_document(filename, data, limit)
     parsed = parse_document(data, file_type)
     return filename, file_type, parsed
 
 
-def _read_cloudinary_document(url: str, filename_hint: str | None = None) -> tuple[str, str, dict]:
-    data, hint = fetch_cloudinary_bytes(url)
+def _read_uploaded_document(
+    url: str,
+    filename_hint: str | None = None,
+    max_bytes: int | None = None,
+) -> tuple[str, str, dict]:
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
+    data, hint = fetch_s3_bytes(url, max_bytes=limit)
     filename = Path((filename_hint or hint or "document").strip()).name
     if not Path(filename).suffix and hint and Path(hint).suffix:
         filename = Path(hint).name
-    return _read_document_bytes(filename, data)
+    return _read_document_bytes(filename, data, limit)
 
 
 def _document_preview_pages(parsed: dict, text: str, limit: int = 500) -> list[dict]:
@@ -342,10 +406,9 @@ async def mechanics_extract(
     uid: str = Depends(authenticated_uid),
 ):
     """Parse a format guide and return editable rules without saving."""
-    del uid  # auth only
     try:
-        filename, file_type, parsed = _read_cloudinary_document(
-            body.cloudinary_url, body.filename
+        filename, file_type, parsed = _read_uploaded_document(
+            body.cloudinary_url, body.filename, max_bytes=_user_upload_byte_limit(uid)
         )
         text = parsed["text"]
         if not text:
@@ -356,7 +419,6 @@ async def mechanics_extract(
         rules = derive_mechanics_rules(text)
         assert_mechanics_guide(text, rules)
         pages = _document_preview_pages(parsed, text)
-        validation = validate_mechanics_document(text, pages=pages, rules=None)
         return {
             "name": Path(filename).stem[:200],
             "source_filename": filename,
@@ -368,9 +430,8 @@ async def mechanics_extract(
             or len(pages),
             "pages": pages,
             "rules": rules,
-            "validation": validation,
         }
-    except CloudinaryFetchError as exc:
+    except S3StorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -398,23 +459,6 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
     if not filename.lower().endswith((".pdf", ".docx")):
         filename = f"{Path(filename).stem}.docx"
     text = (body.extracted_text or "").strip()
-    # Uploaded guides must pass schema validation unless the user covered gaps via Format Fields.
-    if text and raw_type not in ("manual", "customize"):
-        validation = filter_issues_for_rules(
-            validate_mechanics_document(text, rules=None),
-            rules,
-            body.ignored_fields,
-        )
-        if not validation.get("ok"):
-            first = (validation.get("issues") or [{}])[0]
-            detail = first.get("message") or "Fix the highlighted mechanics issues before saving."
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": detail,
-                    "validation": validation,
-                },
-            )
     parsed = {
         "text": text,
         "pages": [],
@@ -459,8 +503,8 @@ async def mechanics_create(
     uid: str = Depends(authenticated_uid),
 ):
     try:
-        filename, file_type, parsed = _read_cloudinary_document(
-            body.cloudinary_url, body.filename
+        filename, file_type, parsed = _read_uploaded_document(
+            body.cloudinary_url, body.filename, max_bytes=_user_upload_byte_limit(uid)
         )
         text = parsed["text"]
         if not text:
@@ -474,7 +518,7 @@ async def mechanics_create(
             uid, item_name[:200], filename, file_type, text, parsed, rules
         )
         return item
-    except CloudinaryFetchError as exc:
+    except S3StorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
@@ -540,10 +584,9 @@ async def manuscript_preview(
     uid: str = Depends(authenticated_uid),
 ):
     """Extract manuscript pages for a document-style side preview (no version created)."""
-    del uid
     try:
-        filename, file_type, parsed = _read_cloudinary_document(
-            body.cloudinary_url, body.filename
+        filename, file_type, parsed = _read_uploaded_document(
+            body.cloudinary_url, body.filename, max_bytes=_user_upload_byte_limit(uid)
         )
         text = parsed.get("text") or ""
         if not text:
@@ -563,7 +606,7 @@ async def manuscript_preview(
             "pages": pages_out,
             "cloudinary_url": body.cloudinary_url,
         }
-    except CloudinaryFetchError as exc:
+    except S3StorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -583,8 +626,8 @@ async def manuscript_version_create(
             detail="Format mechanics not found. Select a saved format profile, then upload again.",
         )
     try:
-        filename, file_type, parsed = _read_cloudinary_document(
-            body.cloudinary_url, body.filename
+        filename, file_type, parsed = _read_uploaded_document(
+            body.cloudinary_url, body.filename, max_bytes=_user_upload_byte_limit(uid)
         )
         if not parsed["text"]:
             raise DocumentError("No extractable text was found in the document.")
@@ -601,7 +644,7 @@ async def manuscript_version_create(
             client_request_id=body.client_request_id,
         )
         return {"created_manuscript": created_parent, "version": version}
-    except CloudinaryFetchError as exc:
+    except S3StorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except DocumentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -720,14 +763,14 @@ def compliance_scan_create(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "This manuscript version has no stored Cloudinary URL. "
+                    "This manuscript version has no stored document URL. "
                     "Upload the document again, then run the scan."
                 ),
             )
-        # ML cannot authenticate Cloudinary restricted formats; gateway fetches bytes.
+        # Gateway fetches bytes from S3 (public URL) and forwards base64 to ML.
         try:
-            raw_bytes, _hint = fetch_cloudinary_bytes(document_url)
-        except CloudinaryFetchError as exc:
+            raw_bytes, _hint = fetch_s3_bytes(document_url)
+        except S3StorageError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
         except Exception:
             raise HTTPException(
@@ -840,18 +883,13 @@ def compliance_scan_document(scan_id: str, uid: str = Depends(authenticated_uid)
     version_id = scan.get("manuscript_version_id") or ""
     version = get_version(uid, manuscript_id, version_id) if manuscript_id and version_id else None
     url = get_version_document_url(uid, manuscript_id, version_id) if version else None
-    download_url = ""
-    if url:
-        try:
-            download_url = signed_download_url(url)
-        except CloudinaryFetchError:
-            download_url = ""
+    public = (url or "").strip()
     return {
         "scan_id": scan_id,
         "manuscript_id": manuscript_id,
         "manuscript_version_id": version_id,
-        "cloudinary_url": url or "",
-        "download_url": download_url,
+        "cloudinary_url": public,
+        "download_url": public,
         "source_filename": (version or {}).get("source_filename") or "",
     }
 
@@ -1111,30 +1149,6 @@ def _email_registered(email: str) -> bool | None:
         return False
 
 
-GOOGLE_PASSWORD_HINT = (
-    "This account signs in with Google. Change your password in your Google Account "
-    "(myaccount.google.com), then sign in here with Google."
-)
-
-
-def _is_google_sign_in_only(email: str) -> bool | None:
-    """True when the account has Google and no email/password provider.
-
-    None when Admin SDK is unavailable (caller should not block).
-    """
-    fb = admin_auth()
-    if not fb:
-        return None
-    from firebase_admin.auth import UserNotFoundError
-
-    try:
-        user = fb.get_user_by_email(email)
-    except UserNotFoundError:
-        return False
-    providers = {p.provider_id for p in (user.provider_data or [])}
-    return "google.com" in providers and "password" not in providers
-
-
 @app.post("/auth/register/check")
 def auth_register_check(body: RegisterCheckRequest):
     email = normalize_email(body.email)
@@ -1346,8 +1360,6 @@ def auth_otp_send(body: OtpSendRequest):
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
     if body.purpose == "reset_password" and registered is False:
         raise HTTPException(status_code=404, detail="No account found for this email.")
-    if body.purpose == "reset_password" and _is_google_sign_in_only(email):
-        raise HTTPException(status_code=400, detail=GOOGLE_PASSWORD_HINT)
 
     # Local/dev bypass: skip email and return a challenge token immediately.
     # Password resets always require a real emailed code.
@@ -1483,8 +1495,6 @@ def auth_reset_password(body: ResetPasswordRequest):
     email = normalize_email(body.email)
     _require(email_error(email))
     _require(password_error(body.new_password))
-    if _is_google_sign_in_only(email):
-        raise HTTPException(status_code=400, detail=GOOGLE_PASSWORD_HINT)
     try:
         consume_challenge(body.reset_token, email, "reset_password")
     except ValueError as exc:
@@ -1499,12 +1509,7 @@ def auth_reset_password(body: ResetPasswordRequest):
 
     try:
         user = fb.get_user_by_email(email)
-        providers = {p.provider_id for p in (user.provider_data or [])}
-        if "google.com" in providers and "password" not in providers:
-            raise HTTPException(status_code=400, detail=GOOGLE_PASSWORD_HINT)
         fb.update_user(user.uid, password=body.new_password)
-    except HTTPException:
-        raise
     except UserNotFoundError:
         raise HTTPException(status_code=400, detail="No account found for this email.") from None
     except Exception as exc:

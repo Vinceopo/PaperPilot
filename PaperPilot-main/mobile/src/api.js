@@ -3,8 +3,6 @@ import { auth } from "./firebase";
 
 const extra = Constants.expoConfig?.extra || {};
 const API = resolveApiUrl(extra.apiUrl || "http://127.0.0.1:8000");
-const CLOUDINARY_CLOUD = extra.cloudinaryCloudName || "";
-const CLOUDINARY_PRESET = extra.cloudinaryUploadPreset || "uploaded_docs";
 
 /**
  * A LAN apiUrl goes stale whenever the router hands the dev PC a new IP.
@@ -52,7 +50,9 @@ function statusMessage(status) {
   if (status === 404) {
     return "That item was not found. It may have been deleted on another device — refresh and try again.";
   }
-  if (status === 413) return "This file is too large to upload. Use a file under 10 MB.";
+  if (status === 413) {
+    return "This file is too large for your plan. Free plans allow 15 MB, Premium 45 MB, and Pro 120 MB.";
+  }
   if (status === 429) return "Too many requests in a short time. Wait a minute, then try again.";
   if (status === 502 || status === 503 || status === 504) {
     return "PaperPilot's server is starting up or busy. Wait a few seconds, then try again.";
@@ -213,42 +213,70 @@ function cleanFilename(name = "upload.bin", mimeType = "") {
 }
 
 /**
- * Upload a picked document to Cloudinary (unsigned preset), mirroring the web client.
- * The API only accepts `cloudinary_url` references, never raw file bodies.
- * DocumentPicker URIs work with RN FormData {uri,name,type} + XHR (not fetch).
+ * Upload a picked document to S3 via an API-issued presigned PUT.
+ * Subsequent API calls still send the public URL as `cloudinary_url` for schema compatibility.
  */
-function uploadToCloudinary({ uri, name, mimeType }) {
-  if (!CLOUDINARY_CLOUD) {
-    return Promise.reject(
-      new ApiError(
-        "File uploads are not set up in this build of the app. Update the app or contact support.",
-        0
-      )
-    );
-  }
+async function uploadToS3({ uri, name, mimeType, size }) {
   if (!uri) {
-    return Promise.reject(new ApiError("Missing file. Pick the document again, then upload.", 400));
+    throw new ApiError("Missing file. Pick the document again, then upload.", 400);
   }
   const safeName = cleanFilename(name || "upload.pdf", mimeType);
-  const form = new FormData();
-  form.append("file", { uri, name: safeName, type: guessMime(safeName, mimeType) });
-  form.append("upload_preset", CLOUDINARY_PRESET);
+  const contentType = guessMime(safeName, mimeType);
+  const contentLength = Number(size);
+  const presignBody = {
+    filename: safeName,
+    content_type: contentType,
+  };
+  if (Number.isFinite(contentLength) && contentLength > 0) {
+    presignBody.content_length = contentLength;
+  }
 
-  return new Promise((resolve, reject) => {
+  const signed = await authorizedFetch("/uploads/presign", {
+    method: "POST",
+    body: JSON.stringify(presignBody),
+  });
+
+  const uploadUrl = String(signed?.upload_url || "").trim();
+  const publicUrl = String(signed?.public_url || "").trim();
+  if (!uploadUrl || !publicUrl) {
+    throw new ApiError("Upload could not be prepared. Try again.", 0);
+  }
+  // Never navigate to upload_url — it is PUT-only. Preview/download must use public_url.
+  if (/[?&]X-Amz-Signature=/i.test(publicUrl) || !/[?&]X-Amz-Signature=/i.test(uploadUrl)) {
+    throw new ApiError("Upload could not be prepared. Try again.", 0);
+  }
+
+  const putHeaders = { ...(signed.headers || {}) };
+  const hasContentType = Object.keys(putHeaders).some(
+    (key) => key.toLowerCase() === "content-type"
+  );
+  if (!hasContentType) {
+    putHeaders["Content-Type"] = contentType;
+  }
+
+  let body;
+  try {
+    const fileRes = await fetch(uri);
+    body = await fileRes.blob();
+  } catch {
+    throw new ApiError("Could not read the selected file. Pick it again, then upload.", 0);
+  }
+
+  await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/raw/upload`);
+    xhr.open("PUT", uploadUrl);
     xhr.timeout = 180000;
+    Object.entries(putHeaders).forEach(([key, value]) => {
+      if (value != null && value !== "") xhr.setRequestHeader(key, String(value));
+    });
     xhr.onload = () => {
-      const data = parseBody(xhr.responseText);
-      const url = data.secure_url || data.url;
-      if (xhr.status >= 200 && xhr.status < 300 && url) {
-        resolve({ url, originalFilename: data.original_filename || safeName });
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
         return;
       }
       reject(
         new ApiError(
-          data.error?.message ||
-            "The file could not be uploaded. Check that it is a PDF or DOCX under 10 MB, then try again.",
+          "The file could not be uploaded. Check that it is a PDF or DOCX within your plan’s size limit, then try again.",
           xhr.status
         )
       );
@@ -262,12 +290,14 @@ function uploadToCloudinary({ uri, name, mimeType }) {
           0
         )
       );
-    xhr.send(form);
+    xhr.send(body);
   });
+
+  return { url: publicUrl, originalFilename: safeName };
 }
 
-async function postCloudinaryDocument(path, file, fallbackName, fields = {}) {
-  const uploaded = await uploadToCloudinary(file);
+async function postUploadedDocument(path, file, fallbackName, fields = {}) {
+  const uploaded = await uploadToS3(file);
   return authorizedFetch(path, {
     method: "POST",
     body: JSON.stringify({
@@ -337,7 +367,7 @@ export function listMechanics() {
 }
 
 export function extractMechanics({ uri, name, mimeType }) {
-  return postCloudinaryDocument("/mechanics/extract", { uri, name, mimeType }, "mechanics.pdf");
+  return postUploadedDocument("/mechanics/extract", { uri, name, mimeType }, "mechanics.pdf");
 }
 
 export function saveMechanicsProfile({
@@ -362,7 +392,7 @@ export function saveMechanicsProfile({
 }
 
 export function uploadMechanics({ uri, name, mimeType, displayName = "" }) {
-  return postCloudinaryDocument("/mechanics", { uri, name, mimeType }, "mechanics.pdf", {
+  return postUploadedDocument("/mechanics", { uri, name, mimeType }, "mechanics.pdf", {
     name: displayName.trim() || undefined,
   });
 }
@@ -414,7 +444,7 @@ export function deleteManuscriptVersion({ manuscriptId, versionId } = {}) {
 }
 
 export function previewManuscript({ uri, name, mimeType }) {
-  return postCloudinaryDocument("/manuscripts/preview", { uri, name, mimeType }, "manuscript.pdf");
+  return postUploadedDocument("/manuscripts/preview", { uri, name, mimeType }, "manuscript.pdf");
 }
 
 export async function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
@@ -425,7 +455,7 @@ export async function uploadManuscriptVersion({ file, mechanicsId, title, manusc
   if (!trimmedTitle) throw new ApiError("A manuscript title is required.", 400);
   if (!mechanicsId) throw new ApiError("Select a format mechanics document first.", 400);
 
-  const uploaded = await uploadToCloudinary({ uri, name, mimeType });
+  const uploaded = await uploadToS3({ uri, name, mimeType });
   // Same id on every retry, so a save whose reply was lost is not stored twice.
   const clientRequestId = newRequestId();
   const created = await withRetry(() =>

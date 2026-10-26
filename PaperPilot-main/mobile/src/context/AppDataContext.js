@@ -259,6 +259,7 @@ export function AppDataProvider({ children }) {
     resolveManuscript,
     getActiveManuscript,
     getScanTarget,
+    tier: String(subscription?.tier || "free").toLowerCase(),
   });
   const scanFlowRef = useRef(scanFlow);
   scanFlowRef.current = scanFlow;

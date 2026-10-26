@@ -140,7 +140,7 @@ export default function ReferenceTracingView({
             preview={result?.documentPreview}
             scrollTarget={scrollTarget}
             highlight={highlight}
-            emptyLabel="Document preview will appear when Cloudinary URL or upload is available."
+            emptyLabel="Document preview will appear when a document URL or upload is available."
             paged
           />
         </div>

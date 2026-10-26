@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { otpBypassToken, resetPasswordWithOtp, sendOtp } from "../../api";
-import { GOOGLE_PASSWORD_HINT } from "../../lib/messages";
 import {
   confirmPasswordError,
   emailError,
@@ -56,8 +55,7 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
       setOtpMeta({ expiresIn: res.expires_in, resendIn: res.resend_in, devCode: res.dev_code });
       setStep("otp");
     } catch (err2) {
-      const msg = err2.message || "";
-      setFormError(msg.includes("Google") ? GOOGLE_PASSWORD_HINT : msg);
+      setFormError(err2.message);
     } finally {
       setBusy(false);
     }

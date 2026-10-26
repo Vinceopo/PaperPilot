@@ -1,8 +1,12 @@
 /**
- * Human-readable file size. Binary units (1024), matching Cloudinary's limits and
- * Windows Explorer, so a 10,485,760 byte limit reads "10 MB".
+ * Human-readable file size. Binary units (1024), matching Windows Explorer,
+ * so a 15,728,640 byte limit reads "15 MB".
  * At most one decimal place. `roundUp` never rounds a size down to a smaller value.
  */
+
+import { planName } from "./plans.js";
+import { maxUploadBytesForPlan } from "./uploadLimits.js";
+
 export function formatFileSize(bytes, { roundUp = false } = {}) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -18,6 +22,30 @@ export function formatFileSize(bytes, { roundUp = false } = {}) {
   return `${text} ${units[unit]}`;
 }
 
-export function oversizeFileMessage(fileBytes, maxBytes) {
-  return `Your file is ${formatFileSize(fileBytes)}, but the maximum allowed file size is ${formatFileSize(maxBytes)}. Please upload a smaller file.`;
+/**
+ * @param {number} fileBytes
+ * @param {number} [maxBytes]
+ * @param {string} [tier] when set, names the plan in the message
+ */
+export function oversizeFileMessage(fileBytes, maxBytes, tier) {
+  const limit = Number(maxBytes) > 0 ? Number(maxBytes) : maxUploadBytesForPlan(tier);
+  const maxLabel = formatFileSize(limit);
+  if (tier != null && tier !== "") {
+    return `Your file is ${formatFileSize(fileBytes)}, but ${planName(tier)} plans can upload up to ${maxLabel}. Please upload a smaller file.`;
+  }
+  return `Your file is ${formatFileSize(fileBytes)}, but the maximum allowed file size is ${maxLabel}. Please upload a smaller file.`;
+}
+
+/**
+ * Named-file rejection used by manuscript / mechanics pickers.
+ * @param {{ name: string, size: number }} rejection
+ * @param {string} [tier]
+ * @param {number} [maxBytes]
+ */
+export function namedOversizeFileMessage(rejection, tier, maxBytes) {
+  const limit = Number(maxBytes) > 0 ? Number(maxBytes) : maxUploadBytesForPlan(tier);
+  const max = formatFileSize(limit);
+  let actual = formatFileSize(rejection.size);
+  if (actual === max) actual = formatFileSize(rejection.size, { roundUp: true });
+  return `Your file '${rejection.name}' is ${actual}, but ${planName(tier)} plans can upload up to ${max}. Please choose a smaller file and try again.`;
 }
