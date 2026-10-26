@@ -16,9 +16,10 @@ import {
   plural,
 } from "../../lib/scoreFormat.js";
 import { downloadReport } from "../../lib/mockAnalysis.js";
-import { versionToScanResult } from "../../lib/scannedLibrary.js";
+import { versionScanId, versionToScanResult } from "../../lib/scannedLibrary.js";
 import { isPaidTier } from "../../lib/plans.js";
 import { APP_TIME_ZONE } from "../../lib/timeZone.js";
+import Spinner from "../Spinner.jsx";
 
 const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 
@@ -119,6 +120,15 @@ function formatLocationChip(loc) {
   return `Page ${loc.page}${loc.line != null ? `, line ${loc.line}` : ""}`;
 }
 
+/** Trimmed / server summaries need a refetch so Score Breakdown + issues can render here. */
+function needsScanHydration(version) {
+  if (!version || !versionScanId(version)) return false;
+  if (version.trimmed) return true;
+  if (!(version.breakdown || []).length) return true;
+  if ((version.issues || []).length) return false;
+  return (version.breakdown || []).some((row) => Number(row.issueCount) > 0);
+}
+
 /**
  * Dedicated manuscript detail page (versions + score breakdown).
  * Free plan: only the latest scanned version is accessible. Premium: all versions.
@@ -149,17 +159,60 @@ export default function ManuscriptDetailModal({
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [hydrating, setHydrating] = useState(false);
+  const [hydrateError, setHydrateError] = useState("");
 
   useEffect(() => {
     setSelectedId(latestId);
   }, [manuscript?.id, latestId]);
 
-  if (!manuscript) return null;
-
-  const selected =
+  const selectedFromLibrary =
     versionsDesc.find((v) => v.id === selectedId) ||
     versionsDesc.find((v) => v.id === latestId) ||
-    versionsDesc[0];
+    versionsDesc[0] ||
+    null;
+
+  // Load full scan (breakdown + issues) when this version was stored trimmed / summary-only.
+  useEffect(() => {
+    if (!manuscript || !selectedFromLibrary || !resolveResult) return undefined;
+    if (!needsScanHydration(selectedFromLibrary)) {
+      setHydrating(false);
+      setHydrateError("");
+      return undefined;
+    }
+    let cancelled = false;
+    setHydrating(true);
+    setHydrateError("");
+    void (async () => {
+      try {
+        const payload = await resolveResult(manuscript, selectedFromLibrary);
+        if (cancelled) return;
+        if (!payload) {
+          setHydrateError("Could not load the full scan for this version. Check your connection, then try again.");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setHydrateError(err?.message || "Could not load the full scan for this version.");
+        }
+      } finally {
+        if (!cancelled) setHydrating(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    manuscript,
+    resolveResult,
+    selectedFromLibrary?.id,
+    selectedFromLibrary?.trimmed,
+    (selectedFromLibrary?.issues || []).length,
+    (selectedFromLibrary?.breakdown || []).length,
+  ]);
+
+  if (!manuscript) return null;
+
+  const selected = selectedFromLibrary;
   const band = scoreBand(selected?.score);
   const versionLabel = selected ? `v${selected.versionNumber}.0` : "—";
 
@@ -348,6 +401,12 @@ export default function ManuscriptDetailModal({
 
               <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="text-lg font-bold text-slate-900">Score Breakdown</h3>
+                {hydrating && !(selected.breakdown || []).length ? (
+                  <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
+                    <Spinner className="h-4 w-4 text-[#16bfa8]" />
+                    Loading score breakdown…
+                  </div>
+                ) : null}
                 {(selected.breakdown || []).length > 0 &&
                 (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
                   <p className="mt-1 text-[11px] text-slate-500">
@@ -367,6 +426,9 @@ export default function ManuscriptDetailModal({
                     />
                   ))}
                 </div>
+                {!hydrating && !(selected.breakdown || []).length ? (
+                  <p className="mt-3 text-sm text-slate-400">No score breakdown recorded for this version.</p>
+                ) : null}
               </section>
 
               <section className="mt-7">
@@ -382,19 +444,16 @@ export default function ManuscriptDetailModal({
                   </div>
                 </div>
 
-                {issues.length === 0 && selected.trimmed ? (
-                  <div className="mt-3 text-sm text-slate-500">
-                    <p>This version was scanned on another device. Open full results to load every issue.</p>
-                    {onOpenResult ? (
-                      <button
-                        type="button"
-                        onClick={() => void openFullResult(selected)}
-                        disabled={openingResult}
-                        className="mt-2 rounded-lg bg-[#16bfa8] px-4 py-2 text-xs font-bold text-white hover:bg-[#12ae99] disabled:opacity-50"
-                      >
-                        {openingResult ? "Opening…" : "View full results"}
-                      </button>
-                    ) : null}
+                {hydrateError ? (
+                  <p className="mt-3 text-sm text-rose-500" role="alert">
+                    {hydrateError}
+                  </p>
+                ) : null}
+
+                {hydrating && issues.length === 0 ? (
+                  <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
+                    <Spinner className="h-4 w-4 text-[#16bfa8]" />
+                    Loading detected issues…
                   </div>
                 ) : issues.length === 0 ? (
                   <p className="mt-3 text-sm text-slate-400">No issues recorded for this version.</p>

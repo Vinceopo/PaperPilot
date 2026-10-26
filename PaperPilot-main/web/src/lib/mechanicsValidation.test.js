@@ -1,10 +1,70 @@
 import { describe, expect, it } from "vitest";
 import {
   applyIgnoredFieldsToForm,
+  fillEmptyFieldsWithIgnore,
   filterValidationForForm,
   ignoredFieldsFromForm,
 } from "./mechanicsValidation.js";
-import { emptyMechanicsForm, rulesToForm } from "./formatMechanicsForm.js";
+import { emptyMechanicsForm, formToRules, rulesToForm } from "./formatMechanicsForm.js";
+
+describe("deleted headings mean no rules", () => {
+  it("omits heading rules and marks them ignored when headings are removed", () => {
+    const form = {
+      ...emptyMechanicsForm("Capstone"),
+      marginTop: "1",
+      headings: [],
+    };
+    const rules = formToRules(form);
+    expect(rules.font?.heading1_size).toBeUndefined();
+    expect(rules.font?.heading2_size).toBeUndefined();
+    expect(rules.font?.heading_styles).toBeUndefined();
+    const ignored = ignoredFieldsFromForm(form);
+    expect(ignored).toContain("font:heading1_size");
+    expect(ignored).toContain("font:heading2_size");
+    expect(ignored).toContain("heading_styles:heading1_style");
+    expect(ignored).toContain("heading_styles:heading2_style");
+  });
+
+  it("treats a cleared heading card (no rule chips) as ignored", () => {
+    const form = {
+      ...emptyMechanicsForm("Capstone"),
+      marginTop: "1",
+      headings: [{ size: "", bold: "", italic: "", case: "", alignment: "", fields: [] }],
+    };
+    expect(formToRules(form).font?.heading1_size).toBeUndefined();
+    expect(ignoredFieldsFromForm(form)).toContain("font:heading1_size");
+  });
+});
+
+describe("fillEmptyFieldsWithIgnore", () => {
+  it("keeps extracted values and sets missing fields to IGNORE", () => {
+    const form = fillEmptyFieldsWithIgnore({
+      ...emptyMechanicsForm("Capstone"),
+      marginTop: "1",
+      fontType: "Arial",
+      citationFormat: "APA",
+    });
+    expect(form.marginTop).toBe("1");
+    expect(form.fontType).toBe("Arial");
+    expect(form.citationFormat).toBe("APA");
+    expect(form.marginLeft).toBe("IGNORE");
+    expect(form.bodySize).toBe("IGNORE");
+    expect(form.paginationTitlePage).toBe("IGNORE");
+    expect(form.paginationChapterMarkers).toBe("IGNORE");
+    expect(form.headings).toEqual([]);
+  });
+
+  it("lists filled IGNORE fields in ignoredFieldsFromForm for scan skip", () => {
+    const form = fillEmptyFieldsWithIgnore({
+      ...emptyMechanicsForm("Capstone"),
+      marginTop: "1",
+    });
+    const ignored = ignoredFieldsFromForm(form);
+    expect(ignored).toContain("margins:left");
+    expect(ignored).toContain("citation_format:citation_style");
+    expect(ignored).not.toContain("margins:top");
+  });
+});
 
 describe("filterValidationForForm font coverage", () => {
   const missingFont = {

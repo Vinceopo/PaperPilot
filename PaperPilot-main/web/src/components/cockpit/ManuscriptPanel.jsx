@@ -360,9 +360,11 @@ export default function ManuscriptPanel({
 
               <div
                 className={`relative max-h-[min(36rem,72vh)] min-h-[22rem] flex-1 ${
-                  file?.name?.toLowerCase().endsWith(".pdf")
-                    ? "overflow-hidden bg-white"
-                    : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
+                  previewPreparing || previewUploading
+                    ? "overflow-hidden bg-[#e8ecf1]"
+                    : file?.name?.toLowerCase().endsWith(".pdf")
+                      ? "overflow-hidden bg-white"
+                      : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
                 }`}
               >
                 {preview?.error ? (
@@ -370,18 +372,28 @@ export default function ManuscriptPanel({
                     {preview.error}
                   </p>
                 ) : (
-                  <DocumentPagePreview
-                    file={file}
-                    preview={preview}
-                    emptyLabel="No manuscript preview available yet."
-                  />
+                  <div
+                    className={
+                      previewPreparing || previewUploading
+                        ? "pointer-events-none h-full overflow-hidden"
+                        : undefined
+                    }
+                    aria-hidden={previewPreparing || previewUploading || undefined}
+                  >
+                    <DocumentPagePreview
+                      file={file}
+                      preview={preview}
+                      emptyLabel="No manuscript preview available yet."
+                    />
+                  </div>
                 )}
 
                 {(previewPreparing || previewUploading) && (
                   <div
-                    className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-[#e8ecf1]/88 backdrop-blur-[2px]"
+                    className="absolute inset-0 z-20 flex touch-none flex-col items-center justify-center gap-3 overflow-hidden overscroll-none bg-[#e8ecf1]/88 backdrop-blur-[2px]"
                     role="status"
                     aria-live="polite"
+                    onWheel={(e) => e.preventDefault()}
                   >
                     <DocumentLoader className="h-28 w-28" />
                     <p className="text-sm font-bold text-slate-800">

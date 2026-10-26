@@ -212,6 +212,17 @@ function isIgnoreOrEmpty(value) {
   return !text || /^ignore$/i.test(text);
 }
 
+/** True when the heading card was deleted or has no rules left (same as IGNORE). */
+export function headingHasNoRules(heading) {
+  if (!heading) return true;
+  const fields = Array.isArray(heading.fields) ? heading.fields : null;
+  if (fields) {
+    if (!fields.length) return true;
+    return fields.every((key) => isIgnoreOrEmpty(heading?.[key]));
+  }
+  return HEADING_RULE_FIELDS.every((field) => isIgnoreOrEmpty(heading?.[field.key]));
+}
+
 /** Form headings → `heading{n}_size`, `heading_styles`, and `heading_levels` for `rules.font`. */
 export function headingsToRules(headings) {
   const list = (Array.isArray(headings) ? headings : []).slice(0, MAX_HEADING_LEVELS);
@@ -220,21 +231,37 @@ export function headingsToRules(headings) {
   let highest = 0;
   list.forEach((heading, index) => {
     const level = index + 1;
-    const sizeRaw = String(heading?.size ?? "").trim();
-    if (/^ignore$/i.test(sizeRaw)) return;
-    const size = Number(heading?.size);
-    const hasSize = sizeRaw !== "" && !Number.isNaN(size);
-    if (hasSize) out[`heading${level}_size`] = size;
+    // Deleted heading or cleared rules → omit this level (no scan check).
+    if (headingHasNoRules(heading)) return;
+    const enabled = new Set(
+      Array.isArray(heading?.fields) && heading.fields.length
+        ? heading.fields
+        : HEADING_RULE_FIELDS.map((field) => field.key)
+    );
+    let hasSize = false;
+    if (enabled.has("size")) {
+      const sizeRaw = String(heading?.size ?? "").trim();
+      if (sizeRaw && !/^ignore$/i.test(sizeRaw)) {
+        const size = Number(sizeRaw);
+        if (!Number.isNaN(size)) {
+          out[`heading${level}_size`] = size;
+          hasSize = true;
+        }
+      }
+    }
     const style = {};
     for (const flag of ["bold", "italic"]) {
+      if (!enabled.has(flag)) continue;
       if (heading?.[flag] === "yes") style[flag] = true;
       else if (heading?.[flag] === "no") style[flag] = false;
       // IGNORE / blank → omit (no style rule for this flag)
     }
     // Never persist IGNORE as a case/alignment value — that faked coverage client-side
     // then disappeared after server normalize and blocked save.
-    if (!isIgnoreOrEmpty(heading?.case)) style.case = heading.case;
-    if (!isIgnoreOrEmpty(heading?.alignment)) style.alignment = heading.alignment;
+    if (enabled.has("case") && !isIgnoreOrEmpty(heading?.case)) style.case = heading.case;
+    if (enabled.has("alignment") && !isIgnoreOrEmpty(heading?.alignment)) {
+      style.alignment = heading.alignment;
+    }
     if (Object.keys(style).length) styles[`heading${level}`] = style;
     if (hasSize || Object.keys(style).length) highest = level;
   });

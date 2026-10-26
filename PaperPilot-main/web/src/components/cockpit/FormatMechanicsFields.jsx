@@ -344,7 +344,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
 
       <Section title="Font">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Body text size" hint="Paragraph text, in points">
+          <Field label="Body text size" hint="Same as Contents Size — not heading size">
             <input
               disabled={disabled}
               type="number"
@@ -381,7 +381,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
         </p>
         {headings.length ? null : (
           <p className="text-[11px] text-slate-400">
-            No heading rules were found in this format yet. Add a level only if your guide defines one.
+            No heading rules — this check is skipped. Add a level only if your guide defines one.
           </p>
         )}
         {headings.map((heading, index) => {
@@ -445,7 +445,9 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
                   ))}
                 </div>
               ) : (
-                <p className="mt-1 text-[10px] text-slate-400">No rules set for this heading.</p>
+                <p className="mt-1 text-[10px] text-slate-400">
+                  No rules set — this heading level is skipped (same as IGNORE).
+                </p>
               )}
               {!disabled && missing.length ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">

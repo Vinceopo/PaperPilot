@@ -32,7 +32,7 @@ function scoreBand(score) {
     };
   if (score >= 80)
     return {
-      label: "COMPLIANT",
+      label: "GOOD STANDING",
       textColor: "text-[#157347]",
       badgeBorder: "border-[#b7e4c7]",
       badgeBg: "bg-[#eaf7ef]",
@@ -40,14 +40,14 @@ function scoreBand(score) {
     };
   if (score >= 50)
     return {
-      label: "NEEDS REVISION",
+      label: "UNDER REVIEW",
       textColor: "text-[#B57200]",
       badgeBorder: "border-[#f0d9a0]",
       badgeBg: "bg-[#fff8e8]",
       scoreColor: "text-[#B57200]",
     };
   return {
-    label: "CRITICAL ISSUES",
+    label: "ATTENTION REQUIRED",
     textColor: "text-[#B02A37]",
     badgeBorder: "border-[#f0c2c7]",
     badgeBg: "bg-[#fdf0f1]",

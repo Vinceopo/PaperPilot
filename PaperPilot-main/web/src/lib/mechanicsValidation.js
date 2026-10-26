@@ -1,12 +1,12 @@
 /**
- * Client-side helpers for mechanics document validation issues.
- * Mirrors api/app/mechanics_validate.py field → rules coverage checks.
+ * Client-side helpers for Format Fields IGNORE coverage.
  *
- * Empty form fields after extract stay unresolved. Choosing IGNORE in Format
- * Fields (literal "IGNORE") clears that document issue without adding a rule.
+ * After extract, missing rules are filled as IGNORE (no check for that field).
+ * IGNORE is omitted from saved rules and listed in ignored_fields so scans skip it.
  */
 
 import { formToRules } from "./formatMechanicsForm.js";
+import { headingHasNoRules } from "./mechanicsOptions.js";
 
 export function isIgnoreFormValue(value) {
   return /^ignore$/i.test(String(value || "").trim());
@@ -155,8 +155,10 @@ function formIgnoresField(form, category, fieldId) {
       if (fieldId === "heading1_size" || fieldId === "heading2_size") {
         const level = fieldId === "heading1_size" ? 1 : 2;
         const heading = headings[level - 1];
-        // Headings are optional in Format Fields — no row (or empty size) means skip.
-        if (!heading) return true;
+        // Deleted heading or cleared rules → no check (same as IGNORE).
+        if (headingHasNoRules(heading)) return true;
+        const fields = Array.isArray(heading.fields) ? heading.fields : [];
+        if (fields.length && !fields.includes("size")) return true;
         const size = String(heading.size ?? "").trim();
         if (!size) return true;
         return isIgnoreFormValue(size);
@@ -164,7 +166,8 @@ function formIgnoresField(form, category, fieldId) {
       if (fieldId === "heading1_style" || fieldId === "heading2_style") {
         const level = fieldId === "heading1_style" ? 1 : 2;
         const heading = headings[level - 1];
-        if (!heading) return true;
+        // Deleted heading or cleared rules → no check (same as IGNORE).
+        if (headingHasNoRules(heading)) return true;
         if (isIgnoreFormValue(heading?.size)) return true;
         // Incomplete Choose… is never IGNORE.
         if (incompleteHeadingStyleKeys(heading).length) return false;
@@ -276,6 +279,15 @@ export function ignoredFieldsFromForm(form) {
     if (formIgnoresField(form, category, fieldId)) ignored.push(key);
   }
   return ignored;
+}
+
+/**
+ * After extract: set every empty Format Field to IGNORE so missing guide rules
+ * auto-pass (nothing to enforce). Extracted values are left unchanged.
+ * Headings stay empty when unset — empty already means skip in the UI.
+ */
+export function fillEmptyFieldsWithIgnore(form) {
+  return applyIgnoredFieldsToForm(form, Object.keys(FIELD_FORM_KEYS));
 }
 
 /**

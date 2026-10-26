@@ -18,9 +18,9 @@ import ConfirmDialog from "../ConfirmDialog.jsx";
 const PAGE_SIZE = 8;
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
-  { id: "compliant", label: "Compliant" },
-  { id: "needs_revision", label: "Needs Revision" },
-  { id: "critical", label: "Critical" },
+  { id: "compliant", label: "Good Standing" },
+  { id: "needs_revision", label: "Under Review" },
+  { id: "critical", label: "Attention Required" },
 ];
 
 function formatDate(iso) {
@@ -197,19 +197,19 @@ export default function MyManuscriptsScreen({
           }}
         />
         <StatCard
+          label="Good Standing"
+          value={stats.compliant}
+          accent="text-emerald-600"
+          sub={{ text: "Good", className: "text-emerald-600" }}
+        />
+        <StatCard
           label="Under Review"
           value={stats.underReview}
           accent="text-amber-600"
           sub={{ text: "Needs attention", className: "text-amber-600" }}
         />
         <StatCard
-          label="Compliant"
-          value={stats.compliant}
-          accent="text-emerald-600"
-          sub={{ text: "≥80 score", className: "text-emerald-600" }}
-        />
-        <StatCard
-          label="Critical Issues"
+          label="Attention Required"
           value={stats.critical}
           accent="text-rose-600"
           sub={{ text: "Requires fix", className: "text-rose-600" }}
@@ -395,18 +395,6 @@ export default function MyManuscriptsScreen({
           >
             <ChevronRight className="h-4 w-4" />
           </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-slate-500">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Compliant ≥80
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-sm bg-amber-500" /> Needs revision 50–79
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-sm bg-rose-500" /> Critical &lt;50
-          </span>
         </div>
       </div>
 

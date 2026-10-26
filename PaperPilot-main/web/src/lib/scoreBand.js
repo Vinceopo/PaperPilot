@@ -20,7 +20,7 @@ export function scoreBand(score) {
   if (n >= 80) {
     return {
       key: "compliant",
-      label: "COMPLIANT",
+      label: "GOOD STANDING",
       status: "compliant",
       color: "emerald",
       barClass: "bg-emerald-500",
@@ -32,7 +32,7 @@ export function scoreBand(score) {
   if (n >= 50) {
     return {
       key: "needs_revision",
-      label: "NEEDS REVISION",
+      label: "UNDER REVIEW",
       status: "needs_revision",
       color: "amber",
       barClass: "bg-amber-500",
@@ -43,7 +43,7 @@ export function scoreBand(score) {
   }
   return {
     key: "critical",
-    label: "CRITICAL",
+    label: "ATTENTION REQUIRED",
     status: "critical",
     color: "rose",
     barClass: "bg-rose-500",
