@@ -94,7 +94,7 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
     setBusy(true);
     try {
       await resetPasswordWithOtp({ email: email.trim(), resetToken, newPassword: password });
-      onDone("Password updated. Sign in with your new password.");
+      onDone?.();
     } catch (err) {
       setFormError(err.message);
     } finally {

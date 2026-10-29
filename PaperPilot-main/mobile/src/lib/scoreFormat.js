@@ -102,8 +102,8 @@ function issuesFromScore(total, score) {
 
 /**
  * Per-category display counts from the backend unit fields.
- * Ring % is (total − issues) / total × 100 from those same counts
- * (e.g. 66 of 218 → 30.28% non-compliant → 69.72% on the ring).
+ * Ring % is (total − issues) / total × 100 using the same issue count shown
+ * on the card (Issue Tracing occurrences when available), e.g. 16 of 24 → 33.33%.
  *
  * Never invent unit totals from score alone (that made category sums diverge
  * from the header Total Units). Missing counts stay null → N/A on the card.
@@ -136,7 +136,8 @@ export function resolveCategoryUnitDisplays(rows = []) {
       compliant = total - nonCompliant;
     }
 
-    // Prefer occurrence counts so "issues found" and ring % share one formula.
+    // Prefer Issue Tracing occurrence counts so "issues found" and ring % use one formula:
+    // (total − issues) / total. Cap issues at total so the arithmetic stays valid.
     const occurrenceIssues = hasValue(row.issueCount)
       ? Math.max(0, Math.round(Number(row.issueCount)))
       : null;
@@ -208,7 +209,7 @@ export function reconcileDisplayedUnits(overall = {}, categoryDisplays = []) {
 }
 
 /**
- * Category card subtitle. ``issueCount`` is Issue Tracing occurrences (not failed units).
+ * Category card subtitle. Ring % is (total − min(issueCount, total)) / total from these same figures.
  */
 export function formatCategoryIssuesDetail(issueCount, total) {
   if (!hasValue(total)) return null;

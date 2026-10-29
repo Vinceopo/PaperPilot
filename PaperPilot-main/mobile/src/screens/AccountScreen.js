@@ -14,7 +14,7 @@ import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useAppData } from "../context/AppDataContext";
 import { auth } from "../firebase";
 import { getProfile, otpBypassToken, resetPasswordWithOtp, sendOtp, updateUserProfile } from "../api";
-import { signOutUser } from "../services/auth";
+import { markPasswordChanged, signOutUser } from "../services/auth";
 import { loadNotifications, pushNotification, saveNotifications } from "../lib/notifications";
 import { nameError, phoneError, usernameError } from "../lib/validation";
 import { isPaidTier, planName } from "../lib/plans";
@@ -356,6 +356,7 @@ export default function AccountScreen({ navigation }) {
         });
         await saveNotifications(next, user.uid);
       }
+      await markPasswordChanged();
       await signOutUser(auth);
     } catch (err) {
       setPwError(err?.message || "Could not update the password.");

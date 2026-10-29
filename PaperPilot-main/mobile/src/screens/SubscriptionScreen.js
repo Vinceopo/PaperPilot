@@ -10,6 +10,11 @@ import BackToDashboardButton from "../components/ui/BackToDashboardButton";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 import {
+  clearPendingCheckout,
+  readPendingCheckout,
+  savePendingCheckout,
+} from "../lib/pendingCheckout";
+import {
   ANNUAL_SAVINGS_LABEL,
   FREE_FEATURES,
   PREMIUM_FEATURES,
@@ -176,7 +181,8 @@ function PaidPlanCard({ plan, selected, isCurrent, billingPeriod, features, badg
 
 /** Subscription management — plans, PayMongo checkout, cancel, history (mirrors the web page). */
 export default function SubscriptionScreen({ navigation }) {
-  const { subscription, applySubscription, refreshSubscription, handleBackToDashboard } = useAppData();
+  const { user, subscription, applySubscription, refreshSubscription, handleBackToDashboard } =
+    useAppData();
   const tier = normalizeTier(subscription?.tier);
   // Any paid plan (Premium or Pro).
   const isPremium = isPaidTier(tier);
@@ -204,6 +210,40 @@ export default function SubscriptionScreen({ navigation }) {
       setBillingPeriod(subscription.billing_period === "annual" ? "annual" : "monthly");
     }
   }, [subscription?.billing_period]);
+
+  // Resume PayMongo confirmation after an app kill during checkout (matches web return flow).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const uid = user?.uid;
+      if (!uid) return;
+      const checkoutSessionId = await readPendingCheckout(uid);
+      if (!checkoutSessionId || cancelled) return;
+      setBusy(true);
+      try {
+        let confirmed = null;
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          confirmed = await confirmCheckoutPayment({ checkoutSessionId }).catch(() => null);
+          if (confirmed && !confirmed.pending && isPaidTier(confirmed.tier)) break;
+          if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+        if (cancelled) return;
+        if (confirmed && !confirmed.pending && isPaidTier(confirmed.tier)) {
+          applySubscription(confirmed);
+          setCheckoutOpen(false);
+          setSuccess(`Welcome to ${planName(confirmed.tier)}! Your PayMongo payment was confirmed.`);
+          await clearPendingCheckout();
+        } else {
+          await refreshSubscription?.();
+        }
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid, applySubscription, refreshSubscription]);
 
   const price = planPrice(selectedPlan, billingPeriod);
   const perPeriod = billingPeriod === "annual" ? "year" : "month";
@@ -245,8 +285,12 @@ export default function SubscriptionScreen({ navigation }) {
           "The PayMongo payment page could not be opened. You were not charged. Try again in a minute."
         );
       }
+      if (user?.uid && result?.checkout_session_id) {
+        await savePendingCheckout(user.uid, result.checkout_session_id);
+      }
       const returnedUrl = String((await openBillingSession(url)) || "");
       if (returnedUrl.includes("status=canceled")) {
+        await clearPendingCheckout();
         setPaymentCanceled(true);
         setSelectedPlan(plan);
         setSuccess("Payment canceled. No charges were made.");
@@ -268,6 +312,7 @@ export default function SubscriptionScreen({ navigation }) {
         }
       }
       if (isActivated(confirmed)) {
+        await clearPendingCheckout();
         applySubscription(confirmed);
         setCheckoutOpen(false);
         setSuccess(`Welcome to ${planName(plan)}! Your PayMongo payment was confirmed.`);

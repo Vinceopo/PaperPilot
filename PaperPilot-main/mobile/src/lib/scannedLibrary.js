@@ -14,8 +14,59 @@ function dismissedKey(uid) {
   return uid ? `paperpilot.dismissedScans.${uid}` : "paperpilot.dismissedScans";
 }
 
+// Device storage is limited; a long thesis can report thousands of issue
+// locations, so stored copies are capped and the full result is refetched by scanId.
+const LOCATION_CAPS = [300, 80, 15, 0];
+
 export function versionScanId(version) {
   return String(version?.scanId || version?.scanResult?.scanId || "");
+}
+
+function capLocations(list, cap) {
+  const locations = Array.isArray(list) ? list : [];
+  return locations.length > cap ? locations.slice(0, cap) : locations;
+}
+
+function compactVersion(version, cap) {
+  let trimmed = Boolean(version.trimmed);
+  const issues = (version.issues || []).map((issue) => {
+    const locations = capLocations(issue.locations, cap);
+    if (locations.length !== (issue.locations || []).length) trimmed = true;
+    return { ...issue, locations, count: issue.count == null ? null : issue.count };
+  });
+  let scanResult = version.scanResult;
+  if (scanResult && typeof scanResult === "object") {
+    const { documentPreview: _preview, ...rest } = scanResult;
+    scanResult = {
+      ...rest,
+      formatChecks: (rest.formatChecks || []).map((check) => {
+        const locations = capLocations(check.locations, cap);
+        if (locations.length !== (check.locations || []).length) trimmed = true;
+        return { ...check, locations, count: check.count == null ? null : check.count };
+      }),
+    };
+  }
+  return { ...version, scanId: versionScanId(version) || undefined, issues, scanResult, trimmed };
+}
+
+function compactLibrary(items, cap) {
+  return (items || []).map((m) => ({
+    ...m,
+    versions: (m.versions || []).map((v) => compactVersion(v, cap)),
+  }));
+}
+
+function summaryOnlyLibrary(items) {
+  return (items || []).map((m) => ({
+    ...m,
+    versions: (m.versions || []).map((v) => ({
+      ...v,
+      scanId: versionScanId(v) || undefined,
+      issues: (v.issues || []).map(({ locations: _locations, ...issue }) => issue),
+      scanResult: null,
+      trimmed: true,
+    })),
+  }));
 }
 
 export async function loadDismissedScanIds(uid) {
@@ -60,12 +111,18 @@ export async function loadScannedManuscripts(uid) {
   }
 }
 
+/** Returns false only when even the summary-only copy could not be written. */
 export async function saveScannedManuscripts(items, uid) {
-  try {
-    await AsyncStorage.setItem(storageKey(uid), JSON.stringify(items || []));
-  } catch {
-    // Ignore quota failures.
+  const attempts = [...LOCATION_CAPS.map((cap) => () => compactLibrary(items, cap)), () => summaryOnlyLibrary(items)];
+  for (const build of attempts) {
+    try {
+      await AsyncStorage.setItem(storageKey(uid), JSON.stringify(build()));
+      return true;
+    } catch {
+      // Quota exceeded — retry with a smaller copy.
+    }
   }
+  return false;
 }
 
 function versionTime(version) {
@@ -232,12 +289,13 @@ export function mergeServerScans(items, summaries, dismissed = new Set(), delete
       list[idx] = { ...list[idx], serverManuscriptId: manuscriptId };
     }
     const score = scan.overall_score == null ? null : Number(scan.overall_score);
+    const createdAt = String(scan.created_at || new Date().toISOString());
     list[idx].versions.push({
       id: `ver-${scanId}`,
       manuscriptId: list[idx].id,
       versionNumber: Number(scan.version_number) || 0,
-      scannedAt: String(scan.created_at || new Date().toISOString()),
-      scannedDate: String(scan.created_at || new Date().toISOString()).slice(0, 10),
+      scannedAt: createdAt,
+      scannedDate: createdAt.slice(0, 10),
       score,
       status: scoreBand(score).status,
       issues: [],
@@ -298,10 +356,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
   const serverVersion = Number(versionNumber) || Number(scanResult.versionNumber) || 0;
   const nextVersion = serverVersion > 0 ? serverVersion : maxVer + 1;
 
-  const score =
-    scanResult.overallScore == null || !Number.isFinite(Number(scanResult.overallScore))
-      ? null
-      : Number(scanResult.overallScore);
+  const score = scanResult.overallScore == null ? null : Number(scanResult.overallScore);
   const status = scoreBand(score).status;
 
   const scannedAt = String(scanResult.scannedAt || new Date().toISOString());
@@ -316,6 +371,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
     ...versionPartsFromResult(scanResult),
     scanId: scanResult.scanId || undefined,
     versionId: scanResult.versionId || "",
+    // Full scan payload so My Manuscripts can download the same PDF as Scan Results.
     scanResult: {
       ...scanResult,
       documentId,
@@ -344,7 +400,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
       versions: [version],
     });
   }
-  return list;
+  return dedupeManuscriptsByTitle(list);
 }
 
 /**
@@ -386,7 +442,7 @@ export function versionToScanResult(manuscript, version) {
     versionNumber: version.versionNumber,
     scoreBreakdown: (version.breakdown || []).map((b) => ({
       metric: b.section,
-      score: b.score == null || !Number.isFinite(Number(b.score)) ? null : Number(b.score),
+      score: b.score == null ? null : Number(b.score),
       status: b.status || null,
       unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
       unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
@@ -394,6 +450,18 @@ export function versionToScanResult(manuscript, version) {
       issueCount: b.issueCount == null ? null : Number(b.issueCount),
       failedShare: b.failedShare == null ? null : Number(b.failedShare),
     })),
+    unitsChecked: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsChecked == null ? 0 : Number(b.unitsChecked) || 0),
+      0,
+    ),
+    unitsPassed: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsPassed == null ? 0 : Number(b.unitsPassed) || 0),
+      0,
+    ),
+    unitsFailed: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsFailed == null ? 0 : Number(b.unitsFailed) || 0),
+      0,
+    ),
     formatChecks: issues.map((issue, idx) => ({
       id: issue.issue_type || `issue-${idx}`,
       issue_type: issue.issue_type || "",

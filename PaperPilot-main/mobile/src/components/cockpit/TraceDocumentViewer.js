@@ -4,20 +4,17 @@ import { WebView } from "react-native-webview";
 import { File, Paths } from "expo-file-system";
 import { colors } from "../../theme";
 import { buildDocumentPages, lineMatchesHighlight } from "../../lib/documentPages";
+import {
+  hitPaint,
+  isPaginationTarget,
+  isMarginTarget,
+  marginSide,
+  pageRegion,
+} from "../../lib/documentPreviewLocate";
 import { TRACE_VIEWER_HTML } from "./traceViewerHtml";
 
 /** Base64 slice size; a multiple of 4 so every chunk decodes on its own. */
 const CHUNK = 1 << 20;
-
-const HIT = {
-  critical: { bg: "rgba(244, 63, 94, 0.42)", edge: "#e11d48" },
-  moderate: { bg: "rgba(249, 115, 22, 0.42)", edge: "#ea580c" },
-  minor: { bg: "rgba(251, 191, 36, 0.55)", edge: "#d97706" },
-};
-
-function hitPaint(severity) {
-  return HIT[String(severity || "").toLowerCase()] || HIT.minor;
-}
 
 function kindOf(name, url) {
   const value = String(name || "").toLowerCase();
@@ -36,31 +33,6 @@ async function readDocumentBase64({ file, url, name }) {
   const target = new File(Paths.cache, `trace-${safe}`);
   const downloaded = await File.downloadFileAsync(url, target, { idempotent: true });
   return downloaded.base64();
-}
-
-function marginSide(text, extras = {}) {
-  const explicit = String(extras.margin_side || extras.marginSide || "").toLowerCase();
-  if (explicit === "top" || explicit === "bottom" || explicit === "left" || explicit === "right") {
-    return explicit;
-  }
-  const issueType = String(extras.issue_type || extras.issueType || "").toLowerCase();
-  const fromType = issueType.match(/^(top|bottom|left|right)_margin$/);
-  if (fromType) return fromType[1];
-  const value = String(text || "").toLowerCase();
-  if (value.includes("right margin")) return "right";
-  if (value.includes("left margin")) return "left";
-  if (value.includes("top margin")) return "top";
-  if (value.includes("bottom margin")) return "bottom";
-  return "";
-}
-
-function pageRegion(target = {}) {
-  const explicit = String(target.page_region || target.pageRegion || "").toLowerCase();
-  if (explicit === "top" || explicit === "bottom") return explicit;
-  const text = `${target.finding || ""} ${target.recommendation || ""}`.toLowerCase();
-  if (/\bbottom\b/.test(text)) return "bottom";
-  if (/\btop\b/.test(text)) return "top";
-  return "top";
 }
 
 function MarginBand({ side, severity }) {
@@ -88,11 +60,8 @@ function TextTrace({ preview, pageCount, formatChecks, highlight, emptyLabel }) 
     () => buildDocumentPages({ preview, pageCount, formatChecks }),
     [preview, pageCount, formatChecks]
   );
-  const marginTrace = String(highlight?.section || "").toLowerCase() === "margins";
-  const paginationBand =
-    String(highlight?.section || "").toLowerCase() === "pagination" &&
-    !highlight?.bbox &&
-    highlight?.line == null;
+  const marginTrace = isMarginTarget(highlight || {});
+  const paginationBand = isPaginationTarget(highlight || {});
 
   useEffect(() => {
     if (!highlight?.page || !scrollRef.current) return;

@@ -20,6 +20,7 @@ import {
   resolveCategoryUnitDisplays,
   roundSharesToTotal,
 } from "../lib/scoreFormat";
+import { isApproximateTracing } from "../lib/documentPreviewLocate";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 
 function scoreBand(score) {
@@ -442,6 +443,12 @@ function ScanResultBody({ navigation }) {
             <Text style={styles.previewSub}>
               Starts on page 1. Scroll to read every page, or trace an issue to jump to it.
             </Text>
+            {isApproximateTracing(pagination) ? (
+              <Text style={styles.approxNote}>
+                Approximate locations — this Word file was scanned without exact page breaks. Highlights
+                may be near the issue. For precise tracing, upload a PDF of the same manuscript.
+              </Text>
+            ) : null}
           </View>
           <Pressable
             onPress={openReferenceTracing}
@@ -705,6 +712,18 @@ const styles = StyleSheet.create({
   },
   previewTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
   previewSub: { marginTop: 2, fontSize: 11, lineHeight: 16, color: "#64748b" },
+  approxNote: {
+    marginTop: 8,
+    fontSize: 11,
+    lineHeight: 16,
+    color: "#92400e",
+    backgroundColor: "#fffbeb",
+    borderWidth: 1,
+    borderColor: "#fde68a",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
   traceBtn: {
     borderRadius: 8,
     backgroundColor: "#059669",

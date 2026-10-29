@@ -514,8 +514,8 @@ export function AppDataProvider({ children }) {
     }
   }, [user, libraryUid, loadDashboard]);
 
-  // Pick up formats, versions, scan counts and plan changes made on another device:
-  // on returning to the app and every 30 seconds while it is open.
+  // Cross-device updates: refresh when the app returns to the foreground only
+  // (matches web focus/visibility refresh — no 30s polling).
   useEffect(() => {
     if (!user?.uid || libraryUid !== user.uid) return undefined;
     const refresh = () => {
@@ -529,9 +529,7 @@ export function AppDataProvider({ children }) {
     const listener = AppState.addEventListener("change", (state) => {
       if (state === "active") refresh();
     });
-    const timer = setInterval(refresh, 30000);
     return () => {
-      clearInterval(timer);
       listener.remove();
     };
   }, [user?.uid, libraryUid, loadDashboard]);

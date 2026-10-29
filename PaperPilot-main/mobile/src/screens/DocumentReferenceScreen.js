@@ -7,6 +7,7 @@ import { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPan
 import TraceDocumentViewer from "../components/cockpit/TraceDocumentViewer";
 import BackToDashboardButton from "../components/ui/BackToDashboardButton";
 import PrimaryButton from "../components/ui/PrimaryButton";
+import { isApproximateTracing } from "../lib/documentPreviewLocate";
 
 const ACTIVE_TONE = {
   critical: { backgroundColor: "rgba(255,241,242,0.9)", borderColor: "#fda4af" },
@@ -37,6 +38,7 @@ function toTarget(entry) {
     issue_type: entry.issue_type || "",
     margin_side: entry.margin_side || loc.margin_side || loc.marginSide || "",
     page_region: entry.page_region || loc.page_region || loc.pageRegion || "",
+    page_align: entry.page_align || loc.page_align || loc.pageAlign || "",
   };
 }
 
@@ -123,9 +125,7 @@ export default function DocumentReferenceScreen({ navigation }) {
         <Text style={styles.hint}>
           Tap an issue to jump to the matching page and line in your document.
         </Text>
-        {String(result?.pagination?.fidelity || "")
-          .toLowerCase()
-          .includes("estimat") ? (
+        {isApproximateTracing(result?.pagination) ? (
           <Text style={styles.approxNote}>
             Approximate locations — Word page breaks were estimated. For precise tracing, upload a
             PDF of the same manuscript.
