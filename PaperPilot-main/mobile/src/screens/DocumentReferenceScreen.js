@@ -123,6 +123,14 @@ export default function DocumentReferenceScreen({ navigation }) {
         <Text style={styles.hint}>
           Tap an issue to jump to the matching page and line in your document.
         </Text>
+        {String(result?.pagination?.fidelity || "")
+          .toLowerCase()
+          .includes("estimat") ? (
+          <Text style={styles.approxNote}>
+            Approximate locations — Word page breaks were estimated. For precise tracing, upload a
+            PDF of the same manuscript.
+          </Text>
+        ) : null}
       </View>
 
       <View style={styles.docFrame}>
@@ -191,6 +199,18 @@ const styles = StyleSheet.create({
   fullBtnText: { fontSize: 12, fontWeight: "700", color: colors.white },
   title: { marginTop: 10, fontSize: 17, fontWeight: "700", color: "#172033" },
   hint: { marginTop: 2, fontSize: 12, color: colors.muted },
+  approxNote: {
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#fde68a",
+    backgroundColor: "#fffbeb",
+    fontSize: 11,
+    lineHeight: 16,
+    color: "#92400e",
+  },
   docFrame: {
     flex: 1.35,
     marginHorizontal: 12,

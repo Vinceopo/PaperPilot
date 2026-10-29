@@ -262,9 +262,12 @@ const SCRIPT = String.raw`
     var bbox = t.bbox;
     pdfLineYs(spec).then(function (ys) {
       var line = Number(t.line) || 0;
+      var rounded = line ? Math.round(line) : 0;
       var bboxY = bbox && isFinite(Number(bbox.y)) ? Number(bbox.y) * pageHeight : null;
-      var lineY = line && ys.length
-        ? ys[Math.min(ys.length, Math.max(1, Math.round(line))) - 1]
+      // When pdf.js clustered fewer rows than the scanner line, prefer bbox over clamp-to-last.
+      var pastEnd = rounded > 0 && ys.length && rounded > ys.length && bboxY != null;
+      var lineY = !pastEnd && line && ys.length
+        ? ys[Math.min(ys.length, Math.max(1, rounded)) - 1]
         : null;
       var useLine = lineY != null && isFinite(Number(lineY));
       if (useLine && bboxY != null) {
@@ -273,7 +276,7 @@ const SCRIPT = String.raw`
       }
       clearMarks();
       if (useLine) {
-        var next = ys[Math.min(ys.length, Math.max(1, Math.round(line)))];
+        var next = ys[Math.min(ys.length, Math.max(1, rounded))];
         var markHeight = next != null && next > lineY ? Math.max(14, next - lineY) : Math.max(18, pageHeight * 0.03);
         paintBox(pageEl, { top: lineY + "px", left: "8%", width: "84%", height: markHeight + "px" }, t.severity);
         scrollMarkIntoView(elementTopIn(pageEl, lineY), markHeight);
@@ -589,14 +592,31 @@ const SCRIPT = String.raw`
       if (state.pending) trace(state.pending);
     }).catch(function (err) { fail(err && err.message); });
   }
+  function resolveDocxPageNumber(sections, t) {
+    var wanted = Math.round(Number(t.page));
+    if (!isFinite(wanted) || wanted < 1 || !sections.length) return null;
+    if (wanted <= sections.length) return wanted;
+    // Scanner page beyond preview sheets — locate via excerpt, never clamp onto last page.
+    var needles = excerptNeedles(t.excerpt || t.finding || "");
+    var best = null;
+    for (var i = 0; i < sections.length; i += 1) {
+      var text = normalizeNeedle(sections[i].innerText || "");
+      for (var n = 0; n < needles.length; n += 1) {
+        if (text.indexOf(needles[n]) < 0) continue;
+        var score = needles[n].length;
+        if (!best || score > best.score) best = { page: i + 1, score: score };
+      }
+    }
+    return best ? best.page : null;
+  }
   function traceDocx(t) {
     var sections = state.docxSections;
     if (!sections.length) return;
     clearMarks();
     // Never invent page 1 when the issue has no page pin.
     if (t.page == null || t.page === "") return;
-    var pageNumber = Math.min(sections.length, Math.max(1, Number(t.page)));
-    if (!isFinite(pageNumber) || pageNumber < 1) return;
+    var pageNumber = resolveDocxPageNumber(sections, t);
+    if (!pageNumber) return;
     if (isMarginTarget(t) || (isPaginationTarget(t) && !t.bbox && !t.excerpt)) {
       var pageEl = sections[pageNumber - 1];
       var side = isMarginTarget(t)

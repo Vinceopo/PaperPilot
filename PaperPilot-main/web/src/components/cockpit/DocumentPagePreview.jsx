@@ -28,6 +28,7 @@ import {
   pageRegion,
   pagesByDistance,
   pickBestRects,
+  resolveDocxPageIndex,
   resolvePdfMarkY,
   shouldUsePaginationEdge,
   visualLineTarget,
@@ -125,42 +126,6 @@ function paginateOversizedDocxSection(host) {
   [...wrapper.querySelectorAll(":scope > section")].forEach((section, index) => {
     section.dataset.page = String(index + 1);
   });
-}
-
-/**
- * Map a scanner page onto a rendered DOCX section.
- * Never silently clamp a high page onto the last preview sheet — that painted
- * page-12 pagination chips on page 2. Prefer exact index, then excerpt search.
- */
-function resolveDocxPageIndex(sections, target, pageCountHint = 0) {
-  const wanted = Math.round(Number(target.page));
-  if (!Number.isFinite(wanted) || wanted < 1 || !sections.length) return null;
-  if (wanted <= sections.length) {
-    return { index: wanted - 1, pageNumber: wanted };
-  }
-
-  const needles = excerptNeedles(target.excerpt || target.finding || "");
-  if (needles.length) {
-    let best = null;
-    for (let i = 0; i < sections.length; i += 1) {
-      const text = normalizeNeedle(sections[i].innerText || "");
-      for (const needle of needles) {
-        if (!text.includes(needle)) continue;
-        const score = needle.length;
-        if (!best || score > best.score) best = { index: i, pageNumber: i + 1, score };
-      }
-    }
-    if (best) return { index: best.index, pageNumber: best.pageNumber };
-  }
-
-  // Last resort: proportional map using the scan's page count (still better than clamp-to-end).
-  const span = Math.max(sections.length, Math.round(Number(pageCountHint) || 0), wanted);
-  if (span <= 1) return { index: 0, pageNumber: 1 };
-  const mapped = Math.min(
-    sections.length,
-    Math.max(1, Math.round(((wanted - 1) / Math.max(1, span - 1)) * (sections.length - 1)) + 1)
-  );
-  return { index: mapped - 1, pageNumber: mapped };
 }
 
 function targetFrom(scrollTarget, highlight) {
