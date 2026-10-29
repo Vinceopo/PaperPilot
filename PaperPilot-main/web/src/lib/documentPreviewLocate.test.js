@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   excerptNeedles,
+  isApproximateTracing,
   pageAlign,
   pageRegion,
   pickBestRects,
   resolveDocxHighlight,
+  resolveDocxPageIndex,
   resolvePdfMarkY,
   shouldUsePaginationEdge,
   visualLineTarget,
@@ -103,12 +105,51 @@ describe("resolvePdfMarkY", () => {
     expect(resolvePdfMarkY({ line: 4, ys, pageHeight: 800 })).toBe(100);
   });
 
-  it("clamps past-the-end line numbers onto the last measured row", () => {
+  it("clamps past-the-end line numbers onto the last measured row when no bbox", () => {
     expect(resolvePdfMarkY({ line: 99, ys, pageHeight: 800 })).toBe(120);
+  });
+
+  it("prefers bbox when the scanner line is past preview row count", () => {
+    // pdf.js clustered fewer rows than PyMuPDF — do not clamp onto the last row.
+    expect(resolvePdfMarkY({ line: 99, ys, bboxY: 55, pageHeight: 800 })).toBe(55);
   });
 
   it("uses bbox when no line pin exists", () => {
     expect(resolvePdfMarkY({ line: null, ys, bboxY: 55, pageHeight: 800 })).toBe(55);
+  });
+});
+
+describe("resolveDocxPageIndex", () => {
+  const sections = [
+    { innerText: "Title page content" },
+    { innerText: "CHAPTER I INTRODUCTION methods overview" },
+    { innerText: "Results and discussion" },
+  ];
+
+  it("maps exact pages when the preview has that sheet", () => {
+    expect(resolveDocxPageIndex(sections, { page: 2 })).toEqual({
+      index: 1,
+      pageNumber: 2,
+      approximate: false,
+    });
+  });
+
+  it("uses excerpt search when the scanner page is beyond preview sheets", () => {
+    expect(
+      resolveDocxPageIndex(sections, { page: 9, excerpt: "CHAPTER I INTRODUCTION" })
+    ).toEqual({ index: 1, pageNumber: 2, approximate: true });
+  });
+
+  it("does not invent a page via proportional remap when nothing matches", () => {
+    expect(resolveDocxPageIndex(sections, { page: 9, excerpt: "" }, 9)).toBeNull();
+  });
+});
+
+describe("isApproximateTracing", () => {
+  it("flags estimated DOCX pagination", () => {
+    expect(isApproximateTracing({ fidelity: "estimated" })).toBe(true);
+    expect(isApproximateTracing({ fidelity: "pdf_source" })).toBe(false);
+    expect(isApproximateTracing({ fidelity: "word_rendered" })).toBe(false);
   });
 });
 

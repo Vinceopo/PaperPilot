@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { categoryForIssue, normalizeDetectedIssues } from "./IssuesDetectedPanel.jsx";
 import { normalizeIssueLocation } from "../../lib/scanMapper.js";
+import { isApproximateTracing } from "../../lib/documentPreviewLocate.js";
 
 const SEVERITY = {
   minor: {
@@ -86,6 +87,7 @@ export default function IssueTracingSection({
   const formatChecks = result?.formatChecks || [];
   const pageCount = result?.pageCount || 0;
   const paginationNote = result?.pagination?.note || "";
+  const approximateTrace = isApproximateTracing(result?.pagination);
 
   const { entries, hiddenLocations } = useMemo(
     () => normalizeDetectedIssues(formatChecks, pageCount),
@@ -240,6 +242,13 @@ export default function IssueTracingSection({
             ? ` ${hiddenLocations} additional matching locations are counted in the totals.`
             : ""}
         </p>
+        {approximateTrace ? (
+          <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900">
+            Approximate locations — this Word file was scanned without exact page breaks. Highlights
+            may be off by a page. For precise tracing, upload a PDF of the same manuscript (or
+            open/save the DOCX in Word so rendered page breaks are stored).
+          </p>
+        ) : null}
         {paginationNote ? (
           <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{paginationNote}</p>
         ) : null}

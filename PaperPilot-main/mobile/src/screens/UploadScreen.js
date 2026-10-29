@@ -84,10 +84,7 @@ function rejectionMessage(rejection, kind = "mechanics", tier = "free", maxBytes
   if (rejection.kind === "type") {
     const allowed =
       kind === "manuscript" ? MANUSCRIPT_ACCEPTED_EXTENSIONS : MECHANICS_ACCEPTED_EXTENSIONS;
-    const label =
-      kind === "manuscript"
-        ? `a Word document (${allowed.join(", ")})`
-        : `a PDF or Word document (${allowed.join(", ")})`;
+    const label = `a PDF or Word document (${allowed.join(", ")})`;
     return `'${rejection.name}' isn't a supported file type. Please upload ${label}.`;
   }
   return namedOversizeFileMessage(rejection, tier, maxBytes);
@@ -1132,7 +1129,7 @@ export default function UploadScreen({ navigation }) {
                         : msUploading
                           ? `${formatFileSize(msFile.size)} · Uploading — see progress below`
                           : `${formatFileSize(msFile.size)} · Preview appears below — confirm Upload when ready`
-                      : `Tap to browse · .docx · Max ${formatFileSize(maxBytes)}`}
+                      : `Tap to browse · .pdf and .docx · Max ${formatFileSize(maxBytes)}`}
                   </Text>
                   <View style={styles.browsePill}>
                     <Text style={styles.browseText}>Browse files</Text>

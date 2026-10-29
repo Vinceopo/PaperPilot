@@ -31,9 +31,13 @@ export const MECHANICS_ACCEPT_ATTRIBUTE = [
   ...MECHANICS_ACCEPTED_MIME_TYPES,
 ].join(",");
 
-/** Manuscripts for analysis: DOCX only. */
-export const MANUSCRIPT_ACCEPTED_EXTENSIONS = [".docx"];
+/**
+ * Manuscripts for analysis: PDF or DOCX.
+ * PDF keeps fixed source pages + bboxes for precise Issue Tracing; DOCX may estimate pages.
+ */
+export const MANUSCRIPT_ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
 export const MANUSCRIPT_ACCEPTED_MIME_TYPES = [
+  "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ];
 export const MANUSCRIPT_ACCEPT_ATTRIBUTE = [

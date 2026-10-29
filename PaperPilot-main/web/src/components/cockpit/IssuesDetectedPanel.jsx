@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { normalizeIssueLocation } from "../../lib/scanMapper.js";
 
 const SEVERITY = {
   minor: {
@@ -114,14 +115,18 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
     }
 
     rawLocs.forEach((loc, locIdx) => {
-      const page = loc?.page == null || loc.page === "" ? null : Number(loc.page);
-      const line = loc?.line == null || loc.line === "" ? null : Number(loc.line);
-      if (page != null && !Number.isNaN(page)) maxPage = Math.max(maxPage, page);
-      const bbox = loc?.bbox;
+      // Same contract as mobile: always normalize page_index/line_index + pagination pins.
+      const normalized = normalizeIssueLocation(loc);
+      const page =
+        normalized.page == null || Number.isNaN(normalized.page) ? null : normalized.page;
+      const line =
+        normalized.line == null || Number.isNaN(normalized.line) ? null : normalized.line;
+      if (page != null) maxPage = Math.max(maxPage, page);
+      const bbox = normalized.bbox;
       const bboxKey = bbox
         ? [bbox.x, bbox.y, bbox.w, bbox.h].map((n) => Number(n || 0).toFixed(3)).join(",")
         : "";
-      const excerpt = String(loc?.excerpt || "")
+      const excerpt = String(normalized.excerpt || "")
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 80)
@@ -134,8 +139,7 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
       const locExplanation = typeof loc?.explanation === "string" ? loc.explanation.trim() : "";
       const locRecommendation =
         typeof loc?.recommendation === "string" ? loc.recommendation.trim() : "";
-      const section = loc?.section || check.section || "General";
-      const pagination = String(section).toLowerCase() === "pagination";
+      const section = normalized.section || check.section || "General";
       // Keep "Why"/"Fix" text on the card's own page (shared issue text often reused page 1 / folio 12).
       const alignPageMention = (text) => {
         if (page == null || !text) return text;
@@ -148,10 +152,10 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
         id: `${check.id || check.issue_type || "chk"}-${checkIdx}-${locIdx}`,
         issue_type: issueType,
         page,
-        // Pagination highlights the header/footer chip — never body line 1.
-        line: pagination ? null : line != null && !Number.isNaN(line) ? line : null,
+        // Pagination line/excerpt already cleared inside normalizeIssueLocation.
+        line,
         section,
-        location: loc && typeof loc === "object" ? loc : null,
+        location: normalized,
         severity,
         finding: alignPageMention(
           locSummary ||
@@ -170,9 +174,11 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
         ),
         recommendation: alignPageMention(locRecommendation || check.recommendation || ""),
         result: check.result,
-        margin_side: loc?.margin_side || loc?.marginSide || "",
-        page_region: loc?.page_region || loc?.pageRegion || "",
-        page_align: loc?.page_align || loc?.pageAlign || "",
+        bbox: normalized.bbox,
+        excerpt: normalized.excerpt,
+        margin_side: normalized.margin_side || loc?.margin_side || loc?.marginSide || "",
+        page_region: normalized.page_region || loc?.page_region || loc?.pageRegion || "",
+        page_align: normalized.page_align || loc?.page_align || loc?.pageAlign || "",
       };
       draft.category = categoryForIssue(draft);
       entries.push(draft);

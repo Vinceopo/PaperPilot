@@ -25,7 +25,7 @@ function validateFile(file, maxBytes) {
 function rejectionMessage(rejection, tier, maxBytes) {
   if (!rejection) return "";
   if (rejection.kind === "type") {
-    return `'${rejection.name}' isn't a supported file type. Please upload a Word document (${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(", ")}).`;
+    return `'${rejection.name}' isn't a supported file type. Please upload a PDF or Word document (${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(", ")}).`;
   }
   return namedOversizeFileMessage(rejection, tier, maxBytes);
 }
@@ -317,7 +317,7 @@ export default function ManuscriptPanel({
                     : previewUploading
                       ? `${formatFileSize(file.size)} · Uploading — see progress beside this panel`
                       : `${formatFileSize(file.size)} · Preview appears beside this panel — confirm Upload when ready`
-                  : `Drag & drop or browse · .docx · Max ${formatFileSize(maxBytes)}`}
+                  : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(maxBytes)}`}
               </p>
               <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
                 Browse files

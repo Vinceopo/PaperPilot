@@ -7,6 +7,7 @@ import BackToDashboardButton from "../BackToDashboardButton.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { normalizeDetectedIssues } from "./IssuesDetectedPanel.jsx";
 import { normalizeIssueLocation } from "../../lib/scanMapper.js";
+import { isApproximateTracing } from "../../lib/documentPreviewLocate.js";
 
 function formatLocation(entry) {
   const parts = [];
@@ -31,6 +32,7 @@ export default function ReferenceTracingView({
     () => normalizeDetectedIssues(result?.formatChecks || [], result?.pageCount || 0),
     [result]
   );
+  const approximateTrace = isApproximateTracing(result?.pagination);
 
   const resolveLocation = useCallback(
     (entry) => {
@@ -120,6 +122,12 @@ export default function ReferenceTracingView({
           <p className="text-xs text-slate-500">
             Click an issue to jump to the matching page and line in your document.
           </p>
+          {approximateTrace ? (
+            <p className="mt-2 max-w-xl rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900">
+              Approximate locations — Word page breaks were estimated. For precise tracing, upload a
+              PDF of the same manuscript.
+            </p>
+          ) : null}
         </div>
         <button
           type="button"

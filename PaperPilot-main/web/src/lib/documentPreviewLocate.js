@@ -233,16 +233,23 @@ export function resolveDocxHighlight({
 /**
  * PDF / canvas Y for an issue. Prefer scanner line when available so adjacent
  * lines (13, 14, 15) never collapse onto one shared bbox.
+ * When the preview measured fewer rows than the scanner line (pdf.js vs PyMuPDF
+ * cluster mismatch), prefer bbox instead of clamping onto the last row.
  */
 export function resolvePdfMarkY({ line, ys = [], bboxY = null, pageHeight = 0 } = {}) {
   const rows = Array.isArray(ys) ? ys : [];
   const lineNum = Number(line);
   const hasLine = Number.isFinite(lineNum) && lineNum >= 1;
+  const rounded = hasLine ? Math.round(lineNum) : null;
+  // Number(null) === 0, so treat null/"" as missing — not a real bbox.
+  const hasBbox = bboxY != null && bboxY !== "" && Number.isFinite(Number(bboxY));
+  if (hasLine && rows.length && rounded > rows.length && hasBbox) {
+    return Number(bboxY);
+  }
   const lineY =
     hasLine && rows.length
-      ? rows[Math.min(rows.length, Math.max(1, Math.round(lineNum))) - 1]
+      ? rows[Math.min(rows.length, Math.max(1, rounded)) - 1]
       : null;
-  const hasBbox = Number.isFinite(Number(bboxY));
   if (lineY != null && Number.isFinite(Number(lineY))) {
     if (!hasBbox) return Number(lineY);
     const bbox = Number(bboxY);
@@ -251,6 +258,52 @@ export function resolvePdfMarkY({ line, ys = [], bboxY = null, pageHeight = 0 } 
     return Math.abs(bbox - Number(lineY)) > tolerance ? Number(lineY) : bbox;
   }
   return hasBbox ? Number(bboxY) : 0;
+}
+
+/** True when scanner pages were estimated (DOCX without Word rendered breaks). */
+export function isApproximateTracing(pagination) {
+  const fidelity = String(pagination?.fidelity || "").toLowerCase();
+  return fidelity === "estimated" || fidelity.includes("estimat");
+}
+
+/**
+ * Map a scanner page onto rendered DOCX preview sections.
+ * Prefer exact index, then excerpt search. Never invent a sheet via proportional
+ * remap when counts disagree — that painted wrong-page highlights.
+ */
+export function resolveDocxPageIndex(sections, target = {}, pageCountHint = 0) {
+  const list = Array.isArray(sections) ? sections : [];
+  const wanted = Math.round(Number(target.page));
+  if (!Number.isFinite(wanted) || wanted < 1 || !list.length) return null;
+  if (wanted <= list.length) {
+    return { index: wanted - 1, pageNumber: wanted, approximate: false };
+  }
+
+  const needles = excerptNeedles(target.excerpt || target.finding || "");
+  if (needles.length) {
+    let best = null;
+    for (let i = 0; i < list.length; i += 1) {
+      const text = normalizeNeedle(
+        typeof list[i]?.innerText === "string"
+          ? list[i].innerText
+          : typeof list[i]?.text === "string"
+            ? list[i].text
+            : String(list[i] || "")
+      );
+      for (const needle of needles) {
+        if (!text.includes(needle)) continue;
+        const score = needle.length;
+        if (!best || score > best.score) best = { index: i, pageNumber: i + 1, score };
+      }
+    }
+    if (best) {
+      return { index: best.index, pageNumber: best.pageNumber, approximate: true };
+    }
+  }
+
+  // No safe mapping — caller should leave the preview unmoved rather than jump wrongly.
+  void pageCountHint;
+  return null;
 }
 
 /** Page numbers ordered by distance from the reported page: p, p+1, p-1, p+2, … */
