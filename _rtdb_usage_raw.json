@@ -1,0 +1,530 @@
+{
+  "project": "paperpilotv6",
+  "db": "https://paperpilotv6-default-rtdb.asia-southeast1.firebasedatabase.app",
+  "fetched_at": "2026-10-20T15:35:21.605273+00:00",
+  "Downloads daily (sent_bytes)": {
+    "status": 200,
+    "by_time": {
+      "2026-10-20T15:35:21": 24501021790.0,
+      "2026-10-19T15:35:21": 62761716476.0,
+      "2026-10-18T15:35:21": 1821059071.0,
+      "2026-10-17T15:35:21": 44335607690.0,
+      "2026-10-16T15:35:21": 12661018009.0,
+      "2026-10-15T15:35:21": 6630370454.0,
+      "2026-10-13T15:35:21": 407166904.0,
+      "2026-10-12T15:35:21": 336319607.0,
+      "2026-10-11T15:35:21": 394964162.0,
+      "2026-10-10T15:35:21": 81803700.0,
+      "2026-10-09T15:35:21": 84086616.0,
+      "2026-10-08T15:35:21": 1004491761.0,
+      "2026-10-07T15:35:21": 767195630.0
+    },
+    "series_count": 1,
+    "error": null,
+    "resource_labels": [
+      {
+        "project_id": "paperpilotv6",
+        "location": "asia-southeast1",
+        "table_name": "paperpilotv6-default-rtdb"
+      }
+    ]
+  },
+  "Uploads daily (received_bytes)": {
+    "status": 404,
+    "by_time": {},
+    "series_count": 0,
+    "error": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Cannot find metric(s) that match type = \\\"firebasedatabase.googleapis.com/network/received_bytes_count\\\". If a metric was created recently, it could take up to 10 minutes to become available. Please try again soon.\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n",
+    "resource_labels": []
+  },
+  "HTTPS requests daily": {
+    "status": 200,
+    "by_time": {
+      "2026-10-20T15:35:22": 9284.0,
+      "2026-10-19T15:35:22": 22830.0,
+      "2026-10-18T15:35:22": 408.0,
+      "2026-10-17T15:35:22": 18819.0,
+      "2026-10-16T15:35:22": 5294.0,
+      "2026-10-15T15:35:22": 2980.0,
+      "2026-10-14T15:35:22": 2.0,
+      "2026-10-13T15:35:22": 165.0,
+      "2026-10-12T15:35:22": 50.0,
+      "2026-10-11T15:35:22": 376.0,
+      "2026-10-10T15:35:22": 22.0,
+      "2026-10-09T15:35:22": 13.0,
+      "2026-10-08T15:35:22": 881.0,
+      "2026-10-07T15:35:22": 190.0
+    },
+    "series_count": 2,
+    "error": null,
+    "resource_labels": [
+      {
+        "project_id": "paperpilotv6",
+        "table_name": "paperpilotv6-default-rtdb",
+        "location": "asia-southeast1"
+      },
+      {
+        "project_id": "paperpilotv6",
+        "table_name": "paperpilotv6-default-rtdb",
+        "location": "asia-southeast1"
+      }
+    ]
+  },
+  "Active connections daily mean": {
+    "status": 200,
+    "by_time": {},
+    "series_count": 0,
+    "error": null,
+    "resource_labels": []
+  },
+  "Stored bytes daily mean": {
+    "status": 200,
+    "by_time": {
+      "2026-10-20T15:35:24": 500060265.3333333,
+      "2026-10-19T15:35:24": 482175702.0,
+      "2026-10-18T15:35:24": 477983536.0,
+      "2026-10-17T15:35:24": 438367592.3333333,
+      "2026-10-16T15:35:24": 411041712.6666667,
+      "2026-10-15T15:35:24": 424908871.3333333,
+      "2026-10-14T15:35:24": 439325521.0,
+      "2026-10-13T15:35:24": 437615127.6666667,
+      "2026-10-12T15:35:24": 435918310.0,
+      "2026-10-11T15:35:24": 432625391.0,
+      "2026-10-10T15:35:24": 430979121.0,
+      "2026-10-09T15:35:24": 430979121.0,
+      "2026-10-08T15:35:24": 421011350.0,
+      "2026-10-07T15:35:24": 416456563.3333333
+    },
+    "series_count": 1,
+    "error": null,
+    "resource_labels": [
+      {
+        "location": "asia-southeast1",
+        "project_id": "paperpilotv6",
+        "table_name": "paperpilotv6-default-rtdb"
+      }
+    ]
+  },
+  "Downloads hourly last 3d": {
+    "status": 200,
+    "by_time": {
+      "2026-10-20T15:35:24": 2933099112.0,
+      "2026-10-20T14:35:24": 17578326517.0,
+      "2026-10-20T13:35:24": 664610152.0,
+      "2026-10-20T12:35:24": 2075625592.0,
+      "2026-10-20T10:35:24": 423097161.0,
+      "2026-10-20T09:35:24": 47186374.0,
+      "2026-10-20T06:35:24": 52285133.0,
+      "2026-10-19T17:35:24": 254819089.0,
+      "2026-10-19T16:35:24": 471994125.0,
+      "2026-10-19T15:35:24": 5767900825.0,
+      "2026-10-19T14:35:24": 5349454714.0,
+      "2026-10-19T13:35:24": 82156223.0,
+      "2026-10-19T12:35:24": 861084493.0,
+      "2026-10-19T04:35:24": 66003465.0,
+      "2026-10-19T03:35:24": 66009576.0,
+      "2026-10-18T21:35:24": 187772111.0,
+      "2026-10-18T20:35:24": 4706223238.0,
+      "2026-10-18T19:35:24": 16547777415.0,
+      "2026-10-18T18:35:24": 7480768405.0,
+      "2026-10-18T17:35:24": 6056271615.0,
+      "2026-10-18T16:35:24": 15583353655.0,
+      "2026-10-18T15:35:24": 1769486374.0,
+      "2026-10-18T07:35:24": 58515043.0
+    },
+    "series_count": 1,
+    "error": null,
+    "resource_labels": [
+      {
+        "project_id": "paperpilotv6",
+        "location": "asia-southeast1",
+        "table_name": "paperpilotv6-default-rtdb"
+      }
+    ]
+  },
+  "size_samples": {
+    "owners_status": 200,
+    "owner_count": 15,
+    "samples": [
+      {
+        "owner_prefix": "QYYYqnXo",
+        "manuscript_count": 3,
+        "versions_per_ms": {
+          "6fa6b6f1": 31,
+          "740a84d5": 5,
+          "c88d08a3": 16
+        },
+        "version_samples": [
+          {
+            "bytes": 294023,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 252606,
+            "extracted_text_bytes": 40743,
+            "status": 200
+          },
+          {
+            "bytes": 3721657,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 3571151,
+            "extracted_text_bytes": 147650,
+            "status": 200
+          },
+          {
+            "bytes": 3346930,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 3196269,
+            "extracted_text_bytes": 147803,
+            "status": 200
+          }
+        ],
+        "mechanics_tree_bytes": 7827,
+        "mechanics_count": 3
+      },
+      {
+        "owner_prefix": "LsUfowFh",
+        "manuscript_count": 3,
+        "versions_per_ms": {
+          "7a48e634": 2,
+          "87b31721": 1,
+          "d71dd22d": 2
+        },
+        "version_samples": [
+          {
+            "bytes": 1546233,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 1394830,
+            "extracted_text_bytes": 147014,
+            "status": 200
+          },
+          {
+            "bytes": 81783,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 69060,
+            "extracted_text_bytes": 12237,
+            "status": 200
+          },
+          {
+            "bytes": 1546233,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 1394830,
+            "extracted_text_bytes": 147014,
+            "status": 200
+          }
+        ],
+        "mechanics_tree_bytes": 11892,
+        "mechanics_count": 2
+      },
+      {
+        "owner_prefix": "rNOM8V93",
+        "manuscript_count": 1,
+        "versions_per_ms": {
+          "4cf6c735": 1
+        },
+        "version_samples": [
+          {
+            "bytes": 115421,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 99441,
+            "extracted_text_bytes": 15495,
+            "status": 200
+          }
+        ],
+        "mechanics_tree_bytes": 3233,
+        "mechanics_count": 1
+      },
+      {
+        "owner_prefix": "zQuKh63d",
+        "manuscript_count": 11,
+        "versions_per_ms": {
+          "f9a3190c": 19,
+          "4826fabe": 1,
+          "10ef553a": 1,
+          "155ae330": 3,
+          "b3415075": 1
+        },
+        "version_samples": [
+          {
+            "bytes": 3346929,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 3196269,
+            "extracted_text_bytes": 147803,
+            "status": 200
+          },
+          {
+            "bytes": 3437560,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 3287050,
+            "extracted_text_bytes": 147650,
+            "status": 200
+          },
+          {
+            "bytes": 3042839,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 2892182,
+            "extracted_text_bytes": 147803,
+            "status": 200
+          },
+          {
+            "bytes": 1644202,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 1486560,
+            "extracted_text_bytes": 153427,
+            "status": 200
+          },
+          {
+            "bytes": 1644206,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 1486560,
+            "extracted_text_bytes": 153427,
+            "status": 200
+          }
+        ],
+        "mechanics_tree_bytes": 10210,
+        "mechanics_count": 2
+      },
+      {
+        "owner_prefix": "FvnbQgvk",
+        "manuscript_count": 5,
+        "versions_per_ms": {
+          "ca9380cd": 1,
+          "07ecb6a3": 1,
+          "ee0e068a": 1,
+          "72975bc3": 4,
+          "2424ed9d": 1
+        },
+        "version_samples": [
+          {
+            "bytes": 1661026,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 1507954,
+            "extracted_text_bytes": 148279,
+            "status": 200
+          },
+          {
+            "bytes": 1661026,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 1507954,
+            "extracted_text_bytes": 148279,
+            "status": 200
+          },
+          {
+            "bytes": 3326353,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 2932042,
+            "extracted_text_bytes": 386734,
+            "status": 200
+          },
+          {
+            "bytes": 1661026,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 1507954,
+            "extracted_text_bytes": 148279,
+            "status": 200
+          },
+          {
+            "bytes": 1546233,
+            "keys": [
+              "cloudinary_url",
+              "created_at",
+              "extracted_text",
+              "file_type",
+              "id",
+              "manuscript_id",
+              "mechanics_id",
+              "parsed_data",
+              "source_filename",
+              "version_number"
+            ],
+            "parsed_data_bytes": 1394830,
+            "extracted_text_bytes": 147014,
+            "status": 200
+          }
+        ],
+        "mechanics_tree_bytes": 7501,
+        "mechanics_count": 3
+      }
+    ],
+    "projection": {
+      "sampled_owners": 5,
+      "sampled_version_nodes_measured": 17,
+      "avg_version_bytes": 1977863,
+      "sampled_versions_count": 91,
+      "rough_sampled_owners_version_store_bytes": 179985581
+    }
+  }
+}

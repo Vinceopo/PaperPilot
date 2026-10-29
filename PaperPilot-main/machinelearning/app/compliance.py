@@ -2095,10 +2095,13 @@ def _check_pagination(
             # No printed number (e.g. title page) — not an issue.
             continue
         page = mark["page"]
-        unit = mark.get("unit")
-        # Page-number findings sit in the header/footer band, never on body line 1.
-        loc = _unit_location(unit, "Pagination") if unit else _location(page, None, "Pagination")
+        # Page-number findings sit in the header/footer band — never attach a body
+        # line/excerpt/bbox (that made the preview paint the whole first paragraph).
+        loc = _location(page, None, "Pagination")
         loc["page_region"] = mark.get("vertical") or vertical or "top"
+        align = mark.get("horizontal") or horizontal
+        if align:
+            loc["page_align"] = align
         wrong_v = bool(vertical and mark.get("vertical") != vertical)
         wrong_h = bool(horizontal and mark.get("horizontal") != horizontal)
         if wrong_v or wrong_h:
@@ -2666,7 +2669,8 @@ def _filter_unset_heading_font_issues(issues: list[dict], mechanics_rules: dict)
     """Drop font-size findings for heading levels with no headingN_size in the format.
 
     Unset Heading 1 must never appear on Issues just because Heading 2/3 have sizes.
-    Also strips list-bracket leaks ("[11.0]") from issue text.
+    Also strips list-bracket leaks ("[11.0]") from issue text. Role contradictions from
+    Gemini are discarded in enrichment before wording is applied.
     """
     font = mechanics_rules.get("font") if isinstance(mechanics_rules.get("font"), dict) else {}
     sized = set(_heading_sizes(font, include_legacy=False).keys())
@@ -2683,50 +2687,19 @@ def _filter_unset_heading_font_issues(issues: list[dict], mechanics_rules: dict)
             role = f"heading{title_match.group(1)}"
             if role not in sized and issue_type.startswith("font_size"):
                 continue
-        # Body font_size must not be rewritten into a Heading N claim when that
-        # level has no size rule (Gemini sometimes invents this from sizes_points).
-        if issue_type == "font_size":
+        # Bracket cleanup only — Gemini role contradictions are rejected in enrichment
+        # before wording is applied (no post-hoc Heading→body rewrite reliance).
+        for key in ("explanation", "recommendation", "summary"):
+            text = issue.get(key)
+            if isinstance(text, str) and "[" in text:
+                issue[key] = re.sub(r"\[(\d+(?:\.\d+)?)\]", r"\1", text)
+        for loc in issue.get("locations") or []:
+            if not isinstance(loc, dict):
+                continue
             for key in ("explanation", "recommendation", "summary"):
-                text = issue.get(key)
-                if not isinstance(text, str):
-                    continue
-                cleaned = text
-                for level_num in range(1, 10):
-                    role = f"heading{level_num}"
-                    if role in sized:
-                        continue
-                    cleaned = re.sub(
-                        rf"\bHeading\s+{level_num}\b",
-                        "body text",
-                        cleaned,
-                        flags=re.I,
-                    )
-                # "[11.0]" → "11.0" (list leak from sizes_points in enrichment).
-                cleaned = re.sub(r"\[(\d+(?:\.\d+)?)\]", r"\1", cleaned)
-                issue[key] = cleaned
-            for loc in issue.get("locations") or []:
-                if not isinstance(loc, dict):
-                    continue
-                for key in ("explanation", "recommendation", "summary"):
-                    text = loc.get(key)
-                    if not isinstance(text, str):
-                        continue
-                    cleaned = re.sub(r"\[(\d+(?:\.\d+)?)\]", r"\1", text)
-                    for level_num in range(1, 10):
-                        if f"heading{level_num}" in sized:
-                            continue
-                        cleaned = re.sub(
-                            rf"\bHeading\s+{level_num}\b",
-                            "body text",
-                            cleaned,
-                            flags=re.I,
-                        )
-                    loc[key] = cleaned
-        else:
-            for key in ("explanation", "recommendation", "summary"):
-                text = issue.get(key)
+                text = loc.get(key)
                 if isinstance(text, str) and "[" in text:
-                    issue[key] = re.sub(r"\[(\d+(?:\.\d+)?)\]", r"\1", text)
+                    loc[key] = re.sub(r"\[(\d+(?:\.\d+)?)\]", r"\1", text)
         kept.append(issue)
     return kept
 

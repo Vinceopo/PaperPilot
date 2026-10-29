@@ -1876,7 +1876,13 @@ def _sanitize_pagination_sections(sections: list | None, issues: list) -> list:
             cleaned.append(section)
             continue
         row = dict(section)
-        count = len(pag_issues)
+        # Match Issue Tracing: count locations/occurrences, not issue-type rows.
+        count = 0
+        for issue in pag_issues:
+            reported = issue.get("count")
+            if reported is None:
+                reported = len(issue.get("locations") or [])
+            count += max(0, int(reported or 0))
         row["issue_count"] = count
         if count == 0 and int(row.get("units_failed") or 0) == 0:
             # Keep analyzer unit counts; only clarify a clean pass when nothing failed.

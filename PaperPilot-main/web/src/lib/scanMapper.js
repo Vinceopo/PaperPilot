@@ -124,12 +124,16 @@ export function normalizeIssueLocation(loc = {}) {
   const recommendation = String(loc.recommendation || "").trim();
   const marginSide = String(loc.margin_side || loc.marginSide || "").trim().toLowerCase();
   const pageRegion = String(loc.page_region || loc.pageRegion || "").trim().toLowerCase();
+  const pageAlignRaw = String(loc.page_align || loc.pageAlign || "").trim().toLowerCase();
+  const section = String(loc.section || loc.category || "").trim();
+  const pagination = section.toLowerCase() === "pagination";
   return {
     page,
-    line,
-    section: String(loc.section || loc.category || "").trim(),
-    bbox,
-    excerpt: String(loc.excerpt || loc.text || "").trim(),
+    // Pagination is a header/footer finding — drop leaked body line pins.
+    line: pagination ? null : line,
+    section,
+    bbox: pagination ? null : bbox,
+    excerpt: pagination ? "" : String(loc.excerpt || loc.text || "").trim(),
     pageWidth: pageWidth != null ? Number(pageWidth) : null,
     pageHeight: pageHeight != null ? Number(pageHeight) : null,
     ...(summary ? { summary } : {}),
@@ -137,6 +141,7 @@ export function normalizeIssueLocation(loc = {}) {
     ...(recommendation ? { recommendation } : {}),
     ...(marginSide ? { margin_side: marginSide, marginSide } : {}),
     ...(pageRegion ? { page_region: pageRegion, pageRegion } : {}),
+    ...(pageAlignRaw ? { page_align: pageAlignRaw, pageAlign: pageAlignRaw } : {}),
   };
 }
 

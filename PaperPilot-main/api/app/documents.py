@@ -1600,6 +1600,7 @@ def derive_mechanics_rules(text: str) -> dict:
     )
     indent_val = _parse_inches(indent_raw) if indent_raw else None
     if indent_val is None:
+        # Label then measure: "first-line indent: 0.5 inch"
         indent_match = re.search(
             r"\b(?:first(?:[\s-]line)?|paragraph)\s+indent(?:ation|ion)?\s*"
             rf"(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
@@ -1608,14 +1609,25 @@ def derive_mechanics_rules(text: str) -> dict:
         )
         if indent_match:
             indent_val = parse_length_inches(indent_match.group(1))
-        elif re.search(
+        if indent_val is None:
+            # Measure then label (same sentence as spacing): "0.5 inch first-line indent"
+            measure_then = re.search(
+                rf"(?i)({MEASURE_PATTERN})\s+"
+                r"(?:(?:first[\s-]?line|paragraph)\s+)?indent(?:ation|ion)?\b",
+                flat,
+            )
+            if measure_then:
+                indent_val = parse_length_inches(measure_then.group(1))
+        if indent_val is None and re.search(
             r"(?i)(?:0\.5|½|1\s*/\s*2)\s*(?:[\"″]|inches?|in\b)?\s*TAB"
             r"|\bTAB\b[^.]{0,40}?(?:0\.5|½|1\s*/\s*2)"
             r"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{0,40}?(?:0\.5|½|1\s*/\s*2)",
             flat,
         ):
             indent_val = 0.5
-        elif re.search(r"\bone\s+tab\b|\bindent(?:ation|ion)?\s*(?:of|:)?\s*one\s+tab\b", flat, re.I):
+        elif indent_val is None and re.search(
+            r"\bone\s+tab\b|\bindent(?:ation|ion)?\s*(?:of|:)?\s*one\s+tab\b", flat, re.I
+        ):
             indent_val = 0.5
     if indent_val is not None:
         rules["first_line_indent_inches"] = indent_val
@@ -1678,6 +1690,7 @@ def derive_mechanics_rules(text: str) -> dict:
     body_labels = (
         "Body text size",
         "Body font size",
+        "Body content size",
         "Body size",
         "Contents Size",
         "Contents size",
@@ -1686,15 +1699,23 @@ def derive_mechanics_rules(text: str) -> dict:
         "Text size",
         "Main body",
         "Main text",
+        "Body content",
         "Body text",
     )
     # Stop heading values from swallowing the following Content/Contents line.
-    stop_with_content = stop + ("Content", "Contents", "Body text size", "Body size")
+    stop_with_content = stop + (
+        "Content",
+        "Contents",
+        "Body text size",
+        "Body size",
+        "Body content",
+        "Body text",
+    )
 
     # "Heading 3 and contents: 11" — one sentence assigns the SAME pt to Heading 3
     # and body/contents; they remain separate rules that share the value.
     combined_heading_body = re.finditer(
-        r"(?i)\bheading\s*(\d)\s+and\s+(?:contents?|body)(?:\s*size)?\s*[:：=]?\s*"
+        r"(?i)\bheading\s*(\d)\s+and\s+(?:contents?|body)(?:\s*(?:text|content))?(?:\s*size)?\s*[:：=]?\s*"
         r"(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
         flat,
     )
@@ -1705,6 +1726,39 @@ def derive_mechanics_rules(text: str) -> dict:
         if 1 <= level <= MAX_HEADING_LEVELS and 6 <= number <= 72:
             combined_sizes[f"heading{level}_size"] = number
             combined_sizes["body_size"] = number
+
+    # Same sentence, DIFFERENT values: "Heading 1 size: 16 pt and body size: 11 pt"
+    # (each label keeps its own field — do not let one capture swallow the other).
+    paired_heading_body = re.finditer(
+        r"(?i)\bheading\s*(\d)(?:\s*size)?\s*[:：=]?\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
+        r".{0,40}?\b(?:and|&|,)?\s*"
+        r"(?:body(?:\s*(?:text|content))?|contents?)(?:\s*size)?\s*[:：=]?\s*"
+        r"(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+        flat,
+    )
+    for match in paired_heading_body:
+        level = int(match.group(1))
+        heading_pt = float(match.group(2))
+        body_pt = float(match.group(3))
+        if 1 <= level <= MAX_HEADING_LEVELS and 6 <= heading_pt <= 72:
+            combined_sizes.setdefault(f"heading{level}_size", heading_pt)
+        if 6 <= body_pt <= 72:
+            combined_sizes.setdefault("body_size", body_pt)
+    paired_body_heading = re.finditer(
+        r"(?i)\b(?:body(?:\s*(?:text|content))?|contents?)(?:\s*size)?\s*[:：=]?\s*"
+        r"(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
+        r".{0,40}?\b(?:and|&|,)?\s*"
+        r"heading\s*(\d)(?:\s*size)?\s*[:：=]?\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+        flat,
+    )
+    for match in paired_body_heading:
+        body_pt = float(match.group(1))
+        level = int(match.group(2))
+        heading_pt = float(match.group(3))
+        if 6 <= body_pt <= 72:
+            combined_sizes.setdefault("body_size", body_pt)
+        if 1 <= level <= MAX_HEADING_LEVELS and 6 <= heading_pt <= 72:
+            combined_sizes.setdefault(f"heading{level}_size", heading_pt)
 
     # Heading sizes only when the guide ties Heading N to a size/pt — never from a
     # bare mention of "Heading 1" next to unrelated numbers (margins, word counts).
@@ -1787,6 +1841,14 @@ def derive_mechanics_rules(text: str) -> dict:
             # Label alone on one outline line, value on the next token.
             match = re.search(
                 r"(?i)(?<!of )\bcontents?\b(?:\s*size)?\s+(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+                flat,
+            )
+        if not match:
+            # Prose in a multi-rule sentence: "body content uses 12 pt" / "body text is 11 pt".
+            match = re.search(
+                r"(?i)\b(?:body(?:\s*(?:text|content))?|(?<!of )contents?)\b(?:\s*size)?\s*"
+                r"(?:uses?|is|of|:|=|should\s+be|must\s+be|at)?\s*"
+                r"(\d{1,2}(?:\.\d+)?)\s*-?\s*(?:pt|points?)\b",
                 flat,
             )
         if not match:

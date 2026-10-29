@@ -18,16 +18,18 @@ import {
   fitPageScale,
   hitPaint,
   isMarginTarget,
-  isPaginationTarget,
   onePageHeight,
   marginRegion,
   marginSide,
   mergeLineRects,
   normalizedIndex,
+  normalizeNeedle,
+  pageAlign,
   pageRegion,
   pagesByDistance,
   pickBestRects,
   resolvePdfMarkY,
+  shouldUsePaginationEdge,
   visualLineTarget,
 } from "../../lib/documentPreviewLocate.js";
 
@@ -65,30 +67,24 @@ function pageNumberFromIndex(pageIndex, fallbackIndex) {
   return Math.max(1, Number(raw) + 1);
 }
 
-/**
- * Revised DOCX files often lose Word's lastRenderedPageBreak markers, so docx-preview
- * emits one tall section. Split that section into letter-sized pages by content height.
- */
-function paginateOversizedDocxSection(host) {
-  const wrapper = host?.querySelector(".docx-wrapper");
-  if (!wrapper) return;
-  const sections = [...wrapper.querySelectorAll(":scope > section")];
-  if (sections.length !== 1) return;
-  const page = sections[0];
+function sectionPageHeight(page) {
   const styles = getComputedStyle(page);
   const pageWidth = page.offsetWidth || page.scrollWidth || 816;
   const declaredHeight = parseFloat(styles.minHeight) || parseFloat(styles.height) || 0;
-  const pageHeight = declaredHeight > 40 ? declaredHeight : pageWidth * (11 / 8.5);
-  if (page.scrollHeight <= pageHeight * 1.2) return;
+  return declaredHeight > 40 ? declaredHeight : pageWidth * (11 / 8.5);
+}
 
+/** Split one tall Word section into letter-sized pages by block height. */
+function splitOversizedSection(wrapper, page) {
+  const pageHeight = sectionPageHeight(page);
+  if (page.scrollHeight <= pageHeight * 1.2) return false;
   const kids = [...page.children];
-  if (kids.length < 2) return;
-  const heights = kids.map((el) => el.getBoundingClientRect().height || 0);
-  if (heights.reduce((sum, value) => sum + value, 0) <= pageHeight * 1.2) return;
+  if (kids.length < 2) return false;
+  const heights = kids.map((el) => el.getBoundingClientRect().height || el.offsetHeight || 0);
+  if (heights.reduce((sum, value) => sum + value, 0) <= pageHeight * 1.2) return false;
 
   let current = page;
   let used = 0;
-  const built = [page];
   kids.forEach((child, index) => {
     const height = heights[index];
     if (used > 0 && used + height > pageHeight * 0.98 && height > 8) {
@@ -96,32 +92,94 @@ function paginateOversizedDocxSection(host) {
       next.className = page.className;
       next.style.cssText = page.style.cssText;
       next.style.minHeight = `${Math.round(pageHeight)}px`;
-      wrapper.appendChild(next);
-      built.push(next);
+      // Insert after the section we are filling so order stays correct.
+      current.after(next);
       current = next;
       used = 0;
     }
     current.appendChild(child);
     used += height;
   });
-  built.forEach((section, index) => {
+  return true;
+}
+
+/**
+ * Revised DOCX files often lose Word's lastRenderedPageBreak markers, so docx-preview
+ * emits one (or a few) tall sections. Split every oversized section into letter pages
+ * so issue page N maps to preview section N — never clamp page 12 onto page 2.
+ */
+function paginateOversizedDocxSection(host) {
+  const wrapper = host?.querySelector(".docx-wrapper");
+  if (!wrapper) return;
+  let guard = 0;
+  while (guard < 80) {
+    guard += 1;
+    const sections = [...wrapper.querySelectorAll(":scope > section")];
+    const oversized = sections.find((section) => {
+      const pageHeight = sectionPageHeight(section);
+      return section.scrollHeight > pageHeight * 1.25;
+    });
+    if (!oversized) break;
+    if (!splitOversizedSection(wrapper, oversized)) break;
+  }
+  [...wrapper.querySelectorAll(":scope > section")].forEach((section, index) => {
     section.dataset.page = String(index + 1);
   });
 }
 
+/**
+ * Map a scanner page onto a rendered DOCX section.
+ * Never silently clamp a high page onto the last preview sheet — that painted
+ * page-12 pagination chips on page 2. Prefer exact index, then excerpt search.
+ */
+function resolveDocxPageIndex(sections, target, pageCountHint = 0) {
+  const wanted = Math.round(Number(target.page));
+  if (!Number.isFinite(wanted) || wanted < 1 || !sections.length) return null;
+  if (wanted <= sections.length) {
+    return { index: wanted - 1, pageNumber: wanted };
+  }
+
+  const needles = excerptNeedles(target.excerpt || target.finding || "");
+  if (needles.length) {
+    let best = null;
+    for (let i = 0; i < sections.length; i += 1) {
+      const text = normalizeNeedle(sections[i].innerText || "");
+      for (const needle of needles) {
+        if (!text.includes(needle)) continue;
+        const score = needle.length;
+        if (!best || score > best.score) best = { index: i, pageNumber: i + 1, score };
+      }
+    }
+    if (best) return { index: best.index, pageNumber: best.pageNumber };
+  }
+
+  // Last resort: proportional map using the scan's page count (still better than clamp-to-end).
+  const span = Math.max(sections.length, Math.round(Number(pageCountHint) || 0), wanted);
+  if (span <= 1) return { index: 0, pageNumber: 1 };
+  const mapped = Math.min(
+    sections.length,
+    Math.max(1, Math.round(((wanted - 1) / Math.max(1, span - 1)) * (sections.length - 1)) + 1)
+  );
+  return { index: mapped - 1, pageNumber: mapped };
+}
+
 function targetFrom(scrollTarget, highlight) {
   const merged = { ...(highlight || {}), ...(scrollTarget || {}) };
+  const section = String(merged.section || "").trim();
+  const pagination = String(section).toLowerCase() === "pagination";
   return {
     page: merged.page ?? null,
-    line: merged.line ?? null,
-    bbox: merged.bbox || null,
-    excerpt: String(merged.excerpt || "").trim(),
+    // Pagination is page-level — never pin to body line 1 (that over-highlights).
+    line: pagination ? null : merged.line ?? null,
+    bbox: pagination ? null : merged.bbox || null,
+    excerpt: pagination ? "" : String(merged.excerpt || "").trim(),
     severity: merged.severity || "minor",
     finding: String(merged.finding || merged.summary || merged.name || "").trim(),
-    section: String(merged.section || "").trim(),
+    section,
     issue_type: String(merged.issue_type || merged.issueType || "").trim(),
     margin_side: merged.margin_side || merged.marginSide || "",
     page_region: merged.page_region || merged.pageRegion || "",
+    page_align: merged.page_align || merged.pageAlign || "",
     recommendation: String(merged.recommendation || "").trim(),
     explanation: String(merged.explanation || "").trim(),
     token: merged.token ?? 0,
@@ -146,38 +204,42 @@ function clearIssueMarks(root) {
   root.querySelectorAll(".pp-issue-margin, .pp-issue-box").forEach((el) => el.remove());
 }
 
-function paintMarginHit(pageEl, side, severity) {
+function edgeBandStyle(side, align = "") {
+  const thick = "7%";
+  const chipW = "30%";
+  const chipH = "8%";
+  // Pagination: small header/footer chip at the expected page-number corner.
+  if (align === "left" || align === "right" || align === "center") {
+    const style = { height: chipH, width: chipW };
+    if (side === "bottom") Object.assign(style, { bottom: 0, top: "auto" });
+    else Object.assign(style, { top: 0 });
+    if (align === "left") Object.assign(style, { left: 0, right: "auto" });
+    else if (align === "right") Object.assign(style, { right: 0, left: "auto" });
+    else Object.assign(style, { left: "35%", right: "auto" });
+    return style;
+  }
+  if (side === "right") return { top: 0, right: 0, bottom: 0, width: thick };
+  if (side === "left") return { top: 0, left: 0, bottom: 0, width: thick };
+  if (side === "top") return { top: 0, left: 0, right: 0, height: thick };
+  if (side === "bottom") return { bottom: 0, left: 0, right: 0, height: thick };
+  return null;
+}
+
+function paintMarginHit(pageEl, side, severity, align = "") {
   if (!pageEl) return;
   const paint = hitPaint(severity);
   const band = document.createElement("div");
   band.className = "pp-issue-margin";
   band.style.setProperty("--pp-hit-bg", paint.bg);
   band.style.setProperty("--pp-hit-edge", paint.edge);
-  const thick = "7%";
-  if (side === "right") {
-    band.style.top = "0";
-    band.style.right = "0";
-    band.style.bottom = "0";
-    band.style.width = thick;
-  } else if (side === "left") {
-    band.style.top = "0";
-    band.style.left = "0";
-    band.style.bottom = "0";
-    band.style.width = thick;
-  } else if (side === "top") {
-    band.style.top = "0";
-    band.style.left = "0";
-    band.style.right = "0";
-    band.style.height = thick;
-  } else if (side === "bottom") {
-    band.style.bottom = "0";
-    band.style.left = "0";
-    band.style.right = "0";
-    band.style.height = thick;
-  } else {
+  const style = edgeBandStyle(side, align);
+  if (!style) {
+    // Unknown side — outline only, never flood the whole page.
     band.style.inset = "0";
     band.style.background = "transparent";
     band.style.boxShadow = `inset 0 0 0 4px ${paint.edge}`;
+  } else {
+    Object.assign(band.style, style);
   }
   const positioned = getComputedStyle(pageEl).position;
   if (positioned === "static") pageEl.style.position = "relative";
@@ -187,15 +249,13 @@ function paintMarginHit(pageEl, side, severity) {
 function IssueMark({ mark }) {
   if (!mark) return null;
   const paint = hitPaint(mark.severity);
-  if (mark.kind === "margin") {
+  if (mark.kind === "margin" || mark.kind === "pagination") {
     const style = {
       background: paint.bg,
       boxShadow: `inset 0 0 0 2px ${paint.edge}`,
     };
-    if (mark.side === "right") Object.assign(style, { top: 0, right: 0, bottom: 0, width: "7%" });
-    else if (mark.side === "left") Object.assign(style, { top: 0, left: 0, bottom: 0, width: "7%" });
-    else if (mark.side === "top") Object.assign(style, { top: 0, left: 0, right: 0, height: "7%" });
-    else if (mark.side === "bottom") Object.assign(style, { bottom: 0, left: 0, right: 0, height: "7%" });
+    const band = edgeBandStyle(mark.side, mark.align || "");
+    if (band) Object.assign(style, band);
     else Object.assign(style, { inset: 0, background: "transparent", boxShadow: `inset 0 0 0 4px ${paint.edge}` });
     return <div className="pp-issue-margin" style={style} />;
   }
@@ -468,9 +528,16 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
     const target = targetFrom(scrollTarget, highlight);
     // Never invent page 1 when the issue has no page pin.
     if (target.page == null) return;
-    const pageNumber = Math.min(pages.length, Math.max(1, Number(target.page)));
-    if (!Number.isFinite(pageNumber) || pageNumber < 1) return;
-    const pageEl = scroller.querySelector(`[data-page="${pageNumber}"]`);
+    const wanted = Math.round(Number(target.page));
+    if (!Number.isFinite(wanted) || wanted < 1) return;
+    // Prefer the exact scanner page — do not clamp a high page onto the last sheet.
+    let pageNumber = wanted;
+    let pageEl = scroller.querySelector(`[data-page="${pageNumber}"]`);
+    if (!pageEl && pages.length) {
+      // PDF page count should match; if not, stay on the closest existing page only as fallback.
+      pageNumber = Math.min(pages.length, wanted);
+      pageEl = scroller.querySelector(`[data-page="${pageNumber}"]`);
+    }
     if (!pageEl) return;
     const ys = lineYsRef.current.get(pageNumber) || [];
     const bbox = target.bbox;
@@ -484,12 +551,14 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
       bboxY,
       pageHeight,
     });
-    if (isMarginTarget(target) || (isPaginationTarget(target) && !bbox)) {
+    if (isMarginTarget(target) || shouldUsePaginationEdge(target)) {
       const side = isMarginTarget(target) ? resolveEdgeSide(target) : pageRegion(target);
+      const align = shouldUsePaginationEdge(target) ? pageAlign(target) : "";
       setMark({
         page: pageNumber,
-        kind: "margin",
+        kind: shouldUsePaginationEdge(target) ? "pagination" : "margin",
         side,
+        align,
         severity: target.severity,
       });
       scrollToPageRegion(scroller, pageEl, side);
@@ -712,7 +781,7 @@ function lineCountBox(section, line, scroller) {
  * When a scanner line is present, that line always disambiguates excerpt hits
  * so issues on lines 13 / 14 / 15 never collapse onto one highlight.
  */
-function locateDocxBox(sections, pageNumber, line, excerpt, scroller) {
+function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRadius = 2 } = {}) {
   const reported = sections[pageNumber - 1];
   const estimate = reported ? lineCountBox(reported, line, scroller) : null;
   const needles = excerptNeedles(excerpt);
@@ -725,8 +794,9 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller) {
   };
 
   const allCandidates = [];
+  const radius = Math.max(1, Math.min(sections.length, Number(searchRadius) || 2));
   for (const needle of needles) {
-    for (const page of pagesByDistance(pageNumber, sections.length, 1)) {
+    for (const page of pagesByDistance(pageNumber, sections.length, radius)) {
       const ranges = textRangesIn(sections[page - 1], needle);
       if (!ranges.length) continue;
       const candidates = ranges
@@ -734,6 +804,19 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller) {
         .filter((rects) => rects.length);
       for (const rects of candidates) {
         allCandidates.push({ page, rects, needleLen: needle.length });
+      }
+    }
+  }
+
+  // If the reported page is out of sync, search the whole document once.
+  if (!allCandidates.length && needles.length && sections.length > radius * 2) {
+    for (const needle of needles) {
+      for (let page = 1; page <= sections.length; page += 1) {
+        const ranges = textRangesIn(sections[page - 1], needle);
+        for (const range of ranges) {
+          const rects = rangeToRects(range, scroller);
+          if (rects.length) allCandidates.push({ page, rects, needleLen: needle.length });
+        }
       }
     }
   }
@@ -763,6 +846,23 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller) {
   return estimate;
 }
 
+/** Always leave a visible mark on the target page when line/excerpt locate fails. */
+function fallbackDocxBox(pageEl, line, scroller) {
+  if (!pageEl) return null;
+  const byLine = lineCountBox(pageEl, line, scroller);
+  if (byLine) return byLine;
+  const body = docxBody(pageEl);
+  const rect = body.getBoundingClientRect();
+  const base = contentBox(scroller, rect);
+  // Thin band near the top of the page body — never flood the whole sheet.
+  const height = Math.max(18, Math.min(36, base.height * 0.04 || 24));
+  return {
+    rects: [{ top: base.top + 8, left: base.left, width: Math.max(base.width, 24), height }],
+    top: base.top + 8,
+    height,
+  };
+}
+
 function paintBoxes(scroller, rects, severity) {
   const paint = hitPaint(severity);
   rects.forEach((rect) => {
@@ -778,22 +878,24 @@ function paintBoxes(scroller, rects, severity) {
   });
 }
 
-function DocxFilePreview({ file, scrollTarget, highlight, paged }) {
+function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint = 0 }) {
   const hostRef = useRef(null);
   const scrollRef = useRef(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [frameHeight, setFrameHeight] = useState(0);
+  const [pagesReady, setPagesReady] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     let observer;
 
     async function render() {
-      setBusy(true);
-      setError("");
-      setFrameHeight(0);
-      try {
+        setBusy(true);
+        setError("");
+        setFrameHeight(0);
+        setPagesReady(0);
+        try {
         if (!hostRef.current) return;
         hostRef.current.innerHTML = "";
         await renderAsync(file, hostRef.current, undefined, {
@@ -811,7 +913,18 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged }) {
         });
         if (cancelled || !hostRef.current) return;
         // Let layout settle, then recover pages when Word soft-breaks were stripped on re-save.
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (cancelled || !hostRef.current) return;
         paginateOversizedDocxSection(hostRef.current);
+        // If the scan saw many more pages than docx-preview emitted, split again after paint.
+        const hint = Math.max(0, Math.round(Number(pageCountHint) || 0));
+        if (hint > 0) {
+          const count = hostRef.current.querySelectorAll(".docx-wrapper > section").length;
+          if (count > 0 && count < hint * 0.6) {
+            paginateOversizedDocxSection(hostRef.current);
+          }
+        }
+        setPagesReady(hostRef.current.querySelectorAll(".docx-wrapper > section").length);
 
         const fit = () => {
           const host = hostRef.current;
@@ -868,7 +981,7 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged }) {
       observer?.disconnect();
       if (onResize) window.removeEventListener("resize", onResize);
     };
-  }, [file, paged]);
+  }, [file, paged, pageCountHint]);
 
   useEffect(() => {
     const root = hostRef.current;
@@ -880,19 +993,30 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged }) {
     const sections = [...root.querySelectorAll(".docx-wrapper > section")];
     if (!sections.length) return;
     clearIssueMarks(scroller);
-    const pageNumber = Math.min(sections.length, Math.max(1, Number(target.page)));
-    if (!Number.isFinite(pageNumber) || pageNumber < 1) return;
+    const resolved = resolveDocxPageIndex(sections, target, pageCountHint || pagesReady);
+    if (!resolved) return;
+    const { index, pageNumber } = resolved;
+    const pageEl = sections[index];
+    if (!pageEl) return;
 
-    if (isMarginTarget(target) || (isPaginationTarget(target) && !target.bbox && !target.excerpt)) {
-      const pageEl = sections[pageNumber - 1];
+    if (isMarginTarget(target) || shouldUsePaginationEdge(target)) {
       const side = isMarginTarget(target) ? resolveEdgeSide(target) : pageRegion(target);
-      paintMarginHit(pageEl, side, target.severity);
+      // Default pagination chip to the right when mechanics say "top right" or omit align.
+      const align = shouldUsePaginationEdge(target)
+        ? pageAlign(target) || "right"
+        : "";
+      paintMarginHit(pageEl, side, target.severity, align);
       if (paged) scrollToPageRegion(scroller, pageEl, side);
       else pageEl.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
 
-    const box = locateDocxBox(sections, pageNumber, target.line, target.excerpt, scroller);
+    const searchRadius =
+      sections.length < Math.max(8, Number(pageCountHint) || 0) * 0.7 ? sections.length : 3;
+    const box =
+      locateDocxBox(sections, pageNumber, target.line, target.excerpt || target.finding, scroller, {
+        searchRadius,
+      }) || fallbackDocxBox(pageEl, target.line, scroller);
     if (!box) return;
     paintBoxes(scroller, box.rects, target.severity);
     if (paged) {
@@ -900,7 +1024,7 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged }) {
       return;
     }
     scroller.querySelector(".pp-issue-box")?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [scrollTarget, highlight, busy, frameHeight, paged]);
+  }, [scrollTarget, highlight, busy, frameHeight, paged, pageCountHint, pagesReady]);
 
   return (
     <div className="relative min-h-[12rem]">
@@ -951,8 +1075,9 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
       scrollerRef.current?.querySelector(`article[data-page="${target.page}"]`);
     const scroller = scrollerRef.current;
     const pageEl = scroller?.querySelector(`article[data-page="${target.page}"]`);
-    if (paged && scroller && pageEl && isMarginTarget(target)) {
-      scrollToPageRegion(scroller, pageEl, resolveEdgeSide(target));
+    if (paged && scroller && pageEl && (isMarginTarget(target) || shouldUsePaginationEdge(target))) {
+      const side = isMarginTarget(target) ? resolveEdgeSide(target) : pageRegion(target);
+      scrollToPageRegion(scroller, pageEl, side);
       return;
     }
     if (paged && scroller && node) {
@@ -968,12 +1093,19 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
 
   const traced = targetFrom(scrollTarget, highlight);
   const marginTrace = isMarginTarget(traced);
-  const paginationBand = isPaginationTarget(traced) && !traced.bbox && !traced.line;
+  const paginationBand = shouldUsePaginationEdge(traced);
+  const previewPageNums = pages.map((page, index) => pageNumberFromIndex(page.pageIndex, index));
+  // Exact page only — never paint page-99 issues onto page 2.
+  const tracedPage =
+    traced.page != null && previewPageNums.includes(Number(traced.page))
+      ? Number(traced.page)
+      : null;
   const articles = pages.map((page, index) => {
-    const pageNum = pageNumberFromIndex(page.pageIndex, index);
+    const pageNum = previewPageNums[index];
     const lines = page.text.split(/\n/);
-    const showEdge = (marginTrace || paginationBand) && traced.page === pageNum;
+    const showEdge = (marginTrace || paginationBand) && tracedPage === pageNum;
     const edgeSide = marginTrace ? resolveEdgeSide(traced) : pageRegion(traced);
+    const edgeAlign = paginationBand ? pageAlign(traced) || "right" : "";
     return (
       <article
         key={`${page.pageIndex}-${index}`}
@@ -983,8 +1115,9 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
         {showEdge ? (
           <IssueMark
             mark={{
-              kind: "margin",
+              kind: paginationBand ? "pagination" : "margin",
               side: edgeSide,
+              align: edgeAlign,
               severity: traced.severity,
             }}
           />
@@ -996,7 +1129,11 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
           {lines.map((lineText, lineIdx) => {
             const lineNum = lineIdx + 1;
             const refKey = `${pageNum}:${lineNum}`;
-            const lineHit = !marginTrace && traced.page === pageNum && traced.line === lineNum;
+            const lineHit =
+              !marginTrace &&
+              !paginationBand &&
+              tracedPage === pageNum &&
+              traced.line === lineNum;
             const paint = lineHit ? hitPaint(traced.severity) : null;
             return (
               <p
@@ -1044,7 +1181,7 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
   );
 }
 
-function DocxUrlPreview({ url, name, scrollTarget, highlight, paged }) {
+function DocxUrlPreview({ url, name, scrollTarget, highlight, paged, pageCountHint = 0 }) {
   const [file, setFile] = useState(null);
   const [error, setError] = useState("");
 
@@ -1085,7 +1222,13 @@ function DocxUrlPreview({ url, name, scrollTarget, highlight, paged }) {
     );
   }
   return (
-    <DocxFilePreview file={file} scrollTarget={scrollTarget} highlight={highlight} paged={paged} />
+    <DocxFilePreview
+      file={file}
+      scrollTarget={scrollTarget}
+      highlight={highlight}
+      paged={paged}
+      pageCountHint={pageCountHint}
+    />
   );
 }
 
@@ -1105,6 +1248,7 @@ export default function DocumentPagePreview({
   emptyLabel = "No preview available yet.",
   paged = false,
   loading = false,
+  pageCountHint = 0,
 }) {
   const safeDocumentUrl = isPresignedUploadUrl(documentUrl) ? "" : documentUrl;
   const kind = fileKind(file) || fileKind({ name: documentName }) || urlKind(safeDocumentUrl);
@@ -1137,7 +1281,13 @@ export default function DocumentPagePreview({
   }
   if (kind === "docx" && file) {
     return (
-      <DocxFilePreview file={file} scrollTarget={scrollTarget} highlight={highlight} paged={paged} />
+      <DocxFilePreview
+        file={file}
+        scrollTarget={scrollTarget}
+        highlight={highlight}
+        paged={paged}
+        pageCountHint={pageCountHint}
+      />
     );
   }
   if (kind === "docx" && safeDocumentUrl) {
@@ -1148,6 +1298,7 @@ export default function DocumentPagePreview({
         scrollTarget={scrollTarget}
         highlight={highlight}
         paged={paged}
+        pageCountHint={pageCountHint}
       />
     );
   }

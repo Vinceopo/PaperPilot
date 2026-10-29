@@ -1,0 +1,56 @@
+[
+  {
+    "label": "local",
+    "url": "http://127.0.0.1:5173/",
+    "gotoError": "Error: page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:5173/\nCall log:\n  - navigating to \"http://127.0.0.1:5173/\", waiting until \"networkidle\"\n",
+    "rootHtml": {
+      "rootChildCount": -1,
+      "rootInnerText": "",
+      "bodyBg": "rgba(0, 0, 0, 0)",
+      "title": "",
+      "scriptSrcs": []
+    },
+    "mainJsBundle": null,
+    "jsAssets": [],
+    "badStatusResponses": [],
+    "consoleLogs": [],
+    "failedRequests": [
+      {
+        "url": "http://127.0.0.1:5173/",
+        "method": "GET",
+        "failure": "net::ERR_CONNECTION_REFUSED"
+      }
+    ],
+    "screenshotPath": "c:\\Users\\vince\\Downloads\\PaperPilot-main\\diag-screenshot-local.png"
+  },
+  {
+    "label": "production",
+    "url": "https://paperpilotph.vercel.app/",
+    "gotoError": null,
+    "rootHtml": {
+      "rootChildCount": 1,
+      "rootInnerText": "PAPERPILOT\nAN AI-POWERED ACADEMIC DOCUMENT\nANALYSIS AND COMPLIANCE CHECKING SYSTEM\nFormat Compliance Made Simple.\n\nCheck manuscripts against journal rules and get instant, citation-aware feedback.\n\nFormat Checker\nAI Feedback\nInstant Reports\n\n“PaperPilot caught every margin and citation mismatch before our journal desk reject.”\n\nWelcome back\n\nSign in to continue reviewing manuscripts.\n\nEmail or Username\nPassword\nRemember me\nForgot password?\nSign in to PaperPilot\nOR CONTINUE WITH\nSign in with Google\n\nDon't have an account? Create an account",
+      "bodyBg": "rgb(243, 245, 247)",
+      "title": "PaperPilot",
+      "scriptSrcs": [
+        "https://paperpilotph.vercel.app/assets/index-FJ1HhWE3.js"
+      ]
+    },
+    "mainJsBundle": {
+      "url": "https://paperpilotph.vercel.app/assets/index-FJ1HhWE3.js",
+      "status": 200,
+      "contentType": "application/javascript; charset=utf-8"
+    },
+    "jsAssets": [
+      {
+        "url": "https://paperpilotph.vercel.app/assets/index-FJ1HhWE3.js",
+        "status": 200,
+        "contentType": "application/javascript; charset=utf-8"
+      }
+    ],
+    "badStatusResponses": [],
+    "consoleLogs": [],
+    "failedRequests": [],
+    "screenshotPath": "c:\\Users\\vince\\Downloads\\PaperPilot-main\\diag-screenshot-prod.png"
+  }
+]

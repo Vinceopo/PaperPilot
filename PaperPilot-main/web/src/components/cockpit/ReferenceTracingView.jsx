@@ -142,6 +142,7 @@ export default function ReferenceTracingView({
             highlight={highlight}
             emptyLabel="Document preview will appear when a document URL or upload is available."
             paged
+            pageCountHint={result?.pageCount || 0}
           />
         </div>
 

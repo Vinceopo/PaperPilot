@@ -41,12 +41,30 @@ export function pageRegion(target = {}) {
   return "top";
 }
 
+/** Left / center / right placement for a pagination chip (from mechanics wording). */
+export function pageAlign(target = {}) {
+  const explicit = String(target.page_align || target.pageAlign || "").toLowerCase();
+  if (explicit === "left" || explicit === "right" || explicit === "center") return explicit;
+  const text = `${target.finding || ""} ${target.recommendation || ""} ${target.explanation || ""}`.toLowerCase();
+  if (/\bright\b/.test(text)) return "right";
+  if (/\bleft\b/.test(text)) return "left";
+  return "center";
+}
+
 export function isMarginTarget(target = {}) {
   return String(target.section || "").toLowerCase() === "margins";
 }
 
 export function isPaginationTarget(target = {}) {
   return String(target.section || "").toLowerCase() === "pagination";
+}
+
+/**
+ * Pagination must never paint body line 1 / chapter text. Always use the
+ * header/footer chip — even when a body excerpt or line leaked onto the issue.
+ */
+export function shouldUsePaginationEdge(target = {}) {
+  return isPaginationTarget(target);
 }
 
 /** Tallest a single page may be drawn so the whole page fits on screen. */

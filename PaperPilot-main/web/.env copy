@@ -1,0 +1,11 @@
+VITE_FIREBASE_API_KEY=AIzaSyCS3voJcHKSjLUlX2Nl72wUtQyPcKEcV8Q
+VITE_FIREBASE_AUTH_DOMAIN=paperpilot-cb289.firebaseapp.com
+VITE_FIREBASE_DATABASE_URL=https://paperpilot-cb289-default-rtdb.asia-southeast1.firebasedatabase.app
+VITE_FIREBASE_PROJECT_ID=paperpilot-cb289
+VITE_FIREBASE_STORAGE_BUCKET=paperpilot-cb289.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=226823540820
+VITE_FIREBASE_APP_ID=1:226823540820:web:cf5161f1bc99cac75d5dc1
+VITE_FIREBASE_MEASUREMENT_ID=G-3P1HHYHKN6
+VITE_API_URL=/api
+VITE_API_PROXY_TARGET=http://127.0.0.1:8000
+# Document uploads use API-issued S3 presigned URLs (POST /uploads/presign). No AWS keys here.

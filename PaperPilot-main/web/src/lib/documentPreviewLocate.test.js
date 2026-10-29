@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   excerptNeedles,
+  pageAlign,
+  pageRegion,
   pickBestRects,
   resolveDocxHighlight,
   resolvePdfMarkY,
+  shouldUsePaginationEdge,
   visualLineTarget,
 } from "./documentPreviewLocate.js";
 
@@ -106,5 +109,23 @@ describe("resolvePdfMarkY", () => {
 
   it("uses bbox when no line pin exists", () => {
     expect(resolvePdfMarkY({ line: null, ys, bboxY: 55, pageHeight: 800 })).toBe(55);
+  });
+});
+
+describe("pagination edge highlight", () => {
+  it("always uses the header/footer chip for pagination, even with a body line/excerpt", () => {
+    expect(
+      shouldUsePaginationEdge({
+        section: "Pagination",
+        line: 1,
+        excerpt: "CHAPTER I INTRODUCTION",
+      })
+    ).toBe(true);
+    expect(shouldUsePaginationEdge({ section: "Fonts", line: 1 })).toBe(false);
+  });
+
+  it("reads top-right placement from recommendation wording", () => {
+    expect(pageRegion({ recommendation: "Add a page number at the top right of the page." })).toBe("top");
+    expect(pageAlign({ recommendation: "Add a page number at the top right of the page." })).toBe("right");
   });
 });

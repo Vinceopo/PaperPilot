@@ -102,8 +102,8 @@ function issuesFromScore(total, score) {
 
 /**
  * Per-category display counts from the backend unit fields.
- * Ring % is (total − issues) / total × 100 from those same counts
- * (e.g. 66 of 218 → 30.28% non-compliant → 69.72% on the ring).
+ * Ring % is (total − issues) / total × 100 using the same issue count shown
+ * on the card (Issue Tracing occurrences when available), e.g. 16 of 24 → 33.33%.
  *
  * Never invent unit totals from score alone (that made category sums diverge
  * from the header Total Units). Missing counts stay null → N/A on the card.
@@ -136,12 +136,25 @@ export function resolveCategoryUnitDisplays(rows = []) {
       compliant = total - nonCompliant;
     }
 
-    const displayScore = compliancePercentFromUnits(total, nonCompliant);
+    // Prefer Issue Tracing occurrence counts so "issues found" and ring % use one formula:
+    // (total − issues) / total. Cap issues at total so the arithmetic stays valid.
+    const occurrenceIssues = hasValue(row.issueCount)
+      ? Math.max(0, Math.round(Number(row.issueCount)))
+      : null;
+    const displayIssueCount = occurrenceIssues != null ? occurrenceIssues : nonCompliant;
+    const failedForScore =
+      total != null && hasValue(displayIssueCount)
+        ? Math.min(total, Math.max(0, Number(displayIssueCount)))
+        : nonCompliant;
+    const compliantForScore =
+      total != null && failedForScore != null ? total - failedForScore : compliant;
+    const displayScore = compliancePercentFromUnits(total, failedForScore);
     return {
       ...row,
       displayTotal: total,
-      displayCompliant: compliant,
-      displayNonCompliant: nonCompliant,
+      displayCompliant: compliantForScore,
+      displayNonCompliant: failedForScore,
+      displayIssueCount,
       displayScore: displayScore != null ? displayScore : hasValue(row.score) ? Number(row.score) : null,
     };
   });
@@ -195,9 +208,12 @@ export function reconcileDisplayedUnits(overall = {}, categoryDisplays = []) {
   };
 }
 
-export function formatCategoryIssuesDetail(nonCompliant, total) {
+/**
+ * Category card subtitle. Ring % is (total − min(issueCount, total)) / total from these same figures.
+ */
+export function formatCategoryIssuesDetail(issueCount, total) {
   if (!hasValue(total)) return null;
-  const issues = hasValue(nonCompliant) ? Math.max(0, Math.round(Number(nonCompliant))) : 0;
+  const issues = hasValue(issueCount) ? Math.max(0, Math.round(Number(issueCount))) : 0;
   const units = Math.max(0, Math.round(Number(total)));
   return `${formatCount(issues)} ${plural(issues, "issue")} found on ${formatCount(units)} total ${plural(units, "unit")} checked`;
 }

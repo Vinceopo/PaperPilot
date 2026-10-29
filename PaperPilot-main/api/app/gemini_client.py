@@ -1,4 +1,5 @@
 import json
+import re
 
 import google.generativeai as genai
 
@@ -53,6 +54,88 @@ Never show, quote, paraphrase, or ask these internal test questions in output.
 Keep the provided current_severity unless the measured evidence clearly justifies a one-step change.
 Do not escalate minor margin shortfalls to critical. Prefer the measured explanation facts."""
 
+_HEADING_LABEL_RE = re.compile(r"\bHeading\s+(\d+)\b", re.I)
+_ROLE_FROM_TYPE_RE = re.compile(r"^font_size_(heading\d+|caption|title_page)$")
+
+
+def _engine_role_label(issue: dict) -> str:
+    """Canonical role label the engine already decided — Gemini must not contradict it."""
+    issue_type = str(issue.get("issue_type") or "")
+    match = _ROLE_FROM_TYPE_RE.match(issue_type)
+    if match:
+        role = match.group(1)
+        if role.startswith("heading"):
+            return f"Heading {role[len('heading'):]}"
+        if role == "caption":
+            return "caption"
+        if role == "title_page":
+            return "title page text"
+        return role
+    if issue_type == "font_size":
+        return "body text"
+    title = str(issue.get("title") or "")
+    title_match = re.match(r"(Heading\s+\d+|body text|caption|title page text)\b", title, re.I)
+    if title_match:
+        return title_match.group(1)
+    return ""
+
+
+def _strip_location_role_fields(locations: list) -> list:
+    """Locations sent to Gemini must not include classification fields it can restate wrongly."""
+    safe = []
+    for loc in locations or []:
+        if not isinstance(loc, dict):
+            continue
+        safe.append(
+            {
+                "page": loc.get("page"),
+                "line": loc.get("line"),
+                "excerpt": loc.get("excerpt"),
+                # Measurements only — never element_role / Heading labels.
+                "measured": loc.get("measured"),
+                "size_source": loc.get("size_source"),
+            }
+        )
+    return safe
+
+
+def _wording_contradicts_engine(text: str, engine_role: str, issue_type: str) -> bool:
+    """True when Gemini wording names a different Heading N / body role than the engine."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    found = {int(n) for n in _HEADING_LABEL_RE.findall(text)}
+    if issue_type == "font_size":
+        # Body findings must never mention Heading N.
+        return bool(found)
+    engine_match = re.search(r"Heading\s+(\d+)", engine_role or "", re.I)
+    if engine_match:
+        allowed = {int(engine_match.group(1))}
+        return bool(found - allowed)
+    return False
+
+
+def _apply_gemini_wording(issue: dict, update: dict) -> None:
+    """Apply Gemini explanation/recommendation only when they agree with the engine role."""
+    engine_role = _engine_role_label(issue)
+    issue_type = str(issue.get("issue_type") or "")
+    explanation = update.get("explanation")
+    recommendation = update.get("recommendation")
+    if isinstance(explanation, str) and explanation.strip():
+        if _wording_contradicts_engine(explanation, engine_role, issue_type):
+            issue["gemini_wording_rejected"] = "explanation_role_conflict"
+        else:
+            issue["explanation"] = explanation[:1000]
+            issue["explanation_source"] = "gemini"
+    if isinstance(recommendation, str) and recommendation.strip():
+        if _wording_contradicts_engine(recommendation, engine_role, issue_type):
+            prior = issue.get("gemini_wording_rejected") or ""
+            issue["gemini_wording_rejected"] = (
+                f"{prior},recommendation_role_conflict".strip(",")
+            )
+        else:
+            issue["recommendation"] = recommendation[:1000]
+            issue["recommendation_source"] = "gemini"
+
 
 def enrich_compliance_issues(
     issues: list[dict], mechanics_rules: dict, tier: str = "free"
@@ -67,15 +150,15 @@ def enrich_compliance_issues(
                 issue["premium_detail_available"] = True
         return issues
     LOCATION_SAMPLE = 25
+    # Never send title/summary with Heading labels Gemini can remix — send locked role_label.
     safe_input = [
         {
             "issue_type": issue["issue_type"],
+            "role_label": _engine_role_label(issue),
             "current_severity": issue["severity"],
-            "title": issue.get("title"),
-            "summary": issue["summary"],
             "measured_explanation": issue.get("explanation"),
             "measured_recommendation": issue.get("recommendation"),
-            "locations": (issue.get("locations") or [])[:LOCATION_SAMPLE],
+            "locations": _strip_location_role_fields((issue.get("locations") or [])[:LOCATION_SAMPLE]),
             "count": issue["count"],
         }
         for issue in issues
@@ -88,16 +171,15 @@ def enrich_compliance_issues(
     )
     prompt = f"""You enrich already-detected academic document formatting issues.
 Do not perform grammar, plagiarism, source-validity, or citation-content analysis.
-Keep each issue_type separate. Do not merge Heading 1, Heading 2, body, or title-page font issues.
-Never rename the heading level in the title/summary (font_size_heading2 stays Heading 2, never Heading 1).
+Keep each issue_type separate. Do not merge issues.
+role_label is LOCKED by the deterministic engine — you MUST use that exact label
+(e.g. "body text", "Heading 2") in explanation/recommendation. Never rename the role.
+Never invent a Heading level that differs from role_label.
 Use measured_explanation numbers as ground truth; do not invent different measurements.
 When locations list different measured sizes, do not pick one size for the whole issue —
 say sizes vary by location, and never claim every line measures the first location's size.
-Do not list every font size from the mechanics — only the size named in measured_explanation for that issue.
 Never print list/array brackets such as [11.0]; always write a scalar with a unit (e.g. 11 pt).
-Do not invent issues for heading levels that have no headingN_size in MECHANICS RULES.
-If issue_type is font_size (body text), never rewrite the explanation to say Heading 1/2/3 —
-titles without a headingN_size rule are not heading findings.
+Do not invent issues. Do not output location, bbox, page, line, or role fields.
 {COMPLIANCE_SEVERITY_RUBRIC}
 {depth}
 
@@ -141,10 +223,7 @@ DETERMINISTIC GROUPED ISSUES:
                 issue.setdefault("rule_severity", original)
                 issue["severity"] = proposed
                 issue["severity_source"] = "gemini"
-            issue["explanation"] = update["explanation"][:1000]
-            recommendation = update.get("recommendation")
-            if isinstance(recommendation, str) and recommendation.strip():
-                issue["recommendation"] = recommendation[:1000]
+            _apply_gemini_wording(issue, update)
         if not paid:
             for issue in issues:
                 issue["premium_detail_available"] = True

@@ -2,7 +2,7 @@
  * IssuesDetectedPanel
  *
  * Lists every detected formatting issue in one place so authors can fix them
- * together. Severity pills are optional filters — default view is ALL issues.
+ * together. Category dropdown is an optional filter — default is ALL.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -33,6 +33,45 @@ const SEVERITY = {
     tag: "bg-rose-100 text-rose-700 border-rose-200",
   },
 };
+
+/** Preferred display order for category filter chips. */
+const CATEGORY_ORDER = [
+  "Fonts",
+  "Margins",
+  "Indentation",
+  "Spacing",
+  "Alignment",
+  "Pagination",
+  "Captions",
+  "Citations",
+  "Other",
+];
+
+export function categoryForIssue(entry = {}) {
+  const section = String(entry.section || entry.category || "").trim();
+  if (section) {
+    const known = CATEGORY_ORDER.find((name) => name.toLowerCase() === section.toLowerCase());
+    return known || section;
+  }
+  const type = String(entry.issue_type || "").toLowerCase();
+  if (type.startsWith("font") || type.includes("heading")) return "Fonts";
+  if (type.includes("margin") || type.includes("paper") || type.includes("orientation")) {
+    return "Margins";
+  }
+  if (type.includes("indent")) return "Indentation";
+  if (type.includes("spacing") || type.includes("line_spacing") || type.includes("word_spacing")) {
+    return "Spacing";
+  }
+  if (type.includes("align")) return "Alignment";
+  if (type.includes("pagination") || type.includes("page_number") || type.includes("page_token")) {
+    return "Pagination";
+  }
+  if (type.includes("caption") || type.startsWith("table_") || type.startsWith("figure_")) {
+    return "Captions";
+  }
+  if (type.includes("citation")) return "Citations";
+  return "Other";
+}
 
 function normalizeSeverity(raw, result) {
   const v = String(raw || "").toLowerCase();
@@ -95,32 +134,48 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
       const locExplanation = typeof loc?.explanation === "string" ? loc.explanation.trim() : "";
       const locRecommendation =
         typeof loc?.recommendation === "string" ? loc.recommendation.trim() : "";
-      entries.push({
+      const section = loc?.section || check.section || "General";
+      const pagination = String(section).toLowerCase() === "pagination";
+      // Keep "Why"/"Fix" text on the card's own page (shared issue text often reused page 1 / folio 12).
+      const alignPageMention = (text) => {
+        if (page == null || !text) return text;
+        return String(text)
+          .replace(/\bpage\s+\d+\b/gi, `page ${page}`)
+          .replace(/(page number\s+['"]?)\d+(['"]?)/gi, `$1${page}$2`)
+          .replace(/(shows the page number\s+['"]?)\d+(['"]?)/gi, `$1${page}$2`);
+      };
+      const draft = {
         id: `${check.id || check.issue_type || "chk"}-${checkIdx}-${locIdx}`,
         issue_type: issueType,
         page,
-        line: line != null && !Number.isNaN(line) ? line : null,
-        section: loc?.section || check.section || "General",
+        // Pagination highlights the header/footer chip — never body line 1.
+        line: pagination ? null : line != null && !Number.isNaN(line) ? line : null,
+        section,
         location: loc && typeof loc === "object" ? loc : null,
         severity,
-        finding:
+        finding: alignPageMention(
           locSummary ||
-          check.finding ||
-          check.details ||
-          check.description ||
-          check.name ||
-          "Formatting discrepancy detected",
-        explanation:
+            check.finding ||
+            check.details ||
+            check.description ||
+            check.name ||
+            "Formatting discrepancy detected"
+        ),
+        explanation: alignPageMention(
           locExplanation ||
-          check.explanation ||
-          check.details ||
-          check.description ||
-          "This formatting rule does not match the confirmed mechanics.",
-        recommendation: locRecommendation || check.recommendation || "",
+            check.explanation ||
+            check.details ||
+            check.description ||
+            "This formatting rule does not match the confirmed mechanics."
+        ),
+        recommendation: alignPageMention(locRecommendation || check.recommendation || ""),
         result: check.result,
         margin_side: loc?.margin_side || loc?.marginSide || "",
         page_region: loc?.page_region || loc?.pageRegion || "",
-      });
+        page_align: loc?.page_align || loc?.pageAlign || "",
+      };
+      draft.category = categoryForIssue(draft);
+      entries.push(draft);
     });
   });
 
@@ -157,24 +212,12 @@ function AiSparkleIcon({ className = "h-4 w-4" }) {
   );
 }
 
-function SeverityIcon({ severity, className = "h-4 w-4" }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
-      />
-    </svg>
-  );
-}
-
 export default function IssuesDetectedPanel({
   formatChecks = [],
   pageCount: pageCountProp = 0,
   pagination = null,
 }) {
-  const [severityFilter, setSeverityFilter] = useState(null);
+  const [categoryFilter, setCategoryFilter] = useState(null);
   const [selectedPage, setSelectedPage] = useState("all");
   const [reviewed, setReviewed] = useState(() => new Set());
 
@@ -191,6 +234,23 @@ export default function IssuesDetectedPanel({
     return c;
   }, [entries]);
 
+  const categoryCounts = useMemo(() => {
+    const c = {};
+    entries.forEach((e) => {
+      const key = e.category || categoryForIssue(e);
+      c[key] = (c[key] || 0) + 1;
+    });
+    return c;
+  }, [entries]);
+
+  const categoryOptions = useMemo(() => {
+    const ordered = CATEGORY_ORDER.filter((name) => categoryCounts[name]);
+    const extras = Object.keys(categoryCounts)
+      .filter((name) => !CATEGORY_ORDER.includes(name))
+      .sort((a, b) => a.localeCompare(b));
+    return [...ordered, ...extras];
+  }, [categoryCounts]);
+
   const pages = useMemo(() => {
     const fromIssues = entries.map((e) => e.page).filter((p) => p != null);
     const total = Math.max(Number(pageCountProp) || 0, pageCount, ...fromIssues, 0);
@@ -199,20 +259,22 @@ export default function IssuesDetectedPanel({
   }, [entries, pageCount, pageCountProp]);
 
   useEffect(() => {
-    setSeverityFilter(null);
+    setCategoryFilter(null);
     setSelectedPage("all");
     setReviewed(new Set());
   }, [formatChecks]);
 
   const visibleEntries = useMemo(() => {
     let list = entries;
-    if (severityFilter) list = list.filter((e) => e.severity === severityFilter);
+    if (categoryFilter) {
+      list = list.filter((e) => (e.category || categoryForIssue(e)) === categoryFilter);
+    }
     if (selectedPage !== "all") {
       const n = Number(selectedPage);
       list = list.filter((e) => e.page === n);
     }
     return list;
-  }, [entries, severityFilter, selectedPage]);
+  }, [entries, categoryFilter, selectedPage]);
 
   const issueBlocks = useMemo(() => {
     const map = new Map();
@@ -241,18 +303,22 @@ export default function IssuesDetectedPanel({
 
   const entriesByPage = useMemo(() => {
     const map = new Map();
-    const filtered = severityFilter ? entries.filter((e) => e.severity === severityFilter) : entries;
+    let filtered = entries;
+    if (categoryFilter) {
+      filtered = filtered.filter((e) => (e.category || categoryForIssue(e)) === categoryFilter);
+    }
     filtered.forEach((e) => {
       const key = e.page ?? "all";
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(e);
     });
     return map;
-  }, [entries, severityFilter]);
+  }, [entries, categoryFilter]);
 
   const isReviewed = reviewed.has(String(selectedPage));
-  const totalVisible = severityFilter ? counts[severityFilter] : entries.length;
+  const totalVisible = visibleEntries.length;
   const paginationNote = pagination?.note || "";
+  const filtersActive = Boolean(categoryFilter);
 
   if (!entries.length) {
     return (
@@ -273,7 +339,7 @@ export default function IssuesDetectedPanel({
         </p>
         <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
           {counts.critical} critical · {counts.moderate} moderate · {counts.minor} minor.
-          Each card explains what failed, why it matters, and how to fix it — filter by severity or page if you want a smaller pass.
+          Each card explains what failed, why it matters, and how to fix it — filter by category or page if you want a smaller pass.
           {hiddenLocations > 0
             ? ` ${hiddenLocations} additional matching locations are counted in the totals.`
             : ""}
@@ -283,43 +349,40 @@ export default function IssuesDetectedPanel({
         ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-5 py-4">
-        {[["minor", counts.minor], ["moderate", counts.moderate], ["critical", counts.critical]].map(
-          ([key, count]) => {
-            const s = SEVERITY[key];
-            const active = severityFilter === key;
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => {
-                  setSeverityFilter((cur) => (cur === key ? null : key));
-                  setSelectedPage("all");
-                }}
-                aria-pressed={active}
-                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition hover:brightness-95 ${
-                  active ? s.pillActive : s.pill
-                } ${count === 0 ? "opacity-40" : ""}`}
-              >
-                <SeverityIcon severity={key} className="h-3.5 w-3.5" />
-                {count} {s.label}
-              </button>
-            );
-          }
-        )}
-        {severityFilter ? (
-          <button
-            type="button"
-            onClick={() => setSeverityFilter(null)}
-            className="text-[11px] font-semibold text-[#0d9488] underline-offset-2 hover:underline"
-          >
-            Show all issues ×
-          </button>
-        ) : (
-          <p className="ml-auto hidden text-[11px] text-slate-400 sm:block">
-            Optional filter only — default is every issue
-          </p>
-        )}
+      <div className="space-y-2 border-b border-slate-100 px-5 py-4">
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="min-w-[9rem] flex-1">
+            <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-400">
+              Category
+            </span>
+            <select
+              value={categoryFilter || "all"}
+              onChange={(e) => {
+                const next = e.target.value;
+                setCategoryFilter(next === "all" ? null : next);
+                setSelectedPage("all");
+              }}
+              className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none transition focus:border-[#16bfa8] focus:ring-2 focus:ring-[#16bfa8]/25"
+              aria-label="Filter by category"
+            >
+              <option value="all">All categories ({entries.length})</option>
+              {categoryOptions.map((name) => (
+                <option key={name} value={name}>
+                  {name} ({categoryCounts[name] || 0})
+                </option>
+              ))}
+            </select>
+          </label>
+          {filtersActive ? (
+            <button
+              type="button"
+              onClick={() => setCategoryFilter(null)}
+              className="mb-0.5 shrink-0 text-[11px] font-semibold text-[#0d9488] underline-offset-2 hover:underline"
+            >
+              Show all issues ×
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-[200px_minmax(0,1fr)]">
@@ -341,9 +404,7 @@ export default function IssuesDetectedPanel({
               {totalVisible > 0 ? (
                 <span
                   className={`grid h-5 min-w-5 place-items-center rounded-full px-1.5 text-[10px] font-bold ${
-                    severityFilter
-                      ? SEVERITY[severityFilter].badge
-                      : SEVERITY[worstSeverity(entries)].badge
+                    SEVERITY[worstSeverity(visibleEntries.length ? visibleEntries : entries)].badge
                   }`}
                 >
                   {totalVisible}
@@ -387,9 +448,9 @@ export default function IssuesDetectedPanel({
             <div>
               <h3 className="text-base font-bold text-slate-800">
                 {selectedPage === "all"
-                  ? severityFilter
-                    ? `All ${SEVERITY[severityFilter].label} issues`
-                    : "All issues (every severity)"
+                  ? categoryFilter
+                    ? `${categoryFilter} issues`
+                    : "All issues"
                   : `Page ${selectedPage}`}
                 <span className="ml-1 font-normal text-slate-400">
                   · {visibleEntries.length} issue{visibleEntries.length !== 1 ? "s" : ""}

@@ -529,6 +529,31 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(sized["heading1_size"], 12.0)
         self.assertEqual(sized["body_size"], 12.0)
 
+    def test_same_sentence_rules_fill_their_own_fields(self):
+        """Two rules in one sentence must each land in the designated Format Field."""
+        # Spacing + indent share a sentence; measure may appear before the indent label.
+        rules = derive_mechanics_rules(
+            "Use double line spacing and 0.5 inch first-line indent."
+        )
+        self.assertEqual(rules["line_spacing"], 2.0)
+        self.assertEqual(rules["first_line_indent_inches"], 0.5)
+
+        # Distinct heading vs body sizes in one prose sentence.
+        font = derive_mechanics_rules(
+            "Use Heading 1 at 16 points and Heading 2 at 14 points; body content uses 12 pt."
+        )["font"]
+        self.assertEqual(font["heading1_size"], 16.0)
+        self.assertEqual(font["heading2_size"], 14.0)
+        self.assertEqual(font["body_size"], 12.0)
+
+        # Labeled pair with different values stays split across fields.
+        paired = derive_mechanics_rules(
+            "Heading 1 size: 16 pt and body size: 11 pt. Font type: Arial."
+        )["font"]
+        self.assertEqual(paired["heading1_size"], 16.0)
+        self.assertEqual(paired["body_size"], 11.0)
+        self.assertEqual(paired["type"], "Arial")
+
     def test_prose_institutional_guide_sentence_rules(self):
         """Sentence-style school guides fill every format category, not only fonts."""
         rules = derive_mechanics_rules(
@@ -1748,20 +1773,23 @@ class LayoutAndPageTests(unittest.TestCase):
             self.assertNotIn("[11.0]", blob)
             self.assertNotIn("[11]", blob)
         # Enrichment-style list leak is stripped by the post-filter.
+        # Role contradictions (Heading N on body issues) are rejected in gemini_client,
+        # not rewritten here.
         leaked = [
             {
                 "issue_type": "font_size",
                 "title": "body text font size differs",
-                "explanation": "Measured 14 pt; the format specifies [11.0] pt for Heading 1.",
+                "explanation": "Measured 14 pt; the format specifies [11.0] pt for body text.",
                 "recommendation": "Set to [11.0] pt.",
-                "summary": "Heading 1 size wrong",
+                "summary": "body text size wrong",
                 "locations": [],
             }
         ]
         cleaned = _filter_unset_heading_font_issues(leaked, rules)
         self.assertEqual(len(cleaned), 1)
         self.assertNotIn("[11.0]", cleaned[0]["explanation"])
-        self.assertNotIn("Heading 1", cleaned[0]["explanation"])
+        self.assertNotIn("[11.0]", cleaned[0]["recommendation"])
+        self.assertIn("body text", cleaned[0]["explanation"])
 
     def test_ignore_heading1_size_counts_as_pass(self):
         paragraphs = [

@@ -136,12 +136,24 @@ export function resolveCategoryUnitDisplays(rows = []) {
       compliant = total - nonCompliant;
     }
 
-    const displayScore = compliancePercentFromUnits(total, nonCompliant);
+    // Prefer occurrence counts so "issues found" and ring % share one formula.
+    const occurrenceIssues = hasValue(row.issueCount)
+      ? Math.max(0, Math.round(Number(row.issueCount)))
+      : null;
+    const displayIssueCount = occurrenceIssues != null ? occurrenceIssues : nonCompliant;
+    const failedForScore =
+      total != null && hasValue(displayIssueCount)
+        ? Math.min(total, Math.max(0, Number(displayIssueCount)))
+        : nonCompliant;
+    const compliantForScore =
+      total != null && failedForScore != null ? total - failedForScore : compliant;
+    const displayScore = compliancePercentFromUnits(total, failedForScore);
     return {
       ...row,
       displayTotal: total,
-      displayCompliant: compliant,
-      displayNonCompliant: nonCompliant,
+      displayCompliant: compliantForScore,
+      displayNonCompliant: failedForScore,
+      displayIssueCount,
       displayScore: displayScore != null ? displayScore : hasValue(row.score) ? Number(row.score) : null,
     };
   });
@@ -195,9 +207,12 @@ export function reconcileDisplayedUnits(overall = {}, categoryDisplays = []) {
   };
 }
 
-export function formatCategoryIssuesDetail(nonCompliant, total) {
+/**
+ * Category card subtitle. ``issueCount`` is Issue Tracing occurrences (not failed units).
+ */
+export function formatCategoryIssuesDetail(issueCount, total) {
   if (!hasValue(total)) return null;
-  const issues = hasValue(nonCompliant) ? Math.max(0, Math.round(Number(nonCompliant))) : 0;
+  const issues = hasValue(issueCount) ? Math.max(0, Math.round(Number(issueCount))) : 0;
   const units = Math.max(0, Math.round(Number(total)));
   return `${formatCount(issues)} ${plural(issues, "issue")} found on ${formatCount(units)} total ${plural(units, "unit")} checked`;
 }

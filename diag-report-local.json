@@ -1,0 +1,432 @@
+{
+  "url": "http://127.0.0.1:5173/",
+  "rootHtml": {
+    "rootChildCount": 1,
+    "rootInnerText": "PAPERPILOT\nAN AI-POWERED ACADEMIC DOCUMENT\nANALYSIS AND COMPLIANCE CHECKING SYSTEM\nFormat Compliance Made Simple.\n\nCheck manuscripts against journal rules and get instant, citation-aware feedback.\n\nFormat Checker\nAI Feedback\nInstant Reports\n\n“PaperPilot caught every margin and citation mismatch before our journal desk reject.”\n\nWelcome back\n\nSign in to continue reviewing manuscripts.\n\nEmail or Username\nPassword\nRemember me\nForgot password?\nSign in to PaperPilot\nOR CONTINUE WITH\nSign in with Google\n\nDon't have an account? Create an account",
+    "title": "PaperPilot"
+  },
+  "jsAssets": [
+    {
+      "url": "http://127.0.0.1:5173/src/main.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/@vite/client",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/react_jsx-dev-runtime.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/@react-refresh",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/react.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/react-dom_client.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/ErrorBoundary.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/vite/dist/client/env.mjs",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/chunk-SNAQBZPT.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/App.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/index.css",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/chunk-VJA5E53X.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/firebase.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/api.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/AuthScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/PaperPilotLogo.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/RegistrationSuccessScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/MechanicsPanel.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/firebase_auth.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/AnalysisProgress.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/ScanSummaryModal.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/PaperCarryAway.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/ScanResultsScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/ReferenceTracingView.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/MyManuscriptsScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/AccountSettingsScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/ManuscriptPanel.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/chunk-H343HIDT.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/UploadJourneyModal.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/NotificationsScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/UpgradePrompt.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/ConfirmDialog.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/PaperRollAnimation.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/PaperPlaneLoader.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/FileTypeIcon.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/hooks/useScanFlow.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/scanMapper.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/SubscriptionScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/scannedLibrary.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/scoreBand.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/formatFileSize.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/formatMechanicsForm.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/plans.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/notifications.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/firebase_app.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/firebase_storage.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/PasswordChangedScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/cloudinaryUpload.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/LoginScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/ForgotPasswordScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/firebase_database.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/RegisterScreen.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/services/auth.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/Spinner.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/DocumentPagePreview.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/DocumentLoader.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/uploadLimits.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/FormatMechanicsFields.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/analysisProgress.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/scoreFormat.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/chunk-KXE5OI7H.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/timeZone.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/ManuscriptDetailModal.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/OtpStep.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/validation.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/cockpit/IssuesDetectedPanel.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/assets/paymongo-logo.png?import",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/mockAnalysis.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/mechanicsOptions.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/AuthShell.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/FloatingLabelInput.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/TermsModal.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/scanPoll.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/OtpInput.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/assets/document-loader.webp?import",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/pdfjs-dist/build/pdf.worker.min.mjs?url",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/GoogleButton.jsx",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/lib/documentPreviewLocate.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/src/components/auth/messages.js",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/docx-preview.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    },
+    {
+      "url": "http://127.0.0.1:5173/node_modules/.vite/deps/lucide-react.js?v=752614a0",
+      "status": 200,
+      "contentType": "text/javascript"
+    }
+  ],
+  "badResponses": [],
+  "consoleLogs": [
+    {
+      "type": "debug",
+      "text": "[vite] connecting..."
+    },
+    {
+      "type": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold"
+    },
+    {
+      "type": "debug",
+      "text": "[vite] connected."
+    }
+  ],
+  "failedRequests": [],
+  "screenshotPath": "c:\\Users\\vince\\Downloads\\PaperPilot-main\\diag-screenshot-local.png"
+}
