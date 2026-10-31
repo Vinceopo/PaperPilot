@@ -18,7 +18,6 @@ import {
   plural,
   reconcileDisplayedUnits,
   resolveCategoryUnitDisplays,
-  roundSharesToTotal,
 } from "../lib/scoreFormat";
 import { isApproximateTracing } from "../lib/documentPreviewLocate";
 import { APP_TIME_ZONE } from "../lib/timeZone";
@@ -229,8 +228,6 @@ function ScanResultBody({ navigation }) {
     citationStyle = "APA",
     overallScore = null,
     overallCategories = null,
-    rightPct,
-    wrongPct,
     scoreBreakdown = [],
     formatChecks = [],
     pageCount = 0,
@@ -256,14 +253,6 @@ function ScanResultBody({ navigation }) {
     { unitsChecked, unitsPassed, unitsFailed },
     categoryDisplays,
   );
-  const fromOverallUnits =
-    hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
-      ? [
-          compliancePercentFromUnits(totalUnits, nonCompliantUnits),
-          (Number(nonCompliantUnits) / Number(totalUnits)) * 100,
-        ]
-      : [rightPct, wrongPct];
-  const [shownRight, shownWrong] = roundSharesToTotal(fromOverallUnits, 2);
   const issuesFound = hasValue(nonCompliantUnits)
     ? Number(nonCompliantUnits)
     : hasValue(issueTotals?.occurrences)
@@ -357,19 +346,7 @@ function ScanResultBody({ navigation }) {
       </View>
 
       <View style={{ gap: 12 }}>
-        <View style={[styles.dualCard, styles.dualRight]}>
-          <Text style={[styles.dualLabel, { color: "#047857" }]}>Compliant</Text>
-          <Text style={[styles.dualValue, { color: "#047857" }]}>{formatPct(shownRight, 2)}</Text>
-          {hasValue(compliantUnits) ? (
-            <Text style={[styles.dualSub, { color: "rgba(4,120,87,0.8)" }]}>
-              {formatCount(compliantUnits)} {plural(compliantUnits, "unit")} compliant
-              {hasValue(totalUnits) ? ` of ${formatCount(totalUnits)}` : ""}
-            </Text>
-          ) : null}
-        </View>
         <View style={[styles.dualCard, styles.dualWrong]}>
-          <Text style={[styles.dualLabel, { color: "#be123c" }]}>Non-Compliant</Text>
-          <Text style={[styles.dualValue, { color: "#be123c" }]}>{formatPct(shownWrong, 2)}</Text>
           <Text style={[styles.dualSub, { color: "rgba(190,18,60,0.8)" }]}>
             {formatCount(issuesFound)} {plural(issuesFound, "issue")}
           </Text>
@@ -426,11 +403,6 @@ function ScanResultBody({ navigation }) {
           Compliant Units + Non-Compliant Units equals Total Units checked.
         </Text>
         <View style={styles.tagRow}>
-          {hasValue(compliantUnits) ? (
-            <Text style={[styles.tag, styles.tagPass]}>
-              {formatCount(compliantUnits)} {plural(compliantUnits, "unit")} passed
-            </Text>
-          ) : null}
           <Text style={styles.tag}>{citationStyle}</Text>
           <Text style={styles.tag}>Format only</Text>
         </View>

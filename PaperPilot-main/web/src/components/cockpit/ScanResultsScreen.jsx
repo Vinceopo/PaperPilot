@@ -352,19 +352,9 @@ export default function ScanResultsScreen({
           </div>
 
           <div className="space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3 text-sm font-semibold">
-              <div className="text-[#157347]">
-                <p>Compliant {formatPct(shownCompliant, 2)}</p>
-                {hasValue(compliantUnits) ? (
-                  <p className="mt-0.5 text-[11px] font-medium text-[#157347]/90">
-                    {formatCount(compliantUnits)} {plural(compliantUnits, "unit")} compliant
-                    {hasValue(totalUnits) ? ` of ${formatCount(totalUnits)}` : ""}
-                  </p>
-                ) : null}
-              </div>
+            <div className="flex flex-wrap items-start justify-end gap-3 text-sm font-semibold">
               <div className="text-right text-[#B02A37]">
-                <p>Non-Compliant {formatPct(shownNonCompliant, 2)}</p>
-                <p className="mt-0.5 text-[11px] font-medium text-[#B02A37]/90">
+                <p className="text-[11px] font-medium text-[#B02A37]/90">
                   {formatCount(issuesFound)} {plural(issuesFound, "issue")}
                 </p>
               </div>

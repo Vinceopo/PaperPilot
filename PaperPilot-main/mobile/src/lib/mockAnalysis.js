@@ -265,24 +265,21 @@ export async function downloadReport(result, opts = {}) {
   doc.setFontSize(7).setFont(undefined, "bold").setTextColor(...bandColor);
   doc.text(band, ML + 5, Y + 30);
 
+  // Thin stacked bar (percent labels intentionally omitted from public report)
   const barX = ML + 58;
   const barW = CW - 68;
-  doc.setFontSize(8).setFont(undefined, "bold").setTextColor(...PASS_C);
-  doc.text(`Compliant ${formatPct(rightPct)}`, barX, Y + 10);
-  doc.setTextColor(...FAIL_C);
-  doc.text(`Non-Compliant ${formatPct(wrongPct)}`, barX + barW, Y + 10, { align: "right" });
 
   const rightW = Math.max(0, Math.min(barW, ((Number(rightPct) || 0) / 100) * barW));
   const wrongW = Math.max(0, barW - rightW);
-  fillPill(barX, Y + 12.5, barW, BAR_H, TRACK);
+  fillPill(barX, Y + 10, barW, BAR_H, TRACK);
   if (rightW > 0) {
-    fillPill(barX, Y + 12.5, rightW, BAR_H, PASS_C, {
+    fillPill(barX, Y + 10, rightW, BAR_H, PASS_C, {
       roundLeft: true,
       roundRight: !(wrongW > 0 && Number(wrongPct) > 0),
     });
   }
   if (wrongW > 0 && Number(wrongPct) > 0) {
-    fillPill(barX + rightW, Y + 12.5, wrongW, BAR_H, FAIL_C, {
+    fillPill(barX + rightW, Y + 10, wrongW, BAR_H, FAIL_C, {
       roundLeft: !(rightW > 0),
       roundRight: true,
     });
@@ -296,7 +293,7 @@ export async function downloadReport(result, opts = {}) {
   const boxW = (barW - 4) / 3;
   stats.forEach((s, i) => {
     const bx = barX + i * (boxW + 2);
-    const by = Y + 20;
+    const by = Y + 17;
     doc.setDrawColor(226, 232, 240);
     doc.setFillColor(255, 255, 255);
     doc.roundedRect(bx, by, boxW, 14, 1.5, 1.5, "FD");
