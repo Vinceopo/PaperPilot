@@ -2,7 +2,7 @@
  * Manuscript preview with issue list — click an issue to scroll and highlight in the document.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import BackToDashboardButton from "../BackToDashboardButton.jsx";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { normalizeDetectedIssues } from "./IssuesDetectedPanel.jsx";
@@ -26,7 +26,6 @@ export default function ReferenceTracingView({
   const [activeIssueId, setActiveIssueId] = useState(null);
   const [scrollTarget, setScrollTarget] = useState(null);
   const [highlight, setHighlight] = useState(null);
-  const openedOnRef = useRef("");
 
   const { entries } = useMemo(
     () => normalizeDetectedIssues(result?.formatChecks || [], result?.pageCount || 0),
@@ -106,12 +105,14 @@ export default function ReferenceTracingView({
     [resolveLocation]
   );
 
+  // Do not auto-jump to the first issue — wait until the user clicks/traces one.
   useEffect(() => {
-    const first = entries[0];
-    if (!first || openedOnRef.current === first.id) return;
-    openedOnRef.current = first.id;
-    onSelectIssue(first);
-  }, [entries, onSelectIssue]);
+    if (!entries.length) {
+      setActiveIssueId(null);
+      setHighlight(null);
+      setScrollTarget(null);
+    }
+  }, [entries]);
 
   return (
     <div className="space-y-4">

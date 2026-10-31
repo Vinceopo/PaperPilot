@@ -450,7 +450,9 @@ export default function SubscriptionScreen({
             </button>
           )}
           {paymentCanceled && onBackToDashboard ? (
-            <BackToDashboardButton onClick={onBackToDashboard} className="mt-3" />
+            <div className="mt-2">
+              <BackToDashboardButton onClick={onBackToDashboard} />
+            </div>
           ) : null}
         </div>
       )}

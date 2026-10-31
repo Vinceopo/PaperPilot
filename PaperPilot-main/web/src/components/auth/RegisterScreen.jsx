@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../api.js";
 import { auth, db, firebaseReady } from "../../firebase.js";
-import { registerWithEmail, saveUserProfile, signInWithEmail, signInWithGoogle } from "../../services/auth.js";
+import { registerWithEmail, saveUserProfile, signInWithEmail } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
 import AuthShell from "./AuthShell.jsx";
-import GoogleButton from "./GoogleButton.jsx";
 import OtpStep from "./OtpStep.jsx";
 import TermsModal from "./TermsModal.jsx";
 import { FIREBASE_MISSING, authMessage } from "./messages.js";
@@ -158,31 +157,6 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
       sessionStorage.removeItem(REGISTRATION_SUCCESS_KEY);
       setFormError(`Your account is verified, but signing in failed: ${authMessage(err)}`);
       setStep("form");
-    }
-  }
-
-  async function onGoogle() {
-    if (busy) return;
-    setFormError("");
-    if (!agreedToTerms) {
-      setTermsError(TERMS_REQUIRED);
-      return;
-    }
-    if (!firebaseReady || !auth) {
-      setFormError("Add Firebase keys to web/.env to enable Google sign-up.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await signInWithGoogle(auth, true);
-    } catch (err) {
-      if (err?.code === "auth/cancelled-popup-request") {
-        setFormError("");
-      } else {
-        setFormError(authMessage(err));
-      }
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -355,7 +329,6 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
         </button>
       </form>
 
-      <GoogleButton label="Sign up with Google" onClick={onGoogle} disabled={busy} compact />
       <TermsModal
         open={termsOpen}
         onClose={() => setTermsOpen(false)}

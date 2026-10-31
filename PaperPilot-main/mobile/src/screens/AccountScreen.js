@@ -158,7 +158,11 @@ function PwField({ label, value, onChangeText, show, onToggle }) {
 }
 
 function BackLink({ onPress, label = "Back to account" }) {
-  return <BackToDashboardButton onPress={onPress} label={label} style={styles.backLink} />;
+  return (
+    <View style={styles.backLink}>
+      <BackToDashboardButton onPress={onPress} label={label} />
+    </View>
+  );
 }
 
 export default function AccountScreen({ navigation }) {
@@ -829,7 +833,7 @@ const styles = StyleSheet.create({
   manageText: { fontSize: 14, fontWeight: "600", color: "#334155" },
   errorText: { marginTop: 12, fontSize: 12, color: "#f43f5e" },
   successText: { marginTop: 12, fontSize: 12, fontWeight: "600", color: "#059669" },
-  backLink: { marginBottom: 20 },
+  backLink: { marginBottom: 16 },
   formCard: {
     borderRadius: 16,
     borderWidth: 1,

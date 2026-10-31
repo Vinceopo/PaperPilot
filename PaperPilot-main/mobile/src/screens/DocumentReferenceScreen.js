@@ -52,18 +52,17 @@ export default function DocumentReferenceScreen({ navigation }) {
     [result]
   );
 
+  // Only highlight after the user taps an issue (or arrives with an explicit selection).
   const initial = scanFlow?.traceHighlight;
   const [highlight, setHighlight] = useState(() =>
-    initial?.page != null || initial?.line != null
-      ? initial
-      : entries[0]
-        ? toTarget(entries[0])
-        : null
+    initial?.page != null || initial?.line != null || initial?.id ? initial : null
   );
 
   useEffect(() => {
-    if (highlight || !entries[0]) return;
-    setHighlight(toTarget(entries[0]));
+    if (!highlight) return;
+    if (!entries.length || (highlight.id && !entries.some((e) => e.id === highlight.id))) {
+      setHighlight(null);
+    }
   }, [entries, highlight]);
 
   useEffect(() => {

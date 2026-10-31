@@ -262,5 +262,5 @@ const styles = StyleSheet.create({
     color: colors.muted,
   },
   title: { marginTop: 2, fontSize: 20, fontWeight: "700", letterSpacing: -0.3, color: colors.text },
-  backBtn: { marginTop: 8 },
+  backBtn: { marginTop: 6 },
 });

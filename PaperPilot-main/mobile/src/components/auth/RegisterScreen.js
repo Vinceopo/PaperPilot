@@ -4,13 +4,11 @@ import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../
 import { auth, db, firebaseReady } from "../../firebase";
 import { FIREBASE_MISSING, authMessage } from "../../lib/messages";
 import { passwordChecks, registerErrors, registerFieldError } from "../../lib/validation";
-import { registerWithEmail, saveUserProfile, signInWithEmail, signInWithGoogle } from "../../services/auth";
-import { promptGoogleSignIn } from "../../services/googleSignIn";
+import { registerWithEmail, saveUserProfile, signInWithEmail } from "../../services/auth";
 import { colors } from "../../theme";
 import FloatingLabelInput from "../ui/FloatingLabelInput";
 import PrimaryButton from "../ui/PrimaryButton";
 import AuthShell from "./AuthShell";
-import GoogleButton from "./GoogleButton";
 import OtpStep from "./OtpStep";
 import TermsModal from "./TermsModal";
 
@@ -148,27 +146,6 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
     } catch (err) {
       setFormError(`Your account is verified, but signing in failed: ${authMessage(err)}`);
       setStep("form");
-    }
-  }
-
-  async function onGoogle() {
-    setFormError("");
-    if (!agreedToTerms) {
-      setTermsError(TERMS_REQUIRED);
-      return;
-    }
-    if (!firebaseReady || !auth) {
-      setFormError("Add Firebase keys to mobile/app.json to enable Google sign-up.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const tokens = await promptGoogleSignIn();
-      await signInWithGoogle(auth, true, tokens);
-    } catch (err) {
-      setFormError(authMessage(err));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -312,7 +289,6 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
         />
       </View>
 
-      <GoogleButton label="Sign up with Google" onPress={onGoogle} disabled={busy} />
       <TermsModal
         open={termsOpen}
         onClose={() => setTermsOpen(false)}

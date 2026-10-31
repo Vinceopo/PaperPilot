@@ -4,13 +4,11 @@ import Svg, { Path } from "react-native-svg";
 import { resolveEmail } from "../../api";
 import { auth, firebaseReady } from "../../firebase";
 import { FIREBASE_MISSING, authMessage } from "../../lib/messages";
-import { signInWithEmail, signInWithGoogle } from "../../services/auth";
-import { promptGoogleSignIn } from "../../services/googleSignIn";
+import { signInWithEmail } from "../../services/auth";
 import { colors } from "../../theme";
 import FloatingLabelInput from "../ui/FloatingLabelInput";
 import PrimaryButton from "../ui/PrimaryButton";
 import AuthShell from "./AuthShell";
-import GoogleButton from "./GoogleButton";
 
 const USERNAME_NOT_FOUND = "No account uses that username. Check the spelling or sign in with your email.";
 const USERNAME_SIGN_IN_UNAVAILABLE =
@@ -134,23 +132,6 @@ export default function LoginScreen({
     }
   }
 
-  async function onGoogle() {
-    setFormError("");
-    if (!firebaseReady || !auth) {
-      setFormError("Add Firebase keys to mobile/app.json to enable Google sign-in.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const tokens = await promptGoogleSignIn();
-      await signInWithGoogle(auth, remember, tokens);
-    } catch (err) {
-      setFormError(authMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const footer = (
     <Text style={styles.footer}>
       Don't have an account?{" "}
@@ -217,8 +198,6 @@ export default function LoginScreen({
           style={styles.submit}
         />
       </View>
-
-      <GoogleButton label="Sign in with Google" onPress={onGoogle} disabled={busy} />
     </AuthShell>
   );
 }

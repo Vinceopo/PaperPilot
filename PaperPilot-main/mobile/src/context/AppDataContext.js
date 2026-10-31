@@ -394,7 +394,7 @@ export function AppDataProvider({ children }) {
       .catch(() => {});
   }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, scanFlow.persistScan, user?.uid, libraryUid]);
 
-  // Accounts created with Google never pass through /auth/register, so the API
+  // Ensure the API has a database profile the first time it is requested.
   // creates their database profile the first time it is requested.
   useEffect(() => {
     if (!user?.uid) return;

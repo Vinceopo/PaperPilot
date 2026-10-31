@@ -176,7 +176,6 @@ export default function ScanResultsScreen({
     unitsChecked,
     unitsPassed,
     unitsFailed,
-    issueTotals = null,
     scoringConsistency = null,
   } = result;
 
@@ -223,7 +222,7 @@ export default function ScanResultsScreen({
     { unitsChecked, unitsPassed, unitsFailed },
     categoryCards,
   );
-  // Compliant / Non-Compliant % from the same issue counts shown on the cards.
+  // Bar shares only — percent numbers are not shown in the public results UI.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
       ? [
@@ -246,10 +245,6 @@ export default function ScanResultsScreen({
   const nonCompliantShare = hasValue(shownNonCompliant)
     ? Math.max(0, Math.min(100, Number(shownNonCompliant)))
     : 0;
-  // Same Issue Tracing occurrence total shown on category cards.
-  const issuesFound = tracedEntries.length
-    || (hasValue(issueTotals?.occurrences) ? Number(issueTotals.occurrences) : 0)
-    || formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
 
   const versionLabel = `v${versionNumber}.0`;
   const scannedLabel = formatReportDate(scannedAt);
@@ -353,21 +348,8 @@ export default function ScanResultsScreen({
 
           <div className="space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3 text-sm font-semibold">
-              <div className="text-[#157347]">
-                <p>Compliant {formatPct(shownCompliant, 2)}</p>
-                {hasValue(compliantUnits) ? (
-                  <p className="mt-0.5 text-[11px] font-medium text-[#157347]/90">
-                    {formatCount(compliantUnits)} {plural(compliantUnits, "unit")} compliant
-                    {hasValue(totalUnits) ? ` of ${formatCount(totalUnits)}` : ""}
-                  </p>
-                ) : null}
-              </div>
-              <div className="text-right text-[#B02A37]">
-                <p>Non-Compliant {formatPct(shownNonCompliant, 2)}</p>
-                <p className="mt-0.5 text-[11px] font-medium text-[#B02A37]/90">
-                  {formatCount(issuesFound)} {plural(issuesFound, "issue")}
-                </p>
-              </div>
+              <p className="text-[#157347]">Compliant</p>
+              <p className="text-[#B02A37]">Non-Compliant</p>
             </div>
             <div className="flex h-1.5 overflow-hidden rounded-full bg-[#eeeeee]">
               {hasValue(shownCompliant) || hasValue(shownNonCompliant) ? (

@@ -15,7 +15,7 @@ function validateFile(file, tier) {
   const maxBytes = maxUploadBytesForPlan(tier);
   const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
   if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(ext)) {
-    return `Only ${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
+    return "Only PDF files are accepted for manuscripts.";
   }
   if (file.size > maxBytes) {
     return `${planName(tier)} plans can upload up to ${formatFileSize(maxBytes)}.`;
@@ -158,7 +158,8 @@ export function useScanFlow({
   }, [result]);
 
   const openDocumentTrace = useCallback((highlight) => {
-    if (highlight) setTraceHighlight(traceTarget(highlight));
+    // null clears any prior pin so the preview does not jump until the user picks an issue.
+    setTraceHighlight(highlight ? traceTarget(highlight) : null);
     setStep("documentTrace");
   }, []);
 

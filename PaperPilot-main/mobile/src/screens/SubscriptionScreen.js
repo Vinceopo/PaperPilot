@@ -403,13 +403,14 @@ export default function SubscriptionScreen({ navigation }) {
               </Pressable>
             ) : null}
             {paymentCanceled ? (
-              <BackToDashboardButton
-                onPress={() => {
-                  handleBackToDashboard();
-                  navigation.navigate("MainTabs", { screen: "Library" });
-                }}
-                style={styles.dashboardBtn}
-              />
+              <View style={styles.dashboardBtn}>
+                <BackToDashboardButton
+                  onPress={() => {
+                    handleBackToDashboard();
+                    navigation.navigate("MainTabs", { screen: "Library" });
+                  }}
+                />
+              </View>
             ) : null}
           </View>
         ) : null}
@@ -721,7 +722,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   payAgainText: { fontSize: 12, fontWeight: "700", color: "#092823" },
-  dashboardBtn: { marginTop: 12 },
+  dashboardBtn: { marginTop: 8 },
   accentPressed: { backgroundColor: colors.accentHover },
   card: {
     borderRadius: 16,

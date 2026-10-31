@@ -22,7 +22,7 @@ function validateFile(file, tier) {
   const maxBytes = maxUploadBytesForPlan(tier);
   const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
   if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(ext))
-    return `Only ${MANUSCRIPT_ACCEPTED_EXTENSIONS.join(" and ")} files are accepted.`;
+    return "Only PDF files are accepted for manuscripts.";
   if (file.size > maxBytes)
     return `${planName(tier)} plans can upload up to ${formatFileSize(maxBytes)}.`;
   return "";

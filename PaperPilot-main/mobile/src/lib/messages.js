@@ -13,10 +13,6 @@ export function authMessage(err) {
   if (code === "auth/invalid-email") return "Enter a valid email address.";
   if (code === "auth/email-already-in-use") return "An account with this email already exists.";
   if (code === "auth/weak-password") return "Password must be at least 8 characters.";
-  if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
-    return "Google sign-in was cancelled.";
-  }
-  if (code === "auth/popup-blocked") return "Your browser blocked the Google sign-in popup.";
   if (code === "auth/network-request-failed") return "Network error. Check your connection and try again.";
   if (code === "auth/too-many-requests") return "Too many attempts. Please try again later.";
   if (code === "auth/user-disabled") return "This account has been disabled.";

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth, firebaseReady } from "./firebase.js";
-import { completeGoogleRedirect } from "./services/auth.js";
 import {
   deleteMechanics as deleteMechanicsRequest,
   extractMechanics,
@@ -84,17 +83,27 @@ function itemsFrom(data, key) {
 
 const DASHBOARD_PAGES = new Set(["manuscripts", "upload", "account", "subscription", "notifications"]);
 
-/** Hash routes so sidebar links support Open in new tab / middle-click. */
-function pageFromHash() {
+/** Raw hash segment (e.g. "results", "upload") without the leading #/. */
+function hashSegment() {
   try {
-    const raw = String(window.location.hash || "")
+    return String(window.location.hash || "")
       .replace(/^#\/?/, "")
       .split(/[/?#]/)[0]
       .trim();
-    return DASHBOARD_PAGES.has(raw) ? raw : "manuscripts";
   } catch {
-    return "manuscripts";
+    return "";
   }
+}
+
+/**
+ * Hash routes so sidebar links support Open in new tab / middle-click.
+ * `#/results` is session-only — a hard refresh has no in-memory scan, so land on
+ * My Manuscripts (the dashboard) instead of an empty upload/results screen.
+ */
+function pageFromHash() {
+  const raw = hashSegment();
+  if (raw === "results") return "manuscripts";
+  return DASHBOARD_PAGES.has(raw) ? raw : "manuscripts";
 }
 
 function hashForPage(page) {
@@ -553,21 +562,17 @@ export default function App() {
   }, []);
 
   // Keep the URL hash in sync so dashboard links are real destinations.
+  // Compliance results use `#/results` so a hard refresh can fall back to My Manuscripts.
   useEffect(() => {
-    const wanted = hashForPage(activePage);
+    const onResults =
+      Boolean(scanFlow.result) &&
+      activePage === "upload" &&
+      (scanFlow.step === "results" || scanFlow.step === "tracing" || scanFlow.step === "summary");
+    const wanted = onResults ? "#/results" : hashForPage(activePage);
     if (window.location.hash === wanted) return;
     const next = `${window.location.pathname}${window.location.search}${wanted}`;
     window.history.replaceState({}, "", next);
-  }, [activePage]);
-
-  useEffect(() => {
-    const onHashChange = () => {
-      const page = pageFromHash();
-      setActivePage((current) => (current === page ? current : page));
-    };
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
+  }, [activePage, scanFlow.result, scanFlow.step]);
 
   useEffect(() => {
     const loaded = loadScannedManuscripts(user?.uid);
@@ -660,6 +665,26 @@ export default function App() {
 
   const scanFlowRef = useRef(null);
   scanFlowRef.current = scanFlow;
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const raw = hashSegment();
+      if (raw === "results") {
+        if (scanFlowRef.current?.result) {
+          setActivePage("upload");
+          scanFlowRef.current.openFullResults?.();
+        } else {
+          // Hard refresh / cold open of results with no session → dashboard.
+          setActivePage("manuscripts");
+        }
+        return;
+      }
+      const page = pageFromHash();
+      setActivePage((current) => (current === page ? current : page));
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   const [savedDocument, setSavedDocument] = useState(null);
   const savedDocumentRef = useRef(null);
@@ -780,9 +805,6 @@ export default function App() {
       setAuthReady(true);
     });
 
-    // Finish Google redirect sign-in (popup-blocked fallback).
-    void completeGoogleRedirect(auth);
-
     // Do NOT force getIdToken(true) on focus/visibility. File pickers, uploads,
     // and popups steal focus; a flaky refresh used to sign everyone out.
     // Real revocation is handled in authorizedFetch (fatal Firebase codes only).
@@ -791,8 +813,7 @@ export default function App() {
     };
   }, []);
 
-  // Accounts created with Google never pass through /auth/register, so the API
-  // creates their database profile the first time it is requested.
+  // Ensure the API has a database profile the first time it is requested.
   useEffect(() => {
     if (!user?.uid) return;
     getProfile().catch(() => {});
@@ -1408,6 +1429,23 @@ export default function App() {
           >
             <span>▣</span> My Manuscripts
           </a>
+          {hasComplianceResult ? (
+            <a
+              href="#/results"
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                e.preventDefault();
+                openComplianceResult();
+              }}
+              className={`mt-0.5 flex w-full items-center rounded-r-lg py-2.5 pl-11 pr-4 text-left text-sm transition ${
+                viewingComplianceResult
+                  ? "border-l-2 border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Compliance Result
+            </a>
+          ) : null}
           <a
             href="#/upload"
             onClick={(e) => {
@@ -1431,30 +1469,6 @@ export default function App() {
             </span>{" "}
             Upload &amp; Analyze
           </a>
-          {hasComplianceResult ? (
-            <a
-              href="#/upload"
-              onClick={(e) => {
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-                e.preventDefault();
-                openComplianceResult();
-              }}
-              className={`mt-1 flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold transition ${
-                viewingComplianceResult
-                  ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <span className="inline-flex h-4 w-4 items-center justify-center text-[#22c9b4]" aria-hidden>
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6M9 16h4" />
-                </svg>
-              </span>{" "}
-              Compliance Result
-            </a>
-          ) : null}
         </nav>
 
         <nav className="mt-auto">
@@ -1484,7 +1498,7 @@ export default function App() {
       </aside>
 
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <header className={`sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white px-5 md:px-8 ${hidePageHeading ? "min-h-16" : "min-h-[76px]"}`}>
+      <header className={`sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-3 md:px-8 ${hidePageHeading ? "min-h-16" : ""}`}>
         <div className="flex items-center gap-3">
           {!sidebarOpen && (
             <button
@@ -1519,7 +1533,7 @@ export default function App() {
             </div>
             {activePage === "upload" &&
             (scanFlow.step === "results" || scanFlow.step === "tracing") ? (
-              <BackToDashboardButton onClick={handleBackToDashboard} className="mt-2" />
+              <BackToDashboardButton onClick={handleBackToDashboard} className="mt-1" />
             ) : null}
           </div>
           ) : null}

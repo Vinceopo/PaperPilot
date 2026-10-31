@@ -15,7 +15,18 @@ import { MenuIcon, UploadIcon } from "./icons";
 
 const SIDEBAR_MAX_WIDTH = 320;
 
-function NavItem({ icon, iconNode, iconAccent, label, active, onPress, tone = "dashboard", first }) {
+function NavItem({
+  icon,
+  iconNode,
+  iconAccent,
+  label,
+  active,
+  onPress,
+  tone = "dashboard",
+  first,
+  nested = false,
+  hideIcon = false,
+}) {
   const idle = tone === "settings" ? styles.itemTextSettings : styles.itemTextIdle;
   return (
     <Pressable
@@ -25,11 +36,12 @@ function NavItem({ icon, iconNode, iconAccent, label, active, onPress, tone = "d
       style={({ pressed }) => [
         styles.item,
         first ? styles.itemFirst : styles.itemNext,
+        nested && styles.itemNested,
         active && styles.itemActive,
         pressed && !active && styles.itemPressed,
       ]}
     >
-      {iconNode ? (
+      {hideIcon ? null : iconNode ? (
         <View style={styles.itemIconWrap}>{iconNode}</View>
       ) : (
         <Text
@@ -132,6 +144,15 @@ export default function Sidebar({
               active={active === "manuscripts"}
               onPress={() => select(onManuscripts)}
             />
+            {showComplianceResult ? (
+              <NavItem
+                nested
+                hideIcon
+                label="Compliance Result"
+                active={active === "results"}
+                onPress={() => select(onComplianceResult)}
+              />
+            ) : null}
             <NavItem
               iconAccent
               iconNode={
@@ -141,15 +162,6 @@ export default function Sidebar({
               active={active === "upload"}
               onPress={() => select(onUpload)}
             />
-            {showComplianceResult ? (
-              <NavItem
-                iconAccent
-                icon="≡"
-                label="Compliance Result"
-                active={active === "results"}
-                onPress={() => select(onComplianceResult)}
-              />
-            ) : null}
           </View>
 
           <View style={styles.navBottom}>
@@ -213,6 +225,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     textTransform: "uppercase",
     color: "#475569",
+  },
+  itemNested: {
+    marginTop: 2,
+    paddingLeft: 44,
+    paddingVertical: 10,
   },
   item: {
     flexDirection: "row",

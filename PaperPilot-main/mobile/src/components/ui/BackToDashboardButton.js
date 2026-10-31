@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import Svg, { Path } from "react-native-svg";
 
 function ArrowLeftIcon({ size = 14, color = "#109b89" }) {
@@ -17,6 +17,7 @@ function ArrowLeftIcon({ size = 14, color = "#109b89" }) {
 
 /**
  * Shared “Back to Dashboard” control — pill mint style used across cockpit screens.
+ * Wrapper keeps top/bottom padding consistent on every screen.
  */
 export default function BackToDashboardButton({
   onPress,
@@ -25,20 +26,26 @@ export default function BackToDashboardButton({
 }) {
   if (!onPress) return null;
   return (
-    <Pressable
-      onPress={onPress}
-      hitSlop={6}
-      style={({ pressed }) => [styles.btn, pressed && styles.btnPressed, style]}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-    >
-      <ArrowLeftIcon />
-      <Text style={styles.text}>{label}</Text>
-    </Pressable>
+    <View style={[styles.wrap, style]}>
+      <Pressable
+        onPress={onPress}
+        hitSlop={6}
+        style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+      >
+        <ArrowLeftIcon />
+        <Text style={styles.text}>{label}</Text>
+      </Pressable>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrap: {
+    alignSelf: "flex-start",
+    paddingVertical: 4,
+  },
   btn: {
     flexDirection: "row",
     alignItems: "center",

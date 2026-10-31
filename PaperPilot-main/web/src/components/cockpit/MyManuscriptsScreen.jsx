@@ -15,7 +15,7 @@ import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 import ManuscriptDetailModal from "./ManuscriptDetailModal.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 5;
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
   { id: "compliant", label: "Good Standing" },

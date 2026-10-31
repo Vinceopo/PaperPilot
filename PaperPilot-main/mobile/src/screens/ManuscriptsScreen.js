@@ -20,7 +20,7 @@ import { deleteManuscriptVersion } from "../api";
 import { formatScore } from "../lib/scoreFormat";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 5;
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
   { id: "compliant", label: "Good Standing" },

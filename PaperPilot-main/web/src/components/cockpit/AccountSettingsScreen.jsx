@@ -187,7 +187,11 @@ function PwField({ label, id, value, onChange, show, onToggle, autoComplete }) {
 }
 
 function BackLink({ onClick, label = "Back to account" }) {
-  return <BackToDashboardButton onClick={onClick} label={label} className="mb-6" />;
+  return (
+    <div className="mb-5">
+      <BackToDashboardButton onClick={onClick} label={label} />
+    </div>
+  );
 }
 
 // ─── main component ───────────────────────────────────────────────────────────

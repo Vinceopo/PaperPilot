@@ -3,7 +3,7 @@
  * Reuses ReferenceTracing highlight/scroll logic and IssuesDetectedPanel issue data.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { categoryForIssue, normalizeDetectedIssues } from "./IssuesDetectedPanel.jsx";
 import { normalizeIssueLocation } from "../../lib/scanMapper.js";
@@ -82,7 +82,6 @@ export default function IssueTracingSection({
   const [scrollTarget, setScrollTarget] = useState(null);
   const [highlight, setHighlight] = useState(null);
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const openedOnRef = useRef("");
 
   const formatChecks = result?.formatChecks || [];
   const pageCount = result?.pageCount || 0;
@@ -128,7 +127,9 @@ export default function IssueTracingSection({
 
   useEffect(() => {
     setCategoryFilter("all");
-    openedOnRef.current = "";
+    setActiveIssueId(null);
+    setHighlight(null);
+    setScrollTarget(null);
   }, [formatChecks]);
 
   const resolveLocation = useCallback(
@@ -209,20 +210,20 @@ export default function IssueTracingSection({
     [resolveLocation]
   );
 
+  // Do not auto-jump to the first issue — wait until the user clicks/traces one.
   useEffect(() => {
-    const first = filteredEntries[0];
-    if (!first) {
+    if (!filteredEntries.length) {
       setActiveIssueId(null);
       setHighlight(null);
       setScrollTarget(null);
       return;
     }
-    if (openedOnRef.current === first.id && filteredEntries.some((e) => e.id === activeIssueId)) {
-      return;
+    if (activeIssueId && !filteredEntries.some((e) => e.id === activeIssueId)) {
+      setActiveIssueId(null);
+      setHighlight(null);
+      setScrollTarget(null);
     }
-    openedOnRef.current = first.id;
-    onSelectIssue(first);
-  }, [filteredEntries, onSelectIssue, activeIssueId]);
+  }, [filteredEntries, activeIssueId]);
 
   const hasPreview = Boolean(
     file || documentLoading || result?.cloudinaryUrl || result?.documentPreview

@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { resolveEmail } from "../../api.js";
 import { auth, firebaseReady } from "../../firebase.js";
-import { signInWithEmail, signInWithGoogle } from "../../services/auth.js";
+import { signInWithEmail } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
 import AuthShell from "./AuthShell.jsx";
-import GoogleButton from "./GoogleButton.jsx";
 import { FIREBASE_MISSING, authMessage } from "./messages.js";
 
 const USERNAME_NOT_FOUND = "No account uses that username. Check the spelling or sign in with your email.";
@@ -104,28 +103,6 @@ export default function LoginScreen({
     }
   }
 
-  async function onGoogle() {
-    if (busy) return;
-    setFormError("");
-    if (!firebaseReady || !auth) {
-      setFormError("Add Firebase keys to web/.env to enable Google sign-in.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await signInWithGoogle(auth, remember);
-    } catch (err) {
-      // Double-click while the popup is open — don't scare the user with "cancelled".
-      if (err?.code === "auth/cancelled-popup-request") {
-        setFormError("");
-      } else {
-        setFormError(authMessage(err));
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <AuthShell
       variant="login"
@@ -217,8 +194,6 @@ export default function LoginScreen({
           {busy ? "Please wait…" : "Sign in to PaperPilot"}
         </button>
       </form>
-
-      <GoogleButton label="Sign in with Google" onClick={onGoogle} disabled={busy} />
     </AuthShell>
   );
 }

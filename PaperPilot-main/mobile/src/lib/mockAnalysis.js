@@ -265,12 +265,13 @@ export async function downloadReport(result, opts = {}) {
   doc.setFontSize(7).setFont(undefined, "bold").setTextColor(...bandColor);
   doc.text(band, ML + 5, Y + 30);
 
+  // Compliant / Non-Compliant labels + thin stacked bar (no percent numbers)
   const barX = ML + 58;
   const barW = CW - 68;
   doc.setFontSize(8).setFont(undefined, "bold").setTextColor(...PASS_C);
-  doc.text(`Compliant ${formatPct(rightPct)}`, barX, Y + 10);
+  doc.text("Compliant", barX, Y + 10);
   doc.setTextColor(...FAIL_C);
-  doc.text(`Non-Compliant ${formatPct(wrongPct)}`, barX + barW, Y + 10, { align: "right" });
+  doc.text("Non-Compliant", barX + barW, Y + 10, { align: "right" });
 
   const rightW = Math.max(0, Math.min(barW, ((Number(rightPct) || 0) / 100) * barW));
   const wrongW = Math.max(0, barW - rightW);

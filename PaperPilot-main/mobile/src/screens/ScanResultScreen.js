@@ -20,6 +20,7 @@ import {
   resolveCategoryUnitDisplays,
   roundSharesToTotal,
 } from "../lib/scoreFormat";
+import { isApproximateTracing } from "../lib/documentPreviewLocate";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 
 function scoreBand(score) {
@@ -240,7 +241,6 @@ function ScanResultBody({ navigation }) {
     unitsChecked,
     unitsPassed,
     unitsFailed,
-    issueTotals = null,
     scoringConsistency = null,
   } = result;
 
@@ -255,6 +255,7 @@ function ScanResultBody({ navigation }) {
     { unitsChecked, unitsPassed, unitsFailed },
     categoryDisplays,
   );
+  // Bar shares only — percent numbers are not shown in the public results UI.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
       ? [
@@ -263,12 +264,8 @@ function ScanResultBody({ navigation }) {
         ]
       : [rightPct, wrongPct];
   const [shownRight, shownWrong] = roundSharesToTotal(fromOverallUnits, 2);
-  const issuesFound = hasValue(nonCompliantUnits)
-    ? Number(nonCompliantUnits)
-    : hasValue(issueTotals?.occurrences)
-      ? Number(issueTotals.occurrences)
-      : issueTypes;
-
+  const compliantShare = hasValue(shownRight) ? Math.max(0, Math.min(100, Number(shownRight))) : 0;
+  const nonCompliantShare = hasValue(shownWrong) ? Math.max(0, Math.min(100, Number(shownWrong))) : 0;
   const scannedDate = scannedAt
     ? new Date(scannedAt).toLocaleDateString("en-US", {
         year: "numeric",
@@ -295,10 +292,8 @@ function ScanResultBody({ navigation }) {
   }
 
   function openReferenceTracing() {
-    const { entries } = normalizeDetectedIssues(formatChecks, pageCount);
-    const first = entries[0];
-    if (first) scanFlow.selectTraceIssue(first);
-    scanFlow.openDocumentTrace(first || null);
+    // Open the tracer without jumping to a location — user picks an issue first.
+    scanFlow.openDocumentTrace(null);
     navigation.navigate("DocumentReference");
   }
 
@@ -356,26 +351,22 @@ function ScanResultBody({ navigation }) {
       </View>
 
       <View style={{ gap: 12 }}>
-        <View style={[styles.dualCard, styles.dualRight]}>
+        <View style={styles.dualRow}>
           <Text style={[styles.dualLabel, { color: "#047857" }]}>Compliant</Text>
-          <Text style={[styles.dualValue, { color: "#047857" }]}>{formatPct(shownRight, 2)}</Text>
-          {hasValue(compliantUnits) ? (
-            <Text style={[styles.dualSub, { color: "rgba(4,120,87,0.8)" }]}>
-              {formatCount(compliantUnits)} {plural(compliantUnits, "unit")} compliant
-              {hasValue(totalUnits) ? ` of ${formatCount(totalUnits)}` : ""}
-            </Text>
-          ) : null}
-        </View>
-        <View style={[styles.dualCard, styles.dualWrong]}>
           <Text style={[styles.dualLabel, { color: "#be123c" }]}>Non-Compliant</Text>
-          <Text style={[styles.dualValue, { color: "#be123c" }]}>{formatPct(shownWrong, 2)}</Text>
-          <Text style={[styles.dualSub, { color: "rgba(190,18,60,0.8)" }]}>
-            {formatCount(issuesFound)} {plural(issuesFound, "issue")}
-          </Text>
+        </View>
+        <View style={styles.shareBar}>
+          {hasValue(shownRight) || hasValue(shownWrong) ? (
+            <>
+              <View style={[styles.shareSeg, { flex: compliantShare || 0.0001, backgroundColor: "#047857" }]} />
+              <View style={[styles.shareSeg, { flex: nonCompliantShare || 0.0001, backgroundColor: "#be123c" }]} />
+            </>
+          ) : null}
         </View>
         {scoringConsistency && !scoringConsistency.ok ? (
           <Text style={styles.consistencyWarn} accessibilityRole="alert">
-            These results failed an internal consistency check. Re-run the analysis before relying on them.
+            These results failed an internal consistency check. Re-run the analysis before relying on
+            them.
           </Text>
         ) : null}
       </View>
@@ -425,11 +416,6 @@ function ScanResultBody({ navigation }) {
           Compliant Units + Non-Compliant Units equals Total Units checked.
         </Text>
         <View style={styles.tagRow}>
-          {hasValue(compliantUnits) ? (
-            <Text style={[styles.tag, styles.tagPass]}>
-              {formatCount(compliantUnits)} {plural(compliantUnits, "unit")} passed
-            </Text>
-          ) : null}
           <Text style={styles.tag}>{citationStyle}</Text>
           <Text style={styles.tag}>Format only</Text>
         </View>
@@ -442,6 +428,13 @@ function ScanResultBody({ navigation }) {
             <Text style={styles.previewSub}>
               Starts on page 1. Scroll to read every page, or trace an issue to jump to it.
             </Text>
+            {isApproximateTracing(pagination) ? (
+              <Text style={styles.approxNote}>
+                Approximate locations — this Word file was scanned without exact page breaks.
+                Highlights may be near the issue. For precise tracing, upload a PDF of the same
+                manuscript.
+              </Text>
+            ) : null}
           </View>
           <Pressable
             onPress={openReferenceTracing}
@@ -553,19 +546,20 @@ const styles = StyleSheet.create({
   metaValue: { flex: 1, fontSize: 12, fontWeight: "500", color: "#e2e8f0" },
   metaVersion: { flex: 1, fontSize: 12, color: "#94a3b8" },
   heroNote: { marginTop: 16, fontSize: 12, lineHeight: 17, color: "#64748b" },
-  dualCard: {
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+  dualRow: {
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
   },
-  dualRight: { backgroundColor: "rgba(236,253,245,0.8)", borderColor: "#a7f3d0" },
-  dualWrong: { backgroundColor: "rgba(255,241,242,0.8)", borderColor: "#fecdd3" },
-  dualLabel: { fontSize: 10, fontWeight: "700", letterSpacing: 0.5, textTransform: "uppercase" },
-  dualValue: { marginTop: 4, fontSize: 30, fontWeight: "800" },
-  unitsNote: { fontSize: 11, lineHeight: 16, color: "#64748b", textAlign: "center" },
-  dualSub: { marginTop: 2, fontSize: 11 },
+  dualLabel: { fontSize: 13, fontWeight: "700" },
+  shareBar: {
+    height: 6,
+    borderRadius: 999,
+    overflow: "hidden",
+    backgroundColor: "#eeeeee",
+    flexDirection: "row",
+  },
+  shareSeg: { height: "100%" },
   consistencyWarn: {
     overflow: "hidden",
     borderWidth: 1,
@@ -705,6 +699,18 @@ const styles = StyleSheet.create({
   },
   previewTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
   previewSub: { marginTop: 2, fontSize: 11, lineHeight: 16, color: "#64748b" },
+  approxNote: {
+    marginTop: 8,
+    fontSize: 11,
+    lineHeight: 16,
+    color: "#92400e",
+    backgroundColor: "#fffbeb",
+    borderWidth: 1,
+    borderColor: "#fde68a",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
   traceBtn: {
     borderRadius: 8,
     backgroundColor: "#059669",
