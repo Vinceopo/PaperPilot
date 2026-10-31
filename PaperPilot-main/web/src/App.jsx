@@ -22,7 +22,7 @@ import {
   warmApi,
 } from "./api.js";
 import AuthScreen from "./components/AuthScreen.jsx";
-import PaperPilotLogo from "./components/PaperPilotLogo.jsx";
+import PaperPilotLogo, { PaperPilotMark } from "./components/PaperPilotLogo.jsx";
 import RegistrationSuccessScreen from "./components/auth/RegistrationSuccessScreen.jsx";
 import MechanicsPanel from "./components/cockpit/MechanicsPanel.jsx";
 import ManuscriptPanel from "./components/cockpit/ManuscriptPanel.jsx";
@@ -174,9 +174,30 @@ export default function App() {
   ); // "manuscripts" | "upload" | "account" | "subscription" | "notifications"
   const [manuscriptDetailOpen, setManuscriptDetailOpen] = useState(false);
   const closeManuscriptDetailRef = useRef(null);
-  const [sidebarOpen, setSidebarOpen] = useState(
-    () => typeof window === "undefined" || window.innerWidth >= 768
-  );
+  const [sidebarExpanded, setSidebarExpanded] = useState(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      const stored = window.localStorage.getItem("paperpilot.sidebarExpanded");
+      if (stored === "0") return false;
+      if (stored === "1") return true;
+    } catch {
+      // Ignore storage failures (private mode, etc.).
+    }
+    return true;
+  });
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  function toggleSidebarExpanded() {
+    setSidebarExpanded((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem("paperpilot.sidebarExpanded", next ? "1" : "0");
+      } catch {
+        // Ignore storage failures.
+      }
+      return next;
+    });
+  }
   const [scannedLibrary, setScannedLibrary] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const lastSavedScanKey = useRef("");
@@ -1374,19 +1395,72 @@ export default function App() {
     scanFlow.openFullResults();
   }
 
+  const navLabelClass = sidebarExpanded ? "" : "md:hidden";
+  const navItemClass = (active) =>
+    `group flex w-full items-center text-sm transition ${
+      sidebarExpanded
+        ? `gap-3 rounded-r-lg border-l-2 px-4 py-3 text-left ${
+            active
+              ? "border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
+              : "border-transparent text-slate-400 hover:bg-white/5 hover:text-white"
+          }`
+        : `justify-center rounded-lg px-2 py-3 max-md:gap-3 max-md:rounded-r-lg max-md:border-l-2 max-md:px-4 max-md:text-left md:px-2 ${
+            active
+              ? "bg-[#1a2943] font-semibold text-[#5fd3c1] max-md:border-[#16bfa8] max-md:text-white"
+              : "text-slate-400 hover:bg-white/5 hover:text-white max-md:border-transparent"
+          }`
+    }`;
+
   return (
-    <div className={`min-h-screen bg-[#f3f5f7] text-[#172033] transition-[padding] duration-300 ${sidebarOpen ? "md:pl-80" : "md:pl-0"}`}>
+    <div
+      className={`min-h-screen bg-[#f3f5f7] text-[#172033] transition-[padding] duration-300 ${
+        sidebarExpanded ? "md:pl-80" : "md:pl-[4.75rem]"
+      }`}
+    >
+      {/* Mobile drawer backdrop */}
+      {mobileNavOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-30 bg-slate-900/45 md:hidden"
+          aria-label="Close menu"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      ) : null}
+
       {/* ── Sidebar ──────────────────────────────────────────────────────── */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-80 flex-col bg-[#101a30] px-5 py-6 text-white transition-transform duration-300 md:flex ${
-          sidebarOpen ? "flex translate-x-0" : "hidden -translate-x-full md:hidden"
-        }`}
+        className={`fixed inset-y-0 left-0 z-40 flex flex-col bg-[#101a30] py-6 text-white transition-all duration-300 ${
+          sidebarExpanded ? "w-80 px-5" : "w-80 px-5 md:w-[4.75rem] md:px-2"
+        } ${mobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
         onClick={(e) => {
           // On phones the sidebar covers the page, so close it after navigating.
-          if (window.innerWidth < 768 && e.target.closest?.("nav a, nav button")) setSidebarOpen(false);
+          if (window.innerWidth < 768 && e.target.closest?.("nav a, nav button")) setMobileNavOpen(false);
         }}
       >
-        <div className="relative px-2">
+        <div className={`relative ${sidebarExpanded ? "px-2" : "px-0 md:px-0"}`}>
+          <button
+            type="button"
+            onClick={toggleSidebarExpanded}
+            className={`mb-3 hidden h-8 w-8 place-items-center rounded-lg border border-slate-600/60 bg-[#1a2943] text-slate-300 transition hover:bg-[#243552] hover:text-white md:grid ${
+              sidebarExpanded ? "absolute right-0 top-0 z-10 mb-0" : "relative mx-auto"
+            }`}
+            aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
+            title={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              {sidebarExpanded ? (
+                <>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 19l-7-7 7-7" />
+                </>
+              ) : (
+                <>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 5l7 7-7 7" />
+                </>
+              )}
+            </svg>
+          </button>
           <a
             href="#/manuscripts"
             onClick={(e) => {
@@ -1394,105 +1468,121 @@ export default function App() {
               e.preventDefault();
               setActivePage("manuscripts");
             }}
-            className="flex w-full justify-center rounded-xl px-1 pb-2 pt-1 transition hover:bg-white/5"
+            className={`flex w-full rounded-xl px-1 pb-2 pt-1 transition hover:bg-white/5 ${
+              sidebarExpanded ? "justify-center" : "justify-center md:pt-1"
+            }`}
             aria-label="PaperPilot, go to My Manuscripts"
           >
-            <PaperPilotLogo tone="dark" />
+            {sidebarExpanded ? (
+              <PaperPilotLogo tone="dark" />
+            ) : (
+              <>
+                <span className="md:hidden">
+                  <PaperPilotLogo tone="dark" />
+                </span>
+                <PaperPilotMark className="hidden h-10 w-10 md:block" />
+              </>
+            )}
           </a>
           <button
             type="button"
-            onClick={() => setSidebarOpen(false)}
-            className="absolute right-0 top-0 grid h-8 w-8 place-items-center rounded-lg border border-slate-600/60 bg-[#1a2943] text-slate-300 transition hover:bg-[#243552] hover:text-white"
+            onClick={() => setMobileNavOpen(false)}
+            className="absolute right-0 top-0 grid h-8 w-8 place-items-center rounded-lg border border-slate-600/60 bg-[#1a2943] text-slate-300 transition hover:bg-[#243552] hover:text-white md:hidden"
             aria-label="Hide sidebar"
             title="Hide sidebar"
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        <nav className="mt-10">
-          <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Dashboard</p>
+        <nav className={`mt-8 flex flex-col ${sidebarExpanded ? "" : "md:items-stretch"}`}>
+          <p className={`px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ${navLabelClass}`}>
+            Dashboard
+          </p>
           <a
             href="#/manuscripts"
+            title="My Manuscripts"
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               e.preventDefault();
               setActivePage("manuscripts");
             }}
-            className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm transition ${
-              activePage === "manuscripts"
-                ? "border-l-2 border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
-                : "text-slate-400 hover:text-white"
-            }`}
+            className={`mt-2 ${navItemClass(activePage === "manuscripts")}`}
           >
-            <span>▣</span> My Manuscripts
+            <span className="grid h-5 w-5 shrink-0 place-items-center text-base leading-none" aria-hidden>
+              ▣
+            </span>
+            <span className={navLabelClass}>My Manuscripts</span>
           </a>
           {hasComplianceResult ? (
             <a
               href="#/results"
+              title="Compliance Result"
               onClick={(e) => {
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
                 e.preventDefault();
                 openComplianceResult();
               }}
-              className={`mt-0.5 flex w-full items-center rounded-r-lg py-2.5 pl-11 pr-4 text-left text-sm transition ${
-                viewingComplianceResult
-                  ? "border-l-2 border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
-                  : "text-slate-400 hover:text-white"
+              className={`mt-0.5 ${navItemClass(viewingComplianceResult)} ${
+                sidebarExpanded ? "pl-11" : "md:hidden max-md:pl-11"
               }`}
             >
-              Compliance Result
+              <span className={navLabelClass}>Compliance Result</span>
             </a>
           ) : null}
           <a
             href="#/upload"
+            title="Upload & Analyze"
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               e.preventDefault();
               openUploadMechanics();
             }}
-            className={`mt-1 flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold transition ${
-              activePage === "upload" && !viewingComplianceResult
-                ? "border-l-2 border-[#16bfa8] bg-[#1a2943] text-white"
-                : "text-slate-400 hover:text-white"
-            }`}
+            className={`mt-1 font-semibold ${navItemClass(activePage === "upload" && !viewingComplianceResult)}`}
           >
-            <span className="inline-flex h-4 w-4 items-center justify-center text-[#22c9b4]" aria-hidden>
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-[#22c9b4]" aria-hidden>
               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v6h6" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-6" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="m9 15 3-3 3 3" />
               </svg>
-            </span>{" "}
-            Upload &amp; Analyze
+            </span>
+            <span className={navLabelClass}>Upload &amp; Analyze</span>
           </a>
         </nav>
 
-        <nav className="mt-auto">
-          <p className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Settings</p>
+        <nav className="mt-auto flex flex-col">
+          <p className={`px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ${navLabelClass}`}>
+            Settings
+          </p>
           <a
             href="#/account"
+            title="Account"
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               e.preventDefault();
               setActivePage("account");
             }}
-            className={`mt-2 flex w-full items-center gap-3 rounded-r-lg px-4 py-3 text-left text-sm transition ${
-              activePage === "account" || activePage === "subscription"
-                ? "border-l-2 border-[#16bfa8] bg-[#1a2943] font-semibold text-white"
-                : "text-slate-300 hover:text-white"
-            }`}
+            className={`mt-2 ${navItemClass(activePage === "account" || activePage === "subscription")}`}
           >
-            <span>♟</span> Account
+            <span className="grid h-5 w-5 shrink-0 place-items-center text-base leading-none" aria-hidden>
+              ♟
+            </span>
+            <span className={navLabelClass}>Account</span>
           </a>
           <button
-            className="mt-6 flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-rose-400 hover:text-rose-300"
+            type="button"
+            title="Sign Out"
+            className={`mt-6 flex w-full items-center text-sm font-medium text-rose-400 transition hover:text-rose-300 ${
+              sidebarExpanded ? "gap-2 px-3 py-2 text-left" : "justify-center px-2 py-2 md:justify-center max-md:gap-2 max-md:px-3 max-md:text-left"
+            }`}
             onClick={doSignOut}
           >
-            ↪ Sign Out
+            <span aria-hidden>↪</span>
+            <span className={navLabelClass}>Sign Out</span>
           </button>
         </nav>
       </aside>
@@ -1500,19 +1590,17 @@ export default function App() {
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <header className={`sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-3 md:px-8 ${hidePageHeading ? "min-h-16" : ""}`}>
         <div className="flex items-center gap-3">
-          {!sidebarOpen && (
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(true)}
-              className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-[#172033]"
-              aria-label="Show sidebar"
-              title="Show sidebar"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
-              </svg>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(true)}
+            className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-[#172033] md:hidden"
+            aria-label="Show sidebar"
+            title="Show sidebar"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
+            </svg>
+          </button>
           {activePage === "manuscripts" && manuscriptDetailOpen ? (
             <BackToDashboardButton
               onClick={() => closeManuscriptDetailRef.current?.()}

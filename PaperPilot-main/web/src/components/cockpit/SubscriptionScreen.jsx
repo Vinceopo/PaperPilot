@@ -545,7 +545,7 @@ export default function SubscriptionScreen({
               </button>
             </div>
             {showHistory && (
-              <ul className="mt-4 max-h-72 space-y-3 overflow-y-auto">
+              <ul className="pp-scroll mt-4 max-h-72 space-y-3 overflow-y-auto overscroll-contain">
                 {history.length === 0 && (
                   <li className="text-sm text-slate-400">No subscription history yet.</li>
                 )}

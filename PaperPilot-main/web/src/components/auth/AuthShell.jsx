@@ -105,7 +105,7 @@ export default function AuthShell({
       <section
         className={`flex w-full flex-1 items-center justify-center bg-[#EEF1F5] lg:w-[55%] ${
           compact
-            ? "min-h-0 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-8 lg:py-5"
+            ? "pp-scroll min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-4 sm:px-8 lg:py-5"
             : "px-5 py-10 sm:px-10"
         }`}
       >

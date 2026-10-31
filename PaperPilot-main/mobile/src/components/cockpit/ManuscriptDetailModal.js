@@ -327,23 +327,21 @@ export default function ManuscriptDetailModal({
   return (
     <View style={styles.root}>
         <View style={styles.header}>
-          <View style={styles.headerText}>
-            <Text style={styles.kicker}>Manuscript detail</Text>
+          <Text style={styles.kicker}>Manuscript detail</Text>
+          <View style={styles.headerRow}>
             <Text style={styles.title} numberOfLines={1}>
               {manuscript.title}
             </Text>
             <Text style={styles.subtitle}>
-              {manuscript.institution} · {manuscript.citationStyle}
+              {manuscript.institution || "—"} · {manuscript.citationStyle}
             </Text>
-            <View style={styles.pillRow}>
-              <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
-                <Text style={[styles.pillText, { color: tone.pillText }]}>
-                  {formatScore(selected?.score, 0)} · {band.label}
-                </Text>
-              </View>
-              <View style={[styles.pill, styles.pillNeutral]}>
-                <Text style={[styles.pillText, styles.pillNeutralText]}>{versionLabel}</Text>
-              </View>
+            <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
+              <Text style={[styles.pillText, { color: tone.pillText }]}>
+                {formatScore(selected?.score, 0)} · {band.label}
+              </Text>
+            </View>
+            <View style={[styles.pill, styles.pillNeutral]}>
+              <Text style={[styles.pillText, styles.pillNeutralText]}>{versionLabel}</Text>
             </View>
           </View>
         </View>
@@ -415,7 +413,7 @@ export default function ManuscriptDetailModal({
             <>
               <View style={styles.selectedRow}>
                 <View>
-                  <Text style={styles.selectedLabel}>Selected version</Text>
+                  <Text style={styles.selectedLabel}>Short result</Text>
                   <Text style={styles.selectedMeta}>
                     {versionLabel} · {formatDateTime(selected.scannedAt || selected.scannedDate)}
                   </Text>
@@ -560,31 +558,42 @@ export default function ManuscriptDetailModal({
 
 const styles = StyleSheet.create({
   root: {
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
     overflow: "hidden",
+    shadowColor: "#0F1729",
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   header: {
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 20,
   },
-  headerText: { minWidth: 0 },
   kicker: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: "600",
     letterSpacing: 1.4,
     textTransform: "uppercase",
     color: colors.muted,
   },
-  title: { marginTop: 4, fontSize: 18, fontWeight: "700", color: "#0F1729" },
-  subtitle: { marginTop: 4, fontSize: 12, color: colors.slate },
-  pillRow: { marginTop: 12, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
-  pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 2 },
-  pillText: { fontSize: 10, fontWeight: "700" },
+  headerRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+  },
+  title: { maxWidth: "100%", fontSize: 22, fontWeight: "700", color: "#0F1729" },
+  subtitle: { fontSize: 14, color: colors.slate },
+  pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
+  pillText: { fontSize: 12, fontWeight: "700" },
   pillNeutral: { borderColor: colors.border, backgroundColor: "#f8fafc" },
   pillNeutralText: { color: "#475569" },
   aside: { borderBottomWidth: 1, borderBottomColor: "#f1f5f9", backgroundColor: "#F8FAFC" },
@@ -596,7 +605,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     color: colors.slate,
   },
-  versionScroll: { maxHeight: 176 },
+  versionScroll: { maxHeight: 200 },
   versionList: { paddingHorizontal: 12, paddingBottom: 12, gap: 4 },
   versionRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   versionBtn: {
@@ -631,8 +640,8 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: colors.slate,
   },
-  body: { flex: 1 },
-  bodyContent: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 28 },
+  body: { flexGrow: 1, maxHeight: 560 },
+  bodyContent: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 28 },
   emptyText: { fontSize: 14, color: colors.muted },
   selectedRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 12 },
   selectedLabel: { fontSize: 12, fontWeight: "600", color: colors.slate },

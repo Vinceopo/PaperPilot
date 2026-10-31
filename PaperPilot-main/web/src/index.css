@@ -320,11 +320,11 @@ input[type="checkbox"].auth-check:focus-visible {
   }
 }
 
-/* PaperPilot panel scrollbars — thin, theme-matched, professional */
+/* PaperPilot panel scrollbars — thin teal track/thumb matched to accent navy UI */
 @layer utilities {
   .pp-scroll {
     scrollbar-width: thin;
-    scrollbar-color: #9ad9d0 #eef2f6;
+    scrollbar-color: #7dcdc2 #e8eef4;
   }
 
   .pp-scroll::-webkit-scrollbar {
@@ -333,19 +333,23 @@ input[type="checkbox"].auth-check:focus-visible {
   }
 
   .pp-scroll::-webkit-scrollbar-track {
-    background: #eef2f6;
+    background: #e8eef4;
     border-radius: 999px;
     margin-block: 4px;
   }
 
   .pp-scroll::-webkit-scrollbar-thumb {
-    background: #9ad9d0;
+    background: #7dcdc2;
     border-radius: 999px;
-    border: 2px solid #eef2f6;
+    border: 2px solid #e8eef4;
   }
 
   .pp-scroll::-webkit-scrollbar-thumb:hover {
     background: #16bfa8;
+  }
+
+  .pp-scroll::-webkit-scrollbar-corner {
+    background: transparent;
   }
 
   .pp-scroll-panel {

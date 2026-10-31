@@ -125,7 +125,7 @@ function ComboInput({ value, onChange, options, disabled }) {
         <ul
           id={listId}
           role="listbox"
-          className="absolute left-0 right-0 z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+          className="pp-scroll absolute left-0 right-0 z-20 mt-1 max-h-48 overflow-y-auto overscroll-contain rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
           {options.map((option, index) => {
             const selected = option.value.toLowerCase() === current;

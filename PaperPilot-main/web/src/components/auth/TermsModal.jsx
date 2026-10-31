@@ -69,7 +69,7 @@ export default function TermsModal({ open, onClose, onAgree }) {
             Terms and Conditions
           </h2>
         </div>
-        <div className="space-y-4 overflow-y-auto px-6 py-4 text-sm leading-relaxed text-slate-600">
+        <div className="pp-scroll space-y-4 overflow-y-auto overscroll-contain px-6 py-4 text-sm leading-relaxed text-slate-600">
           {TERMS_SECTIONS.map((section) => (
             <div key={section.heading}>
               <h3 className="font-semibold text-slate-800">{section.heading}</h3>
