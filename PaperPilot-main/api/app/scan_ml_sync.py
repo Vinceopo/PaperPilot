@@ -178,7 +178,15 @@ def hydrate_scan_from_ml(owner_uid: str, scan_id: str) -> dict | None:
             return _fail(owner_uid, scan_id, STALE_SCAN_MESSAGE)
         return scan
 
-    result = get_analyze_result(job_id)
+    try:
+        result = get_analyze_result(job_id)
+    except MLServiceError as exc:
+        if _is_stale(scan):
+            return _fail(owner_uid, scan_id, STALE_SCAN_MESSAGE)
+        # Keep the scan running so progress polls can retry after a transient
+        # ML result failure (e.g. response validation / cold restart).
+        logger.warning("ML result fetch failed for scan %s: %s", scan_id, exc)
+        raise
     if result.get("status") == "failed":
         return _fail(
             owner_uid,
@@ -265,9 +273,25 @@ def scan_progress_payload(owner_uid: str, scan_id: str) -> dict | None:
         }
 
     if progress.get("status") == "done" or progress.get("stage") == "done":
-        hydrate_scan_from_ml(owner_uid, scan_id)
+        try:
+            hydrate_scan_from_ml(owner_uid, scan_id)
+        except MLServiceError as exc:
+            # Progress said done, but result fetch/validation failed. Keep polling
+            # instead of turning a transient ML 5xx into a client-facing 502.
+            logger.warning("Hydrate after done failed for scan %s: %s", scan_id, exc)
+            return {
+                "scan_id": scan_id,
+                "job_id": job_id,
+                "stage": progress.get("stage") or "done",
+                "percent": progress.get("percent") if progress.get("percent") is not None else 99,
+                "message": "Finalizing analysis…",
+                "status": "running",
+            }
     elif (progress.get("status") == "failed" or progress.get("stage") == "failed") or _is_stale(scan):
-        hydrate_scan_from_ml(owner_uid, scan_id)
+        try:
+            hydrate_scan_from_ml(owner_uid, scan_id)
+        except MLServiceError as exc:
+            logger.warning("Hydrate after failed/stale failed for scan %s: %s", scan_id, exc)
         refreshed = get_scan(owner_uid, scan_id) or {}
         if refreshed.get("status") == "failed":
             return {

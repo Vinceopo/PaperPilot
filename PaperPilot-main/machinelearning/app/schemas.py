@@ -61,12 +61,19 @@ class SeverityPct(BaseModel):
 
 
 class IssueLocation(BaseModel):
-    page: int
-    line: int
+    # Page/line are omitted for document-level or page-level findings.
+    page: int | None = None
+    line: int | None = None
     section: str | None = None
     bbox: list[float] | None = None
     page_index: int | None = None
     line_index: int | None = None
+    excerpt: str | None = None
+    summary: str | None = None
+    explanation: str | None = None
+    recommendation: str | None = None
+    page_width: float | None = None
+    page_height: float | None = None
 
 
 class ScanIssue(BaseModel):

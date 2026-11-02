@@ -14,6 +14,19 @@ mobile/dist/
 *.log
 .DS_Store
 
+# Env / secrets (including copy backups that **/.env alone misses)
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env*.example
+.env copy
+.env copy.*
+**/.env copy
+**/.env copy.*
+creds.json
+*.pem
+*serviceAccount*.json
+
 # Firebase
 .firebase/
 firebase-debug.log

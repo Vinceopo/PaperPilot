@@ -6,6 +6,16 @@
 .DS_Store
 
 **/.env
+**/.env.*
 !**/.env.example
+!**/.env*.example
+.env copy
+.env copy.*
+**/.env copy
+**/.env copy.*
+.env .example
+**/.env .example
 creds.json
 *firebase-adminsdk*
+*.pem
+*serviceAccount*.json
