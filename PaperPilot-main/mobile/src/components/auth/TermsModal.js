@@ -48,9 +48,20 @@ export default function TermsModal({ open, onClose, onAgree }) {
   return (
     <Modal visible={Boolean(open)} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
-        <View style={styles.card} accessibilityViewIsModal>
-          <Text style={styles.title}>Terms and Conditions</Text>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close terms" />
+        <View style={styles.card} accessibilityViewIsModal accessibilityLabel="Terms and Conditions">
+          <View style={styles.header}>
+            <Text style={styles.title}>Terms and Conditions</Text>
+            <Pressable
+              onPress={onClose}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Close terms and conditions"
+              style={({ pressed }) => [styles.xBtn, pressed && styles.xBtnPressed]}
+            >
+              <Text style={styles.xMark}>×</Text>
+            </Pressable>
+          </View>
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
             {TERMS_SECTIONS.map((section) => (
               <View key={section.heading}>
@@ -89,54 +100,77 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(15,23,42,0.5)",
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 24,
   },
   card: {
+    alignSelf: "center",
     width: "100%",
-    maxWidth: 520,
-    maxHeight: "85%",
+    maxWidth: 640,
+    maxHeight: "92%",
     borderRadius: 16,
     backgroundColor: colors.white,
     overflow: "hidden",
   },
-  title: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    fontSize: 18,
-    fontWeight: "700",
-    color: colors.navy,
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingHorizontal: 22,
+    paddingVertical: 18,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
   },
-  body: { flexGrow: 0 },
-  bodyContent: { paddingHorizontal: 20, paddingVertical: 16, gap: 14 },
-  heading: { fontSize: 14, fontWeight: "600", color: "#1e293b" },
-  text: { marginTop: 4, fontSize: 14, lineHeight: 21, color: "#475569" },
+  title: {
+    flex: 1,
+    fontSize: 22,
+    fontWeight: "700",
+    color: colors.navy,
+  },
+  xBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  xBtnPressed: { backgroundColor: "#f8fafc" },
+  xMark: { fontSize: 28, lineHeight: 30, fontWeight: "500", color: "#64748b", marginTop: -2 },
+  body: { flexGrow: 1 },
+  bodyContent: { paddingHorizontal: 22, paddingVertical: 18, gap: 16 },
+  heading: { fontSize: 16, fontWeight: "600", color: "#1e293b" },
+  text: { marginTop: 6, fontSize: 15, lineHeight: 23, color: "#475569" },
   actions: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "flex-end",
     gap: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
+    paddingHorizontal: 22,
+    paddingVertical: 16,
     borderTopWidth: 1,
     borderTopColor: "#f1f5f9",
   },
   closeBtn: {
-    height: 44,
+    minWidth: 112,
+    height: 48,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: 18,
+    paddingHorizontal: 20,
     alignItems: "center",
     justifyContent: "center",
   },
   closeBtnPressed: { backgroundColor: "#f8fafc" },
   closeText: { fontSize: 14, fontWeight: "600", color: colors.slate },
   agreeBtn: {
-    height: 44,
+    minWidth: 112,
+    height: 48,
     borderRadius: 10,
     backgroundColor: colors.accent,
-    paddingHorizontal: 18,
+    paddingHorizontal: 20,
     alignItems: "center",
     justifyContent: "center",
   },

@@ -158,7 +158,7 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
       const locExplanation = typeof loc?.explanation === "string" ? loc.explanation.trim() : "";
       const locRecommendation =
         typeof loc?.recommendation === "string" ? loc.recommendation.trim() : "";
-      entries.push({
+      const draft = {
         id: `${check.id || check.issue_type || "chk"}-${checkIdx}-${locIdx}`,
         issue_type: issueType,
         page,
@@ -186,7 +186,9 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
         excerpt: normalized.excerpt,
         margin_side: loc?.margin_side || loc?.marginSide || normalized.margin_side || "",
         page_region: loc?.page_region || loc?.pageRegion || normalized.page_region || "",
-      });
+      };
+      draft.category = categoryForIssue(draft);
+      entries.push(draft);
     });
   });
 
@@ -203,19 +205,6 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
   return { entries, pageCount: maxPage, hiddenLocations };
 }
 
-function TriangleIcon({ color, size = 14 }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path
-        d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
-        stroke={color}
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
 
 function SparkleIcon({ size = 16 }) {
   return (
@@ -231,20 +220,6 @@ function SparkleIcon({ size = 16 }) {
         d="M18 15.5 18.7 17.3 20.5 18 18.7 18.7 18 20.5 17.3 18.7 15.5 18 17.3 17.3 18 15.5Z"
         stroke="#94a3b8"
         strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
-function CheckCircleIcon() {
-  return (
-    <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-      <Path
-        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-        stroke={colors.accent}
-        strokeWidth={2}
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -271,8 +246,31 @@ function CountBadge({ count, color }) {
   );
 }
 
+function distinctText(primary, secondary) {
+  const a = String(primary || "").trim();
+  const b = String(secondary || "").trim();
+  if (!b) return "";
+  if (!a) return b;
+  if (a.toLowerCase() === b.toLowerCase()) return "";
+  if (a.toLowerCase().includes(b.toLowerCase()) || b.toLowerCase().includes(a.toLowerCase())) {
+    return a.length >= b.length ? "" : b;
+  }
+  return b;
+}
+
+/** One concise XAI block per issue — matches web IssueTracingSection. */
+function consolidateXai(entry) {
+  const finding = String(entry.finding || "").trim() || "Formatting discrepancy detected";
+  const why = distinctText(finding, entry.explanation);
+  const fix = distinctText(finding, distinctText(why, entry.recommendation));
+  const rule = String(entry.section || entry.category || "").trim();
+  return { finding, why, fix, rule };
+}
+
 function IssueItem({ entry, onTrace }) {
   const s = SEVERITY[entry.severity] || SEVERITY.minor;
+  const xai = consolidateXai(entry);
+  const category = entry.category || categoryForIssue(entry);
   const body = (
     <View style={styles.itemRow}>
       <View style={styles.lineBadge}>
@@ -285,25 +283,41 @@ function IssueItem({ entry, onTrace }) {
           <View style={[styles.sevTag, { backgroundColor: s.tagBg, borderColor: s.tagBorder }]}>
             <Text style={[styles.sevTagText, { color: s.tagText }]}>{s.label}</Text>
           </View>
+          {category ? (
+            <View style={styles.categoryChip}>
+              <Text style={styles.categoryChipText}>{category}</Text>
+            </View>
+          ) : null}
           <View style={styles.aiTag}>
-            <Text style={styles.section}>{entry.section}</Text>
-            <View style={styles.aiIconBox} accessibilityLabel="AI-detected severity">
+            <View style={styles.aiIconBox} accessibilityLabel="AI-detected finding">
               <SparkleIcon size={14} />
             </View>
           </View>
         </View>
-        <Text style={styles.finding}>{entry.finding}</Text>
-        <Text style={styles.explanation}>{entry.explanation}</Text>
-        {entry.recommendation ? (
+        <Text style={styles.finding}>{xai.finding}</Text>
+        {xai.rule ? (
+          <Text style={styles.xaiLine}>
+            <Text style={styles.xaiLabel}>Rule · </Text>
+            {xai.rule}
+          </Text>
+        ) : null}
+        {xai.why ? (
+          <Text style={styles.xaiWhy}>
+            <Text style={styles.xaiWhyLabel}>Why · </Text>
+            {xai.why}
+          </Text>
+        ) : null}
+        {xai.fix ? (
           <View style={styles.recBox}>
-            <CheckCircleIcon />
-            <Text style={styles.recText}>{entry.recommendation}</Text>
+            <Text style={styles.recText}>
+              <Text style={styles.fixLabel}>Fix · </Text>
+              {xai.fix}
+            </Text>
           </View>
         ) : null}
         <Text style={styles.locFoot}>
           {entry.page != null ? `Page ${entry.page}` : "Document-level"}
           {entry.line != null ? `, Line ${entry.line}` : ""}
-          {entry.section ? ` · ${entry.section}` : ""}
         </Text>
         {onTrace ? <Text style={styles.traceHint}>Tap to trace in document</Text> : null}
       </View>
@@ -332,7 +346,7 @@ export default function IssuesDetectedPanel({
   pagination = null,
   onTraceIssue = null,
 }) {
-  const [severityFilter, setSeverityFilter] = useState(null);
+  const [categoryFilter, setCategoryFilter] = useState(null);
   const [selectedPage, setSelectedPage] = useState("all");
   const [reviewed, setReviewed] = useState(() => new Set());
   const [limit, setLimit] = useState(RENDER_STEP);
@@ -342,13 +356,22 @@ export default function IssuesDetectedPanel({
     [formatChecks, pageCountProp]
   );
 
-  const counts = useMemo(() => {
-    const c = { minor: 0, moderate: 0, critical: 0 };
+  const categoryCounts = useMemo(() => {
+    const c = {};
     entries.forEach((e) => {
-      c[e.severity] = (c[e.severity] || 0) + 1;
+      const key = e.category || categoryForIssue(e);
+      c[key] = (c[key] || 0) + 1;
     });
     return c;
   }, [entries]);
+
+  const categoryOptions = useMemo(() => {
+    const ordered = CATEGORY_ORDER.filter((name) => categoryCounts[name]);
+    const extras = Object.keys(categoryCounts)
+      .filter((name) => !CATEGORY_ORDER.includes(name))
+      .sort((a, b) => a.localeCompare(b));
+    return [...ordered, ...extras];
+  }, [categoryCounts]);
 
   const pages = useMemo(() => {
     const fromIssues = entries.map((e) => e.page).filter((p) => p != null);
@@ -358,24 +381,26 @@ export default function IssuesDetectedPanel({
   }, [entries, pageCount, pageCountProp]);
 
   useEffect(() => {
-    setSeverityFilter(null);
+    setCategoryFilter(null);
     setSelectedPage("all");
     setReviewed(new Set());
   }, [formatChecks]);
 
   useEffect(() => {
     setLimit(RENDER_STEP);
-  }, [formatChecks, severityFilter, selectedPage]);
+  }, [formatChecks, categoryFilter, selectedPage]);
 
   const visibleEntries = useMemo(() => {
     let list = entries;
-    if (severityFilter) list = list.filter((e) => e.severity === severityFilter);
+    if (categoryFilter) {
+      list = list.filter((e) => (e.category || categoryForIssue(e)) === categoryFilter);
+    }
     if (selectedPage !== "all") {
       const n = Number(selectedPage);
       list = list.filter((e) => e.page === n);
     }
     return list;
-  }, [entries, severityFilter, selectedPage]);
+  }, [entries, categoryFilter, selectedPage]);
 
   const issueBlocks = useMemo(() => {
     const map = new Map();
@@ -410,19 +435,25 @@ export default function IssuesDetectedPanel({
 
   const entriesByPage = useMemo(() => {
     const map = new Map();
-    const filtered = severityFilter ? entries.filter((e) => e.severity === severityFilter) : entries;
+    let filtered = entries;
+    if (categoryFilter) {
+      filtered = filtered.filter((e) => (e.category || categoryForIssue(e)) === categoryFilter);
+    }
     filtered.forEach((e) => {
       const key = e.page ?? "all";
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(e);
     });
     return map;
-  }, [entries, severityFilter]);
+  }, [entries, categoryFilter]);
 
   const isReviewed = reviewed.has(String(selectedPage));
-  const totalVisible = severityFilter ? counts[severityFilter] : entries.length;
+  const totalVisible = categoryFilter
+    ? categoryCounts[categoryFilter] || 0
+    : entries.length;
   const paginationNote = pagination?.note || "";
   const remainingCount = Math.max(0, visibleEntries.length - limit);
+  const filtersActive = Boolean(categoryFilter);
 
   if (!entries.length) {
     return (
@@ -442,9 +473,8 @@ export default function IssuesDetectedPanel({
           {entries.length} formatting finding{entries.length === 1 ? "" : "s"} to review
         </Text>
         <Text style={styles.headerBody}>
-          {counts.critical} critical · {counts.moderate} moderate · {counts.minor} minor. Each card
-          explains what failed, why it matters, and how to fix it — filter by severity or page if you
-          want a smaller pass.
+          Each card explains what failed, why it matters, and how to fix it — filter by category or
+          page if you want a smaller pass.
           {hiddenLocations > 0
             ? ` ${hiddenLocations} additional matching locations are counted in the totals.`
             : ""}
@@ -452,38 +482,44 @@ export default function IssuesDetectedPanel({
         {paginationNote ? <Text style={styles.headerNote}>{paginationNote}</Text> : null}
       </View>
 
-      <View style={styles.pills}>
-        {["minor", "moderate", "critical"].map((key) => {
-          const s = SEVERITY[key];
-          const count = counts[key];
-          const active = severityFilter === key;
-          return (
-            <Pressable
-              key={key}
-              onPress={() => {
-                setSeverityFilter((cur) => (cur === key ? null : key));
-                setSelectedPage("all");
-              }}
-              accessibilityState={{ selected: active }}
-              style={[
-                styles.pill,
-                {
-                  backgroundColor: active ? s.activeBg : s.pillBg,
-                  borderColor: active ? s.activeBorder : s.pillBorder,
-                  opacity: count === 0 ? 0.4 : 1,
-                },
-              ]}
-            >
-              <TriangleIcon color={s.pillText} size={13} />
-              <Text style={[styles.pillText, { color: s.pillText }]}>
-                {count} {s.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-        {severityFilter ? (
-          <Pressable onPress={() => setSeverityFilter(null)} hitSlop={6}>
-            <Text style={styles.showAll}>Show all issues ×</Text>
+      <View style={styles.categoryBlock}>
+        <Text style={styles.categoryLabel}>Category</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryRow}>
+          <Pressable
+            onPress={() => {
+              setCategoryFilter(null);
+              setSelectedPage("all");
+            }}
+            accessibilityState={{ selected: !categoryFilter }}
+            style={[styles.categoryPill, !categoryFilter && styles.categoryPillActive]}
+          >
+            <Text style={[styles.categoryPillText, !categoryFilter && styles.categoryPillTextActive]}>
+              All categories ({entries.length})
+            </Text>
+          </Pressable>
+          {categoryOptions.map((name) => {
+            const active = categoryFilter === name;
+            const count = categoryCounts[name] || 0;
+            return (
+              <Pressable
+                key={name}
+                onPress={() => {
+                  setCategoryFilter((cur) => (cur === name ? null : name));
+                  setSelectedPage("all");
+                }}
+                accessibilityState={{ selected: active }}
+                style={[styles.categoryPill, active && styles.categoryPillActive]}
+              >
+                <Text style={[styles.categoryPillText, active && styles.categoryPillTextActive]}>
+                  {name} ({count})
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+        {filtersActive ? (
+          <Pressable onPress={() => setCategoryFilter(null)} hitSlop={6} style={styles.clearFilter}>
+            <Text style={styles.showAll}>Clear filter</Text>
           </Pressable>
         ) : (
           <Text style={styles.filterHint}>Optional filter only — default is every issue</Text>
@@ -501,10 +537,7 @@ export default function IssuesDetectedPanel({
               All issues
             </Text>
             {totalVisible > 0 ? (
-              <CountBadge
-                count={totalVisible}
-                color={SEVERITY[severityFilter || worstSeverity(entries)].badge}
-              />
+              <CountBadge count={totalVisible} color={SEVERITY[worstSeverity(entries)].badge} />
             ) : null}
           </Pressable>
           {pages.map((page) => {
@@ -532,9 +565,9 @@ export default function IssuesDetectedPanel({
         <View style={{ flex: 1 }}>
           <Text style={styles.listTitle}>
             {selectedPage === "all"
-              ? severityFilter
-                ? `All ${SEVERITY[severityFilter].label} issues`
-                : "All issues (every severity)"
+              ? categoryFilter
+                ? `${categoryFilter} issues`
+                : "All issues (every category)"
               : `Page ${selectedPage}`}
             <Text style={styles.listCount}>
               {" "}
@@ -779,6 +812,53 @@ const styles = StyleSheet.create({
   },
   recText: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: "500", color: "#0d7a6a" },
   locFoot: { marginTop: 8, fontSize: 11, color: "#94a3b8" },
+  categoryChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  categoryChipText: { fontSize: 10, fontWeight: "600", color: "#475569" },
+  xaiLine: { marginTop: 4, fontSize: 11, lineHeight: 16, color: "#64748b" },
+  xaiLabel: { fontWeight: "600", color: "#475569" },
+  xaiWhy: { marginTop: 8, fontSize: 12, lineHeight: 18, color: "#475569" },
+  xaiWhyLabel: { fontWeight: "600", color: "#334155" },
+  fixLabel: { fontWeight: "700" },
+  categoryBlock: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+    gap: 8,
+  },
+  categoryLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: "#94a3b8",
+  },
+  categoryRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingRight: 8 },
+  categoryPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 36,
+    justifyContent: "center",
+  },
+  categoryPillActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentMuted,
+  },
+  categoryPillText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  categoryPillTextActive: { color: colors.accentText },
+  clearFilter: { alignSelf: "flex-start" },
   traceHint: {
     marginTop: 8,
     fontSize: 11,

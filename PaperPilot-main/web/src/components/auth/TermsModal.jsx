@@ -56,32 +56,43 @@ export default function TermsModal({ open, onClose, onAgree }) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <button type="button" className="absolute inset-0 cursor-default" aria-label="Close" onClick={onClose} />
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 sm:p-6">
+      <button type="button" className="absolute inset-0 cursor-default" aria-label="Close terms" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="terms-title"
-        className="relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        className="relative z-10 mx-auto flex max-h-[min(92vh,52rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
       >
-        <div className="border-b border-slate-100 px-6 py-4">
-          <h2 id="terms-title" className="text-lg font-bold text-navy">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-6 py-4 sm:px-8 sm:py-5">
+          <h2 id="terms-title" className="text-xl font-bold text-navy sm:text-2xl">
             Terms and Conditions
           </h2>
-        </div>
-        <div className="pp-scroll space-y-4 overflow-y-auto overscroll-contain px-6 py-4 text-sm leading-relaxed text-slate-600">
-          {TERMS_SECTIONS.map((section) => (
-            <div key={section.heading}>
-              <h3 className="font-semibold text-slate-800">{section.heading}</h3>
-              <p className="mt-1">{section.body}</p>
-            </div>
-          ))}
-        </div>
-        <div className="flex justify-end gap-3 border-t border-slate-100 px-6 py-4">
           <button
             type="button"
             onClick={onClose}
-            className="h-11 rounded-[10px] border border-slate-200 px-5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Close terms and conditions"
+            title="Close"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.25" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="pp-scroll space-y-5 overflow-y-auto overscroll-contain px-6 py-5 text-[15px] leading-relaxed text-slate-600 sm:px-8 sm:py-6 sm:text-base">
+          {TERMS_SECTIONS.map((section) => (
+            <div key={section.heading}>
+              <h3 className="text-base font-semibold text-slate-800 sm:text-lg">{section.heading}</h3>
+              <p className="mt-1.5">{section.body}</p>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap justify-end gap-3 border-t border-slate-100 px-6 py-4 sm:px-8 sm:py-5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-12 min-w-[7rem] rounded-[10px] border border-slate-200 px-6 text-sm font-semibold text-slate-600 hover:bg-slate-50"
           >
             Close
           </button>
@@ -89,7 +100,7 @@ export default function TermsModal({ open, onClose, onAgree }) {
             <button
               type="button"
               onClick={onAgree}
-              className="h-11 rounded-[10px] bg-accent px-5 text-sm font-semibold text-navy hover:bg-accent-hover"
+              className="h-12 min-w-[7rem] rounded-[10px] bg-accent px-6 text-sm font-semibold text-navy hover:bg-accent-hover"
             >
               I agree
             </button>

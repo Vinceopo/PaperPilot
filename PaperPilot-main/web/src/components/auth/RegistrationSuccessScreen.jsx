@@ -1,3 +1,5 @@
+import PaperPilotLogo from "../PaperPilotLogo.jsx";
+
 export default function RegistrationSuccessScreen({ profile, onContinue }) {
   const fullName =
     profile?.fullName ||
@@ -11,14 +13,8 @@ export default function RegistrationSuccessScreen({ profile, onContinue }) {
         <div className="absolute right-[-24px] top-28 h-32 w-32 rounded-full bg-[#2b4260]" />
         <div className="absolute -bottom-20 right-[-10px] h-64 w-64 rounded-full bg-[#153444]/70" />
 
-        <div className="relative z-10 flex items-center gap-2.5">
-          <span className="grid h-11 w-11 place-items-center rounded-xl bg-white text-[#18243a]">
-            <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" aria-hidden="true">
-              <path d="M5 5.5h9.5A4.5 4.5 0 0 1 19 10v8.5H9.5A4.5 4.5 0 0 1 5 14V5.5Z" stroke="currentColor" strokeWidth="1.8" />
-              <path d="M8 9h7M8 12h7M8 15h4" stroke="#16bfa8" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-          </span>
-          <span className="text-sm font-bold tracking-wide">PAPER PILOT</span>
+        <div className="relative z-10">
+          <PaperPilotLogo tone="dark" align="start" markClassName="h-12 w-12" />
         </div>
 
         <div className="relative z-10 mt-28 max-w-sm">
@@ -41,7 +37,10 @@ export default function RegistrationSuccessScreen({ profile, onContinue }) {
           <div className="absolute inset-x-0 top-0 h-1 bg-[#16bfa8]" />
 
           <div className="text-center">
-            <span className="mx-auto grid h-16 w-16 place-items-center rounded-full border-[7px] border-[#dff7f3] bg-[#16bfa8] text-3xl font-bold text-white">
+            <div className="mx-auto flex justify-center">
+              <PaperPilotLogo tone="light" markClassName="h-16 w-16" subtitle={false} />
+            </div>
+            <span className="mx-auto mt-4 grid h-12 w-12 place-items-center rounded-full border-[5px] border-[#dff7f3] bg-[#16bfa8] text-xl font-bold text-white">
               ✓
             </span>
             <h2 className="mt-3 text-xl font-bold">Account Created Successfully!</h2>
