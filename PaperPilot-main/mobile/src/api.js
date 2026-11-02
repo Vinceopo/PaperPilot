@@ -18,12 +18,13 @@ function resolveApiUrl(configured) {
 }
 
 export class ApiError extends Error {
-  constructor(message, status, detail) {
+  constructor(message, status, detail, retryAfter = 0) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
     this.code = detail && typeof detail === "object" ? detail.code : undefined;
+    this.retryAfter = Number(retryAfter) || 0;
   }
 }
 
@@ -115,7 +116,19 @@ function parseBody(body) {
 
 async function responseData(res) {
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(detailMessage(data, statusMessage(res.status), res.status), res.status, data.detail);
+  if (!res.ok) {
+    const retryHeader = typeof res.headers?.get === "function" ? res.headers.get("Retry-After") : null;
+    const retryAfter =
+      (data?.detail && typeof data.detail === "object" && data.detail.retry_after) ||
+      retryHeader ||
+      0;
+    throw new ApiError(
+      detailMessage(data, statusMessage(res.status), res.status),
+      res.status,
+      data.detail,
+      retryAfter
+    );
+  }
   return data;
 }
 

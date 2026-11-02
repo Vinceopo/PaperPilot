@@ -1540,9 +1540,9 @@ export default function App() {
               e.preventDefault();
               openUploadMechanics();
             }}
-            className={`mt-1 font-semibold ${navItemClass(activePage === "upload" && !viewingComplianceResult)}`}
+            className={`mt-1 ${navItemClass(activePage === "upload" && !viewingComplianceResult)}`}
           >
-            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-[#22c9b4]" aria-hidden>
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center" aria-hidden>
               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v6h6" />

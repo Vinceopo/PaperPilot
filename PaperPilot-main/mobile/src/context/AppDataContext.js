@@ -724,6 +724,7 @@ export function AppDataProvider({ children }) {
           if (viewingThis && onVersionScreen) {
             const saved = versionToScanResult(after, latest);
             if (saved) flow.showSavedResult(saved, latest.versionNumber);
+            else flow.syncVersionNumber?.(latest.versionNumber);
           }
         }
       }

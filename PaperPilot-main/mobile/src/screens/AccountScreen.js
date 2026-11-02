@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Image,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,14 +15,15 @@ import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import { useAppData } from "../context/AppDataContext";
 import { auth } from "../firebase";
 import { getProfile, otpBypassToken, resetPasswordWithOtp, sendOtp, updateUserProfile } from "../api";
-import { signOutUser } from "../services/auth";
+import { markPasswordChanged, signOutUser } from "../services/auth";
 import { loadNotifications, pushNotification, saveNotifications } from "../lib/notifications";
 import { nameError, phoneError, usernameError } from "../lib/validation";
+import { maskEmail } from "../lib/maskEmail";
 import { isPaidTier, planName } from "../lib/plans";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import OtpStep from "../components/auth/OtpStep";
-import BackToDashboardButton from "../components/ui/BackToDashboardButton";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { CameraIcon, EyeIcon, PadlockIcon, PencilIcon } from "../components/shell/icons";
 
 function digitsOnly(value, max = 11) {
@@ -157,17 +159,9 @@ function PwField({ label, value, onChangeText, show, onToggle }) {
   );
 }
 
-function BackLink({ onPress, label = "Back to account" }) {
-  return (
-    <View style={styles.backLink}>
-      <BackToDashboardButton onPress={onPress} label={label} />
-    </View>
-  );
-}
-
 export default function AccountScreen({ navigation }) {
   const { user, tier } = useAppData();
-  const [view, setView] = useState("summary"); // summary | edit | pwOtp | pwNew
+  const [view, setView] = useState("summary"); // summary | edit | pwEmail | pwOtp | pwNew
 
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState(null);
@@ -187,6 +181,8 @@ export default function AccountScreen({ navigation }) {
   const [otpMeta, setOtpMeta] = useState(null);
   const [sendingOtp, setSendingOtp] = useState(false);
   const [sendOtpError, setSendOtpError] = useState("");
+  const [pwEmailInput, setPwEmailInput] = useState("");
+  const [emailMismatchOpen, setEmailMismatchOpen] = useState(false);
 
   const [resetToken, setResetToken] = useState("");
   const [pw, setPw] = useState({ newPw: "", confirm: "" });
@@ -303,9 +299,26 @@ export default function AccountScreen({ navigation }) {
     setView("summary");
   }
 
-  async function handleStartChangePassword() {
-    setSendingOtp(true);
+  function handleOpenChangePassword() {
+    setPwEmailInput("");
     setSendOtpError("");
+    setEmailMismatchOpen(false);
+    setView("pwEmail");
+  }
+
+  async function handleConfirmChangePasswordEmail() {
+    setSendOtpError("");
+    const typed = pwEmailInput.trim();
+    if (!typed) {
+      setSendOtpError("Enter the email address for this account.");
+      return;
+    }
+    if (typed.toLowerCase() !== String(email || "").trim().toLowerCase()) {
+      setEmailMismatchOpen(true);
+      return;
+    }
+
+    setSendingOtp(true);
     try {
       const res = await sendOtp({ email, purpose: "reset_password" });
       const bypass = otpBypassToken(res, "reset_password");
@@ -360,6 +373,7 @@ export default function AccountScreen({ navigation }) {
         });
         await saveNotifications(next, user.uid);
       }
+      await markPasswordChanged();
       await signOutUser(auth);
     } catch (err) {
       setPwError(err?.message || "Could not update the password.");
@@ -378,127 +392,106 @@ export default function AccountScreen({ navigation }) {
 
     if (view === "edit") {
       return (
-        <>
-          <BackLink onPress={handleCancelEdit} />
-          <View style={styles.formCard}>
-            <Text style={styles.formTitle}>Edit profile</Text>
-            <Text style={styles.formSubtitle}>Changes take effect immediately after saving.</Text>
-            <View style={styles.formFields}>
+        <View style={styles.formCard}>
+          <Text style={styles.formTitle}>Edit profile</Text>
+          <Text style={styles.formSubtitle}>Changes take effect immediately after saving.</Text>
+          <View style={styles.formFields}>
+            <Field
+              label="First name"
+              value={form.firstName}
+              onChangeText={setField("firstName")}
+              error={form.firstName ? firstErr : ""}
+            />
+            <Field
+              label="Middle name"
+              value={form.middleName}
+              onChangeText={setField("middleName")}
+              optional
+              error={middleErr}
+            />
+            <Field
+              label="Last name"
+              value={form.lastName}
+              onChangeText={setField("lastName")}
+              error={form.lastName ? lastErr : ""}
+            />
+            {canEditUsername ? (
               <Field
-                label="First name"
-                value={form.firstName}
-                onChangeText={setField("firstName")}
-                error={form.firstName ? firstErr : ""}
+                label="Username"
+                value={form.username}
+                onChangeText={setField("username")}
+                placeholder="e.g. vince.opo"
+                maxLength={20}
+                autoCapitalize="none"
+                hint="Required. 3–20 characters; letters, numbers, underscore, or period. Blank is not allowed."
+                error={userErr}
               />
-              <Field
-                label="Middle name"
-                value={form.middleName}
-                onChangeText={setField("middleName")}
-                optional
-                error={middleErr}
-              />
-              <Field
-                label="Last name"
-                value={form.lastName}
-                onChangeText={setField("lastName")}
-                error={form.lastName ? lastErr : ""}
-              />
-              {canEditUsername ? (
-                <Field
-                  label="Username"
-                  value={form.username}
-                  onChangeText={setField("username")}
-                  placeholder="e.g. vince.opo"
-                  maxLength={20}
-                  autoCapitalize="none"
-                  hint="Required. 3–20 characters; letters, numbers, underscore, or period. Blank is not allowed."
-                  error={userErr}
-                />
-              ) : null}
-              <Field
-                label="Mobile number"
-                value={form.contactNumber}
-                onChangeText={(text) => {
-                  setForm((p) => ({ ...p, contactNumber: digitsOnly(text, 11) }));
-                  setSaveError("");
-                  setSaveSuccess(false);
-                }}
-                optional
-                keyboardType="number-pad"
-                maxLength={11}
-                placeholder="0912xxxxxxx"
-                hint="Example: 0912xxxxxxx — 11 digits, starts with 09."
-                error={mobileErr}
-              />
-
-              <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Email address</Text>
-                <View style={styles.readOnlyWrap}>
-                  <Text style={styles.readOnlyText} numberOfLines={1}>
-                    {email}
-                  </Text>
-                  {emailVerified ? (
-                    <View style={styles.verifiedBadge}>
-                      <Text style={styles.verifiedText}>✓ Verified</Text>
-                    </View>
-                  ) : null}
-                </View>
-                <Text style={styles.fieldHint}>Email cannot be changed from this screen.</Text>
-              </View>
-            </View>
-
-            {saveError ? <Text style={styles.errorText}>{saveError}</Text> : null}
-            {saveSuccess ? <Text style={styles.successText}>✓ Saved!</Text> : null}
-
-            <View style={styles.formActions}>
-              <Pressable
-                onPress={handleCancelEdit}
-                style={({ pressed }) => [styles.cancelBtn, pressed && styles.cancelBtnPressed]}
-              >
-                <Text style={styles.cancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleSaveEdit}
-                disabled={!isDirty || saving || editInvalid}
-                style={({ pressed }) => [
-                  styles.saveBtn,
-                  pressed && styles.saveBtnPressed,
-                  (!isDirty || saving || editInvalid) && styles.btnDisabled,
-                ]}
-              >
-                <Text style={styles.saveText}>{saving ? "Saving…" : "Save changes"}</Text>
-              </Pressable>
-            </View>
+            ) : null}
+            <Field
+              label="Mobile number"
+              value={form.contactNumber}
+              onChangeText={(text) => {
+                setForm((p) => ({ ...p, contactNumber: digitsOnly(text, 11) }));
+                setSaveError("");
+                setSaveSuccess(false);
+              }}
+              optional
+              keyboardType="number-pad"
+              maxLength={11}
+              placeholder="0912xxxxxxx"
+              hint="Example: 0912xxxxxxx — 11 digits, starts with 09."
+              error={mobileErr}
+            />
           </View>
-        </>
+
+          {saveError ? <Text style={styles.errorText}>{saveError}</Text> : null}
+          {saveSuccess ? <Text style={styles.successText}>✓ Saved!</Text> : null}
+
+          <View style={styles.formActions}>
+            <Pressable
+              onPress={handleCancelEdit}
+              style={({ pressed }) => [styles.cancelBtn, pressed && styles.cancelBtnPressed]}
+            >
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              onPress={handleSaveEdit}
+              disabled={!isDirty || saving || editInvalid}
+              style={({ pressed }) => [
+                styles.saveBtn,
+                pressed && styles.saveBtnPressed,
+                (!isDirty || saving || editInvalid) && styles.btnDisabled,
+              ]}
+            >
+              <Text style={styles.saveText}>{saving ? "Saving…" : "Save changes"}</Text>
+            </Pressable>
+          </View>
+        </View>
       );
     }
 
     if (view === "pwOtp") {
       const back = () => {
-        setView("summary");
+        setView("pwEmail");
         setSendOtpError("");
       };
       return (
-        <>
-          <BackLink onPress={back} />
-          <View style={styles.formCard}>
-            <Text style={styles.formTitle}>Verify your identity</Text>
-            <Text style={styles.formSubtitle}>
-              Enter the 6-digit code we sent to your email before setting a new password.
-            </Text>
-            <OtpStep
-              email={email}
-              purpose="reset_password"
-              expiresIn={otpMeta?.expires_in || 300}
-              resendIn={otpMeta?.resend_in || 30}
-              devCode={otpMeta?.dev_code || ""}
-              onVerified={handleOtpVerified}
-              onBack={back}
-              backLabel="Cancel"
-            />
-          </View>
-        </>
+        <View style={styles.formCard}>
+          <Text style={styles.formTitle}>Verify your identity</Text>
+          <Text style={styles.formSubtitle}>
+            Enter the 6-digit code we sent to your email before setting a new password.
+          </Text>
+          <OtpStep
+            email={email}
+            purpose="reset_password"
+            expiresIn={otpMeta?.expires_in || 300}
+            resendIn={otpMeta?.resend_in || 30}
+            devCode={otpMeta?.dev_code || ""}
+            onVerified={handleOtpVerified}
+            onBack={back}
+            backLabel="Cancel"
+          />
+        </View>
       );
     }
 
@@ -509,58 +502,61 @@ export default function AccountScreen({ navigation }) {
         { ok: /[0-9]/.test(pw.newPw), label: "One number" },
       ];
       return (
-        <>
-          <BackLink onPress={() => setView("summary")} />
-          <View style={styles.formCard}>
-            <Text style={styles.formTitle}>Set new password</Text>
-            <Text style={styles.formSubtitle}>Your identity has been verified. Choose a strong new password.</Text>
-            <View style={styles.formFields}>
-              <PwField
-                label="New password"
-                value={pw.newPw}
-                onChangeText={(text) => {
-                  setPw((p) => ({ ...p, newPw: text }));
-                  setPwError("");
-                }}
-                show={pwShow.newPw}
-                onToggle={() => setPwShow((s) => ({ ...s, newPw: !s.newPw }))}
-              />
-              <PwField
-                label="Confirm new password"
-                value={pw.confirm}
-                onChangeText={(text) => {
-                  setPw((p) => ({ ...p, confirm: text }));
-                  setPwError("");
-                }}
-                show={pwShow.confirm}
-                onToggle={() => setPwShow((s) => ({ ...s, confirm: !s.confirm }))}
-              />
-              {pw.newPw.length > 0 ? (
-                <View style={styles.hints}>
-                  {hints.map(({ ok, label }) => (
-                    <Text key={label} style={[styles.hintText, ok && styles.hintOk]}>
-                      {ok ? "✓" : "○"} {label}
-                    </Text>
-                  ))}
-                </View>
-              ) : null}
-            </View>
-
-            {pwError ? <Text style={styles.errorText}>{pwError}</Text> : null}
-
-            <Pressable
-              onPress={handleSetPassword}
-              disabled={pwBusy || !pw.newPw || !pw.confirm}
-              style={({ pressed }) => [
-                styles.setPwBtn,
-                pressed && styles.saveBtnPressed,
-                (pwBusy || !pw.newPw || !pw.confirm) && styles.btnDisabled,
-              ]}
-            >
-              <Text style={styles.saveText}>{pwBusy ? "Updating…" : "Set new password"}</Text>
-            </Pressable>
+        <View style={styles.formCard}>
+          <Text style={styles.formTitle}>Set new password</Text>
+          <Text style={styles.formSubtitle}>Your identity has been verified. Choose a strong new password.</Text>
+          <View style={styles.formFields}>
+            <PwField
+              label="New password"
+              value={pw.newPw}
+              onChangeText={(text) => {
+                setPw((p) => ({ ...p, newPw: text }));
+                setPwError("");
+              }}
+              show={pwShow.newPw}
+              onToggle={() => setPwShow((s) => ({ ...s, newPw: !s.newPw }))}
+            />
+            <PwField
+              label="Confirm new password"
+              value={pw.confirm}
+              onChangeText={(text) => {
+                setPw((p) => ({ ...p, confirm: text }));
+                setPwError("");
+              }}
+              show={pwShow.confirm}
+              onToggle={() => setPwShow((s) => ({ ...s, confirm: !s.confirm }))}
+            />
+            {pw.newPw.length > 0 ? (
+              <View style={styles.hints}>
+                {hints.map(({ ok, label }) => (
+                  <Text key={label} style={[styles.hintText, ok && styles.hintOk]}>
+                    {ok ? "✓" : "○"} {label}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
           </View>
-        </>
+
+          {pwError ? <Text style={styles.errorText}>{pwError}</Text> : null}
+
+          <Pressable
+            onPress={handleSetPassword}
+            disabled={pwBusy || !pw.newPw || !pw.confirm}
+            style={({ pressed }) => [
+              styles.setPwBtn,
+              pressed && styles.saveBtnPressed,
+              (pwBusy || !pw.newPw || !pw.confirm) && styles.btnDisabled,
+            ]}
+          >
+            <Text style={styles.saveText}>{pwBusy ? "Updating…" : "Set new password"}</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setView("summary")}
+            style={({ pressed }) => [styles.cancelBtn, styles.cancelBelow, pressed && styles.cancelBtnPressed]}
+          >
+            <Text style={styles.cancelText}>Cancel</Text>
+          </Pressable>
+        </View>
       );
     }
 
@@ -611,14 +607,14 @@ export default function AccountScreen({ navigation }) {
           </Text>
 
           <View style={styles.infoCard}>
-            <InfoRow label="Email address" value={email} badge={emailVerified} />
+            <InfoRow label="Email address" value={maskEmail(email)} badge={emailVerified} />
             {canEditUsername ? <InfoRow label="Username" value={form.username} /> : null}
             <InfoRow label="Mobile number" value={form.contactNumber} last />
           </View>
 
           <View style={styles.actions}>
-      <Pressable
-        onPress={() => {
+            <Pressable
+              onPress={() => {
                 setSaveError("");
                 setSaveSuccess(false);
                 setView("edit");
@@ -630,23 +626,13 @@ export default function AccountScreen({ navigation }) {
             </Pressable>
 
             <Pressable
-              onPress={handleStartChangePassword}
-              disabled={sendingOtp}
-              style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed, sendingOtp && styles.pwBtnBusy]}
+              onPress={handleOpenChangePassword}
+              style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed]}
             >
-              {sendingOtp ? (
-                <>
-                  <ActivityIndicator size="small" color={colors.white} />
-                  <Text style={styles.pwBtnText}>Sending code…</Text>
-                </>
-              ) : (
-                <>
-                  <PadlockIcon size={16} />
-                  <Text style={styles.pwBtnText}>
-                    {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
-                  </Text>
-                </>
-              )}
+              <PadlockIcon size={16} />
+              <Text style={styles.pwBtnText}>
+                {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
+              </Text>
             </Pressable>
           </View>
 
@@ -680,6 +666,77 @@ export default function AccountScreen({ navigation }) {
       >
         {renderBody()}
       </ScrollView>
+
+      <Modal
+        visible={view === "pwEmail"}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setView("summary");
+          setSendOtpError("");
+          setPwEmailInput("");
+        }}
+      >
+        <View style={styles.emailModalBackdrop}>
+          <View style={styles.emailModalCard}>
+            <Text style={styles.emailModalTitle}>Confirm your email</Text>
+            <Text style={styles.emailModalSubtitle}>
+              Enter the email address for this account. We will send a one-time code only if it matches.
+            </Text>
+            <View style={styles.formFields}>
+              <Field
+                label="Email address"
+                value={pwEmailInput}
+                onChangeText={(text) => {
+                  setPwEmailInput(text);
+                  setSendOtpError("");
+                }}
+                placeholder="you@example.com"
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+            </View>
+            {sendOtpError ? <Text style={styles.errorText}>{sendOtpError}</Text> : null}
+            <View style={styles.emailModalActions}>
+              <Pressable
+                onPress={handleConfirmChangePasswordEmail}
+                disabled={sendingOtp || !pwEmailInput.trim()}
+                style={({ pressed }) => [
+                  styles.emailModalPrimary,
+                  pressed && styles.saveBtnPressed,
+                  (sendingOtp || !pwEmailInput.trim()) && styles.btnDisabled,
+                ]}
+              >
+                {sendingOtp ? (
+                  <ActivityIndicator size="small" color={colors.white} />
+                ) : (
+                  <Text style={styles.saveText}>Send verification code</Text>
+                )}
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setView("summary");
+                  setSendOtpError("");
+                  setPwEmailInput("");
+                }}
+                style={({ pressed }) => [styles.emailModalCancel, pressed && styles.cancelBtnPressed]}
+              >
+                <Text style={styles.cancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <ConfirmDialog
+        open={view === "pwEmail" && emailMismatchOpen}
+        title="That email doesn’t match this account"
+        message="Please use the same email you signed up with. A different address can’t receive a password-change code for this profile."
+        confirmLabel="Try again"
+        cancelLabel={null}
+        onConfirm={() => setEmailMismatchOpen(false)}
+        onCancel={() => setEmailMismatchOpen(false)}
+      />
     </AppShell>
   );
 }
@@ -833,7 +890,46 @@ const styles = StyleSheet.create({
   manageText: { fontSize: 14, fontWeight: "600", color: "#334155" },
   errorText: { marginTop: 12, fontSize: 12, color: "#f43f5e" },
   successText: { marginTop: 12, fontSize: 12, fontWeight: "600", color: "#059669" },
-  backLink: { marginBottom: 16 },
+  cancelBelow: { marginTop: 12, alignSelf: "stretch", alignItems: "center" },
+  emailModalBackdrop: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(15, 23, 42, 0.5)",
+    paddingHorizontal: 20,
+  },
+  emailModalCard: {
+    width: "100%",
+    maxWidth: 440,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingHorizontal: 28,
+    paddingVertical: 32,
+    ...cardShadow,
+  },
+  emailModalTitle: { fontSize: 24, fontWeight: "700", color: "#1e293b" },
+  emailModalSubtitle: { marginTop: 8, fontSize: 14, lineHeight: 21, color: colors.slate },
+  emailModalActions: { marginTop: 28, gap: 12 },
+  emailModalPrimary: {
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: colors.accent,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  emailModalCancel: {
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
   formCard: {
     borderRadius: 16,
     borderWidth: 1,

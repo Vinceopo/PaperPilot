@@ -605,7 +605,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     color: colors.slate,
   },
-  versionScroll: { maxHeight: 200 },
+  versionScroll: { maxHeight: 220, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e2e8f0" },
   versionList: { paddingHorizontal: 12, paddingBottom: 12, gap: 4 },
   versionRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   versionBtn: {
@@ -640,7 +640,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: colors.slate,
   },
-  body: { flexGrow: 1, maxHeight: 560 },
+  body: { flexGrow: 1, maxHeight: 560, minHeight: 280 },
   bodyContent: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 28 },
   emptyText: { fontSize: 14, color: colors.muted },
   selectedRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 12 },

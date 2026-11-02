@@ -3,11 +3,17 @@ import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { useAppData } from "../context/AppDataContext";
+import { auth } from "../firebase";
 import { cancelSubscription, confirmCheckoutPayment, subscribeToPlan } from "../api";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import BackToDashboardButton from "../components/ui/BackToDashboardButton";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import {
+  clearPendingCheckout,
+  readPendingCheckout,
+  savePendingCheckout,
+} from "../lib/pendingCheckout";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 import {
   ANNUAL_SAVINGS_LABEL,
@@ -185,19 +191,17 @@ export default function SubscriptionScreen({ navigation }) {
   const [billingPeriod, setBillingPeriod] = useState(
     subscription?.billing_period === "annual" ? "annual" : "monthly"
   );
-  const [selectedPlan, setSelectedPlan] = useState(isPremium ? tier : "premium");
+  // Empty until the user picks a plan to change/pay — avoids a pre-highlighted card.
+  const [selectedPlan, setSelectedPlan] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [paymentCanceled, setPaymentCanceled] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [checkoutOpen, setCheckoutOpen] = useState(!isPremium);
+  // Always start on the current-plan face so Free/Premium updates are visible without navigating away.
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [confirmFreeOpen, setConfirmFreeOpen] = useState(false);
-
-  useEffect(() => {
-    setCheckoutOpen(!isPremium);
-  }, [isPremium]);
 
   useEffect(() => {
     if (subscription?.billing_period) {
@@ -205,9 +209,50 @@ export default function SubscriptionScreen({ navigation }) {
     }
   }, [subscription?.billing_period]);
 
-  const price = planPrice(selectedPlan, billingPeriod);
+  // Resume a checkout started before an app restart (mirrors web sessionStorage keys).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const uid = auth?.currentUser?.uid;
+      if (!uid) return;
+      const pending = await readPendingCheckout(uid);
+      if (!pending?.checkoutSessionId || cancelled) return;
+      const plan = pending.plan || selectedPlan;
+      setBusy(true);
+      try {
+        const isActivated = (next) =>
+          Boolean(next) && !next.pending && normalizeTier(next.tier) === plan;
+        let confirmed = null;
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          confirmed = await confirmCheckoutPayment({
+            checkoutSessionId: pending.checkoutSessionId,
+          }).catch(() => null);
+          if (cancelled) return;
+          if (isActivated(confirmed)) break;
+          if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+        if (cancelled) return;
+        if (isActivated(confirmed)) {
+          await clearPendingCheckout();
+          applySubscription(confirmed);
+          setCheckoutOpen(false);
+          setSuccess(`Welcome to ${planName(plan)}! Your PayMongo payment was confirmed.`);
+        }
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Run once on mount for the signed-in user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const paidSelected = isPaidTier(selectedPlan);
+  const price = paidSelected ? planPrice(selectedPlan, billingPeriod) : 0;
   const perPeriod = billingPeriod === "annual" ? "year" : "month";
-  const switchingPlan = isPremium && isPaidTier(selectedPlan) && selectedPlan !== tier;
+  const switchingPlan = isPremium && paidSelected && selectedPlan !== tier;
   const subscribeCta =
     isPremium && selectedPlan === tier
       ? `Renew with PayMongo — ${peso(price)}/${perPeriod}`
@@ -219,16 +264,31 @@ export default function SubscriptionScreen({ navigation }) {
     () => (Array.isArray(subscription?.history) ? subscription.history : []),
     [subscription]
   );
-  const showManage = isPremium && !checkoutOpen;
+  const showManage = !checkoutOpen;
+
+  function openChangePlan() {
+    setSelectedPlan("");
+    setError("");
+    setSuccess("");
+    setPaymentCanceled(false);
+    setCheckoutOpen(true);
+  }
 
   async function handleSubscribe() {
     setError("");
     setSuccess("");
     setPaymentCanceled(false);
 
+    if (!selectedPlan) {
+      setError("Select a plan before continuing.");
+      return;
+    }
+
     if (selectedPlan === "free") {
       if (!isPremium) {
         setSuccess("You are already on the Free plan.");
+        setCheckoutOpen(false);
+        setSelectedPlan("");
         return;
       }
       setConfirmFreeOpen(true);
@@ -245,8 +305,13 @@ export default function SubscriptionScreen({ navigation }) {
           "The PayMongo payment page could not be opened. You were not charged. Try again in a minute."
         );
       }
+      const uid = auth?.currentUser?.uid;
+      if (uid && result?.checkout_session_id) {
+        await savePendingCheckout(uid, result.checkout_session_id, plan);
+      }
       const returnedUrl = String((await openBillingSession(url)) || "");
       if (returnedUrl.includes("status=canceled")) {
+        await clearPendingCheckout();
         setPaymentCanceled(true);
         setSelectedPlan(plan);
         setSuccess("Payment canceled. No charges were made.");
@@ -268,6 +333,7 @@ export default function SubscriptionScreen({ navigation }) {
         }
       }
       if (isActivated(confirmed)) {
+        await clearPendingCheckout();
         applySubscription(confirmed);
         setCheckoutOpen(false);
         setSuccess(`Welcome to ${planName(plan)}! Your PayMongo payment was confirmed.`);
@@ -302,9 +368,11 @@ export default function SubscriptionScreen({ navigation }) {
     try {
       const next = await subscribeToPlan({ plan: "free" });
       applySubscription(next, { allowDowngrade: true });
-      setCheckoutOpen(false);
-      setSuccess("Switched to Free plan.");
+      setSelectedPlan("");
       setConfirmFreeOpen(false);
+      // Same face as a paid confirm: close checkout and show the updated current plan.
+      setCheckoutOpen(false);
+      setSuccess("Welcome to Free! Your plan was updated — 3 scans this month.");
     } catch (err) {
       setError(err?.message || "Your plan could not be changed. Check your connection, then try again.");
     } finally {
@@ -319,8 +387,8 @@ export default function SubscriptionScreen({ navigation }) {
     try {
       const next = await cancelSubscription({ immediate: true });
       applySubscription(next, { allowDowngrade: true });
-      setCheckoutOpen(true);
-      setSelectedPlan("premium");
+      setSelectedPlan("");
+      setCheckoutOpen(false);
       setSuccess("Subscription canceled. You are on the Free plan — 3 scans this month.");
       setConfirmCancelOpen(false);
     } catch (err) {
@@ -339,29 +407,41 @@ export default function SubscriptionScreen({ navigation }) {
     <AppShell
       active="account"
       breadcrumb="Settings / Subscription"
-      title={showManage ? "Manage Subscription" : "Upgrade your plan"}
-      onBack={() => navigation.goBack()}
-      backLabel="Back"
+      title={showManage ? "Manage Subscription" : "Change your plan"}
+      onBack={() => navigation.navigate("MainTabs", { screen: "Account" })}
+      backLabel="Back to profile"
     >
       <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
         <View style={styles.introRow}>
           <Text style={styles.intro}>
             {showManage
-              ? "View status, renewal date, and billing history."
-              : "Secure checkout powered by PayMongo (Card, GCash, Maya, and more)."}
+              ? "View your current plan, allowance, and billing history."
+              : selectedPlan === "free"
+                ? "Confirm switching to Free — no payment is required."
+                : "Select a plan, then continue. Paid plans use PayMongo checkout."}
           </Text>
-          {isPremium && checkoutOpen ? (
+          {checkoutOpen ? (
             <Pressable
               onPress={() => {
                 setCheckoutOpen(false);
+                setSelectedPlan("");
                 setError("");
                 setSuccess("");
               }}
               style={({ pressed }) => [styles.toggleViewBtn, pressed && styles.toggleViewBtnPressed]}
             >
+              <Text style={styles.toggleViewArrow}>←</Text>
               <Text style={styles.toggleViewText}>View current plan</Text>
             </Pressable>
-          ) : null}
+          ) : (
+            <Pressable
+              onPress={() => navigation.navigate("MainTabs", { screen: "Account" })}
+              style={({ pressed }) => [styles.toggleViewBtn, pressed && styles.toggleViewBtnPressed]}
+            >
+              <Text style={styles.toggleViewArrow}>←</Text>
+              <Text style={styles.toggleViewText}>Back to profile</Text>
+            </Pressable>
+          )}
         </View>
 
         <ConfirmDialog
@@ -387,19 +467,16 @@ export default function SubscriptionScreen({ navigation }) {
         {success ? (
           <View style={styles.successBox}>
             <Text style={styles.successText}>{success}</Text>
-            {!isPremium ? (
+            {!isPremium && paymentCanceled ? (
               <Pressable
                 onPress={() => {
                   setSuccess("");
                   setPaymentCanceled(false);
-                  setSelectedPlan(isPaidTier(selectedPlan) ? selectedPlan : "premium");
-                  setCheckoutOpen(true);
+                  openChangePlan();
                 }}
                 style={({ pressed }) => [styles.payAgainBtn, pressed && styles.accentPressed]}
               >
-                <Text style={styles.payAgainText}>
-                  Pay for {planName(isPaidTier(selectedPlan) ? selectedPlan : "premium")} again
-                </Text>
+                <Text style={styles.payAgainText}>Choose a plan again</Text>
               </Pressable>
             ) : null}
             {paymentCanceled ? (
@@ -422,15 +499,21 @@ export default function SubscriptionScreen({ navigation }) {
               <Text style={styles.currentPlan}>{currentPlanName}</Text>
               <View style={styles.details}>
                 <DetailRow label="Status" value={statusLabel(subscription)} />
-                <DetailRow label="Billing period" value={subscription?.billing_period || "monthly"} capitalize />
-                <DetailRow label="Payment method" value={subscription?.payment_method || "PayMongo"} uppercase />
-                <DetailRow
-                  label="Current billing period"
-                  value={`${formatDate(subscription?.billing_period_start)} – ${formatDate(
-                    subscription?.billing_period_end || subscription?.renews_at
-                  )}`}
-                />
-                <DetailRow label="Renewal date" value={formatDate(subscription?.renews_at)} />
+                {isPremium ? (
+                  <>
+                    <DetailRow label="Billing period" value={subscription?.billing_period || "monthly"} capitalize />
+                    <DetailRow label="Payment method" value={subscription?.payment_method || "PayMongo"} uppercase />
+                    <DetailRow
+                      label="Current billing period"
+                      value={`${formatDate(subscription?.billing_period_start)} – ${formatDate(
+                        subscription?.billing_period_end || subscription?.renews_at
+                      )}`}
+                    />
+                    <DetailRow label="Renewal date" value={formatDate(subscription?.renews_at)} />
+                  </>
+                ) : (
+                  <DetailRow label="Billing" value="No payment required" />
+                )}
                 <DetailRow
                   label="Scan allowance"
                   value={`${scansRemaining} of ${planScanLimit} remaining this ${resetWindow(tier)}${
@@ -441,28 +524,31 @@ export default function SubscriptionScreen({ navigation }) {
               </View>
               <View style={styles.manageActions}>
                 <Pressable
-                  onPress={() => {
-                    setSelectedPlan(tier);
-                    setCheckoutOpen(true);
-                  }}
+                  onPress={openChangePlan}
                   style={({ pressed }) => [styles.changePlanBtn, pressed && styles.accentPressed]}
                 >
                   <Text style={styles.changePlanText}>
-                    {String(subscription?.status || "").toLowerCase() === "canceled" ? "Pay again" : "Change plan"}
+                    {isPremium
+                      ? String(subscription?.status || "").toLowerCase() === "canceled"
+                        ? "Pay again"
+                        : "Change plan"
+                      : "Upgrade plan"}
                   </Text>
                 </Pressable>
-                <Pressable
-                  disabled={busy}
-                  onPress={() => setConfirmCancelOpen(true)}
-                  style={({ pressed }) => [
-                    styles.cancelSubBtn,
-                    pressed && styles.cancelSubBtnPressed,
-                    busy && styles.disabled,
-                  ]}
-                >
-                  {busy ? <ActivityIndicator size="small" color="#e11d48" /> : null}
-                  <Text style={styles.cancelSubText}>Cancel subscription</Text>
-                </Pressable>
+                {isPremium ? (
+                  <Pressable
+                    disabled={busy}
+                    onPress={() => setConfirmCancelOpen(true)}
+                    style={({ pressed }) => [
+                      styles.cancelSubBtn,
+                      pressed && styles.cancelSubBtnPressed,
+                      busy && styles.disabled,
+                    ]}
+                  >
+                    {busy ? <ActivityIndicator size="small" color="#e11d48" /> : null}
+                    <Text style={styles.cancelSubText}>Cancel subscription</Text>
+                  </Pressable>
+                ) : null}
               </View>
             </View>
 
@@ -567,64 +653,97 @@ export default function SubscriptionScreen({ navigation }) {
             ) : null}
 
             <View style={[styles.card, styles.cardSpacing]}>
-              <Text style={styles.checkoutTitle}>Secure checkout</Text>
-              <Text style={styles.checkoutSub}>
-                You will enter card, GCash, Maya, or other details on PayMongo — not on PaperPilot.
-              </Text>
-              <View style={styles.checkoutList}>
-                <Text style={styles.checkoutItem}>• Card · GCash · Maya · GrabPay · QR Ph</Text>
-                <Text style={styles.checkoutItem}>• Receipt emailed by PayMongo after payment</Text>
-                <Text style={styles.checkoutItem}>• Your plan unlocks as soon as PayMongo confirms payment</Text>
-              </View>
+              {!selectedPlan ? (
+                <>
+                  <Text style={styles.checkoutTitle}>Select a plan</Text>
+                  <Text style={styles.checkoutSub}>
+                    Choose Free, Premium, or Pro above to continue. A plan is highlighted only after you select it.
+                  </Text>
+                </>
+              ) : selectedPlan === "free" ? (
+                <>
+                  <Text style={styles.checkoutTitle}>Confirm Free plan</Text>
+                  <Text style={styles.checkoutSub}>
+                    No payment method is needed. Confirm below to update your plan right away.
+                  </Text>
+                  <View style={styles.checkoutList}>
+                    <Text style={styles.checkoutItem}>• ₱0 — no card, GCash, or Maya checkout</Text>
+                    <Text style={styles.checkoutItem}>• Your plan updates as soon as you confirm</Text>
+                    <Text style={styles.checkoutItem}>• You can upgrade again anytime</Text>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.checkoutTitle}>Secure checkout</Text>
+                  <Text style={styles.checkoutSub}>
+                    You will enter card, GCash, Maya, or other details on PayMongo — not on PaperPilot.
+                  </Text>
+                  <View style={styles.checkoutList}>
+                    <Text style={styles.checkoutItem}>• Card · GCash · Maya · GrabPay · QR Ph</Text>
+                    <Text style={styles.checkoutItem}>• Receipt emailed by PayMongo after payment</Text>
+                    <Text style={styles.checkoutItem}>• Your plan unlocks as soon as PayMongo confirms payment</Text>
+                  </View>
+                </>
+              )}
 
-              <View style={styles.summary}>
-                <Text style={styles.cardKicker}>Payment summary</Text>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>
-                    {isPaidTier(selectedPlan)
-                      ? `${planName(selectedPlan)} (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
-                      : "Free Plan"}
-                  </Text>
-                  <Text style={styles.summaryValue}>{isPaidTier(selectedPlan) ? peso(price) : "₱0"}</Text>
+              {selectedPlan ? (
+                <View style={styles.summary}>
+                  <Text style={styles.cardKicker}>{paidSelected ? "Payment summary" : "Plan summary"}</Text>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>
+                      {paidSelected
+                        ? `${planName(selectedPlan)} (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
+                        : "Free Plan"}
+                    </Text>
+                    <Text style={styles.summaryValue}>{paidSelected ? peso(price) : "₱0"}</Text>
+                  </View>
+                  {paidSelected && billingPeriod === "annual" ? (
+                    <Text style={styles.savingsLine}>
+                      {ANNUAL_SAVINGS_LABEL} — {peso(planPrice(selectedPlan, "monthly"))} off 12 monthly payments
+                    </Text>
+                  ) : null}
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>Total due today</Text>
+                    <Text style={styles.totalValue}>{paidSelected ? `${peso(price)}.00` : "₱0.00"}</Text>
+                  </View>
                 </View>
-                {isPaidTier(selectedPlan) && billingPeriod === "annual" ? (
-                  <Text style={styles.savingsLine}>
-                    {ANNUAL_SAVINGS_LABEL} — {peso(planPrice(selectedPlan, "monthly"))} off 12 monthly payments
-                  </Text>
-                ) : null}
-                <View style={styles.totalRow}>
-                  <Text style={styles.totalLabel}>Total due today</Text>
-                  <Text style={styles.totalValue}>
-                    {isPaidTier(selectedPlan) ? `${peso(price)}.00` : "₱0.00"}
-                  </Text>
-                </View>
-              </View>
+              ) : null}
 
               <Pressable
                 onPress={handleSubscribe}
-                disabled={busy}
-                style={({ pressed }) => [styles.payBtn, pressed && styles.accentPressed, busy && styles.disabled]}
+                disabled={busy || !selectedPlan}
+                style={({ pressed }) => [
+                  styles.payBtn,
+                  pressed && styles.accentPressed,
+                  (busy || !selectedPlan) && styles.disabled,
+                ]}
               >
                 {busy ? <ActivityIndicator size="small" color={colors.white} /> : null}
                 <Text style={styles.payText}>
                   {busy
-                    ? "Opening PayMongo…"
-                    : selectedPlan === "free"
-                      ? isPremium
-                        ? "Switch to Free Plan"
-                        : "Stay on Free Plan"
-                      : subscribeCta}
+                    ? selectedPlan === "free"
+                      ? "Updating plan…"
+                      : "Opening PayMongo…"
+                    : !selectedPlan
+                      ? "Select a plan to continue"
+                      : selectedPlan === "free"
+                        ? isPremium
+                          ? "Switch to Free Plan"
+                          : "Stay on Free Plan"
+                        : subscribeCta}
                 </Text>
               </Pressable>
 
-              <View style={styles.poweredBy}>
-                <View style={styles.logoWrap}>
-                  <Image source={PAYMONGO_LOGO} style={styles.logo} resizeMode="contain" accessibilityLabel="PayMongo" />
+              {paidSelected ? (
+                <View style={styles.poweredBy}>
+                  <View style={styles.logoWrap}>
+                    <Image source={PAYMONGO_LOGO} style={styles.logo} resizeMode="contain" accessibilityLabel="PayMongo" />
+                  </View>
+                  <Text style={styles.poweredText}>
+                    Payments processed by PayMongo · Cancel anytime · Terms &amp; Privacy Policy
+                  </Text>
                 </View>
-                <Text style={styles.poweredText}>
-                  Payments processed by PayMongo · Cancel anytime · Terms &amp; Privacy Policy
-                </Text>
-              </View>
+              ) : null}
             </View>
           </>
         ) : null}
@@ -674,15 +793,22 @@ const styles = StyleSheet.create({
   introRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16 },
   intro: { flex: 1, fontSize: 14, lineHeight: 20, color: colors.slate },
   toggleViewBtn: {
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 12,
+    backgroundColor: "#16bfa8",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
   },
-  toggleViewBtnPressed: { backgroundColor: "#f8fafc" },
-  toggleViewText: { fontSize: 12, fontWeight: "600", color: "#334155" },
+  toggleViewBtnPressed: { backgroundColor: "#12ae99" },
+  toggleViewArrow: { fontSize: 14, fontWeight: "700", color: colors.white },
+  toggleViewText: { fontSize: 13, fontWeight: "700", color: colors.white },
   errorBox: {
     marginBottom: 16,
     borderRadius: 12,

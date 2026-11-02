@@ -56,6 +56,44 @@ const SEVERITY = {
   },
 };
 
+export const CATEGORY_ORDER = [
+  "Fonts",
+  "Margins",
+  "Indentation",
+  "Spacing",
+  "Alignment",
+  "Pagination",
+  "Captions",
+  "Citations",
+  "Other",
+];
+
+export function categoryForIssue(entry = {}) {
+  const section = String(entry.section || entry.category || "").trim();
+  if (section) {
+    const known = CATEGORY_ORDER.find((name) => name.toLowerCase() === section.toLowerCase());
+    return known || section;
+  }
+  const type = String(entry.issue_type || "").toLowerCase();
+  if (type.startsWith("font") || type.includes("heading")) return "Fonts";
+  if (type.includes("margin") || type.includes("paper") || type.includes("orientation")) {
+    return "Margins";
+  }
+  if (type.includes("indent")) return "Indentation";
+  if (type.includes("spacing") || type.includes("line_spacing") || type.includes("word_spacing")) {
+    return "Spacing";
+  }
+  if (type.includes("align")) return "Alignment";
+  if (type.includes("pagination") || type.includes("page_number") || type.includes("page_token")) {
+    return "Pagination";
+  }
+  if (type.includes("caption") || type.startsWith("table_") || type.startsWith("figure_")) {
+    return "Captions";
+  }
+  if (type.includes("citation")) return "Citations";
+  return "Other";
+}
+
 function normalizeSeverity(raw, result) {
   const v = String(raw || "").toLowerCase();
   if (v === "critical" || v === "major") return "critical";
@@ -119,35 +157,48 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
       const locExplanation = typeof loc?.explanation === "string" ? loc.explanation.trim() : "";
       const locRecommendation =
         typeof loc?.recommendation === "string" ? loc.recommendation.trim() : "";
-      entries.push({
+      const section = normalized.section || check.section || "General";
+      const alignPageMention = (text) => {
+        if (page == null || !text) return text;
+        return String(text)
+          .replace(/\bpage\s+\d+\b/gi, `page ${page}`)
+          .replace(/(page number\s+['"]?)\d+(['"]?)/gi, `$1${page}$2`)
+          .replace(/(shows the page number\s+['"]?)\d+(['"]?)/gi, `$1${page}$2`);
+      };
+      const draft = {
         id: `${check.id || check.issue_type || "chk"}-${checkIdx}-${locIdx}`,
         issue_type: issueType,
         page,
         line,
-        section: normalized.section || check.section || "General",
+        section,
         severity,
         title: check.name || check.title || check.issue_type || "Formatting issue",
-        finding:
+        finding: alignPageMention(
           locSummary ||
-          check.finding ||
-          check.details ||
-          check.description ||
-          check.name ||
-          "Formatting discrepancy detected",
-        explanation:
+            check.finding ||
+            check.details ||
+            check.description ||
+            check.name ||
+            "Formatting discrepancy detected"
+        ),
+        explanation: alignPageMention(
           locExplanation ||
-          check.explanation ||
-          check.details ||
-          check.description ||
-          "This formatting rule does not match the confirmed mechanics.",
-        recommendation: locRecommendation || check.recommendation || "",
+            check.explanation ||
+            check.details ||
+            check.description ||
+            "This formatting rule does not match the confirmed mechanics."
+        ),
+        recommendation: alignPageMention(locRecommendation || check.recommendation || ""),
         result: check.result,
         location: normalized,
         bbox: normalized.bbox,
         excerpt: normalized.excerpt,
         margin_side: loc?.margin_side || loc?.marginSide || normalized.margin_side || "",
         page_region: loc?.page_region || loc?.pageRegion || normalized.page_region || "",
-      });
+        page_align: normalized.page_align || loc?.page_align || loc?.pageAlign || "",
+      };
+      draft.category = categoryForIssue(draft);
+      entries.push(draft);
     });
   });
 

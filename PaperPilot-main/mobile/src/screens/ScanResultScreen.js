@@ -5,9 +5,13 @@ import Svg, { Circle, Path } from "react-native-svg";
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
-import IssuesDetectedPanel, { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
+import IssuesDetectedPanel, {
+  categoryForIssue,
+  normalizeDetectedIssues,
+} from "../components/cockpit/IssuesDetectedPanel";
 import TraceDocumentViewer from "../components/cockpit/TraceDocumentViewer";
 import PrimaryButton from "../components/ui/PrimaryButton";
+import { PaperPilotMark } from "../components/shell/PaperPilotLogo";
 import {
   CATEGORY_STATUS_LABEL,
   compliancePercentFromUnits,
@@ -154,12 +158,12 @@ function CategoryScoreCard({ metric, score, status, displayTotal, displayNonComp
   );
 }
 
-function DownloadIcon() {
+function DownloadIcon({ color = colors.white }) {
   return (
     <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
       <Path
         d="M12 4v12m0 0 4-4m-4 4-4-4M4 20h16"
-        stroke={colors.white}
+        stroke={color}
         strokeWidth={2}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -246,6 +250,40 @@ function ScanResultBody({ navigation }) {
 
   const issueTypes = formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
   const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
+  // Same expansion as Issue Tracing — cards, rings, and header all use these counts.
+  const tracedEntries = normalizeDetectedIssues(formatChecks, result.pageCount || 0).entries;
+  const tracedByCategory = {};
+  tracedEntries.forEach((entry) => {
+    const key = entry.category || categoryForIssue(entry) || "Other";
+    tracedByCategory[key] = (tracedByCategory[key] || 0) + 1;
+  });
+  const categoryCards = categoryDisplays.map((row) => {
+    const name = String(row.metric || row.section || "").trim();
+    const traced = name ? tracedByCategory[name] : null;
+    const displayIssueCount = hasValue(traced)
+      ? traced
+      : hasValue(row.displayIssueCount)
+        ? row.displayIssueCount
+        : row.displayNonCompliant;
+    const total = row.displayTotal;
+    const displayNonCompliant =
+      hasValue(total) && hasValue(displayIssueCount)
+        ? Math.min(Math.max(0, Number(total)), Math.max(0, Number(displayIssueCount)))
+        : row.displayNonCompliant;
+    const displayCompliant =
+      hasValue(total) && hasValue(displayNonCompliant)
+        ? Math.max(0, Number(total) - Number(displayNonCompliant))
+        : row.displayCompliant;
+    const displayScore = compliancePercentFromUnits(total, displayNonCompliant);
+    return {
+      ...row,
+      displayIssueCount,
+      displayNonCompliant,
+      displayCompliant,
+      displayScore: displayScore != null ? displayScore : row.displayScore,
+    };
+  });
+
   // Header totals = sum of category cards so they always match what the user adds up.
   const {
     total: totalUnits,
@@ -253,7 +291,7 @@ function ScanResultBody({ navigation }) {
     nonCompliant: nonCompliantUnits,
   } = reconcileDisplayedUnits(
     { unitsChecked, unitsPassed, unitsFailed },
-    categoryDisplays,
+    categoryCards,
   );
   // Bar shares only — percent numbers are not shown in the public results UI.
   const fromOverallUnits =
@@ -266,14 +304,29 @@ function ScanResultBody({ navigation }) {
   const [shownRight, shownWrong] = roundSharesToTotal(fromOverallUnits, 2);
   const compliantShare = hasValue(shownRight) ? Math.max(0, Math.min(100, Number(shownRight))) : 0;
   const nonCompliantShare = hasValue(shownWrong) ? Math.max(0, Math.min(100, Number(shownWrong))) : 0;
-  const scannedDate = scannedAt
-    ? new Date(scannedAt).toLocaleDateString("en-US", {
+  const evaluatedCards = categoryCards.filter(
+    (row) => hasValue(row.displayTotal) && Number(row.displayTotal) > 0 && hasValue(row.displayScore),
+  );
+  const overallFromCards = evaluatedCards.length
+    ? evaluatedCards.reduce((sum, row) => sum + Number(row.displayScore), 0) / evaluatedCards.length
+    : overallScore;
+  const formatReportDate = (iso) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleString(undefined, {
         year: "numeric",
-        month: "long",
+        month: "short",
         day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
         timeZone: APP_TIME_ZONE,
-      })
-    : "—";
+      });
+    } catch {
+      return "—";
+    }
+  };
+  const scannedDate = formatReportDate(scannedAt);
+  const generatedDate = formatReportDate(new Date().toISOString());
 
   const versionLabel = `v${scanFlow.versionNumber || 1}.0`;
   const hasPreview = Boolean(scanFlow.file || cloudinaryUrl || documentPreview);
@@ -299,55 +352,68 @@ function ScanResultBody({ navigation }) {
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
-      <View style={styles.hero}>
-        <View style={styles.heroTopRow}>
-          <View style={styles.heroLinks}>
-            <Pressable onPress={openReferenceTracing} hitSlop={6}>
-              <Text style={styles.heroTrace}>Open reference tracing</Text>
-            </Pressable>
-          </View>
-          <Pressable
-            onPress={onDownload}
-            disabled={scanFlow.downloadBusy}
-            style={({ pressed }) => [
-              styles.downloadBtnTop,
-              pressed && { backgroundColor: "#f1f5f9" },
-              scanFlow.downloadBusy && { opacity: 0.5 },
-            ]}
-          >
-            <DownloadIcon />
-            <Text style={styles.downloadTextTop}>
-              {scanFlow.downloadBusy ? "Generating PDF…" : `Download · ${versionLabel}`}
-            </Text>
-          </Pressable>
+      <View style={styles.brandRow}>
+        <View style={styles.brandLeft}>
+          <PaperPilotMark size={40} />
+          <Text style={styles.brandWord}>PAPERPILOT</Text>
+          <Text style={styles.brandResults}>* RESULTS</Text>
         </View>
-        {scanFlow.downloadError ? (
-          <Text style={styles.downloadError} accessibilityRole="alert">
-            {scanFlow.downloadError}
+        <Pressable
+          onPress={onDownload}
+          disabled={scanFlow.downloadBusy}
+          style={({ pressed }) => [
+            styles.downloadBtnPrimary,
+            pressed && { backgroundColor: "#12ae99" },
+            scanFlow.downloadBusy && { opacity: 0.5 },
+          ]}
+          accessibilityRole="button"
+        >
+          <DownloadIcon color="#fff" />
+          <Text style={styles.downloadTextPrimary}>
+            {scanFlow.downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
           </Text>
-        ) : null}
-        <Text style={styles.scope}>SCOPE: FORMATTING ONLY</Text>
-        <Text style={styles.heroTitle}>{documentTitle}</Text>
-        {campus || college ? (
-          <Text style={styles.heroSub}>{[college, campus].filter(Boolean).join(" · ")}</Text>
-        ) : null}
-        <View style={styles.metaTable}>
-          <View style={styles.metaRow}>
+        </Pressable>
+      </View>
+      {scanFlow.downloadError ? (
+        <Text style={styles.downloadError} accessibilityRole="alert">
+          {scanFlow.downloadError}
+        </Text>
+      ) : null}
+
+      <View style={styles.metaCard}>
+        <View style={styles.metaGrid}>
+          <View style={styles.metaCell}>
+            <Text style={styles.metaKey}>Document</Text>
+            <Text style={styles.metaValue} numberOfLines={2}>
+              {documentTitle}
+            </Text>
+            {campus || college ? (
+              <Text style={styles.metaSub} numberOfLines={1}>
+                {[college, campus].filter(Boolean).join(" · ")}
+              </Text>
+            ) : null}
+          </View>
+          <View style={styles.metaCell}>
+            <Text style={styles.metaKey}>Citation style</Text>
+            <Text style={styles.metaValue}>
+              {citationStyle} · {versionLabel}
+            </Text>
+          </View>
+          <View style={styles.metaCell}>
             <Text style={styles.metaKey}>Scanned</Text>
             <Text style={styles.metaValue}>{scannedDate}</Text>
           </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaKey}>Version</Text>
-            <Text style={styles.metaVersion}>{versionLabel}</Text>
-          </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaKey}>Citation style</Text>
-            <Text style={styles.metaValue}>{citationStyle}</Text>
+          <View style={styles.metaCell}>
+            <Text style={styles.metaKey}>Generated</Text>
+            <Text style={styles.metaValue}>{generatedDate}</Text>
           </View>
         </View>
-        <Text style={styles.heroNote}>
-          Structure and content are not evaluated — results reflect formatting compliance only.
-        </Text>
+      </View>
+
+      <View style={styles.heroActions}>
+        <Pressable onPress={openReferenceTracing} hitSlop={6} accessibilityRole="button">
+          <Text style={styles.heroTrace}>Open issue tracing &amp; XAI</Text>
+        </Pressable>
       </View>
 
       <View style={{ gap: 12 }}>
@@ -372,17 +438,17 @@ function ScanResultBody({ navigation }) {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardKicker}>Overall Score</Text>
+        <Text style={styles.cardKicker}>Overall compliance score</Text>
         <CircularScore
-          score={overallScore}
-          categoryCount={Array.isArray(overallCategories) ? overallCategories.length : null}
+          score={overallFromCards}
+          categoryCount={evaluatedCards.length || (Array.isArray(overallCategories) ? overallCategories.length : null)}
         />
       </View>
 
       <View style={styles.card}>
         <Text style={styles.cardKicker}>Score Breakdown</Text>
         <View style={styles.catGrid}>
-          {categoryDisplays.map((item) => (
+          {categoryCards.map((item) => (
             <CategoryScoreCard
               key={item.metric || item.section}
               metric={item.metric || item.section}
@@ -430,9 +496,8 @@ function ScanResultBody({ navigation }) {
             </Text>
             {isApproximateTracing(pagination) ? (
               <Text style={styles.approxNote}>
-                Approximate locations — this Word file was scanned without exact page breaks.
-                Highlights may be near the issue. For precise tracing, upload a PDF of the same
-                manuscript.
+                Approximate locations — page breaks were estimated. Highlights may be near the
+                issue. For precise tracing, upload a PDF of the same manuscript.
               </Text>
             ) : null}
           </View>
@@ -501,51 +566,61 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textAlign: "center",
   },
-  hero: { borderRadius: 12, backgroundColor: "#172033", padding: 20 },
-  heroTopRow: {
+  brandRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 8,
+    gap: 12,
   },
-  heroLinks: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
-  heroTrace: { fontSize: 11, fontWeight: "600", color: "#cbd5e1" },
-  downloadBtnTop: {
+  brandLeft: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10, minWidth: 0, flex: 1 },
+  brandWord: {
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    color: "#172033",
+  },
+  brandResults: {
+    fontSize: 14,
+    fontWeight: "600",
+    letterSpacing: 1.2,
+    color: "#4a5568",
+  },
+  downloadBtnPrimary: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.45)",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  downloadTextTop: { fontSize: 11, fontWeight: "700", color: "#e2e8f0" },
-  scope: {
-    alignSelf: "flex-start",
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(22,191,168,0.4)",
-    backgroundColor: "rgba(22,191,168,0.1)",
+    gap: 8,
+    minHeight: 44,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: "#bfeee5",
+    backgroundColor: "#16bfa8",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  downloadTextPrimary: { fontSize: 12, fontWeight: "700", color: colors.white },
+  metaCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  metaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 16 },
+  metaCell: { width: "45%", minWidth: 140, flexGrow: 1 },
+  metaKey: {
     fontSize: 10,
     fontWeight: "700",
-    letterSpacing: 1.5,
-    color: colors.accent,
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    color: "#94a3b8",
   },
-  heroTitle: { marginTop: 8, fontSize: 20, lineHeight: 26, fontWeight: "700", color: colors.white },
-  heroSub: { marginTop: 4, fontSize: 14, color: "#94a3b8" },
-  metaTable: { marginTop: 16, gap: 4 },
-  metaRow: { flexDirection: "row" },
-  metaKey: { width: 96, fontSize: 12, color: "#64748b" },
-  metaValue: { flex: 1, fontSize: 12, fontWeight: "500", color: "#e2e8f0" },
-  metaVersion: { flex: 1, fontSize: 12, color: "#94a3b8" },
-  heroNote: { marginTop: 16, fontSize: 12, lineHeight: 17, color: "#64748b" },
+  metaValue: { marginTop: 4, fontSize: 13, fontWeight: "700", color: "#0f172a" },
+  metaSub: { marginTop: 2, fontSize: 12, color: "#64748b" },
+  heroActions: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  heroTrace: { fontSize: 13, fontWeight: "600", color: "#0d9488", textDecorationLine: "underline" },
+  downloadError: { marginTop: 4, fontSize: 12, color: colors.rose },
   dualRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -666,7 +741,6 @@ const styles = StyleSheet.create({
     color: "#475569",
   },
   tagPass: { borderColor: "#a7f3d0", backgroundColor: "#ecfdf5", color: "#047857" },
-  downloadError: { marginTop: 12, fontSize: 12, color: "#f43f5e" },
   downloadBtn: {
     marginTop: 20,
     flexDirection: "row",

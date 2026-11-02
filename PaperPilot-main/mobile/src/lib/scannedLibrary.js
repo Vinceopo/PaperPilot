@@ -18,6 +18,57 @@ export function versionScanId(version) {
   return String(version?.scanId || version?.scanResult?.scanId || "");
 }
 
+// Device storage is limited; a long thesis can report thousands of issue
+// locations, so stored copies are capped and the full result is refetched by scanId.
+const LOCATION_CAPS = [300, 80, 15, 0];
+
+function capLocations(list, cap) {
+  const locations = Array.isArray(list) ? list : [];
+  return locations.length > cap ? locations.slice(0, cap) : locations;
+}
+
+function compactVersion(version, cap) {
+  let trimmed = Boolean(version.trimmed);
+  const issues = (version.issues || []).map((issue) => {
+    const locations = capLocations(issue.locations, cap);
+    if (locations.length !== (issue.locations || []).length) trimmed = true;
+    return { ...issue, locations, count: issue.count == null ? null : issue.count };
+  });
+  let scanResult = version.scanResult;
+  if (scanResult && typeof scanResult === "object") {
+    const { documentPreview: _preview, ...rest } = scanResult;
+    scanResult = {
+      ...rest,
+      formatChecks: (rest.formatChecks || []).map((check) => {
+        const locations = capLocations(check.locations, cap);
+        if (locations.length !== (check.locations || []).length) trimmed = true;
+        return { ...check, locations, count: check.count == null ? null : check.count };
+      }),
+    };
+  }
+  return { ...version, scanId: versionScanId(version) || undefined, issues, scanResult, trimmed };
+}
+
+function compactLibrary(items, cap) {
+  return (items || []).map((m) => ({
+    ...m,
+    versions: (m.versions || []).map((v) => compactVersion(v, cap)),
+  }));
+}
+
+function summaryOnlyLibrary(items) {
+  return (items || []).map((m) => ({
+    ...m,
+    versions: (m.versions || []).map((v) => ({
+      ...v,
+      scanId: versionScanId(v) || undefined,
+      issues: (v.issues || []).map(({ locations: _locations, ...issue }) => issue),
+      scanResult: null,
+      trimmed: true,
+    })),
+  }));
+}
+
 export async function loadDismissedScanIds(uid) {
   try {
     const parsed = JSON.parse((await AsyncStorage.getItem(dismissedKey(uid))) || "[]");
@@ -60,12 +111,18 @@ export async function loadScannedManuscripts(uid) {
   }
 }
 
+/** Returns false only when even the summary-only copy could not be written. */
 export async function saveScannedManuscripts(items, uid) {
-  try {
-    await AsyncStorage.setItem(storageKey(uid), JSON.stringify(items || []));
-  } catch {
-    // Ignore quota failures.
+  const attempts = [...LOCATION_CAPS.map((cap) => () => compactLibrary(items, cap)), () => summaryOnlyLibrary(items)];
+  for (const build of attempts) {
+    try {
+      await AsyncStorage.setItem(storageKey(uid), JSON.stringify(build()));
+      return true;
+    } catch {
+      // Try a tighter cap.
+    }
   }
+  return false;
 }
 
 function versionTime(version) {

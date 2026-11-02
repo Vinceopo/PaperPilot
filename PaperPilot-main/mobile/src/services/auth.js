@@ -8,6 +8,50 @@ import {
 import { ref, runTransaction, set } from "firebase/database";
 
 export const REMEMBER_ME_KEY = "paperpilot.rememberMe";
+const PASSWORD_CHANGED_KEY = "paperpilot.passwordChanged";
+const LOGIN_NOTICE_KEY = "paperpilot.loginNotice";
+
+export async function markPasswordChanged() {
+  try {
+    await AsyncStorage.setItem(PASSWORD_CHANGED_KEY, "1");
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+export async function hasPasswordChangedNotice() {
+  try {
+    return (await AsyncStorage.getItem(PASSWORD_CHANGED_KEY)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export async function clearPasswordChangedNotice() {
+  try {
+    await AsyncStorage.removeItem(PASSWORD_CHANGED_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+export async function setLoginNotice(message) {
+  try {
+    await AsyncStorage.setItem(LOGIN_NOTICE_KEY, message || "");
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+export async function takeLoginNotice() {
+  try {
+    const message = (await AsyncStorage.getItem(LOGIN_NOTICE_KEY)) || "";
+    await AsyncStorage.removeItem(LOGIN_NOTICE_KEY);
+    return message;
+  } catch {
+    return "";
+  }
+}
 
 /** Only these mean the session is truly dead — never sign out on network blips. */
 const FATAL_AUTH_CODES = new Set([

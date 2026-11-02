@@ -18,6 +18,7 @@ import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import UploadJourneyModal, {
   ShowStepsRow,
+  hydrateUploadJourneySeen,
   markUploadJourneySeen,
   uploadJourneySeen,
 } from "../components/cockpit/UploadJourneyModal";
@@ -279,12 +280,20 @@ export default function UploadScreen({ navigation }) {
   const showingUploadFace = scanFlow.step === "idle" || scanFlow.step === "fileSelected";
 
   useEffect(() => {
-    if (!showingUploadFace || uploadJourneySeen()) return;
-    setJourneyOpen(true);
+    let cancelled = false;
+    (async () => {
+      await hydrateUploadJourneySeen();
+      if (cancelled) return;
+      if (!showingUploadFace || uploadJourneySeen()) return;
+      setJourneyOpen(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [showingUploadFace]);
 
   function dismissJourney() {
-    markUploadJourneySeen();
+    void markUploadJourneySeen();
     setJourneyOpen(false);
   }
 
