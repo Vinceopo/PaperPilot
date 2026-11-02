@@ -20,5 +20,5 @@ function createAuth(firebaseApp) {
 
 export const firebaseReady = configured;
 export const auth = app ? createAuth(app) : null;
-/** Realtime Database — same backend as the web app (not Firestore). */
+/** Realtime Database - same backend as the web app (not Firestore). */
 export const db = app ? getDatabase(app) : null;

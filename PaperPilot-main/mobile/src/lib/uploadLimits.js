@@ -65,7 +65,7 @@ function hasExpectedSignature(file, ext) {
   try {
     head = readHead(file.uri, 1024);
   } catch {
-    // Unreadable here (e.g. provider URI) — the API validates the contents again.
+    // Unreadable here (e.g. provider URI) - the API validates the contents again.
     return true;
   }
   if (ext === ".pdf") {

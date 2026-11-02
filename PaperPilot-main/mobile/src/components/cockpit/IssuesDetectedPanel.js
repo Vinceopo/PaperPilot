@@ -2,7 +2,7 @@
  * IssuesDetectedPanel
  *
  * Lists every detected formatting issue in one place so authors can fix them
- * together. Severity pills are optional filters — default view is ALL issues.
+ * together. Severity pills are optional filters - default view is ALL issues.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -13,6 +13,45 @@ import { normalizeIssueLocation } from "../../lib/scanMapper";
 
 /** Issue cards rendered per "Show more" step; thousands at once would stall the phone. */
 const RENDER_STEP = 40;
+
+const CATEGORY_ORDER = [
+  "Fonts",
+  "Margins",
+  "Indentation",
+  "Spacing",
+  "Alignment",
+  "Pagination",
+  "Captions",
+  "Citations",
+  "Other",
+];
+
+/** Maps a finding to the same category buckets used on web Score Breakdown / Issue Tracing. */
+export function categoryForIssue(entry = {}) {
+  const section = String(entry.section || entry.category || "").trim();
+  if (section) {
+    const known = CATEGORY_ORDER.find((name) => name.toLowerCase() === section.toLowerCase());
+    return known || section;
+  }
+  const type = String(entry.issue_type || "").toLowerCase();
+  if (type.startsWith("font") || type.includes("heading")) return "Fonts";
+  if (type.includes("margin") || type.includes("paper") || type.includes("orientation")) {
+    return "Margins";
+  }
+  if (type.includes("indent")) return "Indentation";
+  if (type.includes("spacing") || type.includes("line_spacing") || type.includes("word_spacing")) {
+    return "Spacing";
+  }
+  if (type.includes("align")) return "Alignment";
+  if (type.includes("pagination") || type.includes("page_number") || type.includes("page_token")) {
+    return "Pagination";
+  }
+  if (type.includes("caption") || type.startsWith("table_") || type.startsWith("figure_")) {
+    return "Captions";
+  }
+  if (type.includes("citation")) return "Citations";
+  return "Other";
+}
 
 const SEVERITY = {
   minor: {
@@ -55,44 +94,6 @@ const SEVERITY = {
     tagText: "#be123c",
   },
 };
-
-export const CATEGORY_ORDER = [
-  "Fonts",
-  "Margins",
-  "Indentation",
-  "Spacing",
-  "Alignment",
-  "Pagination",
-  "Captions",
-  "Citations",
-  "Other",
-];
-
-export function categoryForIssue(entry = {}) {
-  const section = String(entry.section || entry.category || "").trim();
-  if (section) {
-    const known = CATEGORY_ORDER.find((name) => name.toLowerCase() === section.toLowerCase());
-    return known || section;
-  }
-  const type = String(entry.issue_type || "").toLowerCase();
-  if (type.startsWith("font") || type.includes("heading")) return "Fonts";
-  if (type.includes("margin") || type.includes("paper") || type.includes("orientation")) {
-    return "Margins";
-  }
-  if (type.includes("indent")) return "Indentation";
-  if (type.includes("spacing") || type.includes("line_spacing") || type.includes("word_spacing")) {
-    return "Spacing";
-  }
-  if (type.includes("align")) return "Alignment";
-  if (type.includes("pagination") || type.includes("page_number") || type.includes("page_token")) {
-    return "Pagination";
-  }
-  if (type.includes("caption") || type.startsWith("table_") || type.startsWith("figure_")) {
-    return "Captions";
-  }
-  if (type.includes("citation")) return "Citations";
-  return "Other";
-}
 
 function normalizeSeverity(raw, result) {
   const v = String(raw || "").toLowerCase();
@@ -157,48 +158,35 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
       const locExplanation = typeof loc?.explanation === "string" ? loc.explanation.trim() : "";
       const locRecommendation =
         typeof loc?.recommendation === "string" ? loc.recommendation.trim() : "";
-      const section = normalized.section || check.section || "General";
-      const alignPageMention = (text) => {
-        if (page == null || !text) return text;
-        return String(text)
-          .replace(/\bpage\s+\d+\b/gi, `page ${page}`)
-          .replace(/(page number\s+['"]?)\d+(['"]?)/gi, `$1${page}$2`)
-          .replace(/(shows the page number\s+['"]?)\d+(['"]?)/gi, `$1${page}$2`);
-      };
-      const draft = {
+      entries.push({
         id: `${check.id || check.issue_type || "chk"}-${checkIdx}-${locIdx}`,
         issue_type: issueType,
         page,
         line,
-        section,
+        section: normalized.section || check.section || "General",
         severity,
         title: check.name || check.title || check.issue_type || "Formatting issue",
-        finding: alignPageMention(
+        finding:
           locSummary ||
-            check.finding ||
-            check.details ||
-            check.description ||
-            check.name ||
-            "Formatting discrepancy detected"
-        ),
-        explanation: alignPageMention(
+          check.finding ||
+          check.details ||
+          check.description ||
+          check.name ||
+          "Formatting discrepancy detected",
+        explanation:
           locExplanation ||
-            check.explanation ||
-            check.details ||
-            check.description ||
-            "This formatting rule does not match the confirmed mechanics."
-        ),
-        recommendation: alignPageMention(locRecommendation || check.recommendation || ""),
+          check.explanation ||
+          check.details ||
+          check.description ||
+          "This formatting rule does not match the confirmed mechanics.",
+        recommendation: locRecommendation || check.recommendation || "",
         result: check.result,
         location: normalized,
         bbox: normalized.bbox,
         excerpt: normalized.excerpt,
         margin_side: loc?.margin_side || loc?.marginSide || normalized.margin_side || "",
         page_region: loc?.page_region || loc?.pageRegion || normalized.page_region || "",
-        page_align: normalized.page_align || loc?.page_align || loc?.pageAlign || "",
-      };
-      draft.category = categoryForIssue(draft);
-      entries.push(draft);
+      });
     });
   });
 
@@ -283,44 +271,58 @@ function CountBadge({ count, color }) {
   );
 }
 
-function IssueItem({ entry }) {
+function IssueItem({ entry, onTrace }) {
   const s = SEVERITY[entry.severity] || SEVERITY.minor;
-  return (
-    <View style={styles.item}>
-      <View style={styles.itemRow}>
-        <View style={styles.lineBadge}>
-          <Text style={[styles.lineBadgeText, entry.line == null && { color: "#94a3b8" }]}>
-            {entry.line != null ? `Line ${entry.line}` : "Page"}
-          </Text>
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={styles.tagRow}>
-            <View style={[styles.sevTag, { backgroundColor: s.tagBg, borderColor: s.tagBorder }]}>
-              <Text style={[styles.sevTagText, { color: s.tagText }]}>{s.label}</Text>
-            </View>
-            <View style={styles.aiTag}>
-              <Text style={styles.section}>{entry.section}</Text>
-              <View style={styles.aiIconBox} accessibilityLabel="AI-detected severity">
-                <SparkleIcon size={14} />
-              </View>
+  const body = (
+    <View style={styles.itemRow}>
+      <View style={styles.lineBadge}>
+        <Text style={[styles.lineBadgeText, entry.line == null && { color: "#94a3b8" }]}>
+          {entry.line != null ? `Line ${entry.line}` : "Page"}
+        </Text>
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={styles.tagRow}>
+          <View style={[styles.sevTag, { backgroundColor: s.tagBg, borderColor: s.tagBorder }]}>
+            <Text style={[styles.sevTagText, { color: s.tagText }]}>{s.label}</Text>
+          </View>
+          <View style={styles.aiTag}>
+            <Text style={styles.section}>{entry.section}</Text>
+            <View style={styles.aiIconBox} accessibilityLabel="AI-detected severity">
+              <SparkleIcon size={14} />
             </View>
           </View>
-          <Text style={styles.finding}>{entry.finding}</Text>
-          <Text style={styles.explanation}>{entry.explanation}</Text>
-          {entry.recommendation ? (
-            <View style={styles.recBox}>
-              <CheckCircleIcon />
-              <Text style={styles.recText}>{entry.recommendation}</Text>
-            </View>
-          ) : null}
-          <Text style={styles.locFoot}>
-            {entry.page != null ? `Page ${entry.page}` : "Document-level"}
-            {entry.line != null ? `, Line ${entry.line}` : ""}
-            {entry.section ? ` · ${entry.section}` : ""}
-          </Text>
         </View>
+        <Text style={styles.finding}>{entry.finding}</Text>
+        <Text style={styles.explanation}>{entry.explanation}</Text>
+        {entry.recommendation ? (
+          <View style={styles.recBox}>
+            <CheckCircleIcon />
+            <Text style={styles.recText}>{entry.recommendation}</Text>
+          </View>
+        ) : null}
+        <Text style={styles.locFoot}>
+          {entry.page != null ? `Page ${entry.page}` : "Document-level"}
+          {entry.line != null ? `, Line ${entry.line}` : ""}
+          {entry.section ? ` · ${entry.section}` : ""}
+        </Text>
+        {onTrace ? <Text style={styles.traceHint}>Tap to trace in document</Text> : null}
       </View>
     </View>
+  );
+
+  if (!onTrace) {
+    return <View style={styles.item}>{body}</View>;
+  }
+
+  return (
+    <Pressable
+      onPress={() => onTrace(entry)}
+      accessibilityRole="button"
+      accessibilityLabel={`Trace ${entry.finding || "issue"} in document`}
+      style={({ pressed }) => [styles.item, styles.itemTraceable, pressed && styles.itemPressed]}
+    >
+      {body}
+    </Pressable>
   );
 }
 
@@ -328,6 +330,7 @@ export default function IssuesDetectedPanel({
   formatChecks = [],
   pageCount: pageCountProp = 0,
   pagination = null,
+  onTraceIssue = null,
 }) {
   const [severityFilter, setSeverityFilter] = useState(null);
   const [selectedPage, setSelectedPage] = useState("all");
@@ -440,7 +443,7 @@ export default function IssuesDetectedPanel({
         </Text>
         <Text style={styles.headerBody}>
           {counts.critical} critical · {counts.moderate} moderate · {counts.minor} minor. Each card
-          explains what failed, why it matters, and how to fix it — filter by severity or page if you
+          explains what failed, why it matters, and how to fix it - filter by severity or page if you
           want a smaller pass.
           {hiddenLocations > 0
             ? ` ${hiddenLocations} additional matching locations are counted in the totals.`
@@ -483,7 +486,7 @@ export default function IssuesDetectedPanel({
             <Text style={styles.showAll}>Show all issues ×</Text>
           </Pressable>
         ) : (
-          <Text style={styles.filterHint}>Optional filter only — default is every issue</Text>
+          <Text style={styles.filterHint}>Optional filter only - default is every issue</Text>
         )}
       </View>
 
@@ -582,7 +585,7 @@ export default function IssuesDetectedPanel({
                 </View>
                 {block.items.map((entry, index) => (
                   <View key={entry.id} style={index > 0 ? styles.itemDivider : null}>
-                    <IssueItem entry={entry} />
+                    <IssueItem entry={entry} onTrace={onTraceIssue} />
                   </View>
                 ))}
               </View>
@@ -743,6 +746,8 @@ const styles = StyleSheet.create({
   sevTagText: { fontSize: 10, fontWeight: "700", letterSpacing: 0.5, textTransform: "uppercase" },
   itemDivider: { borderTopWidth: 1, borderTopColor: "rgba(226,232,240,0.7)" },
   item: { backgroundColor: "rgba(255,255,255,0.7)", paddingHorizontal: 14, paddingVertical: 14 },
+  itemTraceable: { minHeight: 48 },
+  itemPressed: { backgroundColor: "rgba(220,247,242,0.85)" },
   itemRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   lineBadge: {
     marginTop: 2,
@@ -774,6 +779,14 @@ const styles = StyleSheet.create({
   },
   recText: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: "500", color: "#0d7a6a" },
   locFoot: { marginTop: 8, fontSize: 11, color: "#94a3b8" },
+  traceHint: {
+    marginTop: 8,
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    color: colors.accentText,
+  },
   moreBtn: {
     alignItems: "center",
     borderWidth: 1,

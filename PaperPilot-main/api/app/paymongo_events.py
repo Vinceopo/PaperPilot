@@ -125,11 +125,11 @@ def fulfill_checkout_paid(resource: dict) -> bool:
 
 
 def fulfill_link_paid(resource: dict) -> bool:
-    """Payment Link purchases — same Premium activation path when uid is in metadata."""
+    """Payment Link purchases - same Premium activation path when uid is in metadata."""
     meta = _metadata(resource)
     uid = str(meta.get("uid") or "").strip()
     if not uid:
-        logger.info("link.payment.paid without uid — acknowledged only")
+        logger.info("link.payment.paid without uid - acknowledged only")
         return False
     billing_period = str(meta.get("billing_period") or "monthly").lower()
     if billing_period not in ("monthly", "annual"):
@@ -201,7 +201,7 @@ def _dispatch(event_type: str, resource: dict) -> bool:
             uid = str((pending or {}).get("owner_uid") or "")
         if not uid:
             # May already have been fulfilled via checkout_session.payment.paid
-            logger.info("payment.paid without uid — ack id=%s", resource.get("id"))
+            logger.info("payment.paid without uid - ack id=%s", resource.get("id"))
             return False
         attrs = _attrs(resource)
         amount = attrs.get("amount")
@@ -225,7 +225,7 @@ def _dispatch(event_type: str, resource: dict) -> bool:
             mark_checkout_failed(str(cs_id), reason=str(attrs.get("status") or "failed"))
         uid = str(meta.get("uid") or "").strip()
         if uid:
-            # Record failure only — never auto-downgrade an active Premium on a failed attempt.
+            # Record failure only - never auto-downgrade an active Premium on a failed attempt.
             flag_payment_issue(uid, reason="payment.failed", event_type=event_type)
         return True
 
@@ -334,7 +334,7 @@ def _dispatch(event_type: str, resource: dict) -> bool:
         "accounts.identity_verifications.passed",
         "accounts.identity_verifications.failed",
     ):
-        # Merchant KYC for our PayMongo account — not user-facing.
+        # Merchant KYC for our PayMongo account - not user-facing.
         log_merchant_event(event_type, resource)
         return True
 

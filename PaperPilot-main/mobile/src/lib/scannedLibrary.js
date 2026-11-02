@@ -18,57 +18,6 @@ export function versionScanId(version) {
   return String(version?.scanId || version?.scanResult?.scanId || "");
 }
 
-// Device storage is limited; a long thesis can report thousands of issue
-// locations, so stored copies are capped and the full result is refetched by scanId.
-const LOCATION_CAPS = [300, 80, 15, 0];
-
-function capLocations(list, cap) {
-  const locations = Array.isArray(list) ? list : [];
-  return locations.length > cap ? locations.slice(0, cap) : locations;
-}
-
-function compactVersion(version, cap) {
-  let trimmed = Boolean(version.trimmed);
-  const issues = (version.issues || []).map((issue) => {
-    const locations = capLocations(issue.locations, cap);
-    if (locations.length !== (issue.locations || []).length) trimmed = true;
-    return { ...issue, locations, count: issue.count == null ? null : issue.count };
-  });
-  let scanResult = version.scanResult;
-  if (scanResult && typeof scanResult === "object") {
-    const { documentPreview: _preview, ...rest } = scanResult;
-    scanResult = {
-      ...rest,
-      formatChecks: (rest.formatChecks || []).map((check) => {
-        const locations = capLocations(check.locations, cap);
-        if (locations.length !== (check.locations || []).length) trimmed = true;
-        return { ...check, locations, count: check.count == null ? null : check.count };
-      }),
-    };
-  }
-  return { ...version, scanId: versionScanId(version) || undefined, issues, scanResult, trimmed };
-}
-
-function compactLibrary(items, cap) {
-  return (items || []).map((m) => ({
-    ...m,
-    versions: (m.versions || []).map((v) => compactVersion(v, cap)),
-  }));
-}
-
-function summaryOnlyLibrary(items) {
-  return (items || []).map((m) => ({
-    ...m,
-    versions: (m.versions || []).map((v) => ({
-      ...v,
-      scanId: versionScanId(v) || undefined,
-      issues: (v.issues || []).map(({ locations: _locations, ...issue }) => issue),
-      scanResult: null,
-      trimmed: true,
-    })),
-  }));
-}
-
 export async function loadDismissedScanIds(uid) {
   try {
     const parsed = JSON.parse((await AsyncStorage.getItem(dismissedKey(uid))) || "[]");
@@ -96,7 +45,7 @@ export function normalizeTitle(title) {
     .trim()
     .toLowerCase()
     .replace(/\.(pdf|docx)$/i, "")
-    .replace(/[\s_–—−-]+/g, " ")
+    .replace(/[\s_\-\u2013\u2014\u2212]+/g, " ")
     .replace(/\s+/g, " ");
 }
 
@@ -111,18 +60,12 @@ export async function loadScannedManuscripts(uid) {
   }
 }
 
-/** Returns false only when even the summary-only copy could not be written. */
 export async function saveScannedManuscripts(items, uid) {
-  const attempts = [...LOCATION_CAPS.map((cap) => () => compactLibrary(items, cap)), () => summaryOnlyLibrary(items)];
-  for (const build of attempts) {
-    try {
-      await AsyncStorage.setItem(storageKey(uid), JSON.stringify(build()));
-      return true;
-    } catch {
-      // Try a tighter cap.
-    }
+  try {
+    await AsyncStorage.setItem(storageKey(uid), JSON.stringify(items || []));
+  } catch {
+    // Ignore quota failures.
   }
-  return false;
 }
 
 function versionTime(version) {
@@ -279,7 +222,7 @@ export function mergeServerScans(items, summaries, dismissed = new Set(), delete
         id: manuscriptId || `doc-${scanId}`,
         serverManuscriptId: manuscriptId || undefined,
         title,
-        institution: "—",
+        institution: "-",
         citationStyle: "APA",
         createdThisMonth: String(scan.created_at || "").startsWith(monthPrefix),
         versions: [],
@@ -387,7 +330,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
       ...existing,
       id: documentId,
       title: title || existing.title,
-      institution: scanResult.campus || existing.institution || "—",
+      institution: scanResult.campus || existing.institution || "-",
       citationStyle: scanResult.citationStyle || existing.citationStyle || "APA",
       versions: [version, ...(existing.versions || [])],
     };
@@ -395,7 +338,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
     list.unshift({
       id: documentId,
       title,
-      institution: scanResult.campus || scanResult.college || "—",
+      institution: scanResult.campus || scanResult.college || "-",
       citationStyle: scanResult.citationStyle || "APA",
       createdThisMonth: true,
       versions: [version],
@@ -436,7 +379,7 @@ export function versionToScanResult(manuscript, version) {
   return {
     documentId: manuscript?.id || version.manuscriptId,
     documentTitle: manuscript?.title || "Untitled",
-    campus: manuscript?.institution || "—",
+    campus: manuscript?.institution || "-",
     citationStyle: manuscript?.citationStyle || "APA",
     scannedAt: version.scannedAt || version.scannedDate,
     overallScore: version.score,

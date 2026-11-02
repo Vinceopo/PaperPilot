@@ -107,7 +107,7 @@ function splitOversizedSection(wrapper, page) {
 /**
  * Revised DOCX files often lose Word's lastRenderedPageBreak markers, so docx-preview
  * emits one (or a few) tall sections. Split every oversized section into letter pages
- * so issue page N maps to preview section N — never clamp page 12 onto page 2.
+ * so issue page N maps to preview section N - never clamp page 12 onto page 2.
  */
 function paginateOversizedDocxSection(host) {
   const wrapper = host?.querySelector(".docx-wrapper");
@@ -134,7 +134,7 @@ function targetFrom(scrollTarget, highlight) {
   const pagination = String(section).toLowerCase() === "pagination";
   return {
     page: merged.page ?? null,
-    // Pagination is page-level — never pin to body line 1 (that over-highlights).
+    // Pagination is page-level - never pin to body line 1 (that over-highlights).
     line: pagination ? null : merged.line ?? null,
     bbox: pagination ? null : merged.bbox || null,
     excerpt: pagination ? "" : String(merged.excerpt || "").trim(),
@@ -199,7 +199,7 @@ function paintMarginHit(pageEl, side, severity, align = "") {
   band.style.setProperty("--pp-hit-edge", paint.edge);
   const style = edgeBandStyle(side, align);
   if (!style) {
-    // Unknown side — outline only, never flood the whole page.
+    // Unknown side - outline only, never flood the whole page.
     band.style.inset = "0";
     band.style.background = "transparent";
     band.style.boxShadow = `inset 0 0 0 4px ${paint.edge}`;
@@ -287,7 +287,7 @@ function blobUrlForPdfFile(file) {
 function PdfFrame({ src, page, frameHeight = 0 }) {
   const iframeRef = useRef(null);
   const base = String(src || "").split("#")[0];
-  // Stable src — changing #page= reloads the entire embedded PDF in most browsers.
+  // Stable src - changing #page= reloads the entire embedded PDF in most browsers.
   const iframeSrc = `${base}#toolbar=1&navpanes=0&scrollbar=1`;
   const height = frameHeight > 40 ? frameHeight : undefined;
 
@@ -495,7 +495,7 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
     if (target.page == null) return;
     const wanted = Math.round(Number(target.page));
     if (!Number.isFinite(wanted) || wanted < 1) return;
-    // Prefer the exact scanner page — do not clamp a high page onto the last sheet.
+    // Prefer the exact scanner page - do not clamp a high page onto the last sheet.
     let pageNumber = wanted;
     let pageEl = scroller.querySelector(`[data-page="${pageNumber}"]`);
     if (!pageEl && pages.length) {
@@ -621,7 +621,7 @@ function docxBody(section) {
 }
 
 function readDocxBlocks(section) {
-  // Include headings/lists — scanner line counts cover those blocks, not only <p>.
+  // Include headings/lists - scanner line counts cover those blocks, not only <p>.
   return [...docxBody(section).querySelectorAll("p, h1, h2, h3, h4, h5, h6, li")].map((el) => {
     const style = getComputedStyle(el);
     const fontSize = parseFloat(style.fontSize) || 16;
@@ -687,7 +687,7 @@ function textRangesIn(section, needle) {
         }
         return [nodes[0].node, 0];
       };
-      // Collect every occurrence — adjacent issues often share a short needle.
+      // Collect every occurrence - adjacent issues often share a short needle.
       let searchFrom = 0;
       while (searchFrom < text.length) {
         const index = text.indexOf(needle, searchFrom);
@@ -819,7 +819,7 @@ function fallbackDocxBox(pageEl, line, scroller) {
   const body = docxBody(pageEl);
   const rect = body.getBoundingClientRect();
   const base = contentBox(scroller, rect);
-  // Thin band near the top of the page body — never flood the whole sheet.
+  // Thin band near the top of the page body - never flood the whole sheet.
   const height = Math.max(18, Math.min(36, base.height * 0.04 || 24));
   return {
     rects: [{ top: base.top + 8, left: base.left, width: Math.max(base.width, 24), height }],
@@ -1060,7 +1060,7 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
   const marginTrace = isMarginTarget(traced);
   const paginationBand = shouldUsePaginationEdge(traced);
   const previewPageNums = pages.map((page, index) => pageNumberFromIndex(page.pageIndex, index));
-  // Exact page only — never paint page-99 issues onto page 2.
+  // Exact page only - never paint page-99 issues onto page 2.
   const tracedPage =
     traced.page != null && previewPageNums.includes(Number(traced.page))
       ? Number(traced.page)

@@ -1,5 +1,5 @@
 /**
- * Shared score-band helpers — used by table badges, border bars, stat cards,
+ * Shared score-band helpers - used by table badges, border bars, stat cards,
  * and the version detail view so colors/labels can never disagree.
  */
 
@@ -79,6 +79,6 @@ export function manuscriptSummary(manuscript) {
     scannedDate: latest?.scannedDate || "",
     latest,
     versionCount,
-    latestVersionLabel: latest ? `v${latest.versionNumber}.0` : "—",
+    latestVersionLabel: latest ? `v${latest.versionNumber}.0` : "-",
   };
 }

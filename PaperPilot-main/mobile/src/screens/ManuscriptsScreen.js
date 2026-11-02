@@ -31,7 +31,7 @@ const COLUMNS = { title: 210, scanned: 112, score: 84, status: 160, actions: 96 
 const TABLE_WIDTH = Object.values(COLUMNS).reduce((sum, w) => sum + w, 0);
 
 function formatDate(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     return new Date(iso + (iso.length <= 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, {
       year: "numeric",
@@ -55,7 +55,7 @@ function StatCard({ label, value, sub, accent }) {
 }
 
 /**
- * My Manuscripts — checker/viewer only (no content editing).
+ * My Manuscripts - checker/viewer only (no content editing).
  * Only manuscripts the user has scanned appear here.
  */
 export default function ManuscriptsScreen({ navigation }) {

@@ -2,7 +2,7 @@
 
 This module is the single source of truth for every number shown on the results screen.
 It is kept byte-identical in ``machinelearning/app/scoring.py`` and ``api/app/scoring.py``
-(a test enforces this). No machine learning runs here — only counting and division.
+(a test enforces this). No machine learning runs here - only counting and division.
 
 Vocabulary
 ----------

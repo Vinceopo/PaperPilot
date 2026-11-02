@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { Alert, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import Svg, { Circle, Path } from "react-native-svg";
@@ -11,13 +11,13 @@ import IssuesDetectedPanel, {
 } from "../components/cockpit/IssuesDetectedPanel";
 import TraceDocumentViewer from "../components/cockpit/TraceDocumentViewer";
 import PrimaryButton from "../components/ui/PrimaryButton";
-import { PaperPilotMark } from "../components/shell/PaperPilotLogo";
 import {
   CATEGORY_STATUS_LABEL,
   compliancePercentFromUnits,
   formatCategoryIssuesDetail,
   formatCount,
   formatPct,
+  formatScore,
   hasValue,
   plural,
   reconcileDisplayedUnits,
@@ -44,71 +44,21 @@ function ringStroke(score) {
   return "#B02A37";
 }
 
-function CircularScore({ score, categoryCount = null }) {
-  const RADIUS = 52;
-  const circumference = 2 * Math.PI * RADIUS;
-  const [progress, setProgress] = useState(0);
-  const band = scoreBand(score);
-  const evaluated = hasValue(score);
-  const target = evaluated ? Number(score) : 0;
-
-  useEffect(() => {
-    const DURATION = 1100;
-    const start = Date.now();
-    let raf = 0;
-    const tick = () => {
-      const t = Math.min((Date.now() - start) / DURATION, 1);
-      const eased = 1 - (1 - t) ** 3;
-      setProgress(eased * target);
-      if (t < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target]);
-
-  const offset = circumference - (progress / 100) * circumference;
-
-  return (
-    <View style={styles.circleWrap}>
-      <View>
-        <Svg width={148} height={148} viewBox="0 0 148 148" style={{ transform: [{ rotate: "-90deg" }] }}>
-          <Circle cx={74} cy={74} r={RADIUS} fill="none" stroke="#e2e8f0" strokeWidth={14} />
-          <Circle
-            cx={74}
-            cy={74}
-            r={RADIUS}
-            fill="none"
-            stroke={band.ring}
-            strokeWidth={14}
-            strokeLinecap="round"
-            strokeDasharray={`${circumference}`}
-            strokeDashoffset={offset}
-          />
-        </Svg>
-        <View style={styles.circleCenter}>
-          <Text style={styles.circleValue}>{evaluated ? Math.round(progress) : "—"}</Text>
-          {evaluated ? <Text style={styles.circleOutOf}>%</Text> : null}
-        </View>
-      </View>
-      <View style={[styles.bandPill, { backgroundColor: band.bg, borderColor: band.border }]}>
-        <Text style={[styles.bandText, { color: band.text }]}>{band.label}</Text>
-      </View>
-      <Text style={styles.circleHint}>
-        {!evaluated
-          ? "No formatting unit could be measured"
-          : categoryCount != null
-            ? `Average of the ${categoryCount} measured ${plural(categoryCount, "category", "categories")}`
-            : "Average of categories that were actually measured"}
-      </Text>
-    </View>
-  );
-}
-
-function CategoryScoreCard({ metric, score, status, displayTotal, displayNonCompliant, displayScore }) {
-  const fromUnits = compliancePercentFromUnits(displayTotal, displayNonCompliant);
+function CategoryScoreCard({
+  metric,
+  score,
+  status,
+  displayTotal,
+  displayNonCompliant,
+  displayIssueCount,
+  displayScore,
+}) {
+  // Ring % and subtitle use the same issue count: (total − issues) / total.
+  const issueCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
+  const fromShown = compliancePercentFromUnits(displayTotal, issueCount);
   const pct =
-    fromUnits != null
-      ? fromUnits
+    fromShown != null
+      ? fromShown
       : hasValue(displayScore)
         ? Number(displayScore)
         : hasValue(score)
@@ -121,7 +71,7 @@ function CategoryScoreCard({ metric, score, status, displayTotal, displayNonComp
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
-  const detail = formatCategoryIssuesDetail(displayNonCompliant, displayTotal)
+  const detail = formatCategoryIssuesDetail(issueCount, displayTotal)
     || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
     || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
@@ -144,7 +94,7 @@ function CategoryScoreCard({ metric, score, status, displayTotal, displayNonComp
         </Svg>
         <View style={styles.catRingCenter}>
           <Text style={[styles.catRingValue, { color: evaluated ? stroke : "#94a3b8", fontSize: 11 }]}>
-            {evaluated ? formatPct(safe, 2) : "—"}
+            {evaluated ? formatPct(safe, 2) : "-"}
           </Text>
         </View>
       </View>
@@ -158,12 +108,12 @@ function CategoryScoreCard({ metric, score, status, displayTotal, displayNonComp
   );
 }
 
-function DownloadIcon({ color = colors.white }) {
+function DownloadIcon() {
   return (
     <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
       <Path
         d="M12 4v12m0 0 4-4m-4 4-4-4M4 20h16"
-        stroke={color}
+        stroke={colors.white}
         strokeWidth={2}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -209,17 +159,29 @@ function ScanResultBody({ navigation }) {
   const { scanFlow } = useAppData();
   const result = scanFlow?.result;
 
+  // Mirror web: hard-refresh / empty Results is not a sticky destination - send authors home.
+  useEffect(() => {
+    if (result) return undefined;
+    const t = setTimeout(() => navigation.navigate("Library"), 0);
+    return () => clearTimeout(t);
+  }, [result, navigation]);
+
   if (!result) {
     return (
       <View style={styles.emptyWrap}>
-        <Text style={styles.emptyTitle}>Run a scan from Upload</Text>
+        <Text style={styles.emptyTitle}>No compliance result yet</Text>
         <Text style={styles.emptyBody}>
-          Upload format mechanics and a manuscript, then Analyse to see compliance results here.
+          Open a manuscript version or run Analyse from Upload. Returning to My Manuscripts…
         </Text>
+        <PrimaryButton
+          title="My Manuscripts"
+          onPress={() => navigation.navigate("Library")}
+          style={{ marginTop: 18, minWidth: 160 }}
+        />
         <PrimaryButton
           title="Go to Upload"
           onPress={() => navigation.navigate("Upload")}
-          style={{ marginTop: 18, minWidth: 160 }}
+          style={{ marginTop: 10, minWidth: 160, backgroundColor: colors.sidebar }}
         />
       </View>
     );
@@ -250,8 +212,8 @@ function ScanResultBody({ navigation }) {
 
   const issueTypes = formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
   const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
-  // Same expansion as Issue Tracing — cards, rings, and header all use these counts.
-  const tracedEntries = normalizeDetectedIssues(formatChecks, result.pageCount || 0).entries;
+  // Same expansion as Issue Tracing - cards, rings, and header all use these counts.
+  const tracedEntries = normalizeDetectedIssues(formatChecks, pageCount || 0).entries;
   const tracedByCategory = {};
   tracedEntries.forEach((entry) => {
     const key = entry.category || categoryForIssue(entry) || "Other";
@@ -266,14 +228,12 @@ function ScanResultBody({ navigation }) {
         ? row.displayIssueCount
         : row.displayNonCompliant;
     const total = row.displayTotal;
-    const displayNonCompliant =
-      hasValue(total) && hasValue(displayIssueCount)
-        ? Math.min(Math.max(0, Number(total)), Math.max(0, Number(displayIssueCount)))
-        : row.displayNonCompliant;
-    const displayCompliant =
-      hasValue(total) && hasValue(displayNonCompliant)
-        ? Math.max(0, Number(total) - Number(displayNonCompliant))
-        : row.displayCompliant;
+    const displayNonCompliant = hasValue(total) && hasValue(displayIssueCount)
+      ? Math.min(Math.max(0, Number(total)), Math.max(0, Number(displayIssueCount)))
+      : row.displayNonCompliant;
+    const displayCompliant = hasValue(total) && hasValue(displayNonCompliant)
+      ? Math.max(0, Number(total) - Number(displayNonCompliant))
+      : row.displayCompliant;
     const displayScore = compliancePercentFromUnits(total, displayNonCompliant);
     return {
       ...row,
@@ -283,7 +243,6 @@ function ScanResultBody({ navigation }) {
       displayScore: displayScore != null ? displayScore : row.displayScore,
     };
   });
-
   // Header totals = sum of category cards so they always match what the user adds up.
   const {
     total: totalUnits,
@@ -293,7 +252,7 @@ function ScanResultBody({ navigation }) {
     { unitsChecked, unitsPassed, unitsFailed },
     categoryCards,
   );
-  // Bar shares only — percent numbers are not shown in the public results UI.
+  // Bar shares only - percent numbers are not shown in the public results UI.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
       ? [
@@ -310,23 +269,15 @@ function ScanResultBody({ navigation }) {
   const overallFromCards = evaluatedCards.length
     ? evaluatedCards.reduce((sum, row) => sum + Number(row.displayScore), 0) / evaluatedCards.length
     : overallScore;
-  const formatReportDate = (iso) => {
-    if (!iso) return "—";
-    try {
-      return new Date(iso).toLocaleString(undefined, {
+  const overallBand = scoreBand(overallFromCards);
+  const scannedDate = scannedAt
+    ? new Date(scannedAt).toLocaleDateString("en-US", {
         year: "numeric",
-        month: "short",
+        month: "long",
         day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
         timeZone: APP_TIME_ZONE,
-      });
-    } catch {
-      return "—";
-    }
-  };
-  const scannedDate = formatReportDate(scannedAt);
-  const generatedDate = formatReportDate(new Date().toISOString());
+      })
+    : "-";
 
   const versionLabel = `v${scanFlow.versionNumber || 1}.0`;
   const hasPreview = Boolean(scanFlow.file || cloudinaryUrl || documentPreview);
@@ -344,76 +295,63 @@ function ScanResultBody({ navigation }) {
     if (report?.summary) Alert.alert("Analysis report", report.summary);
   }
 
-  function openReferenceTracing() {
-    // Open the tracer without jumping to a location — user picks an issue first.
-    scanFlow.openDocumentTrace(null);
+  function openReferenceTracing(entry = null) {
+    // Open the tracer without auto-jump unless the user picked a specific issue.
+    scanFlow.openDocumentTrace(entry || null);
     navigation.navigate("DocumentReference");
   }
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
-      <View style={styles.brandRow}>
-        <View style={styles.brandLeft}>
-          <PaperPilotMark size={40} />
-          <Text style={styles.brandWord}>PAPERPILOT</Text>
-          <Text style={styles.brandResults}>* RESULTS</Text>
+      <View style={styles.hero}>
+        <View style={styles.heroTopRow}>
+          <View style={styles.heroLinks}>
+            <Pressable onPress={() => openReferenceTracing(null)} hitSlop={6}>
+              <Text style={styles.heroTrace}>Open reference tracing</Text>
+            </Pressable>
+          </View>
+          <Pressable
+            onPress={onDownload}
+            disabled={scanFlow.downloadBusy}
+            style={({ pressed }) => [
+              styles.downloadBtnTop,
+              pressed && { backgroundColor: "#f1f5f9" },
+              scanFlow.downloadBusy && { opacity: 0.5 },
+            ]}
+          >
+            <DownloadIcon />
+            <Text style={styles.downloadTextTop}>
+              {scanFlow.downloadBusy ? "Generating PDF…" : `Download · ${versionLabel}`}
+            </Text>
+          </Pressable>
         </View>
-        <Pressable
-          onPress={onDownload}
-          disabled={scanFlow.downloadBusy}
-          style={({ pressed }) => [
-            styles.downloadBtnPrimary,
-            pressed && { backgroundColor: "#12ae99" },
-            scanFlow.downloadBusy && { opacity: 0.5 },
-          ]}
-          accessibilityRole="button"
-        >
-          <DownloadIcon color="#fff" />
-          <Text style={styles.downloadTextPrimary}>
-            {scanFlow.downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
+        {scanFlow.downloadError ? (
+          <Text style={styles.downloadError} accessibilityRole="alert">
+            {scanFlow.downloadError}
           </Text>
-        </Pressable>
-      </View>
-      {scanFlow.downloadError ? (
-        <Text style={styles.downloadError} accessibilityRole="alert">
-          {scanFlow.downloadError}
-        </Text>
-      ) : null}
-
-      <View style={styles.metaCard}>
-        <View style={styles.metaGrid}>
-          <View style={styles.metaCell}>
-            <Text style={styles.metaKey}>Document</Text>
-            <Text style={styles.metaValue} numberOfLines={2}>
-              {documentTitle}
-            </Text>
-            {campus || college ? (
-              <Text style={styles.metaSub} numberOfLines={1}>
-                {[college, campus].filter(Boolean).join(" · ")}
-              </Text>
-            ) : null}
-          </View>
-          <View style={styles.metaCell}>
-            <Text style={styles.metaKey}>Citation style</Text>
-            <Text style={styles.metaValue}>
-              {citationStyle} · {versionLabel}
-            </Text>
-          </View>
-          <View style={styles.metaCell}>
+        ) : null}
+        <Text style={styles.scope}>SCOPE: FORMATTING ONLY</Text>
+        <Text style={styles.heroTitle}>{documentTitle}</Text>
+        {campus || college ? (
+          <Text style={styles.heroSub}>{[college, campus].filter(Boolean).join(" · ")}</Text>
+        ) : null}
+        <View style={styles.metaTable}>
+          <View style={styles.metaRow}>
             <Text style={styles.metaKey}>Scanned</Text>
             <Text style={styles.metaValue}>{scannedDate}</Text>
           </View>
-          <View style={styles.metaCell}>
-            <Text style={styles.metaKey}>Generated</Text>
-            <Text style={styles.metaValue}>{generatedDate}</Text>
+          <View style={styles.metaRow}>
+            <Text style={styles.metaKey}>Version</Text>
+            <Text style={styles.metaVersion}>{versionLabel}</Text>
+          </View>
+          <View style={styles.metaRow}>
+            <Text style={styles.metaKey}>Citation style</Text>
+            <Text style={styles.metaValue}>{citationStyle}</Text>
           </View>
         </View>
-      </View>
-
-      <View style={styles.heroActions}>
-        <Pressable onPress={openReferenceTracing} hitSlop={6} accessibilityRole="button">
-          <Text style={styles.heroTrace}>Open issue tracing &amp; XAI</Text>
-        </Pressable>
+        <Text style={styles.heroNote}>
+          Structure and content are not evaluated - results reflect formatting compliance only.
+        </Text>
       </View>
 
       <View style={{ gap: 12 }}>
@@ -439,32 +377,25 @@ function ScanResultBody({ navigation }) {
 
       <View style={styles.card}>
         <Text style={styles.cardKicker}>Overall compliance score</Text>
-        <CircularScore
-          score={overallFromCards}
-          categoryCount={evaluatedCards.length || (Array.isArray(overallCategories) ? overallCategories.length : null)}
-        />
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardKicker}>Score Breakdown</Text>
-        <View style={styles.catGrid}>
-          {categoryCards.map((item) => (
-            <CategoryScoreCard
-              key={item.metric || item.section}
-              metric={item.metric || item.section}
-              score={item.displayScore ?? item.score}
-              status={item.status}
-              displayTotal={item.displayTotal}
-              displayNonCompliant={item.displayNonCompliant}
-              displayScore={item.displayScore}
-            />
-          ))}
+        <View style={styles.overallScoreLine}>
+          <Text style={[styles.overallScoreValue, { color: overallBand.text }]}>
+            {formatScore(overallFromCards, 0)}
+          </Text>
+          {hasValue(overallFromCards) ? (
+            <Text style={[styles.overallScorePct, { color: overallBand.text }]}>%</Text>
+          ) : null}
         </View>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardKicker}>Scan Summary</Text>
-        <View style={styles.statGrid}>
+        <View style={[styles.bandPill, { alignSelf: "flex-start", marginTop: 12, backgroundColor: overallBand.bg, borderColor: overallBand.border }]}>
+          <Text style={[styles.bandText, { color: overallBand.text }]}>{overallBand.label}</Text>
+        </View>
+        <Text style={[styles.circleHint, { textAlign: "left", marginTop: 8 }]}>
+          {evaluatedCards.length
+            ? `Average of the ${evaluatedCards.length} measured ${plural(evaluatedCards.length, "category", "categories")}`
+            : Array.isArray(overallCategories) && overallCategories.length
+              ? `Average of the ${overallCategories.length} measured ${plural(overallCategories.length, "category", "categories")}`
+              : "Average of categories that were actually measured"}
+        </Text>
+        <View style={[styles.statGrid, { marginTop: 16 }]}>
           <View style={[styles.stat, { backgroundColor: "#f8fafc" }]}>
             <Text style={[styles.statNum, { color: "#334155" }]}>{formatCount(totalUnits)}</Text>
             <Text style={[styles.statLabel, { color: "#64748b" }]}>Total Units</Text>
@@ -478,12 +409,23 @@ function ScanResultBody({ navigation }) {
             <Text style={[styles.statLabel, { color: "#f43f5e" }]}>Non-Compliant Units</Text>
           </View>
         </View>
-        <Text style={styles.statNote}>
-          Compliant Units + Non-Compliant Units equals Total Units checked.
-        </Text>
-        <View style={styles.tagRow}>
-          <Text style={styles.tag}>{citationStyle}</Text>
-          <Text style={styles.tag}>Format only</Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardKicker}>Score Breakdown</Text>
+        <View style={styles.catGrid}>
+          {categoryCards.map((item) => (
+            <CategoryScoreCard
+              key={item.metric || item.section}
+              metric={item.metric || item.section}
+              score={item.displayScore ?? item.score}
+              status={item.status}
+              displayTotal={item.displayTotal}
+              displayNonCompliant={item.displayNonCompliant}
+              displayIssueCount={item.displayIssueCount}
+              displayScore={item.displayScore}
+            />
+          ))}
         </View>
       </View>
 
@@ -496,13 +438,14 @@ function ScanResultBody({ navigation }) {
             </Text>
             {isApproximateTracing(pagination) ? (
               <Text style={styles.approxNote}>
-                Approximate locations — page breaks were estimated. Highlights may be near the
-                issue. For precise tracing, upload a PDF of the same manuscript.
+                Approximate locations - this Word file was scanned without exact page breaks.
+                Highlights may be near the issue. For precise tracing, upload a PDF of the same
+                manuscript.
               </Text>
             ) : null}
           </View>
           <Pressable
-            onPress={openReferenceTracing}
+            onPress={() => openReferenceTracing(null)}
             style={({ pressed }) => [styles.traceBtn, pressed && { backgroundColor: "#047857" }]}
           >
             <Text style={styles.traceBtnText}>Trace issues in document</Text>
@@ -530,9 +473,9 @@ function ScanResultBody({ navigation }) {
       <View>
         <View style={styles.issuesHead}>
           <View style={{ flex: 1, minWidth: 200 }}>
-            <Text style={styles.issuesTitle}>Issues detected</Text>
+            <Text style={styles.issuesTitle}>Issue tracing</Text>
             <Text style={styles.issuesSub}>
-              Grouped by page with explanations and fix suggestions. Each page starts at line 1.
+              Tap a finding to open the document at that location. Nothing jumps until you choose.
             </Text>
           </View>
           {issueTypes > 0 ? (
@@ -541,7 +484,12 @@ function ScanResultBody({ navigation }) {
             </Text>
           ) : null}
         </View>
-        <IssuesDetectedPanel formatChecks={formatChecks} pageCount={pageCount} pagination={pagination} />
+        <IssuesDetectedPanel
+          formatChecks={formatChecks}
+          pageCount={pageCount}
+          pagination={pagination}
+          onTraceIssue={(entry) => openReferenceTracing(entry)}
+        />
       </View>
 
     </ScrollView>
@@ -566,61 +514,51 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textAlign: "center",
   },
-  brandRow: {
+  hero: { borderRadius: 12, backgroundColor: "#172033", padding: 20 },
+  heroTopRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 12,
+    gap: 10,
+    marginBottom: 8,
   },
-  brandLeft: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10, minWidth: 0, flex: 1 },
-  brandWord: {
-    fontSize: 18,
-    fontWeight: "700",
-    letterSpacing: 1.2,
-    color: "#172033",
-  },
-  brandResults: {
-    fontSize: 14,
-    fontWeight: "600",
-    letterSpacing: 1.2,
-    color: "#4a5568",
-  },
-  downloadBtnPrimary: {
+  heroLinks: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
+  heroTrace: { fontSize: 11, fontWeight: "600", color: "#cbd5e1" },
+  downloadBtnTop: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    minHeight: 44,
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.45)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  downloadTextTop: { fontSize: 11, fontWeight: "700", color: "#e2e8f0" },
+  scope: {
+    alignSelf: "flex-start",
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(22,191,168,0.4)",
+    backgroundColor: "rgba(22,191,168,0.1)",
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "#bfeee5",
-    backgroundColor: "#16bfa8",
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-  },
-  downloadTextPrimary: { fontSize: 12, fontWeight: "700", color: colors.white },
-  metaCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-  },
-  metaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 16 },
-  metaCell: { width: "45%", minWidth: 140, flexGrow: 1 },
-  metaKey: {
+    paddingHorizontal: 12,
+    paddingVertical: 3,
     fontSize: 10,
     fontWeight: "700",
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-    color: "#94a3b8",
+    letterSpacing: 1.5,
+    color: colors.accent,
   },
-  metaValue: { marginTop: 4, fontSize: 13, fontWeight: "700", color: "#0f172a" },
-  metaSub: { marginTop: 2, fontSize: 12, color: "#64748b" },
-  heroActions: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  heroTrace: { fontSize: 13, fontWeight: "600", color: "#0d9488", textDecorationLine: "underline" },
-  downloadError: { marginTop: 4, fontSize: 12, color: colors.rose },
+  heroTitle: { marginTop: 8, fontSize: 20, lineHeight: 26, fontWeight: "700", color: colors.white },
+  heroSub: { marginTop: 4, fontSize: 14, color: "#94a3b8" },
+  metaTable: { marginTop: 16, gap: 4 },
+  metaRow: { flexDirection: "row" },
+  metaKey: { width: 96, fontSize: 12, color: "#64748b" },
+  metaValue: { flex: 1, fontSize: 12, fontWeight: "500", color: "#e2e8f0" },
+  metaVersion: { flex: 1, fontSize: 12, color: "#94a3b8" },
+  heroNote: { marginTop: 16, fontSize: 12, lineHeight: 17, color: "#64748b" },
   dualRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -675,6 +613,9 @@ const styles = StyleSheet.create({
   catTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
   catDetail: { marginTop: 2, fontSize: 11, lineHeight: 15, color: "#64748b" },
   statNote: { marginTop: 8, fontSize: 10, lineHeight: 14, color: "#94a3b8" },
+  overallScoreLine: { flexDirection: "row", alignItems: "flex-end", gap: 2 },
+  overallScoreValue: { fontSize: 48, fontWeight: "800", fontVariant: ["tabular-nums"], lineHeight: 52 },
+  overallScorePct: { fontSize: 24, fontWeight: "800", fontVariant: ["tabular-nums"], paddingBottom: 6 },
   card: {
     borderRadius: 12,
     borderWidth: 1,
@@ -741,6 +682,7 @@ const styles = StyleSheet.create({
     color: "#475569",
   },
   tagPass: { borderColor: "#a7f3d0", backgroundColor: "#ecfdf5", color: "#047857" },
+  downloadError: { marginTop: 12, fontSize: 12, color: "#f43f5e" },
   downloadBtn: {
     marginTop: 20,
     flexDirection: "row",

@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "../../theme";
+import PaperPilotLogo from "../shell/PaperPilotLogo";
 import PrimaryButton from "../ui/PrimaryButton";
 
 export default function RegistrationSuccessScreen({ profile, onContinue }) {
@@ -13,6 +14,9 @@ export default function RegistrationSuccessScreen({ profile, onContinue }) {
     <SafeAreaView style={styles.safe}>
       <View style={styles.card}>
         <View style={styles.accentBar} />
+        <View style={styles.logoWrap}>
+          <PaperPilotLogo tone="light" subtitle={false} markSize={64} />
+        </View>
         <View style={styles.checkCircle}>
           <Text style={styles.checkMark}>✓</Text>
         </View>
@@ -73,18 +77,20 @@ const styles = StyleSheet.create({
     height: 4,
     backgroundColor: "#16bfa8",
   },
+  logoWrap: { alignItems: "center", marginBottom: 8 },
   checkCircle: {
     alignSelf: "center",
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    marginTop: 12,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: "#16bfa8",
-    borderWidth: 7,
+    borderWidth: 6,
     borderColor: "#dff7f3",
     alignItems: "center",
     justifyContent: "center",
   },
-  checkMark: { color: colors.white, fontSize: 28, fontWeight: "700" },
+  checkMark: { color: colors.white, fontSize: 24, fontWeight: "700" },
   title: {
     marginTop: 12,
     textAlign: "center",

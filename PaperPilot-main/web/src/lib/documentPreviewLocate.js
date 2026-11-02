@@ -61,7 +61,7 @@ export function isPaginationTarget(target = {}) {
 
 /**
  * Pagination must never paint body line 1 / chapter text. Always use the
- * header/footer chip — even when a body excerpt or line leaked onto the issue.
+ * header/footer chip - even when a body excerpt or line leaked onto the issue.
  */
 export function shouldUsePaginationEdge(target = {}) {
   return isPaginationTarget(target);
@@ -83,7 +83,7 @@ export function fitPageScale({ pageWidth, pageHeight, boxWidth, maxHeight, allow
   return allowUpscale ? scale : Math.min(1, scale);
 }
 
-/** Vertical slice of the page (0–1) that a margin mark covers. */
+/** Vertical slice of the page (0-1) that a margin mark covers. */
 export function marginRegion(side) {
   if (side === "bottom") return { start: 0.93, size: 0.07 };
   if (side === "top") return { start: 0, size: 0.07 };
@@ -107,7 +107,7 @@ export function frameScrollTop({ elementTop, padding = 16, maxScroll = Infinity 
 
 /**
  * Walk rendered blocks the way the scanner counts lines on one page.
- * `leadingLines` / `trailingLines` are blank gaps — never paint those for
+ * `leadingLines` / `trailingLines` are blank gaps - never paint those for
  * text issues; snap onto the paragraph's first/last content line instead.
  */
 export function visualLineTarget(blocks, lineNumber) {
@@ -186,7 +186,7 @@ export function excerptNeedles(excerpt) {
 
 /**
  * Pick the excerpt hit closest to the scanner line estimate.
- * Always prefer line when both exist — a unique excerpt on the page must not
+ * Always prefer line when both exist - a unique excerpt on the page must not
  * steal highlights from other issues on different lines.
  */
 export function pickBestRects(candidates, estimateTop = null) {
@@ -203,7 +203,7 @@ export function pickBestRects(candidates, estimateTop = null) {
 
 /**
  * Resolve a DOCX highlight from excerpt candidates + line estimate.
- * When `line` is set, line estimate always disambiguates — even for a single hit.
+ * When `line` is set, line estimate always disambiguates - even for a single hit.
  */
 export function resolveDocxHighlight({
   candidateGroups = [],
@@ -241,7 +241,7 @@ export function resolvePdfMarkY({ line, ys = [], bboxY = null, pageHeight = 0 } 
   const lineNum = Number(line);
   const hasLine = Number.isFinite(lineNum) && lineNum >= 1;
   const rounded = hasLine ? Math.round(lineNum) : null;
-  // Number(null) === 0, so treat null/"" as missing — not a real bbox.
+  // Number(null) === 0, so treat null/"" as missing - not a real bbox.
   const hasBbox = bboxY != null && bboxY !== "" && Number.isFinite(Number(bboxY));
   if (hasLine && rows.length && rounded > rows.length && hasBbox) {
     return Number(bboxY);
@@ -269,7 +269,7 @@ export function isApproximateTracing(pagination) {
 /**
  * Map a scanner page onto rendered DOCX preview sections.
  * Prefer exact index, then excerpt search. Never invent a sheet via proportional
- * remap when counts disagree — that painted wrong-page highlights.
+ * remap when counts disagree - that painted wrong-page highlights.
  */
 export function resolveDocxPageIndex(sections, target = {}, pageCountHint = 0) {
   const list = Array.isArray(sections) ? sections : [];
@@ -301,7 +301,7 @@ export function resolveDocxPageIndex(sections, target = {}, pageCountHint = 0) {
     }
   }
 
-  // No safe mapping — caller should leave the preview unmoved rather than jump wrongly.
+  // No safe mapping - caller should leave the preview unmoved rather than jump wrongly.
   void pageCountHint;
   return null;
 }

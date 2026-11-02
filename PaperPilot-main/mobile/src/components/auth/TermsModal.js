@@ -1,4 +1,4 @@
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { colors } from "../../theme";
 
 export const TERMS_SECTIONS = [
@@ -44,13 +44,34 @@ export const TERMS_SECTIONS = [
   },
 ];
 
-export default function TermsModal({ open, onClose, onAgree }) {
+export default function TermsModal({ open, onClose }) {
+  const { width, height } = useWindowDimensions();
+  const cardWidth = Math.min(720, Math.max(320, width - 32));
+  const cardMaxHeight = Math.min(height * 0.9, 720);
+
   return (
     <Modal visible={Boolean(open)} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
-        <View style={styles.card} accessibilityViewIsModal>
-          <Text style={styles.title}>Terms and Conditions</Text>
+        <View
+          style={[styles.card, { width: cardWidth, maxHeight: cardMaxHeight }]}
+          accessibilityViewIsModal
+        >
+          <View style={styles.header}>
+            <View style={styles.headerText}>
+              <Text style={styles.title}>Terms and Conditions</Text>
+              <Text style={styles.subtitle}>Please review before creating your account.</Text>
+            </View>
+            <Pressable
+              onPress={onClose}
+              style={({ pressed }) => [styles.xBtn, pressed && styles.xBtnPressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Close terms and conditions"
+              hitSlop={6}
+            >
+              <Text style={styles.xMark}>×</Text>
+            </Pressable>
+          </View>
           <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
             {TERMS_SECTIONS.map((section) => (
               <View key={section.heading}>
@@ -59,24 +80,6 @@ export default function TermsModal({ open, onClose, onAgree }) {
               </View>
             ))}
           </ScrollView>
-          <View style={styles.actions}>
-            <Pressable
-              onPress={onClose}
-              style={({ pressed }) => [styles.closeBtn, pressed && styles.closeBtnPressed]}
-              accessibilityRole="button"
-            >
-              <Text style={styles.closeText}>Close</Text>
-            </Pressable>
-            {onAgree ? (
-              <Pressable
-                onPress={onAgree}
-                style={({ pressed }) => [styles.agreeBtn, pressed && styles.agreeBtnPressed]}
-                accessibilityRole="button"
-              >
-                <Text style={styles.agreeText}>I agree</Text>
-              </Pressable>
-            ) : null}
-          </View>
         </View>
       </View>
     </Modal>
@@ -92,54 +95,53 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   card: {
-    width: "100%",
-    maxWidth: 520,
-    maxHeight: "85%",
-    borderRadius: 16,
+    borderRadius: 18,
     backgroundColor: colors.white,
     overflow: "hidden",
+    zIndex: 1,
   },
-  title: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    fontSize: 18,
-    fontWeight: "700",
-    color: colors.navy,
+  header: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    paddingHorizontal: 22,
+    paddingTop: 20,
+    paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
   },
-  body: { flexGrow: 0 },
-  bodyContent: { paddingHorizontal: 20, paddingVertical: 16, gap: 14 },
-  heading: { fontSize: 14, fontWeight: "600", color: "#1e293b" },
-  text: { marginTop: 4, fontSize: 14, lineHeight: 21, color: "#475569" },
-  actions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderTopWidth: 1,
-    borderTopColor: "#f1f5f9",
+  headerText: { flex: 1, minWidth: 0 },
+  title: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: colors.navy,
   },
-  closeBtn: {
+  subtitle: {
+    marginTop: 4,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.slate,
+  },
+  xBtn: {
+    width: 44,
     height: 44,
-    borderRadius: 10,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: 18,
+    backgroundColor: colors.white,
     alignItems: "center",
     justifyContent: "center",
   },
-  closeBtnPressed: { backgroundColor: "#f8fafc" },
-  closeText: { fontSize: 14, fontWeight: "600", color: colors.slate },
-  agreeBtn: {
-    height: 44,
-    borderRadius: 10,
-    backgroundColor: colors.accent,
-    paddingHorizontal: 18,
-    alignItems: "center",
-    justifyContent: "center",
+  xBtnPressed: { backgroundColor: "#f8fafc" },
+  xMark: {
+    fontSize: 28,
+    lineHeight: 30,
+    fontWeight: "500",
+    color: "#64748b",
+    marginTop: -2,
   },
-  agreeBtnPressed: { backgroundColor: colors.accentHover },
-  agreeText: { fontSize: 14, fontWeight: "700", color: colors.navy },
+  body: { flexGrow: 1 },
+  bodyContent: { paddingHorizontal: 22, paddingVertical: 18, gap: 18, paddingBottom: 24 },
+  heading: { fontSize: 16, fontWeight: "600", color: "#1e293b" },
+  text: { marginTop: 6, fontSize: 15, lineHeight: 23, color: "#475569" },
 });

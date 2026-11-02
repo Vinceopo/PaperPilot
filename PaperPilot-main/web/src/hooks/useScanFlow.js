@@ -1,13 +1,13 @@
 /**
- * useScanFlow — state machine for the upload-to-results scan flow.
+ * useScanFlow - state machine for the upload-to-results scan flow.
  *
  * Steps:
- *   "idle"         – no file selected
- *   "fileSelected" – valid file ready to analyse
- *   "analyzing"    – analysis in flight (progress polling)
- *   "tracing"      – document + issue reference tracing (legacy; opens full results)
- *   "results"      – full ScanResultsScreen (entered when analysis completes)
- *   "error"        – analysis failed; user can retry
+ *   "idle"         - no file selected
+ *   "fileSelected" - valid file ready to analyse
+ *   "analyzing"    - analysis in flight (progress polling)
+ *   "tracing"      - document + issue reference tracing (legacy; opens full results)
+ *   "results"      - full ScanResultsScreen (entered when analysis completes)
+ *   "error"        - analysis failed; user can retry
  */
 
 import { useCallback, useRef, useState } from "react";

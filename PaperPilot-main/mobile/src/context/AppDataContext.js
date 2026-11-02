@@ -358,7 +358,7 @@ export function AppDataProvider({ children }) {
       lastSavedScanKey.current = "";
       const notes = await loadNotifications(user?.uid);
       if (!cancelled) setNotifications(notes);
-      // Show last-known Saved Mechanics immediately — never flash empty while the API loads.
+      // Show last-known Saved Mechanics immediately - never flash empty while the API loads.
       const cachedMechanics = await loadCachedMechanics(user?.uid);
       if (cancelled || !cachedMechanics.length) return;
       setMechanics(cachedMechanics);
@@ -724,7 +724,6 @@ export function AppDataProvider({ children }) {
           if (viewingThis && onVersionScreen) {
             const saved = versionToScanResult(after, latest);
             if (saved) flow.showSavedResult(saved, latest.versionNumber);
-            else flow.syncVersionNumber?.(latest.versionNumber);
           }
         }
       }

@@ -80,7 +80,7 @@ def _is_decorative_font(name: str | None) -> bool:
 
 
 def _is_prose_font_text(text: str) -> bool:
-    """True when the run has real letters/digits — not only emoji/symbols/spaces."""
+    """True when the run has real letters/digits - not only emoji/symbols/spaces."""
     return any(ch.isalnum() for ch in text)
 
 
@@ -869,7 +869,7 @@ def _line_fonts(unit: dict) -> list[tuple[str | None, float | None]]:
 
 
 SIZE_TOLERANCE = 0.75
-MARGIN_TOLERANCE = 0.15  # inches — Word/PDF rounding and printer offsets
+MARGIN_TOLERANCE = 0.15  # inches - Word/PDF rounding and printer offsets
 PAGE_NUMBER_RE = re.compile(r"^(?:page\s+)?\d{1,4}(?:\s*[/\-]\s*\d{1,4})?$", re.I)
 CHAPTER_RE = re.compile(r"^(?:chapter|ch\.?)\s+(?:\d+|[ivxlcdm]+)\b", re.I)
 TABLE_CAPTION_RE = re.compile(r"^\s*table\s+\d+\b", re.I)
@@ -951,7 +951,7 @@ def _size_matches(actual: float | None, expected: float | None) -> bool:
 
 HEADING_ROLE_RE = re.compile(r"^heading(\d)$")
 HEADING_STYLE_RE = re.compile(r"heading\s*(\d)")
-# Structure-only limits — not compliance rule values.
+# Structure-only limits - not compliance rule values.
 HEADING_MAX_CHARS = 120
 HEADING_MAX_WORDS = 15
 NUMBERED_HEADING_RE = re.compile(r"^\d+(?:\.\d+){0,5}\s+\S")
@@ -980,7 +980,7 @@ def _first_line_indent_inches(unit: dict) -> float | None:
 def _is_structural_heading_text(text: str) -> bool:
     """Chapter / prelim / back-matter titles, or numbered headings.
 
-    Bare ALL-CAPS prose lines are NOT structural — soft-wrapped body lines like
+    Bare ALL-CAPS prose lines are NOT structural - soft-wrapped body lines like
     "THE COMPLETION OF THIS RESEARCH" must stay body, not Heading 1.
     """
     value = (text or "").strip()
@@ -1014,7 +1014,7 @@ def _is_short_standalone_title(text: str) -> bool:
         return False
     if all_caps:
         return True
-    # Title Case short labels (e.g. "Related Work") — not full sentences.
+    # Title Case short labels (e.g. "Related Work") - not full sentences.
     return bool(re.match(r"^[A-Z0-9][\w'’\-]*(?:\s+[A-Z0-9][\w'’\-]*){0,7}$", value))
 
 
@@ -1061,7 +1061,7 @@ def _scalar_pt(value) -> float | None:
 
 
 def _format_expected_pt(value) -> str | None:
-    """Printable point size for issue text — never raw Python/JSON list brackets."""
+    """Printable point size for issue text - never raw Python/JSON list brackets."""
     if isinstance(value, (int, float)):
         return f"{float(value):g}"
     if isinstance(value, (list, tuple, set)):
@@ -1105,7 +1105,7 @@ def _heading_sizes(font: dict, *, include_legacy: bool = True) -> dict[str, floa
 
 
 def _defined_heading_levels(font: dict) -> set[str]:
-    """Heading roles with real size or style rules — not empty slots from heading_levels.
+    """Heading roles with real size or style rules - not empty slots from heading_levels.
 
     `heading_levels` only sizes the editor UI (e.g. empty Heading 1 above a filled
     Heading 2). Blank levels must not be treated as rules to enforce.
@@ -1153,7 +1153,7 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             unit["role"] = "caption"
             continue
 
-        # Heading identity never uses measured point size — only style / structure,
+        # Heading identity never uses measured point size - only style / structure,
         # and only after the hard prose / soft-wrap gate.
         heading_line = _looks_like_heading_line(unit, text)
         if heading_line and re.search(r"^title$", style) and (
@@ -1266,7 +1266,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         for size in font_rule.get("sizes_points") or []
         if (number := _scalar_pt(size)) is not None
     }
-    # Stale profiles dumped heading sizes into sizes_points — strip those so unset H1
+    # Stale profiles dumped heading sizes into sizes_points - strip those so unset H1
     # is not judged against H2/H3 point sizes.
     heading_only_sizes = {round(float(value), 2) for value in _heading_sizes(font_rule).values()}
     body_pt = _body_size(font_rule)
@@ -1277,7 +1277,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
     # IGNORE / list / blank role sizes must not activate font checks.
     role_sizes = _body_size(font_rule) is not None or bool(_heading_sizes(font_rule))
     color_rule = str(font_rule.get("color") or "").strip()
-    # Blank / NA color is not a rule — do not invent Black/Automatic checks.
+    # Blank / NA color is not a rule - do not invent Black/Automatic checks.
     want_black = (not rule_unset(color_rule)) and bool(
         re.search(r"black|automatic", color_rule, re.I)
     )
@@ -1360,7 +1360,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 if _is_heading_role(role)
                 else {"caption": "caption", "body": "body text", "title_page": "title page text"}.get(role, "text")
             )
-            # Never print raw list brackets (e.g. "[11.0]") — only a scalar or "a or b".
+            # Never print raw list brackets (e.g. "[11.0]") - only a scalar or "a or b".
             expected_text = _format_expected_pt(
                 expected_size if expected_size is not None else sorted(listed_sizes)
             )
@@ -1437,7 +1437,7 @@ def _docx_page_sections(parsed: dict, units: list[dict]) -> dict[int, int]:
 
 
 def _docx_page_sources(parsed: dict, units: list[dict]) -> list[tuple[int, float | None, float | None, dict]]:
-    """One margin check per Word section — page setup is section-level, not per rendered page."""
+    """One margin check per Word section - page setup is section-level, not per rendered page."""
     sections = parsed.get("sections") or [{}]
     first_page: dict[int, int] = {}
     for page, index in sorted(_docx_page_sections(parsed, units).items()):
@@ -1464,7 +1464,7 @@ def _page_body_units(units: list[dict]) -> dict[int, list[dict]]:
 
 
 def _margin_edge_bbox(side: str, width: float, height: float) -> list[float]:
-    """Normalized page-edge band (PDF points) for margin highlights — not a body line."""
+    """Normalized page-edge band (PDF points) for margin highlights - not a body line."""
     band = max(24.0, min(width, height) * 0.07)
     if side == "bottom":
         return [0.0, max(0.0, height - band), width, height]
@@ -1478,7 +1478,7 @@ def _margin_edge_bbox(side: str, width: float, height: float) -> list[float]:
 
 
 def _margin_side_location(page: int | None, side: str, by_page: dict[int, list[dict]]) -> dict:
-    """Locate a margin issue on the page edge — never on body line 1 / title text."""
+    """Locate a margin issue on the page edge - never on body line 1 / title text."""
     loc = _location(page if page is not None else 0, None, "Margins")
     loc["margin_side"] = side
     lines = by_page.get(page if page is not None else 0) or []
@@ -1506,7 +1506,7 @@ def _table_or_figure_pages(parsed: dict, units: list[dict]) -> set[int]:
 
 
 def _pdf_body_lines(page: dict, rules: dict) -> list[dict]:
-    """Body text only — ignore page numbers and header/footer bands for margin measure."""
+    """Body text only - ignore page numbers and header/footer bands for margin measure."""
     width = page.get("width_points")
     height = page.get("height_points")
     if not width or not height:
@@ -1940,7 +1940,7 @@ PRELIM_HEADING_RE = re.compile(
 )
 ROMAN_RE = re.compile(r"^(?=[mdclxvi]+$)m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$", re.I)
 PAGE_TOKEN_RE = re.compile(
-    r"^(?:page\s+)?[-–—]?\s*(\d{1,4}|[ivxlcdm]{1,7})\s*[-–—]?(?:\s*(?:of|/)\s*\d{1,4})?$", re.I
+    r"^(?:page\s+)?[-- - ]?\s*(\d{1,4}|[ivxlcdm]{1,7})\s*[-- - ]?(?:\s*(?:of|/)\s*\d{1,4})?$", re.I
 )
 BARE_PAGE_TOKEN_RE = re.compile(r"^(\d{1,4}|[ivxlcdm]{1,7})$", re.I)
 ROMAN_STYLES = frozenset({"roman_lower", "roman_upper"})
@@ -2102,7 +2102,7 @@ def _check_pagination(
     """Only flag page numbers that appear in the wrong place.
 
     Missing numbers (including page 1), style, sequence, and chapter/title hide rules
-    are not issues — any numbering style is fine when the position matches the mechanics.
+    are not issues - any numbering style is fine when the position matches the mechanics.
     """
     pagination = rules.get("pagination") or {}
     vertical, horizontal = page_position_parts(pagination.get("position"))
@@ -2121,7 +2121,7 @@ def _check_pagination(
         if not mark.get("shown"):
             continue
         page = mark["page"]
-        # Page-number findings sit in the header/footer band — never attach a body
+        # Page-number findings sit in the header/footer band - never attach a body
         # line/excerpt/bbox (that made the preview paint the whole first paragraph).
         loc = _location(page, None, "Pagination")
         loc["page_region"] = mark.get("vertical") or vertical or "top"
@@ -2147,8 +2147,8 @@ def _check_pagination(
             stats.observe(True)
 
 
-TABLE_LABEL_RE = re.compile(r"^\s*table\s+(\d+)\b\s*[:.\-–]?\s*(.*)$", re.I)
-FIGURE_LABEL_RE = re.compile(r"^\s*(figure|fig\.?)\s+(\d+)\b\s*[:.\-–]?\s*(.*)$", re.I)
+TABLE_LABEL_RE = re.compile(r"^\s*table\s+(\d+)\b\s*[:.\--]?\s*(.*)$", re.I)
+FIGURE_LABEL_RE = re.compile(r"^\s*(figure|fig\.?)\s+(\d+)\b\s*[:.\--]?\s*(.*)$", re.I)
 
 
 def _layout_expectations(rule_text: str) -> dict:
@@ -2433,7 +2433,7 @@ def _check_citations(units: list[dict], text: str, rules: dict, collector: Issue
                 )
                 located = True
         if not located:
-            # No unit pin — do not invent PAGE 1 / LINE 1.
+            # No unit pin - do not invent PAGE 1 / LINE 1.
             collector.add(
                 "citation_format",
                 "moderate",
@@ -2472,7 +2472,7 @@ def _check_citations(units: list[dict], text: str, rules: dict, collector: Issue
         expected_set = style_aliases.get(style, {style})
         if predicted_style not in expected_set and predicted_style != style:
             loc = _unit_location(unit, "Citations")
-            # Same citation already flagged by the deterministic checker — keep one card.
+            # Same citation already flagged by the deterministic checker - keep one card.
             if (loc.get("page"), loc.get("line")) in format_pins:
                 continue
             collector.add(
@@ -2527,7 +2527,7 @@ def _mark_title_page(units: list[dict], rules: dict) -> None:
         if not text or len(text) > 160:
             continue
         style = str(unit.get("style") or "").lower()
-        # Real Heading styles / chapter titles stay headings — never “title page”.
+        # Real Heading styles / chapter titles stay headings - never “title page”.
         if HEADING_STYLE_RE.search(style) or CHAPTER_RE.match(text):
             continue
         unit["content_role"] = unit.get("role")
@@ -2713,7 +2713,7 @@ def _filter_unset_heading_font_issues(issues: list[dict], mechanics_rules: dict)
             role = f"heading{title_match.group(1)}"
             if role not in sized and issue_type.startswith("font_size"):
                 continue
-        # Bracket cleanup only — Gemini role contradictions are rejected in gemini_client
+        # Bracket cleanup only - Gemini role contradictions are rejected in gemini_client
         # before wording is applied (no post-hoc Heading→body rewrite reliance).
         for key in ("explanation", "recommendation", "summary"):
             text = issue.get(key)

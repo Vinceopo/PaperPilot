@@ -65,7 +65,7 @@ export function notificationFromScan(scanResult, versionNumber = 1) {
   const title = scanResult?.documentTitle || "Manuscript";
   const raw = scanResult?.overallScore;
   const evaluated = raw != null && Number.isFinite(Number(raw));
-  const score = evaluated ? Math.round(Number(raw)) : "—";
+  const score = evaluated ? Math.round(Number(raw)) : "-";
   const band = !evaluated
     ? "Not evaluated"
     : Number(raw) >= 80
@@ -81,7 +81,7 @@ export function notificationFromScan(scanResult, versionNumber = 1) {
       id: `scan-${scanResult?.documentId || title}-${scanResult?.scannedAt || Date.now()}`,
       type: "scan_complete",
       title: `Format scan completed for "${title}"`,
-      body: evaluated ? `Overall score: ${score}/100 — ${band}.` : `Overall score: ${score} — ${band}.`,
+      body: evaluated ? `Overall score: ${score}/100 - ${band}.` : `Overall score: ${score} - ${band}.`,
       createdAt: scanResult?.scannedAt || new Date().toISOString(),
       read: false,
       meta: { documentId: scanResult?.documentId, versionNumber },
@@ -113,7 +113,7 @@ export function notificationFromSubscription(subscription) {
     id: `pay-${subscription?.renews_at || Date.now()}`,
     type: "payment",
     title: "Payment successful",
-    body: `You're now on ${planName(tier)} — ₱${amount.toLocaleString("en-PH")}.00 charged.`,
+    body: `You're now on ${planName(tier)} - ₱${amount.toLocaleString("en-PH")}.00 charged.`,
     createdAt: new Date().toISOString(),
     read: false,
     meta: { billingPeriod: period, tier },

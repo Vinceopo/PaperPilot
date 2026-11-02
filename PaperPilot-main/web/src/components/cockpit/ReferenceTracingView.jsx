@@ -1,5 +1,5 @@
 /**
- * Manuscript preview with issue list — click an issue to scroll and highlight in the document.
+ * Manuscript preview with issue list - click an issue to scroll and highlight in the document.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -89,7 +89,7 @@ export default function ReferenceTracingView({
         page_region: loc.page_region || loc.pageRegion || entry.page_region || "",
       };
       setHighlight({ id: entry.id, ...marked });
-      // Pin only when we have a real page (or bbox/excerpt on that page) — never invent page 1.
+      // Pin only when we have a real page (or bbox/excerpt on that page) - never invent page 1.
       const canLocate =
         loc.page != null ||
         loc.bbox ||
@@ -105,7 +105,7 @@ export default function ReferenceTracingView({
     [resolveLocation]
   );
 
-  // Do not auto-jump to the first issue — wait until the user clicks/traces one.
+  // Do not auto-jump to the first issue - wait until the user clicks/traces one.
   useEffect(() => {
     if (!entries.length) {
       setActiveIssueId(null);
@@ -125,7 +125,7 @@ export default function ReferenceTracingView({
           </p>
           {approximateTrace ? (
             <p className="mt-2 max-w-xl rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900">
-              Approximate locations — Word page breaks were estimated. For precise tracing, upload a
+              Approximate locations - Word page breaks were estimated. For precise tracing, upload a
               PDF of the same manuscript.
             </p>
           ) : null}

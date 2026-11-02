@@ -407,7 +407,7 @@ const SCRIPT = String.raw`
       var b = blocks[i];
       var lh = Math.max(1, b.lineHeight);
       var leading = b.leadingLines;
-      // Never paint blank margin gaps — snap onto content lines.
+      // Never paint blank margin gaps - snap onto content lines.
       if (remaining <= leading) return { index: i, delta: 0 };
       remaining -= leading;
       var height = b.height || lh;
@@ -596,7 +596,7 @@ const SCRIPT = String.raw`
     var wanted = Math.round(Number(t.page));
     if (!isFinite(wanted) || wanted < 1 || !sections.length) return null;
     if (wanted <= sections.length) return wanted;
-    // Scanner page beyond preview sheets — locate via excerpt, never clamp onto last page.
+    // Scanner page beyond preview sheets - locate via excerpt, never clamp onto last page.
     var needles = excerptNeedles(t.excerpt || t.finding || "");
     var best = null;
     for (var i = 0; i < sections.length; i += 1) {

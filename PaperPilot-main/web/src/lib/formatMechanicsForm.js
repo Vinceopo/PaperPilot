@@ -24,7 +24,7 @@ function starterHeading(values) {
 
 export const CITATION_STYLES = ["APA", "MLA", "IEEE"];
 
-/** Format Fields IGNORE choice — stored in the form, omitted from saved rules. */
+/** Format Fields IGNORE choice - stored in the form, omitted from saved rules. */
 export function isIgnoreFormValue(value) {
   return /^ignore$/i.test(String(value || "").trim());
 }
@@ -81,7 +81,7 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
   };
 }
 
-/** Blank form — used before upload extraction. */
+/** Blank form - used before upload extraction. */
 export function emptyMechanicsForm(name = "") {
   return {
     name: name || "",
@@ -208,7 +208,7 @@ export function rulesToForm(rules = {}, name = "") {
   const paper = rules.paper || {};
   const pagination = rules.pagination || {};
 
-  // Do not invent body size from heading sizes / sizes_points — unset means NA.
+  // Do not invent body size from heading sizes / sizes_points - unset means NA.
   const hasHeadingSizes = [1, 2, 3, 4, 5, 6, 7, 8, 9].some(
     (n) => font[`heading${n}_size`] != null && font[`heading${n}_size`] !== ""
   );
@@ -361,8 +361,8 @@ export function formToRules(form) {
     font.families = [fontType];
   }
   const fontColor = formText(form.fontColor);
-  // Blank / IGNORE means no color rule — do not invent Black/Automatic.
-  if (fontColor && !/^(na|n\/a|n\.a\.?|none|not checked|-|—)$/i.test(fontColor)) {
+  // Blank / IGNORE means no color rule - do not invent Black/Automatic.
+  if (fontColor && !/^(na|n\/a|n\.a\.?|none|not checked|-|\u2014)$/i.test(fontColor)) {
     font.color = fontColor;
   }
 
@@ -370,7 +370,7 @@ export function formToRules(form) {
   const bodySize = Number(bodyRaw);
   if (!Number.isNaN(bodySize) && bodyRaw !== "") {
     font.body_size = bodySize;
-    // sizes_points is body-only — never copy heading sizes into it (that invents H1 rules).
+    // sizes_points is body-only - never copy heading sizes into it (that invents H1 rules).
     font.sizes_points = [bodySize];
   }
   const headingRules = headingsToRules(form.headings);

@@ -1,5 +1,5 @@
 /**
- * Issue Tracing + XAI — document preview with clickable findings.
+ * Issue Tracing + XAI - document preview with clickable findings.
  * Reuses ReferenceTracing highlight/scroll logic and IssuesDetectedPanel issue data.
  */
 
@@ -64,7 +64,7 @@ function distinctText(primary, secondary) {
   return b;
 }
 
-/** One concise XAI block per issue — no repeated finding / why / fix copy. */
+/** One concise XAI block per issue - no repeated finding / why / fix copy. */
 function consolidateXai(entry) {
   const finding = String(entry.finding || "").trim() || "Formatting discrepancy detected";
   const why = distinctText(finding, entry.explanation);
@@ -148,7 +148,7 @@ export default function IssueTracingSection({
         }
       }
       for (const check of formatChecks) {
-        // Match the same rule — do not reuse another category's highlight at the same page/line.
+        // Match the same rule - do not reuse another category's highlight at the same page/line.
         if (entry.issue_type && check.issue_type && entry.issue_type !== check.issue_type) continue;
         if (entry.section && check.section && entry.section !== check.section) continue;
         for (const loc of check.locations || []) {
@@ -191,7 +191,7 @@ export default function IssueTracingSection({
         // Keep finding text as a locate hint when excerpt is missing.
         excerpt: loc.excerpt || entry.excerpt || "",
       };
-      // Pagination: never paint body line 1 / chapter text — header/footer chip only.
+      // Pagination: never paint body line 1 / chapter text - header/footer chip only.
       if (String(marked.section || "").toLowerCase() === "pagination") {
         marked.line = null;
         marked.excerpt = "";
@@ -210,7 +210,7 @@ export default function IssueTracingSection({
     [resolveLocation]
   );
 
-  // Do not auto-jump to the first issue — wait until the user clicks/traces one.
+  // Do not auto-jump to the first issue - wait until the user clicks/traces one.
   useEffect(() => {
     if (!filteredEntries.length) {
       setActiveIssueId(null);
@@ -245,7 +245,7 @@ export default function IssueTracingSection({
         </p>
         {approximateTrace ? (
           <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900">
-            Approximate locations — this Word file was scanned without exact page breaks. Highlights
+            Approximate locations - this Word file was scanned without exact page breaks. Highlights
             may be off by a page. For precise tracing, upload a PDF of the same manuscript (or
             open/save the DOCX in Word so rendered page breaks are stored).
           </p>

@@ -5,7 +5,7 @@
 export function maskEmail(email) {
   const raw = String(email || "").trim();
   const at = raw.lastIndexOf("@");
-  if (at <= 0) return raw || "—";
+  if (at <= 0) return raw || "-";
   const local = raw.slice(0, at);
   const domain = raw.slice(at + 1);
   if (!local || !domain) return raw;

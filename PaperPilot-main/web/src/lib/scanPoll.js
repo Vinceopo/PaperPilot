@@ -5,9 +5,9 @@ const MAX_POLL_MS = 20 * 60 * 1000;
 const MAX_NETWORK_FAILURES = 8;
 
 export const SCAN_TIMEOUT_MESSAGE =
-  "The analysis is taking longer than expected. If it finishes, the result will appear in My Manuscripts. If it fails, no scan is used — run it again later.";
+  "The analysis is taking longer than expected. If it finishes, the result will appear in My Manuscripts. If it fails, no scan is used - run it again later.";
 export const SCAN_CONNECTION_MESSAGE =
-  "Lost connection while waiting for the analysis. Check your internet connection, then open My Manuscripts — the result appears there once it finishes. If the analysis failed, no scan was used.";
+  "Lost connection while waiting for the analysis. Check your internet connection, then open My Manuscripts - the result appears there once it finishes. If the analysis failed, no scan was used.";
 
 function isTransient(err) {
   const status = Number(err?.status);
@@ -40,7 +40,7 @@ export async function pollScanUntilDone(scanId, onProgress, { intervalMs = 1000 
       if (!isTransient(err)) throw err;
       failures += 1;
       if (failures >= MAX_NETWORK_FAILURES) throw new Error(SCAN_CONNECTION_MESSAGE);
-      onProgress?.({ percent: null, stage: "reconnecting", message: "Connection lost — retrying…" });
+      onProgress?.({ percent: null, stage: "reconnecting", message: "Connection lost - retrying…" });
       await new Promise((resolve) => {
         window.setTimeout(resolve, Math.min(10000, 1000 * 2 ** (failures - 1)));
       });

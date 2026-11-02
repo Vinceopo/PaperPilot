@@ -97,7 +97,7 @@ function hashSegment() {
 
 /**
  * Hash routes so sidebar links support Open in new tab / middle-click.
- * `#/results` is session-only — a hard refresh has no in-memory scan, so land on
+ * `#/results` is session-only - a hard refresh has no in-memory scan, so land on
  * My Manuscripts (the dashboard) instead of an empty upload/results screen.
  */
 function pageFromHash() {
@@ -602,7 +602,7 @@ export default function App() {
     if (loaded.length) saveScannedManuscripts(loaded, user?.uid);
     lastSavedScanKey.current = "";
     setNotifications(loadNotifications(user?.uid));
-    // Show last-known Saved Mechanics immediately — never flash empty while the API warms.
+    // Show last-known Saved Mechanics immediately - never flash empty while the API warms.
     const cachedMechanics = loadCachedMechanics(user?.uid);
     if (cachedMechanics.length) {
       setMechanics(cachedMechanics);
@@ -848,11 +848,11 @@ export default function App() {
       setError("");
     }
     try {
-      // Vercel Python cold-starts install deps on first request — warm first so
+      // Vercel Python cold-starts install deps on first request - warm first so
       // the three parallel dashboard calls don't all race a 60s install.
       if (!silent) await warmApi();
 
-      // Load each resource independently — a 503 on manuscripts/subscription
+      // Load each resource independently - a 503 on manuscripts/subscription
       // must not wipe a successful mechanics list (that caused "already exists"
       // saves while Use a Saved Format looked empty).
       const subscriptionTicket = nextSubscriptionTicket();
@@ -929,7 +929,7 @@ export default function App() {
   }, [signedIn, loadDashboard]);
 
   // Cross-device updates: refresh on tab focus/visibility only.
-  // Periodic 30s polling was removed — it re-downloaded RTDB trees and burned the free download CAP.
+  // Periodic 30s polling was removed - it re-downloaded RTDB trees and burned the free download CAP.
   useEffect(() => {
     if (!signedIn) return undefined;
     let last = Date.now();
@@ -1046,7 +1046,7 @@ export default function App() {
       }
       return true;
     } catch (err) {
-      // Name conflict usually means the profile is already saved — refresh the list.
+      // Name conflict usually means the profile is already saved - refresh the list.
       if (err?.status === 409 || /already exists/i.test(err?.message || "")) {
         try {
           const data = await listMechanics();
@@ -1131,7 +1131,7 @@ export default function App() {
       deletedMechanicsRef.current.add(mechanicsId);
       mechanicsChangeRef.current += 1;
       const remainingItems = mechanics.filter((item) => item.id !== mechanicsId);
-      // Deleting the last format is a real empty list — allow clearing cache/UI.
+      // Deleting the last format is a real empty list - allow clearing cache/UI.
       applyMechanicsList(remainingItems, {
         allowEmpty: true,
         preferId: selectedMechanicsId === mechanicsId ? "" : selectedMechanicsId,
@@ -1369,7 +1369,7 @@ export default function App() {
 
   function openUploadMechanics() {
     // Leave results / analysis / error and start (or resume) the upload wizard.
-    // Do not bounce to My Manuscripts — sidebar "Upload & Analyze" must stay on Upload.
+    // Do not bounce to My Manuscripts - sidebar "Upload & Analyze" must stay on Upload.
     if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
       beginFreshUpload();
       return;
@@ -1540,9 +1540,9 @@ export default function App() {
               e.preventDefault();
               openUploadMechanics();
             }}
-            className={`mt-1 ${navItemClass(activePage === "upload" && !viewingComplianceResult)}`}
+            className={`mt-1 font-semibold ${navItemClass(activePage === "upload" && !viewingComplianceResult)}`}
           >
-            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center" aria-hidden>
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-[#22c9b4]" aria-hidden>
               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v6h6" />
@@ -1805,7 +1805,7 @@ export default function App() {
         )}
 
         {/* ══════════════════════════════════════════════════════════════════
-            SCAN FLOW — takes over the main area; sidebar + header stay visible
+            SCAN FLOW - takes over the main area; sidebar + header stay visible
         ═══════════════════════════════════════════════════════════════════ */}
         {/* Kept mounted while on other pages so an in-progress upload (step, picked file, title) survives. */}
         <div hidden={activePage !== "upload"}>
@@ -1937,7 +1937,7 @@ export default function App() {
                   >
                     <p className="text-sm font-bold text-emerald-800">{fileDetailsNotice}</p>
                     <p className="mt-0.5 text-xs text-emerald-700">
-                      Review the files below, then click Upload &amp; Analyse to scan — or Cancel upload to discard.
+                      Review the files below, then click Upload &amp; Analyse to scan - or Cancel upload to discard.
                     </p>
                   </div>
                 )}
@@ -2036,7 +2036,7 @@ export default function App() {
                       const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
                       if (!isPaidTier(tier) && scanStyle && scanStyle !== "APA") {
                         setUpgradeMessage(
-                          `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
+                          `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only - change this format's citation style to APA, or upgrade.`
                         );
                         return;
                       }

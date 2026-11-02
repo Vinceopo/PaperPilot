@@ -18,7 +18,6 @@ import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import UploadJourneyModal, {
   ShowStepsRow,
-  hydrateUploadJourneySeen,
   markUploadJourneySeen,
   uploadJourneySeen,
 } from "../components/cockpit/UploadJourneyModal";
@@ -101,7 +100,7 @@ function formFromSaved(item) {
     rulesToForm(item.rules || {}, item.name || item.source_filename || ""),
     ignored
   );
-  // Profiles with almost no stored rules get editable sample values instead of a blank form —
+  // Profiles with almost no stored rules get editable sample values instead of a blank form  - 
   // but never overwrite intentional IGNORE choices from ignored_fields.
   if (!formHasAnyRule(mapped) && !ignored.length) {
     return sampleMechanicsForm(item.name || "Saved Format");
@@ -280,20 +279,12 @@ export default function UploadScreen({ navigation }) {
   const showingUploadFace = scanFlow.step === "idle" || scanFlow.step === "fileSelected";
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      await hydrateUploadJourneySeen();
-      if (cancelled) return;
-      if (!showingUploadFace || uploadJourneySeen()) return;
-      setJourneyOpen(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
+    if (!showingUploadFace || uploadJourneySeen()) return;
+    setJourneyOpen(true);
   }, [showingUploadFace]);
 
   function dismissJourney() {
-    void markUploadJourneySeen();
+    markUploadJourneySeen();
     setJourneyOpen(false);
   }
 
@@ -385,7 +376,7 @@ export default function UploadScreen({ navigation }) {
           rulesToForm(data.rules || {}, data.name || file.name.replace(/\.(pdf|docx)$/i, ""))
         )
       );
-      setMechSuccess("Format fields extracted from your guide — review and edit below, then save.");
+      setMechSuccess("Format fields extracted from your guide - review and edit below, then save.");
     } catch (err) {
       setMechError(err.message || "Extraction failed.");
     } finally {
@@ -573,7 +564,7 @@ export default function UploadScreen({ navigation }) {
           setMechSuccess("Format mechanics deleted.");
           setSavedForm(emptyMechanicsForm());
         } else {
-          setMechError("Could not delete this format. It may still be linked to a manuscript — try again.");
+          setMechError("Could not delete this format. It may still be linked to a manuscript - try again.");
         }
       },
     });
@@ -738,7 +729,7 @@ export default function UploadScreen({ navigation }) {
     const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
     if (!isPaidTier(tier) && scanStyle && scanStyle !== "APA") {
       setUpgradeMessage(
-        `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
+        `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only - change this format's citation style to APA, or upgrade.`
       );
       return;
     }
@@ -1080,7 +1071,7 @@ export default function UploadScreen({ navigation }) {
                 {mode === "customize" && (
                   <View style={{ marginTop: 16 }}>
                     <Text style={[styles.cardHint, { marginTop: 0, marginBottom: 14 }]}>
-                      Starter format rules are loaded below — edit any field to match your
+                      Starter format rules are loaded below - edit any field to match your
                       requirements, then save the profile for reuse.
                     </Text>
                     <FormatMechanicsFields
@@ -1139,8 +1130,8 @@ export default function UploadScreen({ navigation }) {
                       ? msPreparing
                         ? `${formatFileSize(msFile.size)} · Preparing document preview below…`
                         : msUploading
-                          ? `${formatFileSize(msFile.size)} · Uploading — see progress below`
-                          : `${formatFileSize(msFile.size)} · Preview appears below — confirm Upload when ready`
+                          ? `${formatFileSize(msFile.size)} · Uploading - see progress below`
+                          : `${formatFileSize(msFile.size)} · Preview appears below - confirm Upload when ready`
                       : `Tap to browse · PDF only · Max ${formatFileSize(maxBytes)}`}
                   </Text>
                   <View style={styles.browsePill}>
@@ -1175,10 +1166,10 @@ export default function UploadScreen({ navigation }) {
                     }
                     footer={
                       msUploading
-                        ? "Uploading in progress — stay on this page until it completes."
+                        ? "Uploading in progress - stay on this page until it completes."
                         : msPreparing
                           ? "Preparing live preview of your academic document…"
-                          : "Live preview of your uploaded manuscript — scroll to see pages below."
+                          : "Live preview of your uploaded manuscript - scroll to see pages below."
                     }
                   >
                     <DocumentPreview
@@ -1230,7 +1221,7 @@ export default function UploadScreen({ navigation }) {
                   <View style={styles.readyBanner}>
                     <Text style={styles.readyBannerTitle}>{fileDetailsNotice}</Text>
                     <Text style={styles.readyBannerBody}>
-                      Review the files below, then click Upload & Analyse to scan — or Cancel upload
+                      Review the files below, then click Upload & Analyse to scan - or Cancel upload
                       to discard.
                     </Text>
                   </View>

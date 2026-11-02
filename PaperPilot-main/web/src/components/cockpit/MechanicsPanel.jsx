@@ -44,7 +44,7 @@ function formFromSaved(item) {
     ignored
   );
   // If the profile has almost no stored rules, seed editable sample values
-  // so the side panel is never a blank placeholder wall — but never overwrite
+  // so the side panel is never a blank placeholder wall - but never overwrite
   // intentional IGNORE choices from ignored_fields.
   if (!formHasAnyRule(mapped) && !ignored.length) {
     return sampleMechanicsForm(item.name || "Saved Format");
@@ -127,7 +127,7 @@ export default function MechanicsPanel({
     setError("");
     setSuccess("");
     setEditing(false);
-    // Keep upload/customize drafts when switching tabs — only clear on save or refresh.
+    // Keep upload/customize drafts when switching tabs - only clear on save or refresh.
   }
 
   async function onDownloadSample() {
@@ -194,7 +194,7 @@ export default function MechanicsPanel({
           rulesToForm(data.rules || {}, data.name || nextFile.name.replace(/\.(pdf|docx)$/i, ""))
         )
       );
-      setSuccess("Format fields extracted from your guide — review and edit below, then save.");
+      setSuccess("Format fields extracted from your guide - review and edit below, then save.");
     } catch (err) {
       setError(err.message || "Extraction failed.");
     } finally {
@@ -404,7 +404,7 @@ export default function MechanicsPanel({
             setSavedForm(emptyMechanicsForm());
           } else {
             setConfirmAction(null);
-            setError("Could not delete this format. It may still be linked to a manuscript — try again.");
+            setError("Could not delete this format. It may still be linked to a manuscript - try again.");
           }
         } catch (err) {
           setConfirmAction(null);
@@ -474,7 +474,7 @@ export default function MechanicsPanel({
       <ShowStepsRow step={1} onShowSteps={onShowSteps} />
       <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Format Mechanics</h2>
       <p className="mt-1 text-xs leading-relaxed text-slate-400">
-        Upload or select a format guide (not your manuscript) — Format Fields are filled from that file. Customize only
+        Upload or select a format guide (not your manuscript) - Format Fields are filled from that file. Customize only
         when a displayed value does not match your mechanics.
       </p>
 
@@ -483,7 +483,7 @@ export default function MechanicsPanel({
           <p className="text-xs font-semibold text-slate-700">Don’t have a format guide yet?</p>
           <p className="mt-0.5 text-[11px] text-slate-400">
             Download the sample DOCX. Keep every section and field label (like Margins and Top). Put a
-            real value, or type IGNORE to skip that check — don’t use N/A or delete labels. Then upload
+            real value, or type IGNORE to skip that check - don’t use N/A or delete labels. Then upload
             it here or use Customize.
           </p>
         </div>
@@ -786,7 +786,7 @@ export default function MechanicsPanel({
       {showCustomizeEditor && (
         <div className="mt-6 space-y-4">
           <p className="text-xs text-slate-400">
-            Starter format rules are loaded below — edit any field to match your requirements, then
+            Starter format rules are loaded below - edit any field to match your requirements, then
             save the profile for reuse.
           </p>
           <FormatMechanicsFields

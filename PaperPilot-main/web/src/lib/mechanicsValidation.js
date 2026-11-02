@@ -127,7 +127,7 @@ function headingStyleKeysAdded(heading) {
 }
 
 /**
- * Added a style rule but left it on "Choose…" — that is an issue.
+ * Added a style rule but left it on "Choose…" - that is an issue.
  * Not adding the chip at all is IGNORE (optional).
  */
 function incompleteHeadingStyleKeys(heading) {
@@ -284,7 +284,7 @@ export function ignoredFieldsFromForm(form) {
 /**
  * After extract: set every empty Format Field to IGNORE so missing guide rules
  * auto-pass (nothing to enforce). Extracted values are left unchanged.
- * Headings stay empty when unset — empty already means skip in the UI.
+ * Headings stay empty when unset - empty already means skip in the UI.
  */
 export function fillEmptyFieldsWithIgnore(form) {
   return applyIgnoredFieldsToForm(form, Object.keys(FIELD_FORM_KEYS));
@@ -293,7 +293,7 @@ export function fillEmptyFieldsWithIgnore(form) {
 /**
  * Re-apply saved ignored_fields as literal "IGNORE" in Format Fields.
  * Rules omit IGNORE on save, so without this Saved Mechanics shows Choose… again.
- * Heading sizes/styles stay empty when ignored — empty already means skip in the UI.
+ * Heading sizes/styles stay empty when ignored - empty already means skip in the UI.
  */
 export function applyIgnoredFieldsToForm(form, ignoredFields) {
   const list = Array.isArray(ignoredFields) ? ignoredFields : [];

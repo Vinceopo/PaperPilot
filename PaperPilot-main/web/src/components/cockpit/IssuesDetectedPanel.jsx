@@ -2,7 +2,7 @@
  * IssuesDetectedPanel
  *
  * Lists every detected formatting issue in one place so authors can fix them
- * together. Category dropdown is an optional filter — default is ALL.
+ * together. Category dropdown is an optional filter - default is ALL.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -345,7 +345,7 @@ export default function IssuesDetectedPanel({
         </p>
         <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
           {counts.critical} critical · {counts.moderate} moderate · {counts.minor} minor.
-          Each card explains what failed, why it matters, and how to fix it — filter by category or page if you want a smaller pass.
+          Each card explains what failed, why it matters, and how to fix it - filter by category or page if you want a smaller pass.
           {hiddenLocations > 0
             ? ` ${hiddenLocations} additional matching locations are counted in the totals.`
             : ""}

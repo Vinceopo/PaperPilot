@@ -176,7 +176,7 @@ export async function downloadReport(result, opts = {}) {
     Y = MT;
     doc.setFontSize(7).setTextColor(...SLATE);
     doc.text(
-      "PaperPilot · Formatting compliance only — grammar, content, and plagiarism are not evaluated.",
+      "PaperPilot · Formatting compliance only - grammar, content, and plagiarism are not evaluated.",
       PW / 2,
       PH - 8,
       { align: "center" }
@@ -362,14 +362,14 @@ export async function downloadReport(result, opts = {}) {
     ]
       .filter(Boolean)
       .join("\n");
-    return [c.result || "REVIEW", `${c.name || ""}\n${detail}`.trim(), locs || "—"];
+    return [c.result || "REVIEW", `${c.name || ""}\n${detail}`.trim(), locs || "-"];
   });
 
   autoTable(doc, {
     startY: Y,
     margin: { left: ML, right: MR },
     head: [["Result", "Finding", "Locations"]],
-    body: formatTableRows.length ? formatTableRows : [["—", "No formatting issues detected", "—"]],
+    body: formatTableRows.length ? formatTableRows : [["-", "No formatting issues detected", "-"]],
     styles: { fontSize: 8, cellPadding: 3.5, lineColor: [226, 232, 240], lineWidth: 0.3, fillColor: 255 },
     headStyles: { fillColor: [248, 250, 252], textColor: SLATE, fontStyle: "bold", fontSize: 7.5 },
     columnStyles: {
@@ -380,7 +380,7 @@ export async function downloadReport(result, opts = {}) {
     didDrawCell(data) {
       if (data.column.index !== 0 || data.section !== "body") return;
       const val = String(data.cell.raw);
-      if (val === "—") return;
+      if (val === "-") return;
       const { x, y, width, height } = data.cell;
       const [r, g, b] =
         val === "PASS" ? [220, 252, 231] : val === "FAIL" ? [254, 226, 226] : [254, 243, 199];
@@ -422,7 +422,7 @@ export async function downloadReport(result, opts = {}) {
     doc.setPage(p);
     doc.setFontSize(7).setTextColor(...SLATE);
     doc.text(
-      "PaperPilot · Formatting compliance only — grammar, content, and plagiarism are not evaluated.",
+      "PaperPilot · Formatting compliance only - grammar, content, and plagiarism are not evaluated.",
       PW / 2,
       PH - 8,
       { align: "center" }

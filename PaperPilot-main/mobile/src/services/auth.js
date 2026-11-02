@@ -9,8 +9,8 @@ import { ref, runTransaction, set } from "firebase/database";
 
 export const REMEMBER_ME_KEY = "paperpilot.rememberMe";
 const PASSWORD_CHANGED_KEY = "paperpilot.passwordChanged";
-const LOGIN_NOTICE_KEY = "paperpilot.loginNotice";
 
+/** Shown once after password change/reset, before the login form (mirrors web). */
 export async function markPasswordChanged() {
   try {
     await AsyncStorage.setItem(PASSWORD_CHANGED_KEY, "1");
@@ -35,25 +35,7 @@ export async function clearPasswordChangedNotice() {
   }
 }
 
-export async function setLoginNotice(message) {
-  try {
-    await AsyncStorage.setItem(LOGIN_NOTICE_KEY, message || "");
-  } catch {
-    // Ignore storage failures.
-  }
-}
-
-export async function takeLoginNotice() {
-  try {
-    const message = (await AsyncStorage.getItem(LOGIN_NOTICE_KEY)) || "";
-    await AsyncStorage.removeItem(LOGIN_NOTICE_KEY);
-    return message;
-  } catch {
-    return "";
-  }
-}
-
-/** Only these mean the session is truly dead — never sign out on network blips. */
+/** Only these mean the session is truly dead - never sign out on network blips. */
 const FATAL_AUTH_CODES = new Set([
   "auth/user-token-expired",
   "auth/invalid-user-token",

@@ -197,7 +197,7 @@ _FORBIDDEN_PLACEHOLDERS = frozenset(
         "not applicable",
         "none",
         "-",
-        "—",
+        "-",
     }
 )
 
@@ -284,7 +284,7 @@ def _inline_title_value_re(alias: str) -> re.Pattern[str]:
     cached = _INLINE_TITLE_VALUE_RE_CACHE.get(alias)
     if cached:
         return cached
-    pattern = re.compile(rf"^{re.escape(alias)}(?:\s*[:\-—–].*)?$", re.I)
+    pattern = re.compile(rf"^{re.escape(alias)}(?:\s*[:\- - -].*)?$", re.I)
     _INLINE_TITLE_VALUE_RE_CACHE[alias] = pattern
     return pattern
 
@@ -311,7 +311,7 @@ def _heading_matches_title(text: str, title: str) -> bool:
 
 
 def _field_is_optional(category: str, field_id: str) -> bool:
-    """Heading sizes/styles are optional — Format Fields only require them when added."""
+    """Heading sizes/styles are optional - Format Fields only require them when added."""
     if category == "font" and field_id in {"heading1_size", "heading2_size"}:
         return True
     if category == "heading_styles" and field_id in {"heading1_style", "heading2_style"}:
@@ -642,7 +642,7 @@ def apply_ignored_fields_to_rules(
     """Return a copy of rules with IGNORE / empty Format Fields removed.
 
     Empty heading rows (font:heading1_size, heading_styles:…) must not remain as
-    active scan rules — nothing set means that check is skipped.
+    active scan rules - nothing set means that check is skipped.
     """
     import copy
 

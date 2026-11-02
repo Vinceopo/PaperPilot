@@ -1,86 +1,105 @@
 # PaperPilot design system
 
-Product: academic manuscript compliance — navy authority, teal confirmation, quiet density.
-Audience: students and researchers reviewing formatting scores on phone and desktop.
-Worst case: unclear scores, accidental deletes, or blocked actions with no recovery path.
+Product: AI-powered academic manuscript formatting compliance for researchers and students.
+Surfaces: web SPA (`web/`) and Expo mobile (`mobile/`). Tokens below are the source of truth; do not invent a second palette.
 
-## Intent discovery (before UI)
+## Intent
 
-Answer before shipping a screen:
+| Question | Answer |
+| --- | --- |
+| Who | Authors checking campus / journal format rules |
+| What | Upload PDF → score → short detail → full results → click-to-trace fixes |
+| Worst case | Silent empty Results after refresh; password change with no confirmation; scores that disagree with listed issues |
 
-1. **Who** is this for in this moment? (author fixing issues, payer upgrading, signed-out user resetting password)
-2. **What** is the one job of this viewport?
-3. **Worst case** if they mis-tap or lose connectivity?
+## Brand & visual character
 
-## Tokens
+- **Look:** Calm academic cockpit — deep navy chrome, mint accent, light slate workspace. Not purple SaaS, not newspaper, not cream-serif.
+- **Mark:** Mint tile + teal document check (`PaperPilotMark`). Wordmark: Quicksand bold, tracking wide.
+- **Accent:** Teal `#16bfa8` for primary actions and active nav; navy `#101a30` / `#0F1B2D` for sidebar and auth header.
+- **Score bands:** Emerald ≥80, Amber 50–79, Rose <50, Slate not evaluated.
 
-### Color
+## Color tokens
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `navy` / `sidebar` | `#0F1B2D` / `#101a30` | Chrome, sidebar |
-| `sidebarActive` | `#1a2943` | Active nav |
-| `text` | `#172033` | Primary copy |
-| `muted` / `slate` | `#94a3b8` / `#64748b` | Secondary |
-| `pageBg` | `#f3f5f7` | App background |
-| `card` / `border` | `#ffffff` / `#e2e8f0` | Surfaces |
-| `accent` | `#16bfa8` | Primary actions, focus |
-| `accentHover` | `#12ae99` | Pressed primary |
+| `navy` / `sidebar` | `#0F1B2D` / `#101a30` | Auth header, sidebar |
+| `sidebarActive` | `#1a2943` | Active nav item |
+| `text` | `#172033` | Body / titles |
+| `muted` / `slate` | `#94a3b8` / `#64748b` | Secondary copy |
+| `pageBg` | `#f3f5f7` | App canvas |
+| `authFormBg` | `#EEF1F5` | Auth form panel |
+| `card` / `white` | `#ffffff` | Surfaces |
+| `border` | `#e2e8f0` | Hairlines |
+| `accent` | `#16bfa8` | Primary CTA, focus |
+| `accentHover` | `#12ae99` | CTA hover/press |
 | `rose` | `#e11d48` | Destructive / non-compliant |
-| `amber` | `#d97706` | Caution / approximate |
 | `emerald` | `#059669` | Compliant / success |
+| `amber` | `#d97706` | Warnings / under review |
 
-Severity: critical rose · moderate orange · minor amber.
+Web scrollbar (`pp-scroll`): thumb `#7dcdc2`, track `#e8eef4`, hover `#16bfa8`.
 
-### Type
+## Type
 
-- Brand: **Quicksand** (700 wordmark, 600 tagline) — must load before relying on metrics.
-- UI: system sans; tabular nums for scores.
-- Kickers: 10–11px uppercase tracking; titles 17–22px bold; body 14/20.
+- **Brand:** Quicksand (must load before lockup ships).
+- **UI:** Existing sans stacks on web/mobile; keep tabular nums on scores.
+- Scale: kickers 10–11px uppercase; body 14; titles 18–22; hero score 40–48.
 
-### Space
+## Space & radius
 
-`xs 4 · sm 8 · md 12 · lg 16 · xl 20 · xxl 28`
-
-Touch targets ≥ 44×44 on phone. Primary buttons: accent fill; secondary: border white; tertiary: text/link.
-
-### Motion & feedback
-
-- Press feedback &lt; 100ms (opacity / bg shift).
-- Confirm before delete (manuscript, version, cancel subscription).
-- Loading / empty / error / success required; offline and partial where data can be stale.
-
-### Scroll
-
-Web: `.pp-scroll` — thumb `#7dcdc2`, track `#e8eef4`, hover `#16bfa8`.
-Mobile lists: nested `ScrollView` / `FlatList` with independent panes (Versions ≠ Short result).
+- Spacing scale: 4 / 8 / 12 / 16 / 20 / 28.
+- Cards: `borderRadius` 12–16; pills full round.
+- Soft shadow preferred over heavy elevation: `0 1px 3px rgba(15,23,41,0.05)`.
 
 ## Hierarchy
 
-1. **Primary** — analyze, download report, pay, save password
-2. **Secondary** — open tracing, filter, change plan
-3. **Tertiary** — meta, back links, clear filter
+1. **Primary** — one accent CTA per region (Analyse, View full results, Continue to sign in).
+2. **Secondary** — outline / navy buttons (Download, Trace).
+3. **Tertiary** — text links, nested nav (Compliance Result under My Manuscripts).
 
-Scan pattern: brand → score → breakdown → issues → actions.
+Scanning pattern: kicker → title → one supporting line → actions. Prefer density with clear sections over card stacks in heroes.
+
+## Component states
+
+Every interactive screen must cover:
+
+| State | Pattern |
+| --- | --- |
+| Loading | Spinner + short label; never blank navy |
+| Empty | Title + one sentence + primary route out |
+| Error | Inline alert (`role="alert"` / a11y alert); retry when safe |
+| Success | Confirmation screen or toast; password change uses dedicated screen |
+| Partial | e.g. trimmed scan → hydrate + “Loading breakdown…” |
+| Offline / network | Auth/network copy from `authMessage`; no false sign-out |
+
+## Feedback & affordance
+
+- Press feedback <100ms (opacity / bg change).
+- Destructive: ConfirmDialog before delete manuscript/version.
+- Clickable must look clickable (button chrome or underlined text link).
+- Touch targets ≥44px on mobile; icon-only rails use ≥36px hit area + tooltip/`title`/`accessibilityLabel`.
 
 ## Forms
 
-- Labels above fields; group identity vs security.
-- Validate on blur after first submit attempt.
-- OTP for register / forgot / account password change — never skip for production.
-- Smart defaults: Remember me on; PDF-only manuscripts.
+- Labels via floating label or explicit `label` above field.
+- Validate on blur + submit; keep OTP progressive (email → code → password).
+- Smart default: Remember me on; PDF-only manuscript accept list.
+- Password rules checklist visible while typing.
 
-## Responsive (&lt; 640)
+## Responsive (<640px)
 
-- Tables → stacked cards; amounts stay tabular.
-- Sidebar → drawer (mobile) / icon rail (web desktop collapse).
-- Bottom bars: keep primary CTA thumb-reachable; avoid dual sticky conflicts.
+- Web sidebar → overlay drawer; desktop → expandable / icon rail.
+- Manuscript detail: stack Versions above Short result; independent scrolls.
+- Tables → cards; unit stats → 3-up or wrap; bottom bars / CTAs stay thumb-reachable.
+- Auth: single column; brand header then form.
 
-## State completeness checklist
+## Navigation parity
 
-Every interactive screen: loading · empty · error · success · (partial | offline when applicable).
+- **Web:** Collapsible sidebar (`<<` / `>>`), nested Compliance Result, `#/results` session-only (hard refresh → My Manuscripts).
+- **Mobile:** Drawer sidebar; Results empty → My Manuscripts / Upload; DocumentReference for click-to-trace (no auto-jump until user selects).
 
-## Platforms
+## Do / don’t
 
-- Web: `web/src` — Vite React; hash routes; sidebar expand key `paperpilot.sidebarExpanded`.
-- Mobile: `mobile/src` — Expo RN; same API contracts and lib semantics (`scanMapper`, `scoreFormat`, `uploadLimits`, `documentPreviewLocate`).
+- Do keep Compliant / Non-Compliant **labels + bar**; do not show bar percentages in public results.
+- Do gate signup / reset with email OTP.
+- Don’t ship Google sign-in UI.
+- Don’t invent purple gradients or cream-serif marketing looks.

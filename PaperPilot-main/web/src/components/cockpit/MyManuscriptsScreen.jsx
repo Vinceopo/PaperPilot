@@ -24,7 +24,7 @@ const STATUS_FILTERS = [
 ];
 
 function formatDate(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     return new Date(iso + (iso.length <= 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, {
       year: "numeric",
@@ -48,7 +48,7 @@ function StatCard({ label, value, sub, accent }) {
 }
 
 /**
- * My Manuscripts — checker/viewer only (no content editing).
+ * My Manuscripts - checker/viewer only (no content editing).
  * Only manuscripts the user has scanned appear here (no demo seed data).
  */
 export default function MyManuscriptsScreen({

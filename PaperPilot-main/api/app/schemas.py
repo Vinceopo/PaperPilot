@@ -90,7 +90,7 @@ class MechanicsSaveRequest(BaseModel):
     source_filename: str | None = Field(default=None, max_length=300)
     file_type: str | None = Field(default=None, max_length=40)
     extracted_text: str | None = Field(default=None, max_length=200_000)
-    # Format Fields set to IGNORE — clears matching document-validation issues on save.
+    # Format Fields set to IGNORE - clears matching document-validation issues on save.
     ignored_fields: list[str] | None = None
 
 

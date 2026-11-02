@@ -68,7 +68,7 @@ function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, i
             className={`text-[12px] font-extrabold tabular-nums leading-none ${evaluated ? "" : "text-slate-400"}`}
             style={evaluated ? { color: stroke } : undefined}
           >
-            {evaluated ? formatPct(safe, 1) : "—"}
+            {evaluated ? formatPct(safe, 1) : "-"}
           </span>
         </div>
       </div>
@@ -81,7 +81,7 @@ function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, i
 }
 
 function formatDate(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     return new Date(iso + (iso.length <= 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, {
       year: "numeric",
@@ -214,7 +214,7 @@ export default function ManuscriptDetailModal({
 
   const selected = selectedFromLibrary;
   const band = scoreBand(selected?.score);
-  const versionLabel = selected ? `v${selected.versionNumber}.0` : "—";
+  const versionLabel = selected ? `v${selected.versionNumber}.0` : "-";
 
   async function openFullResult(ver) {
     if (!ver || !onOpenResult || openingResult) return;
@@ -234,7 +234,7 @@ export default function ManuscriptDetailModal({
       );
       return;
     }
-    // Short summary only — full Scan Results open via "View full results".
+    // Short summary only - full Scan Results open via "View full results".
     setSelectedId(ver.id);
   }
 
@@ -268,7 +268,7 @@ export default function ManuscriptDetailModal({
             {manuscript.title}
           </h2>
           <p className="shrink-0 text-sm text-slate-500">
-            {manuscript.institution || "—"} · {manuscript.citationStyle}
+            {manuscript.institution || "-"} · {manuscript.citationStyle}
           </p>
           <span className={`rounded-full border px-3 py-1 text-xs font-bold ${band.pillClass}`}>
             {formatScore(selected?.score, 0)} · {band.label}
@@ -437,7 +437,7 @@ export default function ManuscriptDetailModal({
                       <span className="font-normal text-slate-400">({issues.length})</span>
                     </h3>
                     <p className="mt-0.5 text-[11px] text-slate-500">
-                      Each card is one rule finding — expand locations to see every page/line hit.
+                      Each card is one rule finding - expand locations to see every page/line hit.
                     </p>
                   </div>
                 </div>

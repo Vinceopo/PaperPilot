@@ -59,7 +59,7 @@ export const WORD_SPACING_OPTIONS = ["One space between words and after periods"
 
 export const LANDSCAPE_OPTIONS = ["Allowed for tables and figures", "Allowed on any page"];
 
-/** Word supports Heading 1–9; a format shows as many levels as it defines. */
+/** Word supports Heading 1-9; a format shows as many levels as it defines. */
 export const MAX_HEADING_LEVELS = 9;
 export const DEFAULT_HEADING_LEVELS = 2;
 
@@ -256,7 +256,7 @@ export function headingsToRules(headings) {
       else if (heading?.[flag] === "no") style[flag] = false;
       // IGNORE / blank → omit (no style rule for this flag)
     }
-    // Never persist IGNORE as a case/alignment value — that faked coverage client-side
+    // Never persist IGNORE as a case/alignment value - that faked coverage client-side
     // then disappeared after server normalize and blocked save.
     if (enabled.has("case") && !isIgnoreOrEmpty(heading?.case)) style.case = heading.case;
     if (enabled.has("alignment") && !isIgnoreOrEmpty(heading?.alignment)) {

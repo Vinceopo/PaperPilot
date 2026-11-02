@@ -1,5 +1,5 @@
 /**
- * Format Fields — editable form for Customize, Upload extract, and Saved mechanics (RN).
+ * Format Fields - editable form for Customize, Upload extract, and Saved mechanics (RN).
  * Values shown are the actual rules (from extraction, saved profile, or sample starter).
  */
 
@@ -264,7 +264,7 @@ export default function FormatMechanicsFields({
           <Field label="Indention" hint="e.g. 0.5 inch, 1/2 inch, 1.27 cm">
             {input("indention")}
           </Field>
-          <Field label="Alignment" hint="Body text alignment — IGNORE skips this check">
+          <Field label="Alignment" hint="Body text alignment - IGNORE skips this check">
             <SelectField
               title="Alignment"
               value={form.alignment || ""}
@@ -299,7 +299,7 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Font">
-          <Field label="Body text size" hint="Same as Contents Size — not heading size">
+          <Field label="Body text size" hint="Same as Contents Size - not heading size">
             {input("bodySize", { keyboardType: "decimal-pad" })}
           </Field>
           <Field label="Type" hint="Font family">
@@ -324,7 +324,7 @@ export default function FormatMechanicsFields({
           <Text style={styles.hint}>Filled from your uploaded format. Edit only if a value does not match your guide.</Text>
           {headings.length ? null : (
             <Text style={styles.hint}>
-              No heading rules — this check is skipped. Add a level only if your guide defines one.
+              No heading rules - this check is skipped. Add a level only if your guide defines one.
             </Text>
           )}
           {headings.map((heading, index) => {
@@ -387,7 +387,7 @@ export default function FormatMechanicsFields({
                   </View>
                 ) : (
                   <Text style={styles.hint}>
-                    No rules set — this heading level is skipped (same as IGNORE).
+                    No rules set - this heading level is skipped (same as IGNORE).
                   </Text>
                 )}
                 {!disabled && missing.length ? (
@@ -467,7 +467,7 @@ export default function FormatMechanicsFields({
           </Field>
           <Field
             label="Chapter starts"
-            hint="How chapter headings are written — set IGNORE if your guide does not specify this"
+            hint="How chapter headings are written - set IGNORE if your guide does not specify this"
           >
             <SelectField
               title="Chapter starts"

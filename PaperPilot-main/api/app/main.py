@@ -265,7 +265,7 @@ def _user_upload_byte_limit(uid: str) -> int:
 def uploads_presign(body: PresignUploadRequest, uid: str = Depends(authenticated_uid)):
     """Issue a short-lived S3 PUT URL. Client uploads bytes, then sends public_url as cloudinary_url.
 
-    upload_url is PUT-only (presigned). Never open it in a browser tab or iframe —
+    upload_url is PUT-only (presigned). Never open it in a browser tab or iframe  - 
     that issues GET and yields SignatureDoesNotMatch. Use public_url for preview/download.
     """
     if not s3_configured():
@@ -454,7 +454,7 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
         )
     filename = (body.source_filename or f"{name}.docx").strip()[:300]
     raw_type = (body.file_type or "docx").strip().lower()[:40] or "docx"
-    # SQLite CHECK only allows pdf/docx — map customize/"manual" saves to docx.
+    # SQLite CHECK only allows pdf/docx - map customize/"manual" saves to docx.
     file_type = raw_type if raw_type in ("pdf", "docx") else "docx"
     if not filename.lower().endswith((".pdf", ".docx")):
         filename = f"{Path(filename).stem}.docx"
@@ -1058,7 +1058,7 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
 
     handled = fulfill_checkout_paid(data if isinstance(data, dict) else {"id": session_id})
     if not handled:
-        # Session is paid and owned by this user — activate even if webhook metadata was missing.
+        # Session is paid and owned by this user - activate even if webhook metadata was missing.
         billing_period = str(
             (pending or {}).get("billing_period")
             or meta.get("billing_period")
@@ -1112,7 +1112,7 @@ async def paymongo_webhook(
     paymongo_signature: str | None = Header(default=None, alias="Paymongo-Signature"),
 ):
     """
-    PayMongo webhook — raw body required for HMAC verification.
+    PayMongo webhook - raw body required for HMAC verification.
     FastAPI does not JSON-parse Request.body(), so signature verification is safe here.
     Tier changes happen only after a valid signature (never from client redirects).
     """

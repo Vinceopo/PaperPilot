@@ -1,6 +1,6 @@
 /**
  * Persist user-scanned manuscripts for the My Manuscripts page.
- * Starts empty — only real scans are added.
+ * Starts empty - only real scans are added.
  * Re-scans of the same title become new versions, not new rows.
  */
 
@@ -91,13 +91,13 @@ export function dismissScanIds(ids, uid) {
   }
 }
 
-/** Normalize titles so the same file name always matches (e.g. PAPERPILOT–FINAL_MANUSCRIPT). */
+/** Normalize titles so the same file name always matches (e.g. PAPERPILOT-FINAL_MANUSCRIPT). */
 export function normalizeTitle(title) {
   return String(title || "")
     .trim()
     .toLowerCase()
     .replace(/\.(pdf|docx)$/i, "")
-    .replace(/[\s_–—−-]+/g, " ")
+    .replace(/[\s_\-\u2013\u2014\u2212]+/g, " ")
     .replace(/\s+/g, " ");
 }
 
@@ -120,7 +120,7 @@ export function saveScannedManuscripts(items, uid) {
       localStorage.setItem(storageKey(uid), JSON.stringify(build()));
       return true;
     } catch {
-      // Quota exceeded — retry with a smaller copy.
+      // Quota exceeded - retry with a smaller copy.
     }
   }
   return false;
@@ -183,7 +183,7 @@ export function mergeServerScans(items, summaries, dismissed = new Set(), delete
         id: manuscriptId || `doc-${scanId}`,
         serverManuscriptId: manuscriptId || undefined,
         title,
-        institution: "—",
+        institution: "-",
         citationStyle: "APA",
         createdThisMonth: String(scan.created_at || "").startsWith(monthPrefix),
         versions: [],
@@ -395,7 +395,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
       ...existing,
       id: documentId,
       title: title || existing.title,
-      institution: scanResult.campus || existing.institution || "—",
+      institution: scanResult.campus || existing.institution || "-",
       citationStyle: scanResult.citationStyle || existing.citationStyle || "APA",
       versions: [version, ...(existing.versions || [])],
     };
@@ -403,7 +403,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
     list.unshift({
       id: documentId,
       title,
-      institution: scanResult.campus || scanResult.college || "—",
+      institution: scanResult.campus || scanResult.college || "-",
       citationStyle: scanResult.citationStyle || "APA",
       createdThisMonth: true,
       versions: [version],
@@ -448,7 +448,7 @@ export function versionToScanResult(manuscript, version) {
   return {
     documentId: manuscript?.id || version.manuscriptId,
     documentTitle: manuscript?.title || "Untitled",
-    campus: manuscript?.institution || "—",
+    campus: manuscript?.institution || "-",
     citationStyle: manuscript?.citationStyle || "APA",
     scannedAt: version.scannedAt || version.scannedDate,
     overallScore: version.score,

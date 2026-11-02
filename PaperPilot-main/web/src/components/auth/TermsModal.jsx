@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 
 export const TERMS_SECTIONS = [
   {
@@ -43,59 +44,67 @@ export const TERMS_SECTIONS = [
   },
 ];
 
-export default function TermsModal({ open, onClose, onAgree }) {
+export default function TermsModal({ open, onClose }) {
   useEffect(() => {
     if (!open) return undefined;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     function onKey(e) {
       if (e.key === "Escape") onClose?.();
     }
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-      <button type="button" className="absolute inset-0 cursor-default" aria-label="Close" onClick={onClose} />
+  // Portal to body so auth-panel transform/overflow does not trap position:fixed.
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-900/55 p-4 sm:p-8">
+      <button
+        type="button"
+        className="absolute inset-0 cursor-default"
+        aria-label="Close terms and conditions"
+        onClick={onClose}
+      />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="terms-title"
-        className="relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        className="relative z-10 flex max-h-[min(90vh,40rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-[0_24px_60px_rgba(15,23,41,0.28)]"
       >
-        <div className="border-b border-slate-100 px-6 py-4">
-          <h2 id="terms-title" className="text-lg font-bold text-navy">
-            Terms and Conditions
-          </h2>
-        </div>
-        <div className="pp-scroll space-y-4 overflow-y-auto overscroll-contain px-6 py-4 text-sm leading-relaxed text-slate-600">
-          {TERMS_SECTIONS.map((section) => (
-            <div key={section.heading}>
-              <h3 className="font-semibold text-slate-800">{section.heading}</h3>
-              <p className="mt-1">{section.body}</p>
-            </div>
-          ))}
-        </div>
-        <div className="flex justify-end gap-3 border-t border-slate-100 px-6 py-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-6 py-5 sm:px-8">
+          <div className="min-w-0">
+            <h2 id="terms-title" className="text-xl font-bold text-navy sm:text-2xl">
+              Terms and Conditions
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">Please review before creating your account.</p>
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="h-11 rounded-[10px] border border-slate-200 px-5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Close"
+            title="Close"
           >
-            Close
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
-          {onAgree ? (
-            <button
-              type="button"
-              onClick={onAgree}
-              className="h-11 rounded-[10px] bg-accent px-5 text-sm font-semibold text-navy hover:bg-accent-hover"
-            >
-              I agree
-            </button>
-          ) : null}
+        </div>
+        <div className="pp-scroll min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-6 py-5 text-[15px] leading-relaxed text-slate-600 sm:px-8 sm:py-6">
+          {TERMS_SECTIONS.map((section) => (
+            <div key={section.heading}>
+              <h3 className="text-base font-semibold text-slate-800">{section.heading}</h3>
+              <p className="mt-1.5">{section.body}</p>
+            </div>
+          ))}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

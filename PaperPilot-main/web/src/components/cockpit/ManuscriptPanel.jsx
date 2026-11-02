@@ -31,7 +31,7 @@ function rejectionMessage(rejection, tier, maxBytes) {
 }
 
 /**
- * manuscripts — shared library entries from My Manuscripts (same source of truth).
+ * manuscripts - shared library entries from My Manuscripts (same source of truth).
  */
 export default function ManuscriptPanel({
   mechanicsSelected = true,
@@ -315,8 +315,8 @@ export default function ManuscriptPanel({
                   ? previewPreparing
                     ? `${formatFileSize(file.size)} · Preparing document preview on the right…`
                     : previewUploading
-                      ? `${formatFileSize(file.size)} · Uploading — see progress beside this panel`
-                      : `${formatFileSize(file.size)} · Preview appears beside this panel — confirm Upload when ready`
+                      ? `${formatFileSize(file.size)} · Uploading - see progress beside this panel`
+                      : `${formatFileSize(file.size)} · Preview appears beside this panel - confirm Upload when ready`
                   : `Drag & drop or browse · PDF only · Max ${formatFileSize(maxBytes)}`}
               </p>
               <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
@@ -407,10 +407,10 @@ export default function ManuscriptPanel({
               </div>
               <p className="border-t border-slate-200/80 bg-[#f3f5f7] px-4 py-2 text-[10px] text-slate-400">
                 {previewUploading
-                  ? "Uploading in progress — stay on this page until it completes."
+                  ? "Uploading in progress - stay on this page until it completes."
                   : previewPreparing
                     ? "Preparing live preview of your academic document…"
-                    : "Live preview of your uploaded manuscript — scroll to see pages below."}
+                    : "Live preview of your uploaded manuscript - scroll to see pages below."}
               </p>
             </div>
           )}

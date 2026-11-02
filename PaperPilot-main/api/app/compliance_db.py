@@ -356,7 +356,7 @@ def _title_key(title: str) -> str:
     """Same matching rules as the web library, so a deleted title can be reused."""
     text = str(title or "").strip().lower()
     text = re.sub(r"\.(pdf|docx)$", "", text)
-    text = re.sub(r"[\s_–—−-]+", " ", text)
+    text = re.sub(r"[\s_\-\u2013\u2014\u2212]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -559,7 +559,7 @@ def _sync_counter_after_release(owner_uid: str, manuscript_id: str, versions: di
 
 
 def _version_list_fields(owner_uid: str, manuscript_id: str, version_id: str) -> dict | None:
-    """Small fields only — never pull parsed_data / extracted_text for listings."""
+    """Small fields only - never pull parsed_data / extracted_text for listings."""
     base = f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}"
     # Existence check without downloading the fat subtree.
     if _reference(base).get(shallow=True) is None:
@@ -784,7 +784,7 @@ def list_manuscripts(owner_uid: str) -> list[dict]:
         if not isinstance(row, dict):
             continue
         mid = row.get("id")
-        # Field-level version metas only — never download parsed_data trees for the dashboard list.
+        # Field-level version metas only - never download parsed_data trees for the dashboard list.
         versions = _list_version_metas(owner_uid, mid)
         committed = [
             item
@@ -1028,7 +1028,7 @@ def _subscription_row(owner_uid: str) -> dict:
     tier = str(row.get("tier") or "free").lower()
     coverage = None if row.get("premium_ended") else _coverage_end(row)
     # Pro Monday resets only run while the paid subscription term is still open.
-    # After the paid month/year ends, leave counters alone — snapshot drops the tier to free.
+    # After the paid month/year ends, leave counters alone - snapshot drops the tier to free.
     if tier == "pro" and not (coverage and coverage >= now):
         return row
 
@@ -1805,7 +1805,7 @@ def check_scan_eligibility(
             feature=True,
             message=(
                 f"{citation_style} citation checks are available on Premium and Pro. "
-                "The Free plan checks APA only — change this format's citation style to APA, "
+                "The Free plan checks APA only - change this format's citation style to APA, "
                 "or upgrade on the Subscription page."
             ),
         )
@@ -1938,7 +1938,7 @@ def _section_row(item: dict) -> dict:
 
 
 def _write_section_checks(owner_uid: str, scan_id: str, sections: list[dict]) -> None:
-    """Store section score summaries only — full issue arrays live in scan.json on S3."""
+    """Store section score summaries only - full issue arrays live in scan.json on S3."""
     for index, section in enumerate(sections or []):
         if not isinstance(section, dict):
             continue

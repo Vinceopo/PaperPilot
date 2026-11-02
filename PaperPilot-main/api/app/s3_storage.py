@@ -150,7 +150,7 @@ def presign_put(
     SignedHeaders is only ``host``. Browsers and XHR clients often send a
     different or empty Content-Type than the value used at sign time; including
     it in the signature causes SignatureDoesNotMatch. Clients may still send
-    Content-Type on the PUT to set object metadata — it is not signed.
+    Content-Type on the PUT to set object metadata - it is not signed.
     """
     if not s3_configured():
         raise S3StorageError("Amazon S3 is not configured on the server.")

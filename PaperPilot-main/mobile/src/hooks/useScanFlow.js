@@ -1,5 +1,5 @@
 /**
- * useScanFlow — state machine for the upload-to-results scan flow (RN port).
+ * useScanFlow - state machine for the upload-to-results scan flow (RN port).
  * File shape: { uri, name, mimeType, size }
  */
 
@@ -230,11 +230,6 @@ export function useScanFlow({
     });
   }, []);
 
-  const syncVersionNumber = useCallback((version) => {
-    const n = Number(version);
-    setVersionNumber(Number.isFinite(n) && n > 0 ? n : 1);
-  }, []);
-
   const backToSummary = useCallback(() => {
     if (result) setStep("results");
   }, [result]);
@@ -274,7 +269,6 @@ export function useScanFlow({
     backToDashboard,
     showSavedResult,
     patchResult,
-    syncVersionNumber,
     revealSummary,
     backToSummary,
     openFullResult,

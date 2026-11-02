@@ -1,5 +1,5 @@
 /**
- * ScanResultsScreen — report-style results matching the compliance design:
+ * ScanResultsScreen - report-style results matching the compliance design:
  * brand lockup, meta strip, overall score + Compliant/Non-Compliant bar, breakdown,
  * and Issue tracing & XAI (preview + clickable findings in one section).
  */
@@ -64,10 +64,10 @@ function ringStroke(score) {
 }
 
 function formatReportDate(value) {
-  if (!value) return "—";
+  if (!value) return "-";
   const raw = String(value);
   const d = new Date(raw.length <= 10 ? `${raw}T12:00:00` : raw);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "-";
   const datePart = d.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
@@ -139,7 +139,7 @@ function CategoryScoreCard({
             }`}
             style={evaluated ? { color: stroke } : undefined}
           >
-            {evaluated ? formatPct(safe, 2) : "—"}
+            {evaluated ? formatPct(safe, 2) : "-"}
           </span>
         </div>
       </div>
@@ -180,7 +180,7 @@ export default function ScanResultsScreen({
   } = result;
 
   const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
-  // Same expansion as Issue Tracing — cards, rings, and header all use these counts.
+  // Same expansion as Issue Tracing - cards, rings, and header all use these counts.
   const tracedEntries = normalizeDetectedIssues(formatChecks, result.pageCount || 0).entries;
   const tracedByCategory = {};
   tracedEntries.forEach((entry) => {
@@ -222,7 +222,7 @@ export default function ScanResultsScreen({
     { unitsChecked, unitsPassed, unitsFailed },
     categoryCards,
   );
-  // Bar shares only — percent numbers are not shown in the public results UI.
+  // Bar shares only - percent numbers are not shown in the public results UI.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
       ? [
@@ -333,7 +333,7 @@ export default function ScanResultsScreen({
             </p>
             <div className="mt-2 flex flex-wrap items-end gap-1">
               <span className={`text-5xl font-extrabold tabular-nums leading-none ${band.scoreColor}`}>
-                {evaluated ? formatScore(overallFromCards, 0) : "—"}
+                {evaluated ? formatScore(overallFromCards, 0) : "-"}
               </span>
               {evaluated ? (
                 <span className={`pb-1 text-2xl font-extrabold tabular-nums ${band.scoreColor}`}>%</span>

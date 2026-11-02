@@ -92,7 +92,7 @@ def plan_amount_pesos(billing_period: str, tier: str = "premium") -> int:
 
 
 def retrieve_checkout_session(checkout_session_id: str) -> dict:
-    """GET Checkout Session (secret key) — includes payments when paid."""
+    """GET Checkout Session (secret key) - includes payments when paid."""
     sid = (checkout_session_id or "").strip()
     if not sid:
         raise PayMongoError("Checkout session id is required.", status=400)
@@ -142,7 +142,7 @@ def create_checkout_session(
     description = (
         f"{allowance} · APA, MLA & IEEE · version history"
         if period == "monthly"
-        else f"Annual {plan_name} (save 8%) — {allowance} · APA, MLA & IEEE · version history"
+        else f"Annual {plan_name} (save 8%) - {allowance} · APA, MLA & IEEE · version history"
     )
     methods = [
         m.strip()
@@ -248,7 +248,7 @@ def extract_event(payload: dict) -> tuple[str, dict, str]:
     event_id = str(data.get("id") or "")
     attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
 
-    # Shape B — Event resource wrapper
+    # Shape B - Event resource wrapper
     if data.get("type") == "event" or (
         isinstance(attrs.get("type"), str) and "." in str(attrs.get("type") or "")
     ):
@@ -258,7 +258,7 @@ def extract_event(payload: dict) -> tuple[str, dict, str]:
             event_id = str(attrs.get("id") or "")
         return event_type, resource if isinstance(resource, dict) else {}, event_id
 
-    # Shape A — flat event type on data.type
+    # Shape A - flat event type on data.type
     event_type = str(data.get("type") or payload.get("type") or "")
     resource = data.get("data") if isinstance(data.get("data"), dict) else data
     if event_type == "event" and isinstance(attrs.get("data"), dict):

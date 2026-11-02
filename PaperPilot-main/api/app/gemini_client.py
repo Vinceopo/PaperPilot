@@ -44,11 +44,11 @@ def analyze_with_gemini(title: str, abstract: str, text: str) -> dict:
 
 
 COMPLIANCE_SEVERITY_RUBRIC = """SEVERITY RUBRIC (internal classification logic only):
-Critical — Would cause outright rejection or require mandatory resubmission.
+Critical - Would cause outright rejection or require mandatory resubmission.
 Internal test: "Does this violate a hard institutional requirement that graduate schools or journals check first?"
-Moderate — Noticeable and needs fixing, but would not block review by itself.
+Moderate - Noticeable and needs fixing, but would not block review by itself.
 Internal test: "Is this something an adviser would flag and ask the author to fix, but still proceed with content review?"
-Minor — Cosmetic, easy to fix, and does not affect structure or credibility.
+Minor - Cosmetic, easy to fix, and does not affect structure or credibility.
 Internal test: "Would a reader barely notice this, or does it fix in seconds?"
 Never show, quote, paraphrase, or ask these internal test questions in output.
 Keep the provided current_severity unless the measured evidence clearly justifies a one-step change.
@@ -59,7 +59,7 @@ _ROLE_FROM_TYPE_RE = re.compile(r"^font_size_(heading\d+|caption|title_page)$")
 
 
 def _engine_role_label(issue: dict) -> str:
-    """Canonical role label the engine already decided — Gemini must not contradict it."""
+    """Canonical role label the engine already decided - Gemini must not contradict it."""
     issue_type = str(issue.get("issue_type") or "")
     match = _ROLE_FROM_TYPE_RE.match(issue_type)
     if match:
@@ -91,7 +91,7 @@ def _strip_location_role_fields(locations: list) -> list:
                 "page": loc.get("page"),
                 "line": loc.get("line"),
                 "excerpt": loc.get("excerpt"),
-                # Measurements only — never element_role / Heading labels.
+                # Measurements only - never element_role / Heading labels.
                 "measured": loc.get("measured"),
                 "size_source": loc.get("size_source"),
             }
@@ -150,7 +150,7 @@ def enrich_compliance_issues(
                 issue["premium_detail_available"] = True
         return issues
     LOCATION_SAMPLE = 25
-    # Never send title/summary with Heading labels Gemini can remix — send locked role_label.
+    # Never send title/summary with Heading labels Gemini can remix - send locked role_label.
     safe_input = [
         {
             "issue_type": issue["issue_type"],
@@ -172,11 +172,11 @@ def enrich_compliance_issues(
     prompt = f"""You enrich already-detected academic document formatting issues.
 Do not perform grammar, plagiarism, source-validity, or citation-content analysis.
 Keep each issue_type separate. Do not merge issues.
-role_label is LOCKED by the deterministic engine — you MUST use that exact label
+role_label is LOCKED by the deterministic engine - you MUST use that exact label
 (e.g. "body text", "Heading 2") in explanation/recommendation. Never rename the role.
 Never invent a Heading level that differs from role_label.
 Use measured_explanation numbers as ground truth; do not invent different measurements.
-When locations list different measured sizes, do not pick one size for the whole issue —
+When locations list different measured sizes, do not pick one size for the whole issue  - 
 say sizes vary by location, and never claim every line measures the first location's size.
 Never print list/array brackets such as [11.0]; always write a scalar with a unit (e.g. 11 pt).
 Do not invent issues. Do not output location, bbox, page, line, or role fields.

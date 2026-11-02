@@ -129,7 +129,7 @@ export default function OtpStep({
 
       {phase !== "success" && phase !== "verifying" ? (
         <>
-          {/* Dev code banner removed — Resend delivers codes via email */}
+          {/* Dev code banner removed - Resend delivers codes via email */}
 
           <div className="mt-4 flex items-center justify-between text-sm">
             <span className={expired ? "text-rose-500" : "text-slate-500"} role="timer" aria-live="off">

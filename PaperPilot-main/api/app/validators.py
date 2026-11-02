@@ -33,7 +33,7 @@ def username_error(value: str) -> str | None:
     if not value:
         return "Username is required."
     if not USERNAME_RE.match(value):
-        return "Username must be 3–20 characters using letters, numbers, underscore, or period."
+        return "Username must be 3-20 characters using letters, numbers, underscore, or period."
     return None
 
 

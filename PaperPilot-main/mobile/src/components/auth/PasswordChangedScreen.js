@@ -8,7 +8,7 @@ import AuthShell from "./AuthShell";
 export default function PasswordChangedScreen({ onContinue }) {
   return (
     <AuthShell
-      variant="login"
+      variant="passwordChanged"
       title="Password updated"
       subtitle="Your account is now signed out on every device."
     >
@@ -16,18 +16,17 @@ export default function PasswordChangedScreen({ onContinue }) {
         <View style={styles.check}>
           <Text style={styles.checkMark}>✓</Text>
         </View>
-        <Text style={styles.title}>Changing password is completed! Please login again</Text>
+        <Text style={styles.headline}>Changing password is completed! Please login again</Text>
         <Text style={styles.body}>
-          For your security, all active sessions have been ended. Sign in again with your email and
-          new password to continue.
+          For your security, all active sessions have been ended. Sign in again with your email and new
+          password to continue.
         </Text>
         <Pressable
           onPress={onContinue}
-          style={({ pressed }) => [styles.btn, pressed && styles.btnPressed]}
           accessibilityRole="button"
-          accessibilityLabel="Continue to sign in"
+          style={({ pressed }) => [styles.cta, pressed && styles.ctaPressed]}
         >
-          <Text style={styles.btnText}>Continue to sign in</Text>
+          <Text style={styles.ctaText}>Continue to sign in</Text>
         </Pressable>
       </View>
     </AuthShell>
@@ -36,19 +35,19 @@ export default function PasswordChangedScreen({ onContinue }) {
 
 const styles = StyleSheet.create({
   card: {
-    marginTop: 32,
+    marginTop: 28,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: "#d1fae5",
     backgroundColor: colors.white,
-    paddingHorizontal: 28,
+    paddingHorizontal: 24,
     paddingVertical: 28,
     alignItems: "center",
   },
   check: {
     width: 64,
     height: 64,
-    borderRadius: 999,
+    borderRadius: 32,
     backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
@@ -59,7 +58,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   checkMark: { fontSize: 24, fontWeight: "700", color: colors.white },
-  title: {
+  headline: {
     marginTop: 20,
     fontSize: 16,
     fontWeight: "600",
@@ -74,14 +73,16 @@ const styles = StyleSheet.create({
     color: colors.slate,
     textAlign: "center",
   },
-  btn: {
+  cta: {
     marginTop: 28,
     alignSelf: "stretch",
     borderRadius: 12,
     backgroundColor: colors.accent,
-    paddingVertical: 12,
+    paddingVertical: 14,
     alignItems: "center",
+    minHeight: 48,
+    justifyContent: "center",
   },
-  btnPressed: { backgroundColor: colors.accentHover },
-  btnText: { fontSize: 14, fontWeight: "600", color: colors.navy },
+  ctaPressed: { backgroundColor: colors.accentHover },
+  ctaText: { fontSize: 14, fontWeight: "600", color: colors.navy },
 });

@@ -62,7 +62,7 @@ describe("pickBestRects / resolveDocxHighlight", () => {
   const line15 = [{ top: 300, left: 40, width: 400, height: 16 }];
 
   it("picks the rect closest to the line estimate even when only one needle hit exists", () => {
-    // Same single excerpt candidate pool for every issue — line estimate must decide.
+    // Same single excerpt candidate pool for every issue - line estimate must decide.
     const pool = [line13, line14, line15];
     expect(pickBestRects(pool, 260)[0].top).toBe(260);
     expect(pickBestRects(pool, 280)[0].top).toBe(280);
@@ -110,7 +110,7 @@ describe("resolvePdfMarkY", () => {
   });
 
   it("prefers bbox when the scanner line is past preview row count", () => {
-    // pdf.js clustered fewer rows than PyMuPDF — do not clamp onto the last row.
+    // pdf.js clustered fewer rows than PyMuPDF - do not clamp onto the last row.
     expect(resolvePdfMarkY({ line: 99, ys, bboxY: 55, pageHeight: 800 })).toBe(55);
   });
 

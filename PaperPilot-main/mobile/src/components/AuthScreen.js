@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
-import {
-  clearPasswordChangedNotice,
-  hasPasswordChangedNotice,
-  markPasswordChanged,
-  takeLoginNotice,
-} from "../services/auth";
-import { colors } from "../theme";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
 import ForgotPasswordScreen from "./auth/ForgotPasswordScreen";
 import LoginScreen from "./auth/LoginScreen";
 import PasswordChangedScreen from "./auth/PasswordChangedScreen";
 import RegisterScreen from "./auth/RegisterScreen";
+import {
+  clearPasswordChangedNotice,
+  hasPasswordChangedNotice,
+  markPasswordChanged,
+} from "../services/auth";
+import { colors } from "../theme";
 
 /**
  * Chooses between the login, register, password-reset, and password-done screens.
@@ -19,22 +18,15 @@ import RegisterScreen from "./auth/RegisterScreen";
  * @param {(profile: object) => void} [onRegistered]
  */
 export default function AuthScreen({ onRegistered }) {
-  const [mode, setMode] = useState("login");
+  const [mode, setMode] = useState("boot");
   const [notice, setNotice] = useState("");
   const [resetEmail, setResetEmail] = useState("");
-  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [changed, savedNotice] = await Promise.all([
-        hasPasswordChangedNotice(),
-        takeLoginNotice(),
-      ]);
-      if (cancelled) return;
-      if (changed) setMode("passwordDone");
-      if (savedNotice) setNotice(savedNotice);
-      setReady(true);
+      const done = await hasPasswordChangedNotice();
+      if (!cancelled) setMode(done ? "passwordDone" : "login");
     })();
     return () => {
       cancelled = true;
@@ -46,10 +38,10 @@ export default function AuthScreen({ onRegistered }) {
     setMode(next);
   }
 
-  if (!ready) {
+  if (mode === "boot") {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.authFormBg }}>
-        <ActivityIndicator color={colors.accent} />
+      <View style={styles.boot}>
+        <ActivityIndicator size="large" color={colors.accent} />
       </View>
     );
   }
@@ -93,3 +85,12 @@ export default function AuthScreen({ onRegistered }) {
     />
   );
 }
+
+const styles = StyleSheet.create({
+  boot: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.navy,
+  },
+});

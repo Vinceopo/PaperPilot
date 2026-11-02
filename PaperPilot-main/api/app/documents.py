@@ -969,7 +969,7 @@ def _clip_value(value: str, stop_words: tuple[str, ...]) -> str:
 
 
 def _looks_like_layout_rule(value: str) -> bool:
-    """True when text is about table/figure captions or titles — not incidental mentions."""
+    """True when text is about table/figure captions or titles - not incidental mentions."""
     return bool(
         re.search(
             r"(?i)\b(?:caption|title|heading|label|number(?:ed|ing)?|above|below|under|"
@@ -1002,7 +1002,7 @@ def _value_after_label(flat: str, labels: tuple[str, ...], stop_words: tuple[str
     stop_alt = _stop_pattern(stop_words)
     match = re.search(
         rf"(?i)\b(?:{label_alt})\b(?:\s*[)\].-]*)?\s*"
-        rf"(?:[:：=\-–]|is|are|of|should be|must be)?\s*"
+        rf"(?:[:：=\--]|is|are|of|should be|must be)?\s*"
         rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})|$)",
         flat,
     )
@@ -1022,7 +1022,7 @@ def _line_value(text: str, labels: tuple[str, ...]) -> str:
     contain words like 'page' or 'bottom' that stop the flattened label search."""
     lines = [line.strip(" \t•●▪◦*-") for line in (text or "").replace("\r", "\n").split("\n")]
     label_alt = "|".join(re.escape(label) for label in labels)
-    pattern = re.compile(rf"^(?:{label_alt})\s*(?:[:：=–]|\t)\s*(.*)$", re.I)
+    pattern = re.compile(rf"^(?:{label_alt})\s*(?:[:：=-]|\t)\s*(.*)$", re.I)
     alone = re.compile(rf"^(?:{label_alt})\s*[:：]?$", re.I)
     for index, line in enumerate(lines):
         match = pattern.match(line)
@@ -1044,7 +1044,7 @@ def _parse_paper_size(value: str) -> dict:
     text = (value or "").strip()
     if not text:
         return {}
-    # "8 1/2 x 11" / "8½ x 11" — normalize before digit×digit matching (avoids "2 x 11").
+    # "8 1/2 x 11" / "8½ x 11" - normalize before digit×digit matching (avoids "2 x 11").
     text = re.sub(
         r"\b(\d+)\s+(\d+)\s*/\s*(\d+)\b",
         lambda match: str(int(match.group(1)) + int(match.group(2)) / int(match.group(3))),
@@ -1053,7 +1053,7 @@ def _parse_paper_size(value: str) -> dict:
     text = re.sub(r"\b(\d+)\s*½\b", lambda match: str(int(match.group(1)) + 0.5), text)
     upper = text.upper()
     out: dict = {}
-    # Require a dimension pair (8.5 x 14) — bare "14." from outline numbering is not Legal size.
+    # Require a dimension pair (8.5 x 14) - bare "14." from outline numbering is not Legal size.
     if re.search(r"\bLEGAL\b", upper) or re.search(
         r"8\.5\s*(?:inches?|in|[\"″])?\s*[x×by]\s*14\b", upper
     ):
@@ -1212,7 +1212,7 @@ def _parse_inches(value: str) -> float | None:
 
 MARGIN_SIDES = ("top", "bottom", "left", "right", "gutter", "header", "footer")
 _MARGIN_SIDE_ALT = "|".join(MARGIN_SIDES)
-# "1.5 inch" / '1"' / '1.00”' — unit required so "page 1 on the left" is not a margin.
+# "1.5 inch" / '1"' / '1.00”' - unit required so "page 1 on the left" is not a margin.
 _MEASURE_WITH_UNIT = (
     r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)"
     rf"(?:\s*|-)(?:{_INCH_OR_LENGTH_UNIT})"
@@ -1274,7 +1274,7 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
     side_list = rf"(?:{_MARGIN_SIDE_ALT})(?:\s*(?:,|and|&|/)\s*(?:the\s+)?(?:{_MARGIN_SIDE_ALT}))+"
     listed = re.compile(
         rf"\b({side_list})\b\s*\)?\s*(?:margins?\s*)?"
-        rf"(?::|=|-|–|—|should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
+        rf"(?::|=|-|-| - |should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
         rf"(?:set\s+(?:to|at)\s+)?({_MEASURE_AFTER_SIDE_LIST})",
         re.I,
     )
@@ -1311,7 +1311,7 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
     for side in MARGIN_SIDES:
         if side in margins:
             continue
-        # Prefer "Top: 1" labels — incidental "Top" in intro prose must not win.
+        # Prefer "Top: 1" labels - incidental "Top" in intro prose must not win.
         colon = re.search(rf"\b{side}\s*:\s*({MEASURE_PATTERN})", flat, re.I)
         amount = parse_length_inches(colon.group(1)) if colon else None
         if amount is None:
@@ -1476,12 +1476,12 @@ def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
     manuscript_msg = (
         "This file looks like a manuscript, not a format mechanics guide. "
         "Upload your institution’s formatting guidelines (margins, fonts, headings, pagination), "
-        "then upload the manuscript in Step 3 — Upload & Analyze."
+        "then upload the manuscript in Step 3 - Upload & Analyze."
     )
     sparse_msg = (
         "No format mechanics rules were found in this document. "
         "Upload a format guide that lists requirements such as margins, font, spacing, "
-        "or heading sizes — not the manuscript itself."
+        "or heading sizes - not the manuscript itself."
     )
 
     # Sample / school guides that already match our labeled schema.
@@ -1493,7 +1493,7 @@ def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
     if rule_count >= 3 and guide_hits >= 2:
         return
 
-    # Long thesis/paper bodies — deny unless the guide signals are strong.
+    # Long thesis/paper bodies - deny unless the guide signals are strong.
     if manuscript_hits >= 2 and words >= 400 and (guide_hits < 2 or rule_count < 3):
         raise DocumentError(manuscript_msg)
     if words >= 1200 and manuscript_hits >= 1 and guide_hits < 3:
@@ -1520,7 +1520,7 @@ def derive_mechanics_rules(text: str) -> dict:
     if not flat:
         return rules
 
-    # Do not use bare "Table"/"Figure"/"Page" here — they chop mid-sentence
+    # Do not use bare "Table"/"Figure"/"Page" here - they chop mid-sentence
     # ("above the table", "Do page break only…"). Prefer section titles + outline letters.
     stop = (
         "Size", "Orientation", "Substance", "Spacing", "Indention", "Indentation",
@@ -1712,7 +1712,7 @@ def derive_mechanics_rules(text: str) -> dict:
         "Body text",
     )
 
-    # "Heading 3 and contents: 11" — one sentence assigns the SAME pt to Heading 3
+    # "Heading 3 and contents: 11" - one sentence assigns the SAME pt to Heading 3
     # and body/contents; they remain separate rules that share the value.
     combined_heading_body = re.finditer(
         r"(?i)\bheading\s*(\d)\s+and\s+(?:contents?|body)(?:\s*(?:text|content))?(?:\s*size)?\s*[:：=]?\s*"
@@ -1728,7 +1728,7 @@ def derive_mechanics_rules(text: str) -> dict:
             combined_sizes["body_size"] = number
 
     # Same sentence, DIFFERENT values: "Heading 1 size: 16 pt and body size: 11 pt"
-    # (each label keeps its own field — do not let one capture swallow the other).
+    # (each label keeps its own field - do not let one capture swallow the other).
     paired_heading_body = re.finditer(
         r"(?i)\bheading\s*(\d)(?:\s*size)?\s*[:：=]?\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
         r".{0,40}?\b(?:and|&|,)?\s*"
@@ -1760,7 +1760,7 @@ def derive_mechanics_rules(text: str) -> dict:
         if 1 <= level <= MAX_HEADING_LEVELS and 6 <= heading_pt <= 72:
             combined_sizes.setdefault(f"heading{level}_size", heading_pt)
 
-    # Heading sizes only when the guide ties Heading N to a size/pt — never from a
+    # Heading sizes only when the guide ties Heading N to a size/pt - never from a
     # bare mention of "Heading 1" next to unrelated numbers (margins, word counts).
     size_sources: list[tuple[str, str, tuple[str, ...]]] = []
     for level in range(1, MAX_HEADING_LEVELS + 1):
@@ -1787,7 +1787,7 @@ def derive_mechanics_rules(text: str) -> dict:
     def _explicit_pt(raw: str | None) -> float | None:
         """Point size only when the guide states pt/points, or the value is bare like '16'.
 
-        Never treat '40 mm', '30 words', or '40 characters' as a font size — that invented
+        Never treat '40 mm', '30 words', or '40 characters' as a font size - that invented
         phantom heading1_size values (30.0 / 40.0) from unrelated guide numbers.
         """
         text = str(raw or "").strip()
@@ -1803,7 +1803,7 @@ def derive_mechanics_rules(text: str) -> dict:
         if size_labeled:
             number = float(size_labeled.group(1))
             return number if 6 <= number <= 72 else None
-        # "Heading 1: 16" / "16" — number alone, no other words/units.
+        # "Heading 1: 16" / "16" - number alone, no other words/units.
         if re.fullmatch(r"\d{1,2}(?:\.\d+)?", text):
             number = float(text)
             return number if 6 <= number <= 72 else None
@@ -1832,7 +1832,7 @@ def derive_mechanics_rules(text: str) -> dict:
         return number if 6 <= number <= 72 else None
 
     def _contents_body_pt() -> float | None:
-        """Bare Content/Contents: 11 — not 'Table of Contents'."""
+        """Bare Content/Contents: 11 - not 'Table of Contents'."""
         match = re.search(
             r"(?i)(?<!of )\bcontents?\b(?:\s*size)?\s*[:：=]\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
             flat,
@@ -1868,11 +1868,11 @@ def derive_mechanics_rules(text: str) -> dict:
             value = _nearby_pt(labels)
         if value is not None:
             font[key] = value
-            # sizes_points is body fallback only — do not dump headingN sizes into it.
+            # sizes_points is body fallback only - do not dump headingN sizes into it.
             if key in {"body_size", "heading3_content_size"}:
                 sizes = sorted(set([*sizes, value]))
                 font["sizes_points"] = sizes
-    # Shared "Heading N and contents: 11" — apply both rules (same value, separate fields).
+    # Shared "Heading N and contents: 11" - apply both rules (same value, separate fields).
     for key, value in combined_sizes.items():
         font[key] = value
         if key == "body_size":
@@ -1897,7 +1897,7 @@ def derive_mechanics_rules(text: str) -> dict:
         if typeface_size:
             number = float(next(group for group in typeface_size.groups() if group))
         else:
-            # Prose: "… font, size 12 …" — allow a short gap, but never across "Heading N".
+            # Prose: "… font, size 12 …" - allow a short gap, but never across "Heading N".
             spanned = re.search(
                 r"\b(?:typeface|font(?:\s*(?:family|type))?|type)\b(.{0,40}?)\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
                 flat,
@@ -1926,10 +1926,10 @@ def derive_mechanics_rules(text: str) -> dict:
             font["sizes_points"] = sizes
     if "body_size" in font:
         font["heading3_content_size"] = font["body_size"]
-        # Keep sizes_points body-only — never leave heading pt values in the bag.
+        # Keep sizes_points body-only - never leave heading pt values in the bag.
         font["sizes_points"] = [float(font["body_size"])]
     font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
-    # Only store color when the guide names it — never invent Black/Automatic.
+    # Only store color when the guide names it - never invent Black/Automatic.
     if font_color:
         if re.search(r"black|automatic", font_color, re.I):
             font["color"] = "Black/Automatic"
@@ -1971,7 +1971,7 @@ def derive_mechanics_rules(text: str) -> dict:
         title_page = TITLE_HIDDEN_COUNTED
     if title_page:
         pagination["title_page"] = title_page
-    # Only set preliminary / body numbering when those lines exist in the guide —
+    # Only set preliminary / body numbering when those lines exist in the guide  - 
     # do not infer them from unrelated wording (avoids false pagination style checks).
     preliminary_raw = _line_value(text, ("Preliminary pages", "Preliminary page numbers", "Front matter"))
     if not preliminary_raw:
@@ -2219,7 +2219,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
             continue
         if 6 <= number <= 72:
             font_out[key] = number
-            # sizes_points is a body-size fallback only — do not merge headingN_size into it,
+            # sizes_points is a body-size fallback only - do not merge headingN_size into it,
             # or Heading 1 can be judged against Heading 2/3 sizes the user never set for H1.
             if key in {"body_size", "heading3_content_size"}:
                 if isinstance(sizes, list):
@@ -2231,7 +2231,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         font_out["heading3_content_size"] = font_out["body_size"]
     elif "heading3_content_size" in font_out:
         # Drop a stale combined value that only echoes a heading level size (H1→body leak).
-        # Keep distinct values — legacy payloads still use this key as the body size.
+        # Keep distinct values - legacy payloads still use this key as the body size.
         combined = font_out["heading3_content_size"]
         level_sizes = {
             font_out[key]
@@ -2270,7 +2270,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
                 if number not in seen:
                     seen.add(number)
                     unique.append(number)
-            # Drop values that only exist as headingN_size — those are not body rules.
+            # Drop values that only exist as headingN_size - those are not body rules.
             body_fallback = [number for number in unique if number not in heading_size_values]
             if body_fallback:
                 font_out["sizes_points"] = body_fallback[:8]
@@ -2319,7 +2319,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["paper_size"] = paper_size_out
 
     # The text the user typed ("Double", "1/2 inch", "1.27 cm") is the source of truth over a pre-parsed number.
-    # Blank / NA fields are dropped — unset mechanics must not become enforceable rules.
+    # Blank / NA fields are dropped - unset mechanics must not become enforceable rules.
     spacing_text = str(raw.get("spacing") or "").strip()
     if rule_unset(spacing_text):
         spacing_text = ""
@@ -2516,7 +2516,7 @@ def build_sample_mechanics_docx() -> bytes:
     _apply_sample_run_font(
         intro.add_run(
             "Keep every section and field label (for example Margins and Top). "
-            "Put a real value next to each label, or type IGNORE to skip that check — "
+            "Put a real value next to each label, or type IGNORE to skip that check - "
             "do not use N/A and do not delete labels. Upload this guide, review Format Fields, then save."
         )
     )

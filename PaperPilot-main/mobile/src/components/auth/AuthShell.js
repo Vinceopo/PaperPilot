@@ -19,6 +19,11 @@ const COPY = {
     headlineAccent: "research, fast.",
     sub: "Confirm the 6-digit code we email you, then choose a new password.",
   },
+  passwordChanged: {
+    headlineBefore: "You’re secure. ",
+    headlineAccent: "Sign in again.",
+    sub: "Every active session was ended after your password change.",
+  },
 };
 
 /**

@@ -240,7 +240,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             autoCapitalize: "none",
             spellCheck: false,
             maxLength: 20,
-            hint: "3–20 chars: letters, numbers, _ or .",
+            hint: "3-20 chars: letters, numbers, _ or .",
           })}
         />
 
@@ -329,14 +329,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
         </button>
       </form>
 
-      <TermsModal
-        open={termsOpen}
-        onClose={() => setTermsOpen(false)}
-        onAgree={() => {
-          setAgreed(true);
-          setTermsOpen(false);
-        }}
-      />
+      <TermsModal open={termsOpen} onClose={() => setTermsOpen(false)} />
     </AuthShell>
   );
 }

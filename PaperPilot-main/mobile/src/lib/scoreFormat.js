@@ -6,7 +6,7 @@ export function hasValue(value) {
 
 /** Percentage for display, or an em dash when the backend had no denominator. */
 export function formatPct(value, digits = 1) {
-  if (!hasValue(value)) return "—";
+  if (!hasValue(value)) return "-";
   const factor = 10 ** digits;
   return `${Math.round(Number(value) * factor) / factor}%`;
 }
@@ -26,7 +26,7 @@ export function compliancePercentFromUnits(total, nonCompliant) {
 }
 
 export function formatScore(value, digits = 1) {
-  if (!hasValue(value)) return "—";
+  if (!hasValue(value)) return "-";
   const factor = 10 ** digits;
   return String(Math.round(Number(value) * factor) / factor);
 }
@@ -59,7 +59,7 @@ export function roundSharesToTotal(values, digits = 1) {
 }
 
 export function formatCount(value) {
-  return hasValue(value) ? Number(value).toLocaleString("en-US") : "—";
+  return hasValue(value) ? Number(value).toLocaleString("en-US") : "-";
 }
 
 /**

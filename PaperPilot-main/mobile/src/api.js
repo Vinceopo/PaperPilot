@@ -49,7 +49,7 @@ function statusMessage(status) {
   if (status === 401) return "Your session has expired. Sign in again, then retry.";
   if (status === 403) return "Your account can't do this yet. Check your plan on the Subscription page.";
   if (status === 404) {
-    return "That item was not found. It may have been deleted on another device — refresh and try again.";
+    return "That item was not found. It may have been deleted on another device - refresh and try again.";
   }
   if (status === 413) {
     return "This file is too large for your plan. Free plans allow 15 MB, Premium 45 MB, and Pro 120 MB.";
@@ -161,7 +161,7 @@ async function authorizedFetch(path, options = {}) {
   };
   try {
     let res = await send(false);
-    // Retry once with a fresh token. Never sign out on API 401 — only the
+    // Retry once with a fresh token. Never sign out on API 401 - only the
     // caller / auth listener should clear the session for fatal Firebase errors.
     if (res.status === 401) {
       try {
@@ -254,7 +254,7 @@ async function uploadToS3({ uri, name, mimeType, size }) {
   if (!uploadUrl || !publicUrl) {
     throw new ApiError("Upload could not be prepared. Try again.", 0);
   }
-  // Never navigate to upload_url — it is PUT-only. Preview/download must use public_url.
+  // Never navigate to upload_url - it is PUT-only. Preview/download must use public_url.
   if (/[?&]X-Amz-Signature=/i.test(publicUrl) || !/[?&]X-Amz-Signature=/i.test(uploadUrl)) {
     throw new ApiError("Upload could not be prepared. Try again.", 0);
   }
@@ -557,7 +557,7 @@ export function cancelSubscription({ immediate = true } = {}) {
   });
 }
 
-/** After PayMongo checkout — verify the paid session and activate Premium. */
+/** After PayMongo checkout - verify the paid session and activate Premium. */
 export function confirmCheckoutPayment({ checkoutSessionId } = {}) {
   return authorizedFetch("/subscription/confirm", {
     method: "POST",

@@ -313,7 +313,7 @@ def consume_challenge(token: str, email: str, purpose: str) -> None:
     if current.get("email_key") != email_key or current.get("purpose") != purpose:
         raise ValueError("Verification does not match this email address.")
 
-    # Valid — delete the challenge so it can't be reused
+    # Valid - delete the challenge so it can't be reused
     try:
         ref.delete()
         _reference(f"{ROOT}/challenge_index/{email_key}/{purpose}/{token_hash}").delete()

@@ -129,7 +129,7 @@ export function normalizeIssueLocation(loc = {}) {
   const pagination = section.toLowerCase() === "pagination";
   return {
     page,
-    // Pagination is a header/footer finding — drop leaked body line pins.
+    // Pagination is a header/footer finding - drop leaked body line pins.
     line: pagination ? null : line,
     section,
     bbox: pagination ? null : bbox,

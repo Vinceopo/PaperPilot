@@ -1,5 +1,5 @@
 /**
- * Format Fields — editable form for Customize, Upload extract, and Saved mechanics.
+ * Format Fields - editable form for Customize, Upload extract, and Saved mechanics.
  * Values shown are the actual rules (from extraction, saved profile, or sample starter).
  */
 
@@ -289,7 +289,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               className={inputClass}
             />
           </Field>
-          <Field label="Alignment" hint="Body text alignment — IGNORE skips this check">
+          <Field label="Alignment" hint="Body text alignment - IGNORE skips this check">
             <select
               disabled={disabled}
               value={form.alignment || ""}
@@ -344,7 +344,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
 
       <Section title="Font">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Body text size" hint="Same as Contents Size — not heading size">
+          <Field label="Body text size" hint="Same as Contents Size - not heading size">
             <input
               disabled={disabled}
               type="number"
@@ -381,7 +381,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
         </p>
         {headings.length ? null : (
           <p className="text-[11px] text-slate-400">
-            No heading rules — this check is skipped. Add a level only if your guide defines one.
+            No heading rules - this check is skipped. Add a level only if your guide defines one.
           </p>
         )}
         {headings.map((heading, index) => {
@@ -446,7 +446,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
                 </div>
               ) : (
                 <p className="mt-1 text-[10px] text-slate-400">
-                  No rules set — this heading level is skipped (same as IGNORE).
+                  No rules set - this heading level is skipped (same as IGNORE).
                 </p>
               )}
               {!disabled && missing.length ? (
@@ -523,7 +523,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
           </Field>
           <Field
             label="Chapter starts"
-            hint="How chapter headings are written — set IGNORE if your guide does not specify this"
+            hint="How chapter headings are written - set IGNORE if your guide does not specify this"
           >
             <select
               disabled={disabled}

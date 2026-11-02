@@ -56,7 +56,7 @@ def _text(value) -> str:
 
 
 def _rule_unset(value) -> bool:
-    """True when the mechanics field is blank / IGNORE / NA — no rule to enforce."""
+    """True when the mechanics field is blank / IGNORE / NA - no rule to enforce."""
     if value is None:
         return True
     if isinstance(value, bool):
@@ -80,7 +80,7 @@ def _rule_unset(value) -> bool:
         "not check",
         "none",
         "-",
-        "—",
+        "-",
     }
 
 
@@ -174,7 +174,7 @@ def canonical_title_page(value) -> str:
 
 
 def title_page_rule(value) -> str | None:
-    """None when the title-page field is NA / unset — do not score that rule."""
+    """None when the title-page field is NA / unset - do not score that rule."""
     return {
         TITLE_HIDDEN_COUNTED: "hidden_counted",
         TITLE_HIDDEN_NOT_COUNTED: "hidden_not_counted",

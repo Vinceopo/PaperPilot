@@ -1,5 +1,5 @@
 /**
- * NotificationsScreen — Recent Activity feed matching the Notifications mockup.
+ * NotificationsScreen - Recent Activity feed matching the Notifications mockup.
  */
 
 import { useEffect, useState } from "react";

@@ -61,7 +61,7 @@ function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, i
         </Svg>
         <View style={styles.ringLabel}>
           <Text style={[styles.ringPct, { color: evaluated ? stroke : "#94a3b8" }]}>
-            {evaluated ? formatPct(safe, 1) : "—"}
+            {evaluated ? formatPct(safe, 1) : "-"}
           </Text>
         </View>
       </View>
@@ -79,7 +79,7 @@ const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
 
 function formatDate(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     return new Date(iso + (iso.length <= 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, {
       year: "numeric",
@@ -278,7 +278,7 @@ export default function ManuscriptDetailModal({
   const selected = selectedFromLibrary;
   const band = scoreBand(selected?.score);
   const tone = bandTone(band);
-  const versionLabel = selected ? `v${selected.versionNumber}.0` : "—";
+  const versionLabel = selected ? `v${selected.versionNumber}.0` : "-";
 
   async function openFullResult(ver) {
     if (!ver || !onOpenResult || openingResult) return;
@@ -298,7 +298,7 @@ export default function ManuscriptDetailModal({
       );
       return;
     }
-    // Short summary only — full Scan Results open via "View full results".
+    // Short summary only - full Scan Results open via "View full results".
     setSelectedId(ver.id);
   }
 
@@ -333,7 +333,7 @@ export default function ManuscriptDetailModal({
               {manuscript.title}
             </Text>
             <Text style={styles.subtitle}>
-              {manuscript.institution || "—"} · {manuscript.citationStyle}
+              {manuscript.institution || "-"} · {manuscript.citationStyle}
             </Text>
             <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
               <Text style={[styles.pillText, { color: tone.pillText }]}>
@@ -412,50 +412,60 @@ export default function ManuscriptDetailModal({
           ) : (
             <>
               <View style={styles.selectedRow}>
-                <View>
+                <View style={{ flex: 1, minWidth: 140 }}>
                   <Text style={styles.selectedLabel}>Short result</Text>
                   <Text style={styles.selectedMeta}>
                     {versionLabel} · {formatDateTime(selected.scannedAt || selected.scannedDate)}
                   </Text>
                 </View>
-                <View style={styles.scoreBlock}>
-                  <Text style={[styles.bigScore, { color: tone.text }]}>{formatScore(selected.score, 0)}</Text>
-                  <Text style={styles.scoreCaption}>Overall score</Text>
-                </View>
-              </View>
-
-              <View style={styles.footerTop}>
-                {downloadError ? <Text style={styles.downloadError}>{downloadError}</Text> : null}
-                {onOpenResult ? (
+                <View style={styles.footerActions}>
+                  {onOpenResult ? (
+                    <Pressable
+                      onPress={() => void openFullResult(selected)}
+                      disabled={openingResult}
+                      style={({ pressed }) => [
+                        styles.downloadBtn,
+                        { backgroundColor: "#16bfa8" },
+                        pressed && styles.downloadBtnPressed,
+                        openingResult && styles.downloadBtnBusy,
+                      ]}
+                    >
+                      <Text style={[styles.downloadText, { color: "#fff" }]}>
+                        {openingResult ? "Opening…" : "View full results"}
+                      </Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
-                    onPress={() => void openFullResult(selected)}
-                    disabled={openingResult}
+                    onPress={onDownload}
+                    disabled={downloadBusy}
                     style={({ pressed }) => [
                       styles.downloadBtn,
-                      { backgroundColor: "#16bfa8" },
                       pressed && styles.downloadBtnPressed,
-                      openingResult && styles.downloadBtnBusy,
+                      downloadBusy && styles.downloadBtnBusy,
                     ]}
                   >
-                    <Text style={[styles.downloadText, { color: "#fff" }]}>
-                      {openingResult ? "Opening…" : "View full results"}
+                    <DownloadIcon size={14} />
+                    <Text style={styles.downloadText}>
+                      {downloadBusy ? "Generating report…" : `Download · ${versionLabel}`}
                     </Text>
                   </Pressable>
-                ) : null}
-                <Pressable
-                  onPress={onDownload}
-                  disabled={downloadBusy}
-                  style={({ pressed }) => [
-                    styles.downloadBtn,
-                    pressed && styles.downloadBtnPressed,
-                    downloadBusy && styles.downloadBtnBusy,
-                  ]}
-                >
-                  <DownloadIcon size={14} />
-                  <Text style={styles.downloadText}>
-                    {downloadBusy ? "Generating report…" : `Download full report · ${versionLabel}`}
+                </View>
+              </View>
+              {downloadError ? <Text style={styles.downloadError}>{downloadError}</Text> : null}
+
+              <View style={styles.overallCard}>
+                <Text style={styles.overallKicker}>Overall compliance score</Text>
+                <View style={styles.overallScoreLine}>
+                  <Text style={[styles.overallScoreValue, { color: tone.text }]}>
+                    {formatScore(selected.score, 0)}
                   </Text>
-                </Pressable>
+                  {selected.score != null ? (
+                    <Text style={[styles.overallScorePct, { color: tone.text }]}>%</Text>
+                  ) : null}
+                </View>
+                <View style={[styles.pill, { marginTop: 12, alignSelf: "flex-start", backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
+                  <Text style={[styles.pillText, { color: tone.pillText }]}>{band.label}</Text>
+                </View>
               </View>
 
               <Text style={styles.sectionTitle}>Score Breakdown</Text>
@@ -492,7 +502,7 @@ export default function ManuscriptDetailModal({
                 Detected issues <Text style={styles.issuesCount}>({issues.length})</Text>
               </Text>
               <Text style={styles.issuesHint}>
-                Each card is one rule finding — expand locations to see every page/line hit.
+                Each card is one rule finding - expand locations to see every page/line hit.
               </Text>
 
               {hydrateError ? (
@@ -605,7 +615,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     color: colors.slate,
   },
-  versionScroll: { maxHeight: 220, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e2e8f0" },
+  versionScroll: { maxHeight: 200 },
   versionList: { paddingHorizontal: 12, paddingBottom: 12, gap: 4 },
   versionRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   versionBtn: {
@@ -640,21 +650,48 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: colors.slate,
   },
-  body: { flexGrow: 1, maxHeight: 560, minHeight: 280 },
+  body: { flexGrow: 1, maxHeight: 560 },
   bodyContent: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 28 },
   emptyText: { fontSize: 14, color: colors.muted },
-  selectedRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 12 },
-  selectedLabel: { fontSize: 12, fontWeight: "600", color: colors.slate },
-  selectedMeta: { fontSize: 14, fontWeight: "500", color: colors.muted },
-  scoreBlock: { alignItems: "flex-end" },
-  bigScore: { fontSize: 30, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  scoreCaption: {
+  selectedRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  selectedLabel: {
     fontSize: 10,
-    fontWeight: "600",
-    letterSpacing: 0.5,
+    fontWeight: "700",
+    letterSpacing: 1.4,
     textTransform: "uppercase",
     color: colors.muted,
   },
+  selectedMeta: { marginTop: 4, fontSize: 14, fontWeight: "700", color: colors.text },
+  footerActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 },
+  overallCard: {
+    marginTop: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    padding: 20,
+    shadowColor: "#0F1729",
+    shadowOpacity: 0.04,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  overallKicker: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.6,
+    textTransform: "uppercase",
+    color: colors.muted,
+  },
+  overallScoreLine: { marginTop: 8, flexDirection: "row", alignItems: "flex-end", gap: 2 },
+  overallScoreValue: { fontSize: 48, fontWeight: "800", fontVariant: ["tabular-nums"], lineHeight: 52 },
+  overallScorePct: { fontSize: 24, fontWeight: "800", fontVariant: ["tabular-nums"], paddingBottom: 6 },
   sectionTitle: { marginTop: 24, fontSize: 14, fontWeight: "700", color: "#0F1729" },
   breakdown: { marginTop: 12, gap: 12 },
   breakdownNote: { marginTop: 4, fontSize: 11, lineHeight: 16, color: "#64748b" },
@@ -711,7 +748,6 @@ const styles = StyleSheet.create({
   chipText: { fontFamily: MONO, fontSize: 10, fontWeight: "600" },
   chipMore: { borderRadius: 6, backgroundColor: "rgba(255,255,255,0.6)", paddingHorizontal: 8, paddingVertical: 4 },
   chipMoreText: { fontSize: 10, fontWeight: "600" },
-  footerTop: { marginTop: 16, marginBottom: 8 },
   ringGrid: { marginTop: 12, gap: 10 },
   ringCard: {
     flexDirection: "row",
@@ -729,7 +765,7 @@ const styles = StyleSheet.create({
   ringPct: { fontSize: 12, fontWeight: "800" },
   ringTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
   ringDetail: { marginTop: 2, fontSize: 11, lineHeight: 15, color: colors.muted },
-  downloadError: { marginBottom: 8, fontSize: 12, color: "#f43f5e" },
+  downloadError: { marginTop: 8, marginBottom: 4, fontSize: 12, color: "#f43f5e" },
   downloadBtn: {
     alignSelf: "flex-start",
     flexDirection: "row",

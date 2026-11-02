@@ -1,4 +1,4 @@
-/** Paper plane gliding past clouds, tinted to the accent color — workspace loading state. */
+/** Paper plane gliding past clouds, tinted to the accent color - workspace loading state. */
 
 import { useEffect, useRef } from "react";
 
