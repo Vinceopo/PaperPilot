@@ -8,6 +8,32 @@ import {
 import { ref, runTransaction, set } from "firebase/database";
 
 export const REMEMBER_ME_KEY = "paperpilot.rememberMe";
+const PASSWORD_CHANGED_KEY = "paperpilot.passwordChanged";
+
+/** Shown once after password change/reset, before the login form (mirrors web). */
+export async function markPasswordChanged() {
+  try {
+    await AsyncStorage.setItem(PASSWORD_CHANGED_KEY, "1");
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+export async function hasPasswordChangedNotice() {
+  try {
+    return (await AsyncStorage.getItem(PASSWORD_CHANGED_KEY)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export async function clearPasswordChangedNotice() {
+  try {
+    await AsyncStorage.removeItem(PASSWORD_CHANGED_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 /** Only these mean the session is truly dead — never sign out on network blips. */
 const FATAL_AUTH_CODES = new Set([

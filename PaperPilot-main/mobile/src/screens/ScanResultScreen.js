@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { Alert, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import Svg, { Circle, Path } from "react-native-svg";
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
-import IssuesDetectedPanel, { normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
+import IssuesDetectedPanel, {
+  categoryForIssue,
+  normalizeDetectedIssues,
+} from "../components/cockpit/IssuesDetectedPanel";
 import TraceDocumentViewer from "../components/cockpit/TraceDocumentViewer";
 import PrimaryButton from "../components/ui/PrimaryButton";
 import {
@@ -14,6 +17,7 @@ import {
   formatCategoryIssuesDetail,
   formatCount,
   formatPct,
+  formatScore,
   hasValue,
   plural,
   reconcileDisplayedUnits,
@@ -40,71 +44,21 @@ function ringStroke(score) {
   return "#B02A37";
 }
 
-function CircularScore({ score, categoryCount = null }) {
-  const RADIUS = 52;
-  const circumference = 2 * Math.PI * RADIUS;
-  const [progress, setProgress] = useState(0);
-  const band = scoreBand(score);
-  const evaluated = hasValue(score);
-  const target = evaluated ? Number(score) : 0;
-
-  useEffect(() => {
-    const DURATION = 1100;
-    const start = Date.now();
-    let raf = 0;
-    const tick = () => {
-      const t = Math.min((Date.now() - start) / DURATION, 1);
-      const eased = 1 - (1 - t) ** 3;
-      setProgress(eased * target);
-      if (t < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [target]);
-
-  const offset = circumference - (progress / 100) * circumference;
-
-  return (
-    <View style={styles.circleWrap}>
-      <View>
-        <Svg width={148} height={148} viewBox="0 0 148 148" style={{ transform: [{ rotate: "-90deg" }] }}>
-          <Circle cx={74} cy={74} r={RADIUS} fill="none" stroke="#e2e8f0" strokeWidth={14} />
-          <Circle
-            cx={74}
-            cy={74}
-            r={RADIUS}
-            fill="none"
-            stroke={band.ring}
-            strokeWidth={14}
-            strokeLinecap="round"
-            strokeDasharray={`${circumference}`}
-            strokeDashoffset={offset}
-          />
-        </Svg>
-        <View style={styles.circleCenter}>
-          <Text style={styles.circleValue}>{evaluated ? Math.round(progress) : "—"}</Text>
-          {evaluated ? <Text style={styles.circleOutOf}>%</Text> : null}
-        </View>
-      </View>
-      <View style={[styles.bandPill, { backgroundColor: band.bg, borderColor: band.border }]}>
-        <Text style={[styles.bandText, { color: band.text }]}>{band.label}</Text>
-      </View>
-      <Text style={styles.circleHint}>
-        {!evaluated
-          ? "No formatting unit could be measured"
-          : categoryCount != null
-            ? `Average of the ${categoryCount} measured ${plural(categoryCount, "category", "categories")}`
-            : "Average of categories that were actually measured"}
-      </Text>
-    </View>
-  );
-}
-
-function CategoryScoreCard({ metric, score, status, displayTotal, displayNonCompliant, displayScore }) {
-  const fromUnits = compliancePercentFromUnits(displayTotal, displayNonCompliant);
+function CategoryScoreCard({
+  metric,
+  score,
+  status,
+  displayTotal,
+  displayNonCompliant,
+  displayIssueCount,
+  displayScore,
+}) {
+  // Ring % and subtitle use the same issue count: (total − issues) / total.
+  const issueCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
+  const fromShown = compliancePercentFromUnits(displayTotal, issueCount);
   const pct =
-    fromUnits != null
-      ? fromUnits
+    fromShown != null
+      ? fromShown
       : hasValue(displayScore)
         ? Number(displayScore)
         : hasValue(score)
@@ -117,7 +71,7 @@ function CategoryScoreCard({ metric, score, status, displayTotal, displayNonComp
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
-  const detail = formatCategoryIssuesDetail(displayNonCompliant, displayTotal)
+  const detail = formatCategoryIssuesDetail(issueCount, displayTotal)
     || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
     || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
@@ -205,17 +159,29 @@ function ScanResultBody({ navigation }) {
   const { scanFlow } = useAppData();
   const result = scanFlow?.result;
 
+  // Mirror web: hard-refresh / empty Results is not a sticky destination — send authors home.
+  useEffect(() => {
+    if (result) return undefined;
+    const t = setTimeout(() => navigation.navigate("Library"), 0);
+    return () => clearTimeout(t);
+  }, [result, navigation]);
+
   if (!result) {
     return (
       <View style={styles.emptyWrap}>
-        <Text style={styles.emptyTitle}>Run a scan from Upload</Text>
+        <Text style={styles.emptyTitle}>No compliance result yet</Text>
         <Text style={styles.emptyBody}>
-          Upload format mechanics and a manuscript, then Analyse to see compliance results here.
+          Open a manuscript version or run Analyse from Upload. Returning to My Manuscripts…
         </Text>
+        <PrimaryButton
+          title="My Manuscripts"
+          onPress={() => navigation.navigate("Library")}
+          style={{ marginTop: 18, minWidth: 160 }}
+        />
         <PrimaryButton
           title="Go to Upload"
           onPress={() => navigation.navigate("Upload")}
-          style={{ marginTop: 18, minWidth: 160 }}
+          style={{ marginTop: 10, minWidth: 160, backgroundColor: colors.sidebar }}
         />
       </View>
     );
@@ -246,6 +212,37 @@ function ScanResultBody({ navigation }) {
 
   const issueTypes = formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
   const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
+  // Same expansion as Issue Tracing — cards, rings, and header all use these counts.
+  const tracedEntries = normalizeDetectedIssues(formatChecks, pageCount || 0).entries;
+  const tracedByCategory = {};
+  tracedEntries.forEach((entry) => {
+    const key = entry.category || categoryForIssue(entry) || "Other";
+    tracedByCategory[key] = (tracedByCategory[key] || 0) + 1;
+  });
+  const categoryCards = categoryDisplays.map((row) => {
+    const name = String(row.metric || row.section || "").trim();
+    const traced = name ? tracedByCategory[name] : null;
+    const displayIssueCount = hasValue(traced)
+      ? traced
+      : hasValue(row.displayIssueCount)
+        ? row.displayIssueCount
+        : row.displayNonCompliant;
+    const total = row.displayTotal;
+    const displayNonCompliant = hasValue(total) && hasValue(displayIssueCount)
+      ? Math.min(Math.max(0, Number(total)), Math.max(0, Number(displayIssueCount)))
+      : row.displayNonCompliant;
+    const displayCompliant = hasValue(total) && hasValue(displayNonCompliant)
+      ? Math.max(0, Number(total) - Number(displayNonCompliant))
+      : row.displayCompliant;
+    const displayScore = compliancePercentFromUnits(total, displayNonCompliant);
+    return {
+      ...row,
+      displayIssueCount,
+      displayNonCompliant,
+      displayCompliant,
+      displayScore: displayScore != null ? displayScore : row.displayScore,
+    };
+  });
   // Header totals = sum of category cards so they always match what the user adds up.
   const {
     total: totalUnits,
@@ -253,7 +250,7 @@ function ScanResultBody({ navigation }) {
     nonCompliant: nonCompliantUnits,
   } = reconcileDisplayedUnits(
     { unitsChecked, unitsPassed, unitsFailed },
-    categoryDisplays,
+    categoryCards,
   );
   // Bar shares only — percent numbers are not shown in the public results UI.
   const fromOverallUnits =
@@ -266,6 +263,13 @@ function ScanResultBody({ navigation }) {
   const [shownRight, shownWrong] = roundSharesToTotal(fromOverallUnits, 2);
   const compliantShare = hasValue(shownRight) ? Math.max(0, Math.min(100, Number(shownRight))) : 0;
   const nonCompliantShare = hasValue(shownWrong) ? Math.max(0, Math.min(100, Number(shownWrong))) : 0;
+  const evaluatedCards = categoryCards.filter(
+    (row) => hasValue(row.displayTotal) && Number(row.displayTotal) > 0 && hasValue(row.displayScore),
+  );
+  const overallFromCards = evaluatedCards.length
+    ? evaluatedCards.reduce((sum, row) => sum + Number(row.displayScore), 0) / evaluatedCards.length
+    : overallScore;
+  const overallBand = scoreBand(overallFromCards);
   const scannedDate = scannedAt
     ? new Date(scannedAt).toLocaleDateString("en-US", {
         year: "numeric",
@@ -291,9 +295,9 @@ function ScanResultBody({ navigation }) {
     if (report?.summary) Alert.alert("Analysis report", report.summary);
   }
 
-  function openReferenceTracing() {
-    // Open the tracer without jumping to a location — user picks an issue first.
-    scanFlow.openDocumentTrace(null);
+  function openReferenceTracing(entry = null) {
+    // Open the tracer without auto-jump unless the user picked a specific issue.
+    scanFlow.openDocumentTrace(entry || null);
     navigation.navigate("DocumentReference");
   }
 
@@ -302,7 +306,7 @@ function ScanResultBody({ navigation }) {
       <View style={styles.hero}>
         <View style={styles.heroTopRow}>
           <View style={styles.heroLinks}>
-            <Pressable onPress={openReferenceTracing} hitSlop={6}>
+            <Pressable onPress={() => openReferenceTracing(null)} hitSlop={6}>
               <Text style={styles.heroTrace}>Open reference tracing</Text>
             </Pressable>
           </View>
@@ -372,33 +376,26 @@ function ScanResultBody({ navigation }) {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardKicker}>Overall Score</Text>
-        <CircularScore
-          score={overallScore}
-          categoryCount={Array.isArray(overallCategories) ? overallCategories.length : null}
-        />
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardKicker}>Score Breakdown</Text>
-        <View style={styles.catGrid}>
-          {categoryDisplays.map((item) => (
-            <CategoryScoreCard
-              key={item.metric || item.section}
-              metric={item.metric || item.section}
-              score={item.displayScore ?? item.score}
-              status={item.status}
-              displayTotal={item.displayTotal}
-              displayNonCompliant={item.displayNonCompliant}
-              displayScore={item.displayScore}
-            />
-          ))}
+        <Text style={styles.cardKicker}>Overall compliance score</Text>
+        <View style={styles.overallScoreLine}>
+          <Text style={[styles.overallScoreValue, { color: overallBand.text }]}>
+            {formatScore(overallFromCards, 0)}
+          </Text>
+          {hasValue(overallFromCards) ? (
+            <Text style={[styles.overallScorePct, { color: overallBand.text }]}>%</Text>
+          ) : null}
         </View>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardKicker}>Scan Summary</Text>
-        <View style={styles.statGrid}>
+        <View style={[styles.bandPill, { alignSelf: "flex-start", marginTop: 12, backgroundColor: overallBand.bg, borderColor: overallBand.border }]}>
+          <Text style={[styles.bandText, { color: overallBand.text }]}>{overallBand.label}</Text>
+        </View>
+        <Text style={[styles.circleHint, { textAlign: "left", marginTop: 8 }]}>
+          {evaluatedCards.length
+            ? `Average of the ${evaluatedCards.length} measured ${plural(evaluatedCards.length, "category", "categories")}`
+            : Array.isArray(overallCategories) && overallCategories.length
+              ? `Average of the ${overallCategories.length} measured ${plural(overallCategories.length, "category", "categories")}`
+              : "Average of categories that were actually measured"}
+        </Text>
+        <View style={[styles.statGrid, { marginTop: 16 }]}>
           <View style={[styles.stat, { backgroundColor: "#f8fafc" }]}>
             <Text style={[styles.statNum, { color: "#334155" }]}>{formatCount(totalUnits)}</Text>
             <Text style={[styles.statLabel, { color: "#64748b" }]}>Total Units</Text>
@@ -412,12 +409,23 @@ function ScanResultBody({ navigation }) {
             <Text style={[styles.statLabel, { color: "#f43f5e" }]}>Non-Compliant Units</Text>
           </View>
         </View>
-        <Text style={styles.statNote}>
-          Compliant Units + Non-Compliant Units equals Total Units checked.
-        </Text>
-        <View style={styles.tagRow}>
-          <Text style={styles.tag}>{citationStyle}</Text>
-          <Text style={styles.tag}>Format only</Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardKicker}>Score Breakdown</Text>
+        <View style={styles.catGrid}>
+          {categoryCards.map((item) => (
+            <CategoryScoreCard
+              key={item.metric || item.section}
+              metric={item.metric || item.section}
+              score={item.displayScore ?? item.score}
+              status={item.status}
+              displayTotal={item.displayTotal}
+              displayNonCompliant={item.displayNonCompliant}
+              displayIssueCount={item.displayIssueCount}
+              displayScore={item.displayScore}
+            />
+          ))}
         </View>
       </View>
 
@@ -437,7 +445,7 @@ function ScanResultBody({ navigation }) {
             ) : null}
           </View>
           <Pressable
-            onPress={openReferenceTracing}
+            onPress={() => openReferenceTracing(null)}
             style={({ pressed }) => [styles.traceBtn, pressed && { backgroundColor: "#047857" }]}
           >
             <Text style={styles.traceBtnText}>Trace issues in document</Text>
@@ -465,9 +473,9 @@ function ScanResultBody({ navigation }) {
       <View>
         <View style={styles.issuesHead}>
           <View style={{ flex: 1, minWidth: 200 }}>
-            <Text style={styles.issuesTitle}>Issues detected</Text>
+            <Text style={styles.issuesTitle}>Issue tracing</Text>
             <Text style={styles.issuesSub}>
-              Grouped by page with explanations and fix suggestions. Each page starts at line 1.
+              Tap a finding to open the document at that location. Nothing jumps until you choose.
             </Text>
           </View>
           {issueTypes > 0 ? (
@@ -476,7 +484,12 @@ function ScanResultBody({ navigation }) {
             </Text>
           ) : null}
         </View>
-        <IssuesDetectedPanel formatChecks={formatChecks} pageCount={pageCount} pagination={pagination} />
+        <IssuesDetectedPanel
+          formatChecks={formatChecks}
+          pageCount={pageCount}
+          pagination={pagination}
+          onTraceIssue={(entry) => openReferenceTracing(entry)}
+        />
       </View>
 
     </ScrollView>
@@ -600,6 +613,9 @@ const styles = StyleSheet.create({
   catTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
   catDetail: { marginTop: 2, fontSize: 11, lineHeight: 15, color: "#64748b" },
   statNote: { marginTop: 8, fontSize: 10, lineHeight: 14, color: "#94a3b8" },
+  overallScoreLine: { flexDirection: "row", alignItems: "flex-end", gap: 2 },
+  overallScoreValue: { fontSize: 48, fontWeight: "800", fontVariant: ["tabular-nums"], lineHeight: 52 },
+  overallScorePct: { fontSize: 24, fontWeight: "800", fontVariant: ["tabular-nums"], paddingBottom: 6 },
   card: {
     borderRadius: 12,
     borderWidth: 1,

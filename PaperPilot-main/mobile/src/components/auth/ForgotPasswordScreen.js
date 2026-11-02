@@ -14,8 +14,8 @@ import AuthShell from "./AuthShell";
 import OtpStep from "./OtpStep";
 
 /**
- * Email → 6-digit code → new password → back to login.
- * `onDone` is called with a confirmation message for the login screen.
+ * Email → 6-digit code → new password → password-changed confirmation.
+ * `onDone` is called after a successful reset (parent shows PasswordChangedScreen).
  */
 export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, onDone }) {
   const [step, setStep] = useState("email");
@@ -94,7 +94,7 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
     setBusy(true);
     try {
       await resetPasswordWithOtp({ email: email.trim(), resetToken, newPassword: password });
-      onDone("Password updated. Sign in with your new password.");
+      await onDone?.();
     } catch (err) {
       setFormError(err.message);
     } finally {

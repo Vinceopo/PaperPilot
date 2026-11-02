@@ -11,7 +11,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "../../theme";
 import PaperPilotLogo from "./PaperPilotLogo";
-import { MenuIcon, UploadIcon } from "./icons";
+import { UploadIcon } from "./icons";
 
 const SIDEBAR_MAX_WIDTH = 320;
 
@@ -128,10 +128,11 @@ export default function Sidebar({
             <Pressable
               style={styles.closeBtn}
               onPress={onClose}
-              accessibilityLabel="Hide sidebar"
+              accessibilityLabel="Collapse sidebar"
+              accessibilityHint="Hides the navigation drawer"
               hitSlop={6}
             >
-              <MenuIcon size={16} color="#cbd5e1" />
+              <Text style={styles.collapseChevrons}>≪</Text>
             </Pressable>
           </View>
 
@@ -207,14 +208,20 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 0,
     right: 0,
-    width: 32,
-    height: 32,
+    width: 36,
+    height: 36,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: "rgba(71, 85, 105, 0.6)",
     backgroundColor: colors.sidebarActive,
     alignItems: "center",
     justifyContent: "center",
+  },
+  collapseChevrons: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#cbd5e1",
+    lineHeight: 18,
   },
   navTop: { marginTop: 40 },
   navBottom: { marginTop: "auto" },
