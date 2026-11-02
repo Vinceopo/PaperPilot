@@ -16,7 +16,7 @@ issue occurrence
     One detected violation of one issue type at one location. A failed unit produces at
     least one occurrence and may produce several (a line in the wrong font family *and*
     size is one failed Fonts unit but two occurrences). Some checks are document-level and
-    produce occurrences without any unit (paper size/orientation, captions, citations).
+    produce occurrences without any unit (paper size/orientation, captions). Citations use marker-line units when a style is set.
 
 Percentages are returned at full precision as ``{value, numerator, denominator, meaning}``;
 ``value`` is ``None`` when the denominator is 0. Rounding is a display concern.
@@ -29,7 +29,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 SCORING_VERSION = "units-v2"
-BREAKDOWN_ORDER = ("Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination")
+BREAKDOWN_ORDER = ("Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination", "Citations")
 SEVERITIES = ("critical", "moderate", "minor")
 OTHER_CATEGORY = "Other"
 

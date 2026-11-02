@@ -15,12 +15,16 @@ flowchart TD
   C --> F[Indentation]
   C --> G[Spacing]
   C --> H[Alignment]
+  C --> P[Pagination]
+  C --> Q[Citations]
 
   D --> I[Per-category pass rate]
   E --> I
   F --> I
   G --> I
   H --> I
+  P --> I
+  Q --> I
 
   I --> J[Overall score = average of measured categories]
   B --> K[All units counted]
