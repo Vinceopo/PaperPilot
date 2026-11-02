@@ -81,6 +81,15 @@ function itemsFrom(data, key) {
   return data?.[key] || data?.items || [];
 }
 
+function isTransientLoadError(err) {
+  const status = err?.status;
+  return status === 0 || status === 502 || status === 503 || status === 504;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const DASHBOARD_PAGES = new Set(["manuscripts", "upload", "account", "subscription", "notifications"]);
 
 /** Raw hash segment (e.g. "results", "upload") without the leading #/. */
@@ -597,6 +606,8 @@ export default function App() {
 
   useEffect(() => {
     const loaded = loadScannedManuscripts(user?.uid);
+    // Keep the merge source in sync before loadDashboard runs in the same tick.
+    scannedLibraryRef.current = loaded;
     setScannedLibrary(loaded);
     // Persist merged rows if older duplicates were cleaned up.
     if (loaded.length) saveScannedManuscripts(loaded, user?.uid);
@@ -843,43 +854,79 @@ export default function App() {
   const loadDashboard = useCallback(async (opts) => {
     if (!auth?.currentUser) return;
     const silent = opts?.silent === true;
+    const uid = auth.currentUser.uid;
     if (!silent) {
       setLoading(true);
       setError("");
     }
     try {
+      // Avoid merge race: hydrate setState may not have flushed before this runs.
+      if (!(scannedLibraryRef.current || []).length) {
+        const local = loadScannedManuscripts(uid);
+        if (local.length) scannedLibraryRef.current = local;
+      }
+
       // Vercel Python cold-starts install deps on first request - warm first so
       // the three parallel dashboard calls don't all race a 60s install.
       if (!silent) await warmApi();
 
-      // Load each resource independently - a 503 on manuscripts/subscription
-      // must not wipe a successful mechanics list (that caused "already exists"
-      // saves while Use a Saved Format looked empty).
-      const subscriptionTicket = nextSubscriptionTicket();
-      const mechanicsChange = mechanicsChangeRef.current;
-      const [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] = await Promise.allSettled([
-        listMechanics(),
-        listManuscripts(),
-        getSubscription(),
-        listScans(),
-      ]);
-      if (scansResult.status === "fulfilled") {
-        const uid = auth.currentUser?.uid;
-        const { items, added } = mergeServerScans(
-          scannedLibraryRef.current,
-          itemsFrom(scansResult.value, "items"),
-          loadDismissedScanIds(uid)
-        );
-        if (added) {
-          scannedLibraryRef.current = items;
-          setScannedLibrary(items);
-          saveScannedManuscripts(items, uid);
-        }
+      // After Chrome clears site data, local caches are empty and the first API
+      // reply can still be a warm-up empty/503. Retry before accepting a blank UI.
+      const maxAttempts = silent ? 1 : 3;
+      let mechanicsResult;
+      let manuscriptsResult;
+      let subscriptionResult;
+      let scansResult;
+      let subscriptionTicket = nextSubscriptionTicket();
+      let mechanicsChange = mechanicsChangeRef.current;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        subscriptionTicket = nextSubscriptionTicket();
+        mechanicsChange = mechanicsChangeRef.current;
+        // Load each resource independently - a 503 on manuscripts/subscription
+        // must not wipe a successful mechanics list (that caused "already exists"
+        // saves while Use a Saved Format looked empty).
+        [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] =
+          await Promise.allSettled([
+            listMechanics(),
+            listManuscripts(),
+            getSubscription(),
+            listScans(),
+          ]);
+
+        if (attempt >= maxAttempts) break;
+
+        const mechItems =
+          mechanicsResult.status === "fulfilled"
+            ? itemsFrom(mechanicsResult.value, "mechanics")
+            : [];
+        const scanItems =
+          scansResult.status === "fulfilled" ? itemsFrom(scansResult.value, "items") : [];
+        const gotAnyRows = mechItems.length > 0 || scanItems.length > 0;
+        const localMechEmpty = loadCachedMechanics(uid).length === 0;
+        const localLibEmpty =
+          !(scannedLibraryRef.current || []).length &&
+          loadScannedManuscripts(uid).length === 0;
+        const localSubEmpty = !readCachedSubscription(uid) && !subscriptionRef.current;
+        const transientFail = [
+          mechanicsResult,
+          manuscriptsResult,
+          subscriptionResult,
+          scansResult,
+        ].some((result) => result.status === "rejected" && isTransientLoadError(result.reason));
+        const wipedLocal = localMechEmpty && localLibEmpty && localSubEmpty;
+        // Local caches wiped + still no rows: one warm-up reply can be falsely empty.
+        // Stop retrying once any mechanics/scans arrive (new accounts stay empty after retries).
+        const suspiciousEmpty = wipedLocal && !gotAnyRows;
+
+        if (!transientFail && !suspiciousEmpty) break;
+
+        await warmApi({ attempts: 2, delayMs: 800 });
+        await sleep(750 * attempt);
       }
 
       // Scans made on another device (e.g. mobile) join the local library as versions.
       if (scansResult.status === "fulfilled") {
-        const uid = auth.currentUser?.uid;
         const { items, changed } = mergeServerScans(
           scannedLibraryRef.current,
           itemsFrom(scansResult.value, "items"),
@@ -1388,6 +1435,8 @@ export default function App() {
     hasComplianceResult &&
     activePage === "upload" &&
     (scanFlow.step === "results" || scanFlow.step === "tracing" || scanFlow.step === "summary");
+  // Only light Upload & Analyze while that pageface is open - not on Manuscripts/Account.
+  const uploadNavActive = activePage === "upload" && !viewingComplianceResult;
 
   function openComplianceResult() {
     if (!scanFlow.result) return;
@@ -1540,9 +1589,9 @@ export default function App() {
               e.preventDefault();
               openUploadMechanics();
             }}
-            className={`mt-1 font-semibold ${navItemClass(activePage === "upload" && !viewingComplianceResult)}`}
+            className={`mt-1 ${navItemClass(uploadNavActive)}`}
           >
-            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-[#22c9b4]" aria-hidden>
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center" aria-hidden>
               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M14 2v6h6" />
