@@ -2368,55 +2368,70 @@ def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -
         _check_object_placement(units, kind, expect, collector)
 
 
+def _expected_citation_families(style: str) -> set[str]:
+    """Marker families allowed for the uploaded citation_style."""
+    normalized = str(style or "").strip().upper()
+    if normalized in {"IEEE", "VANCOUVER"}:
+        return {"numeric"}
+    if normalized == "MLA":
+        return {"mla"}
+    if normalized in {"APA", "HARVARD", "TURABIAN", "CHICAGO"}:
+        return {"apa"}
+    return set()
+
+
+def _citation_marker_families(text: str) -> set[str]:
+    """Which in-text marker families appear in a line (numeric / apa / mla)."""
+    raw = text or ""
+    found: set[str] = set()
+    if IN_TEXT_NUMERIC_RE.search(raw):
+        found.add("numeric")
+    if IN_TEXT_APA_RE.search(raw):
+        found.add("apa")
+    if IN_TEXT_MLA_RE.search(raw):
+        found.add("mla")
+    return found
+
+
 def _check_citations(units: list[dict], text: str, rules: dict, collector: IssueCollector) -> None:
     style = str(rules.get("citation_style") or "").upper()
     if not style:
         return
     from app.citation_ml import classify_citation
 
+    allowed = _expected_citation_families(style)
+    if not allowed:
+        return
+
     numeric = len(IN_TEXT_NUMERIC_RE.findall(text or ""))
     author_year = len(IN_TEXT_APA_RE.findall(text or ""))
     mla = len(IN_TEXT_MLA_RE.findall(text or ""))
-    if numeric + author_year + mla == 0 and not any(
+    has_reference_header = any(
         REFERENCE_HEADER_RE.match((unit.get("text") or "").strip()) for unit in units
-    ):
+    )
+    if numeric + author_year + mla == 0 and not has_reference_header:
         return
 
-    expected_numeric = style in {"IEEE", "VANCOUVER"}
-    mismatch_pattern = IN_TEXT_APA_RE if expected_numeric else IN_TEXT_NUMERIC_RE
-    if expected_numeric:
-        style_mismatch = author_year > numeric
-    elif style == "MLA":
-        style_mismatch = numeric > mla and numeric > author_year
-        mismatch_pattern = IN_TEXT_NUMERIC_RE
-    else:
-        style_mismatch = numeric > author_year
-
-    located = False
-    if style_mismatch:
-        for unit in units:
-            if mismatch_pattern.search(unit.get("text") or ""):
-                collector.add(
-                    "citation_format",
-                    "moderate",
-                    "Citation format does not match the uploaded style",
-                    f"In-text markers do not follow the uploaded {style} format.",
-                    "This check compares citation marker syntax only; it does not validate sources or citation content.",
-                    f"Reformat in-text citations using {style} conventions.",
-                    _unit_location(unit, "Citations"),
-                )
-                located = True
-        if not located:
-            # No unit pin — do not invent PAGE 1 / LINE 1.
-            collector.add(
-                "citation_format",
-                "moderate",
-                "Citation format does not match the uploaded style",
-                f"Detected citation markers do not predominantly follow {style} formatting.",
-                "This check compares citation marker syntax only; it does not validate sources or citation content.",
-                f"Reformat in-text citations using {style} conventions.",
-                _location(None, None, "Citations"),
-            )
+    # Per-marker (per-unit): flag any line that contains a marker family the
+    # uploaded style does not allow. Minority wrong citations are no longer
+    # hidden by document-level majority vote.
+    for unit in units:
+        raw = unit.get("text") or ""
+        families = _citation_marker_families(raw)
+        if not families:
+            continue
+        wrong = families - allowed
+        if not wrong:
+            continue
+        collector.add(
+            "citation_format",
+            "moderate",
+            "Citation format does not match the uploaded style",
+            f"In-text markers do not follow the uploaded {style} format.",
+            "This check compares citation marker syntax only; it does not validate sources or citation content.",
+            f"Reformat in-text citations using {style} conventions.",
+            _unit_location(unit, "Citations"),
+        )
 
     format_pins = {
         (loc.get("page"), loc.get("line"))

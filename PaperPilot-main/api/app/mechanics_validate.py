@@ -284,7 +284,7 @@ def _inline_title_value_re(alias: str) -> re.Pattern[str]:
     cached = _INLINE_TITLE_VALUE_RE_CACHE.get(alias)
     if cached:
         return cached
-    pattern = re.compile(rf"^{re.escape(alias)}(?:\s*[:\- - -].*)?$", re.I)
+    pattern = re.compile(rf"^{re.escape(alias)}(?:\s*[:\-\u2014\u2013].*)?$", re.I)
     _INLINE_TITLE_VALUE_RE_CACHE[alias] = pattern
     return pattern
 

@@ -484,16 +484,16 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
 @app.get("/mechanics/sample")
 def mechanics_sample():
     """Downloadable sample format-mechanics guide (DOCX) for users who need a starting point."""
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import Response
 
-    buffer = io.BytesIO(build_sample_mechanics_docx())
-    headers = {
-        "Content-Disposition": 'attachment; filename="Sample_Format_Mechanics.docx"'
-    }
-    return StreamingResponse(
-        buffer,
+    payload = build_sample_mechanics_docx()
+    return Response(
+        content=payload,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers=headers,
+        headers={
+            "Content-Disposition": 'attachment; filename="Sample_Format_Mechanics.docx"',
+            "Cache-Control": "no-store",
+        },
     )
 
 

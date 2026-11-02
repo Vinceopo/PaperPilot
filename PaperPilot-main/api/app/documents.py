@@ -1002,7 +1002,7 @@ def _value_after_label(flat: str, labels: tuple[str, ...], stop_words: tuple[str
     stop_alt = _stop_pattern(stop_words)
     match = re.search(
         rf"(?i)\b(?:{label_alt})\b(?:\s*[)\].-]*)?\s*"
-        rf"(?:[:：=\--]|is|are|of|should be|must be)?\s*"
+        rf"(?:[:：=\-\u2013]|is|are|of|should be|must be)?\s*"
         rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})|$)",
         flat,
     )
@@ -1022,7 +1022,7 @@ def _line_value(text: str, labels: tuple[str, ...]) -> str:
     contain words like 'page' or 'bottom' that stop the flattened label search."""
     lines = [line.strip(" \t•●▪◦*-") for line in (text or "").replace("\r", "\n").split("\n")]
     label_alt = "|".join(re.escape(label) for label in labels)
-    pattern = re.compile(rf"^(?:{label_alt})\s*(?:[:：=-]|\t)\s*(.*)$", re.I)
+    pattern = re.compile(rf"^(?:{label_alt})\s*(?:[:：=\u2013]|\t)\s*(.*)$", re.I)
     alone = re.compile(rf"^(?:{label_alt})\s*[:：]?$", re.I)
     for index, line in enumerate(lines):
         match = pattern.match(line)
@@ -1274,7 +1274,7 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
     side_list = rf"(?:{_MARGIN_SIDE_ALT})(?:\s*(?:,|and|&|/)\s*(?:the\s+)?(?:{_MARGIN_SIDE_ALT}))+"
     listed = re.compile(
         rf"\b({side_list})\b\s*\)?\s*(?:margins?\s*)?"
-        rf"(?::|=|-|-| - |should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
+        rf"(?::|=|-|\u2013|\u2014|should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
         rf"(?:set\s+(?:to|at)\s+)?({_MEASURE_AFTER_SIDE_LIST})",
         re.I,
     )

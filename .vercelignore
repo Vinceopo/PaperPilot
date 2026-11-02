@@ -41,12 +41,14 @@ PaperPilot-main/.pytest_cache/
 !.env.example
 creds.json
 *firebase-adminsdk*
-*.pdf
-*.docx
+# Ignore local fixture docs only (do not use bare *.docx/*.pdf — that can
+# strip python-docx templates and break sample-format generation on Vercel).
+PaperPilot-main/testdata/**/*.pdf
+PaperPilot-main/testdata/**/*.docx
+PaperPilot-main/**/Sample_Format_Mechanics_preview.docx
 diag-*.mjs
 diag-*.json
 diag-*.png
 _rtdb_usage_raw.json
 FIREBASE_RTDB_DOWNLOADS_INVESTIGATION.md
 plan.md
-Sample_Format_Mechanics_preview.docx

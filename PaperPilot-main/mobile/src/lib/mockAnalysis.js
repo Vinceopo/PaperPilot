@@ -11,10 +11,12 @@ import { isServerId, mapComplianceScanToResult } from "./scanMapper";
 import { scanNeedsPolling, waitForScanResult } from "./scanPoll";
 import {
   CATEGORY_STATUS_LABEL,
+  formatCategoryIssuesDetail,
   formatCount,
   formatPct,
   formatScore,
   hasValue,
+  resolveCategoryUnitDisplays,
   resolveUnitCounts,
 } from "./scoreFormat";
 import { APP_TIME_ZONE } from "./timeZone";
@@ -211,11 +213,39 @@ export async function downloadReport(result, opts = {}) {
     if (rectW > 0) doc.rect(rectX, y, rectW, h, "F");
   }
 
+  function strokeRing(cx, cy, radius, lineWidth, rgb, pct) {
+    doc.setDrawColor(...rgb);
+    doc.setLineWidth(lineWidth);
+    doc.setLineCap("round");
+    const safe = Math.max(0, Math.min(100, Number(pct) || 0));
+    if (safe <= 0) return;
+    const startDeg = -90;
+    const sweep = (safe / 100) * 360;
+    const steps = Math.max(12, Math.ceil(sweep / 2.5));
+    let prevX = cx + radius * Math.cos((startDeg * Math.PI) / 180);
+    let prevY = cy + radius * Math.sin((startDeg * Math.PI) / 180);
+    for (let i = 1; i <= steps; i += 1) {
+      const deg = startDeg + (sweep * i) / steps;
+      const x = cx + radius * Math.cos((deg * Math.PI) / 180);
+      const y = cy + radius * Math.sin((deg * Math.PI) / 180);
+      doc.line(prevX, prevY, x, y);
+      prevX = x;
+      prevY = y;
+    }
+  }
+
+  function ringColor(score) {
+    if (!hasValue(score)) return [203, 213, 225];
+    if (score >= 80) return PASS_C;
+    if (score >= 50) return REVIEW_C;
+    return FAIL_C;
+  }
+
   const brandX = ML;
-  doc.setFontSize(12).setTextColor(...NAVY).setFont(undefined, "bold");
+  doc.setFontSize(12).setTextColor(...NAVY).setFont("helvetica", "bold");
   doc.text("PAPERPILOT", brandX, 16);
   const brandW = doc.getTextWidth("PAPERPILOT");
-  doc.setFontSize(10).setTextColor(74, 85, 104).setFont(undefined, "bold");
+  doc.setFontSize(10).setTextColor(74, 85, 104).setFont("helvetica", "bold");
   doc.text("* RESULTS", brandX + brandW + 3, 16);
 
   Y = 24;
@@ -232,7 +262,7 @@ export async function downloadReport(result, opts = {}) {
   const colW = CW / 4;
   metaCols.forEach(([label, val], i) => {
     const cx = ML + 4 + i * colW;
-    doc.setFontSize(6).setFont(undefined, "bold").setTextColor(...SLATE);
+    doc.setFontSize(6).setFont("helvetica", "bold").setTextColor(...SLATE);
     doc.text(label, cx, Y + 7);
     doc.setFontSize(8).setTextColor(...NAVY);
     const lines = doc.splitTextToSize(String(val), colW - 8);
@@ -240,7 +270,7 @@ export async function downloadReport(result, opts = {}) {
   });
   if (campus || college) {
     Y += 24;
-    doc.setFontSize(7).setFont(undefined, "normal").setTextColor(...SLATE);
+    doc.setFontSize(7).setFont("helvetica", "normal").setTextColor(...SLATE);
     doc.text([college, campus].filter(Boolean).join(" · "), ML, Y);
   } else {
     Y += 28;
@@ -254,21 +284,21 @@ export async function downloadReport(result, opts = {}) {
   doc.setDrawColor(226, 232, 240);
   doc.roundedRect(ML, Y, CW, 42, 2, 2, "FD");
 
-  doc.setFontSize(6.5).setFont(undefined, "bold").setTextColor(...SLATE);
+  doc.setFontSize(6.5).setFont("helvetica", "bold").setTextColor(...SLATE);
   doc.text("OVERALL COMPLIANCE SCORE", ML + 5, Y + 8);
   const scoreStr = formatScore(scoreValue, 0);
-  doc.setFontSize(22).setFont(undefined, "bold").setTextColor(...bandColor);
+  doc.setFontSize(22).setFont("helvetica", "bold").setTextColor(...bandColor);
   doc.text(scoreStr, ML + 5, Y + 22);
   const scoreW = doc.getTextWidth(scoreStr);
-  doc.setFontSize(12).setFont(undefined, "bold").setTextColor(...bandColor);
+  doc.setFontSize(12).setFont("helvetica", "bold").setTextColor(...bandColor);
   doc.text("%", ML + 5 + scoreW + 1, Y + 22);
-  doc.setFontSize(7).setFont(undefined, "bold").setTextColor(...bandColor);
+  doc.setFontSize(7).setFont("helvetica", "bold").setTextColor(...bandColor);
   doc.text(band, ML + 5, Y + 30);
 
   // Compliant / Non-Compliant labels + thin stacked bar (no percent numbers)
   const barX = ML + 58;
   const barW = CW - 68;
-  doc.setFontSize(8).setFont(undefined, "bold").setTextColor(...PASS_C);
+  doc.setFontSize(8).setFont("helvetica", "bold").setTextColor(...PASS_C);
   doc.text("Compliant", barX, Y + 10);
   doc.setTextColor(...FAIL_C);
   doc.text("Non-Compliant", barX + barW, Y + 10, { align: "right" });
@@ -301,49 +331,83 @@ export async function downloadReport(result, opts = {}) {
     doc.setDrawColor(226, 232, 240);
     doc.setFillColor(255, 255, 255);
     doc.roundedRect(bx, by, boxW, 14, 1.5, 1.5, "FD");
-    doc.setFontSize(11).setFont(undefined, "bold").setTextColor(...s.color);
+    doc.setFontSize(11).setFont("helvetica", "bold").setTextColor(...s.color);
     doc.text(String(s.value), bx + boxW / 2, by + 7, { align: "center" });
-    doc.setFontSize(5).setFont(undefined, "bold").setTextColor(...SLATE);
+    doc.setFontSize(5).setFont("helvetica", "bold").setTextColor(...SLATE);
     doc.text(s.label, bx + boxW / 2, by + 11.5, { align: "center" });
   });
 
   Y += 48;
 
-  if (scoreBreakdown.length) {
-    checkPageBreak(scoreBreakdown.length * 9 + 14);
-    doc.setFontSize(10).setFont(undefined, "bold").setTextColor(0, 0, 0);
-    doc.text("Score breakdown", ML, Y);
-    Y += 5;
-    const barTrackW = CW * 0.55;
-    const barH = BAR_H;
-    scoreBreakdown.forEach((item) => {
-      checkPageBreak(8);
-      const evaluated = hasValue(item.score);
-      const score = evaluated ? Number(item.score) : 0;
-      const barColor = !evaluated ? SLATE : score >= 80 ? PASS_C : score >= 60 ? REVIEW_C : FAIL_C;
-      doc.setFontSize(8).setFont(undefined, "normal").setTextColor(50, 65, 85);
-      doc.text(item.metric || item.section || "", ML, Y + barH + 0.5);
-      const trackX = ML + 42;
-      fillPill(trackX, Y, barTrackW, barH, TRACK);
-      if (evaluated) {
-        const fillW = Math.max(barH, (score / 100) * barTrackW);
-        fillPill(trackX, Y, Math.min(fillW, barTrackW), barH, barColor);
+  const categoryCards = resolveCategoryUnitDisplays(scoreBreakdown);
+  if (categoryCards.length) {
+    const cols = 3;
+    const gap = 3.5;
+    const cardW = (CW - gap * (cols - 1)) / cols;
+    const cardH = 22;
+    checkPageBreak(cardH + 16);
+    doc.setFontSize(10).setFont("helvetica", "bold").setTextColor(0, 0, 0);
+    doc.text("Score Breakdown", ML, Y);
+    Y += 6;
+
+    categoryCards.forEach((item, index) => {
+      const col = index % cols;
+      if (col === 0) checkPageBreak(cardH + gap);
+      const x = ML + col * (cardW + gap);
+      const y = Y;
+
+      doc.setFillColor(244, 246, 248);
+      doc.setDrawColor(226, 232, 240);
+      doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, "FD");
+
+      const issueCount = hasValue(item.displayIssueCount)
+        ? item.displayIssueCount
+        : item.displayNonCompliant;
+      const pct = hasValue(item.displayScore)
+        ? Number(item.displayScore)
+        : hasValue(item.score)
+          ? Number(item.score)
+          : null;
+      const evaluated = hasValue(pct);
+      const safe = evaluated ? Math.max(0, Math.min(100, Number(pct))) : 0;
+      const color = ringColor(evaluated ? safe : null);
+      const cx = x + 11;
+      const cy = y + cardH / 2;
+      const radius = 6.2;
+      const strokeW = 1.7;
+
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(strokeW);
+      doc.circle(cx, cy, radius, "S");
+      if (evaluated) strokeRing(cx, cy, radius, strokeW, color, safe);
+
+      doc.setFontSize(6.5).setFont("helvetica", "bold").setTextColor(...(evaluated ? color : SLATE));
+      doc.text(evaluated ? formatPct(safe, 0) : "-", cx, cy + 1.1, { align: "center" });
+
+      const textX = x + 20;
+      const name = String(item.metric || item.section || "Category").trim() || "Category";
+      const detail =
+        formatCategoryIssuesDetail(issueCount, item.displayTotal) ||
+        (evaluated ? null : CATEGORY_STATUS_LABEL[item.status] || "Not evaluated") ||
+        "";
+      doc.setFontSize(7.5).setFont("helvetica", "bold").setTextColor(30, 41, 59);
+      doc.text(doc.splitTextToSize(name, cardW - 24).slice(0, 1), textX, y + 8);
+      doc.setFontSize(5.5).setFont("helvetica", "normal").setTextColor(...SLATE);
+      if (detail) {
+        doc.text(doc.splitTextToSize(detail, cardW - 24).slice(0, 2), textX, y + 13);
       }
-      doc.setFontSize(7.5).setFont(undefined, "bold").setTextColor(...barColor);
-      doc.text(
-        evaluated ? formatPct(score) : CATEGORY_STATUS_LABEL[item.status] || "Not evaluated",
-        trackX + barTrackW + 3,
-        Y + barH + 0.5
-      );
-      Y += 7.5;
+
+      if (col === cols - 1 || index === categoryCards.length - 1) {
+        Y += cardH + gap;
+      }
     });
-    Y += 4;
+    Y += 2;
   }
 
   checkPageBreak(20);
-  doc.setFontSize(10).setFont(undefined, "bold").setTextColor(0, 0, 0);
+  doc.setFontSize(10).setFont("helvetica", "bold").setTextColor(0, 0, 0);
   doc.text("Format Checks", ML, Y);
-  doc.setFontSize(7.5).setFont(undefined, "normal").setTextColor(...SLATE);
+  doc.setFontSize(7.5).setFont("helvetica", "normal").setTextColor(...SLATE);
   doc.text(`${issueTypes} issue type${issueTypes === 1 ? "" : "s"} found`, ML, Y + 5);
   Y += 10;
 
@@ -387,7 +451,7 @@ export async function downloadReport(result, opts = {}) {
       const [tr, tg, tb] = val === "PASS" ? PASS_C : val === "FAIL" ? FAIL_C : REVIEW_C;
       doc.setFillColor(r, g, b);
       doc.roundedRect(x + 1.5, y + (height - 5.5) / 2, width - 3, 5.5, 1.5, 1.5, "F");
-      doc.setFontSize(6.5).setFont(undefined, "bold").setTextColor(tr, tg, tb);
+      doc.setFontSize(6.5).setFont("helvetica", "bold").setTextColor(tr, tg, tb);
       doc.text(val, x + width / 2, y + height / 2 + 0.8, { align: "center" });
     },
     didAddPage: () => {
@@ -401,7 +465,7 @@ export async function downloadReport(result, opts = {}) {
   doc.setDrawColor(...TEAL).setLineWidth(0.4);
   doc.line(ML, Y, PW - MR, Y);
   Y += 5;
-  doc.setFontSize(7).setFont(undefined, "normal").setTextColor(...SLATE);
+  doc.setFontSize(7).setFont("helvetica", "normal").setTextColor(...SLATE);
   doc.text(
     "This report covers formatting mechanics only: fonts, margins, spacing, indentation, " +
       "alignment, pagination, and citation format.",

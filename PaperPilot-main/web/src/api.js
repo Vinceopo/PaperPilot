@@ -328,7 +328,15 @@ export async function downloadSampleMechanics() {
       const data = await res.json().catch(() => ({}));
       throw new ApiError(detailMessage(data, "Could not download sample mechanics."), res.status, data.detail);
     }
-    const blob = await res.blob();
+    const buffer = await res.arrayBuffer();
+    // DOCX is a ZIP (PK…). Reject HTML/text error bodies that would save as a corrupt file.
+    const head = new Uint8Array(buffer.slice(0, 2));
+    if (buffer.byteLength < 64 || head[0] !== 0x50 || head[1] !== 0x4b) {
+      throw new ApiError("Sample format download failed. The server did not return a DOCX file.", res.status || 502);
+    }
+    const blob = new Blob([buffer], {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
