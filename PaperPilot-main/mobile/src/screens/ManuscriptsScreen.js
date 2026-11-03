@@ -14,7 +14,7 @@ import {
   TrashIcon,
   UploadIcon,
 } from "../components/shell/icons";
-import { bandTone, manuscriptSummary } from "../lib/scoreBand";
+import { bandTone, manuscriptSummary, sortManuscriptsByLatestScan } from "../lib/scoreBand";
 import { removeManuscriptVersion } from "../lib/scannedLibrary";
 import { deleteManuscriptVersion } from "../api";
 import { formatScore } from "../lib/scoreFormat";
@@ -92,11 +92,13 @@ export default function ManuscriptsScreen({ navigation }) {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return summaries.filter((m) => {
-      if (statusFilter !== "all" && m.status !== statusFilter) return false;
-      if (!q) return true;
-      return (m.title || "").toLowerCase().includes(q);
-    });
+    return sortManuscriptsByLatestScan(
+      summaries.filter((m) => {
+        if (statusFilter !== "all" && m.status !== statusFilter) return false;
+        if (!q) return true;
+        return (m.title || "").toLowerCase().includes(q);
+      })
+    );
   }, [summaries, query, statusFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));

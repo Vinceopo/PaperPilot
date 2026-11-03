@@ -77,6 +77,19 @@ export function latestVersion(manuscript) {
   return versions[0];
 }
 
+/** Most recent scan timestamp on a manuscript (ISO or date string). */
+export function latestScanTime(manuscript) {
+  const latest = manuscript?.latest || latestVersion(manuscript);
+  return String(latest?.scannedAt || latest?.scanResult?.scannedAt || latest?.scannedDate || "");
+}
+
+/** Newest-scanned manuscripts first so My Manuscripts surfaces the last scan. */
+export function sortManuscriptsByLatestScan(items) {
+  return [...(Array.isArray(items) ? items : [])].sort((a, b) =>
+    latestScanTime(b).localeCompare(latestScanTime(a))
+  );
+}
+
 /** Table-facing fields always derived from the latest version. */
 export function manuscriptSummary(manuscript) {
   const latest = latestVersion(manuscript);
@@ -89,6 +102,7 @@ export function manuscriptSummary(manuscript) {
     status: band.status,
     band,
     scannedDate: latest?.scannedDate || "",
+    scannedAt: latest?.scannedAt || latest?.scanResult?.scannedAt || latest?.scannedDate || "",
     latest,
     versionCount,
     latestVersionLabel: latest ? `v${latest.versionNumber}.0` : "-",

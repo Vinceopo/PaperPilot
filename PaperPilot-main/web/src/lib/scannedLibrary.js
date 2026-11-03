@@ -315,26 +315,29 @@ export function dedupeManuscriptsByTitle(items) {
     if (m.createdThisMonth) existing.createdThisMonth = true;
   }
 
-  return [...map.values()].map((m) => {
-    const chronological = uniqueByScanId(m.versions || []).sort((a, b) => {
-      const da = versionTime(a);
-      const db = versionTime(b);
-      if (da !== db) return da.localeCompare(db);
-      return (Number(a.versionNumber) || 0) - (Number(b.versionNumber) || 0);
-    });
-    // Server numbers are kept as-is (gaps after a delete are expected); only
-    // legacy versions without one get the next number in order.
-    let last = 0;
-    const versions = chronological
-      .map((v) => {
-        const own = Number(v.versionNumber);
-        const versionNumber = own > 0 ? own : last + 1;
-        last = Math.max(last, versionNumber);
-        return { ...v, manuscriptId: m.id, versionNumber };
-      })
-      .reverse();
-    return { ...m, versions };
-  });
+  return [...map.values()]
+    .map((m) => {
+      const chronological = uniqueByScanId(m.versions || []).sort((a, b) => {
+        const da = versionTime(a);
+        const db = versionTime(b);
+        if (da !== db) return da.localeCompare(db);
+        return (Number(a.versionNumber) || 0) - (Number(b.versionNumber) || 0);
+      });
+      // Server numbers are kept as-is (gaps after a delete are expected); only
+      // legacy versions without one get the next number in order.
+      let last = 0;
+      const versions = chronological
+        .map((v) => {
+          const own = Number(v.versionNumber);
+          const versionNumber = own > 0 ? own : last + 1;
+          last = Math.max(last, versionNumber);
+          return { ...v, manuscriptId: m.id, versionNumber };
+        })
+        .reverse();
+      return { ...m, versions };
+    })
+    // Newest last scan first so My Manuscripts / Upload targets surface it immediately.
+    .sort((a, b) => versionTime((b.versions || [])[0]).localeCompare(versionTime((a.versions || [])[0])));
 }
 
 /**
