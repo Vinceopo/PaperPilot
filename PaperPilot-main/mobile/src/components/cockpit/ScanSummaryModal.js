@@ -73,7 +73,7 @@ export default function ScanSummaryModal({
               {result.documentTitle || "Your manuscript"}
             </Text>
             <Text style={styles.subtitle}>
-              Formatting compliance summary - not grammar or content.
+              Formatting compliance summary — not grammar or content.
               {issueCount > 0
                 ? ` ${issueCount} issue type${issueCount === 1 ? "" : "s"} flagged.`
                 : " No format issues flagged."}

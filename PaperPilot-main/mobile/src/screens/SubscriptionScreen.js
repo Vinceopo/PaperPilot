@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
@@ -75,7 +75,7 @@ function peso(amount) {
 }
 
 function formatDate(iso) {
-  if (!iso) return "-";
+  if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
   return d.toLocaleDateString("en-PH", {
@@ -174,7 +174,7 @@ function PaidPlanCard({ plan, selected, isCurrent, billingPeriod, features, badg
   );
 }
 
-/** Subscription management - plans, PayMongo checkout, cancel, history (mirrors the web page). */
+/** Subscription management — plans, PayMongo checkout, cancel, history (mirrors the web page). */
 export default function SubscriptionScreen({ navigation }) {
   const { subscription, applySubscription, refreshSubscription, handleBackToDashboard } = useAppData();
   const tier = normalizeTier(subscription?.tier);
@@ -185,15 +185,17 @@ export default function SubscriptionScreen({ navigation }) {
   const [billingPeriod, setBillingPeriod] = useState(
     subscription?.billing_period === "annual" ? "annual" : "monthly"
   );
-  // null until the user clicks a plan card — avoids a permanent blue selection.
-  const [selectedPlan, setSelectedPlan] = useState(null);
+  // Same default as web: current paid plan, otherwise Premium.
+  const [selectedPlan, setSelectedPlan] = useState(isPremium ? tier : "premium");
+  const [activating, setActivating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [paymentCanceled, setPaymentCanceled] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  // Manage layout for every plan (including Free); checkout only after "Change plan".
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  // Like web: paid members start on Manage; Free members start on checkout.
+  const [checkoutOpen, setCheckoutOpen] = useState(!isPremium);
+  const viewTouchedRef = useRef(false);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [confirmFreeOpen, setConfirmFreeOpen] = useState(false);
 
@@ -206,22 +208,30 @@ export default function SubscriptionScreen({ navigation }) {
   const price = planPrice(selectedPlan, billingPeriod);
   const perPeriod = billingPeriod === "annual" ? "year" : "month";
   const switchingPlan = isPremium && isPaidTier(selectedPlan) && selectedPlan !== tier;
-  const subscribeCta = !selectedPlan
-    ? "Choose a plan to continue"
-    : isPremium && selectedPlan === tier
-      ? `Renew with PayMongo - ${peso(price)}/${perPeriod}`
+  const subscribeCta =
+    isPremium && selectedPlan === tier
+      ? `Renew with PayMongo — ${peso(price)}/${perPeriod}`
       : switchingPlan
-        ? `Switch to ${planName(selectedPlan)} with PayMongo - ${peso(price)}/${perPeriod}`
-        : `Pay with PayMongo - ${peso(price)}/${perPeriod}`;
+        ? `Switch to ${planName(selectedPlan)} with PayMongo — ${peso(price)}/${perPeriod}`
+        : `Pay with PayMongo — ${peso(price)}/${perPeriod}`;
+
+  // The cached subscription can land after first render; show Manage for paid members like web.
+  useEffect(() => {
+    if (isPremium && !viewTouchedRef.current) {
+      setCheckoutOpen(false);
+      setSelectedPlan(tier);
+    }
+  }, [isPremium, tier]);
 
   const history = useMemo(
     () => (Array.isArray(subscription?.history) ? subscription.history : []),
     [subscription]
   );
-  const showManage = !checkoutOpen;
+  const showManage = isPremium && !checkoutOpen;
 
-  function openCheckout(plan = null) {
-    setSelectedPlan(plan);
+  function openCheckout(plan) {
+    viewTouchedRef.current = true;
+    setSelectedPlan(plan || "premium");
     setCheckoutOpen(true);
   }
 
@@ -230,16 +240,9 @@ export default function SubscriptionScreen({ navigation }) {
     setSuccess("");
     setPaymentCanceled(false);
 
-    if (!selectedPlan) {
-      setError("Choose a plan first.");
-      return;
-    }
-
     if (selectedPlan === "free") {
       if (!isPremium) {
         setSuccess("You are already on the Free plan.");
-        setCheckoutOpen(false);
-        setSelectedPlan(null);
         return;
       }
       setConfirmFreeOpen(true);
@@ -257,6 +260,7 @@ export default function SubscriptionScreen({ navigation }) {
         );
       }
       const returnedUrl = String((await openBillingSession(url)) || "");
+      setActivating(true);
       if (returnedUrl.includes("status=canceled")) {
         setPaymentCanceled(true);
         setSelectedPlan(plan);
@@ -284,16 +288,15 @@ export default function SubscriptionScreen({ navigation }) {
         setSuccess(`Welcome to ${planName(plan)}! Your PayMongo payment was confirmed.`);
       } else if (paidReturn) {
         await refreshSubscription?.();
-        setCheckoutOpen(false);
         setSuccess(
-          "Payment received. PayMongo is still confirming it - your plan will activate within a minute. Pull to refresh or reopen this page."
+          "Payment received. PayMongo is still confirming it — your plan will activate within a minute. Pull to refresh or reopen this page."
         );
       } else {
         await refreshSubscription?.();
         setPaymentCanceled(true);
         setSelectedPlan(plan);
         setSuccess(
-          "Payment not completed. No charges were made. If you did pay, your plan will activate within a minute - pull to refresh or reopen this page."
+          "Payment not completed. No charges were made. If you did pay, your plan will activate within a minute — pull to refresh or reopen this page."
         );
       }
     } catch (err) {
@@ -302,6 +305,7 @@ export default function SubscriptionScreen({ navigation }) {
           "The PayMongo payment page could not be opened. You were not charged. Try again in a minute."
       );
     } finally {
+      setActivating(false);
       setBusy(false);
     }
   }
@@ -313,8 +317,8 @@ export default function SubscriptionScreen({ navigation }) {
     try {
       const next = await subscribeToPlan({ plan: "free" });
       applySubscription(next, { allowDowngrade: true });
-      setSelectedPlan(null);
-      setCheckoutOpen(false);
+      setSelectedPlan("premium");
+      setCheckoutOpen(true);
       setSuccess("Switched to Free plan.");
       setConfirmFreeOpen(false);
     } catch (err) {
@@ -331,9 +335,9 @@ export default function SubscriptionScreen({ navigation }) {
     try {
       const next = await cancelSubscription({ immediate: true });
       applySubscription(next, { allowDowngrade: true });
-      setSelectedPlan(null);
-      setCheckoutOpen(false);
-      setSuccess("Subscription canceled. You are on the Free plan - 3 scans this month.");
+      setCheckoutOpen(true);
+      setSelectedPlan("premium");
+      setSuccess("Subscription canceled. You are on the Free plan — 3 scans this month.");
       setConfirmCancelOpen(false);
     } catch (err) {
       setError(
@@ -362,12 +366,13 @@ export default function SubscriptionScreen({ navigation }) {
               ? "View status, renewal date, and billing history."
               : "Secure checkout powered by PayMongo (Card, GCash, Maya, and more)."}
           </Text>
-          {checkoutOpen ? (
+          {isPremium && checkoutOpen ? (
             <Pressable
               onPress={() => {
+                viewTouchedRef.current = true;
                 setCheckoutOpen(false);
-                setSelectedPlan(null);
                 setError("");
+                setSuccess("");
               }}
               style={({ pressed }) => [styles.toggleViewBtn, pressed && styles.toggleViewBtnPressed]}
             >
@@ -391,7 +396,7 @@ export default function SubscriptionScreen({ navigation }) {
             <Text style={styles.warnText}>
               Payment issue detected
               {subscription.payment_issue_reason ? ` (${subscription.payment_issue_reason})` : ""}. Your{" "}
-              {currentPlanName} access stays active during the grace period - update billing via PayMongo or contact support if this
+              {currentPlanName} access stays active during the grace period — update billing via PayMongo or contact support if this
               persists.
             </Text>
           </View>
@@ -404,7 +409,7 @@ export default function SubscriptionScreen({ navigation }) {
                 onPress={() => {
                   setSuccess("");
                   setPaymentCanceled(false);
-                  openCheckout(isPaidTier(selectedPlan) ? selectedPlan : null);
+                  openCheckout(isPaidTier(selectedPlan) ? selectedPlan : "premium");
                 }}
                 style={({ pressed }) => [styles.payAgainBtn, pressed && styles.accentPressed]}
               >
@@ -435,25 +440,25 @@ export default function SubscriptionScreen({ navigation }) {
                 <DetailRow label="Status" value={statusLabel(subscription)} />
                 <DetailRow
                   label="Billing period"
-                  value={isPremium ? subscription?.billing_period || "monthly" : "-"}
+                  value={isPremium ? subscription?.billing_period || "monthly" : "—"}
                   capitalize={isPremium}
                 />
                 <DetailRow
                   label="Payment method"
-                  value={isPremium ? subscription?.payment_method || "PayMongo" : "-"}
+                  value={isPremium ? subscription?.payment_method || "PayMongo" : "—"}
                   uppercase={isPremium}
                 />
                 <DetailRow
                   label="Current billing period"
                   value={
                     isPremium
-                      ? `${formatDate(subscription?.billing_period_start)} - ${formatDate(
+                      ? `${formatDate(subscription?.billing_period_start)} – ${formatDate(
                           subscription?.billing_period_end || subscription?.renews_at
                         )}`
                       : "-"
                   }
                 />
-                <DetailRow label="Renewal date" value={isPremium ? formatDate(subscription?.renews_at) : "-"} />
+                <DetailRow label="Renewal date" value={isPremium ? formatDate(subscription?.renews_at) : "—"} />
                 <DetailRow
                   label="Scan allowance"
                   value={`${scansRemaining} of ${planScanLimit} remaining this ${resetWindow(tier)}${
@@ -464,7 +469,7 @@ export default function SubscriptionScreen({ navigation }) {
               </View>
               <View style={styles.manageActions}>
                 <Pressable
-                  onPress={() => openCheckout(null)}
+                  onPress={() => openCheckout(tier)}
                   style={({ pressed }) => [styles.changePlanBtn, pressed && styles.accentPressed]}
                 >
                   <Text style={styles.changePlanText}>
@@ -542,10 +547,20 @@ export default function SubscriptionScreen({ navigation }) {
                   onPress={() => setBillingPeriod(opt.id)}
                   style={[styles.periodBtn, billingPeriod === opt.id && styles.periodBtnActive]}
                 >
-                  <Text style={[styles.periodText, billingPeriod === opt.id && styles.periodTextActive]}>
-                    {opt.label}
-                    {opt.id === "annual" ? ` · ${ANNUAL_SAVINGS_LABEL}` : ""}
-                  </Text>
+                  <View style={styles.periodInner}>
+                    <Text style={[styles.periodText, billingPeriod === opt.id && styles.periodTextActive]}>
+                      {opt.label}
+                    </Text>
+                    {opt.id === "annual" ? (
+                      <View style={[styles.periodBadge, billingPeriod === "annual" && styles.periodBadgeActive]}>
+                        <Text
+                          style={[styles.periodBadgeText, billingPeriod === "annual" && styles.periodTextActive]}
+                        >
+                          {ANNUAL_SAVINGS_LABEL}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
                 </Pressable>
               ))}
             </View>
@@ -595,7 +610,7 @@ export default function SubscriptionScreen({ navigation }) {
             <View style={[styles.card, styles.cardSpacing]}>
               <Text style={styles.checkoutTitle}>Secure checkout</Text>
               <Text style={styles.checkoutSub}>
-                You will enter card, GCash, Maya, or other details on PayMongo - not on PaperPilot.
+                You will enter card, GCash, Maya, or other details on PayMongo — not on PaperPilot.
               </Text>
               <View style={styles.checkoutList}>
                 <Text style={styles.checkoutItem}>• Card · GCash · Maya · GrabPay · QR Ph</Text>
@@ -607,45 +622,41 @@ export default function SubscriptionScreen({ navigation }) {
                 <Text style={styles.cardKicker}>Payment summary</Text>
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>
-                    {!selectedPlan
-                      ? "No plan selected"
-                      : isPaidTier(selectedPlan)
-                        ? `${planName(selectedPlan)} (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
-                        : "Free Plan"}
+                    {isPaidTier(selectedPlan)
+                      ? `${planName(selectedPlan)} (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
+                      : "Free Plan"}
                   </Text>
-                  <Text style={styles.summaryValue}>
-                    {!selectedPlan ? "-" : isPaidTier(selectedPlan) ? peso(price) : "₱0"}
-                  </Text>
+                  <Text style={styles.summaryValue}>{isPaidTier(selectedPlan) ? peso(price) : "₱0"}</Text>
                 </View>
                 {isPaidTier(selectedPlan) && billingPeriod === "annual" ? (
                   <Text style={styles.savingsLine}>
-                    {ANNUAL_SAVINGS_LABEL} - {peso(planPrice(selectedPlan, "monthly"))} off 12 monthly payments
+                    {ANNUAL_SAVINGS_LABEL} vs paying monthly for a year
                   </Text>
                 ) : null}
                 <View style={styles.totalRow}>
                   <Text style={styles.totalLabel}>Total due today</Text>
                   <Text style={styles.totalValue}>
-                    {!selectedPlan ? "-" : isPaidTier(selectedPlan) ? `${peso(price)}.00` : "₱0.00"}
+                    {isPaidTier(selectedPlan) ? `${peso(price)}.00` : "₱0.00"}
                   </Text>
                 </View>
               </View>
 
               <Pressable
                 onPress={handleSubscribe}
-                disabled={busy || !selectedPlan}
+                disabled={busy}
                 style={({ pressed }) => [
                   styles.payBtn,
                   pressed && styles.accentPressed,
-                  (busy || !selectedPlan) && styles.disabled,
+                  busy && styles.disabled,
                 ]}
               >
                 {busy ? <ActivityIndicator size="small" color={colors.white} /> : null}
                 <Text style={styles.payText}>
                   {busy
-                    ? "Opening PayMongo…"
-                    : !selectedPlan
-                      ? "Choose a plan to continue"
-                      : selectedPlan === "free"
+                    ? activating
+                      ? "Confirming your payment…"
+                      : "Redirecting to PayMongo…"
+                    : selectedPlan === "free"
                         ? isPremium
                           ? "Switch to Free Plan"
                           : "Stay on Free Plan"
@@ -658,7 +669,7 @@ export default function SubscriptionScreen({ navigation }) {
                   <Image source={PAYMONGO_LOGO} style={styles.logo} resizeMode="contain" accessibilityLabel="PayMongo" />
                 </View>
                 <Text style={styles.poweredText}>
-                  Payments processed by PayMongo · Cancel anytime · Terms &amp; Privacy Policy
+                  Payments processed by PayMongo · Cancel anytime · Terms & Privacy Policy
                 </Text>
               </View>
             </View>
@@ -839,6 +850,10 @@ const styles = StyleSheet.create({
   periodBtnActive: { backgroundColor: colors.accent },
   periodText: { fontSize: 12, fontWeight: "700", color: colors.slate },
   periodTextActive: { color: colors.white },
+  periodInner: { flexDirection: "row", alignItems: "center", gap: 8 },
+  periodBadge: { borderRadius: 999, backgroundColor: "#ecfdf5", paddingHorizontal: 8, paddingVertical: 2 },
+  periodBadgeActive: { backgroundColor: "rgba(255,255,255,0.25)" },
+  periodBadgeText: { fontSize: 10, fontWeight: "700", color: "#047857" },
   planCard: {
     marginBottom: 16,
     minHeight: 320,

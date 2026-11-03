@@ -99,7 +99,7 @@ function formFromSaved(item) {
     rulesToForm(item.rules || {}, item.name || item.source_filename || ""),
     ignored
   );
-  // Profiles with almost no stored rules get editable sample values instead of a blank form  - 
+  // Profiles with almost no stored rules get editable sample values instead of a blank form — 
   // but never overwrite intentional IGNORE choices from ignored_fields.
   if (!formHasAnyRule(mapped) && !ignored.length) {
     return sampleMechanicsForm(item.name || "Saved Format");
@@ -263,9 +263,6 @@ export default function UploadScreen({ navigation }) {
     if (scanFlow.step === "results" && scanFlow.result) {
       navigation.navigate("Results");
     }
-    if (scanFlow.step === "documentTrace" && scanFlow.result) {
-      navigation.navigate("DocumentReference");
-    }
   }, [
     scanFlow.step,
     scanFlow.result,
@@ -305,7 +302,7 @@ export default function UploadScreen({ navigation }) {
     setMechSuccess("");
     try {
       await downloadSampleMechanics();
-      setMechSuccess("Sample format mechanics downloaded. Upload it here whenever you're ready.");
+      setMechSuccess("Sample format mechanics downloaded. Upload it here whenever you’re ready.");
     } catch (err) {
       setMechError(err?.message || "Could not download the sample format guide.");
     } finally {
@@ -377,7 +374,7 @@ export default function UploadScreen({ navigation }) {
           rulesToForm(data.rules || {}, data.name || file.name.replace(/\.(pdf|docx)$/i, ""))
         )
       );
-      setMechSuccess("Format fields extracted from your guide - review and edit below, then save.");
+      setMechSuccess("Format fields extracted from your guide — review and edit below, then save.");
     } catch (err) {
       setMechError(err.message || "Extraction failed.");
     } finally {
@@ -565,7 +562,7 @@ export default function UploadScreen({ navigation }) {
           setMechSuccess("Format mechanics deleted.");
           setSavedForm(emptyMechanicsForm());
         } else {
-          setMechError("Could not delete this format. It may still be linked to a manuscript - try again.");
+          setMechError("Could not delete this format. It may still be linked to a manuscript — try again.");
         }
       },
     });
@@ -730,7 +727,7 @@ export default function UploadScreen({ navigation }) {
     const scanStyle = supportedCitationStyle(selectedMechanics?.rules?.citation_style);
     if (!isPaidTier(tier) && scanStyle && scanStyle !== "APA") {
       setUpgradeMessage(
-        `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only - change this format's citation style to APA, or upgrade.`
+        `${scanStyle} citation checks are available on Premium and Pro. The Free plan checks APA only — change this format's citation style to APA, or upgrade.`
       );
       return;
     }
@@ -790,7 +787,7 @@ export default function UploadScreen({ navigation }) {
     );
   }
 
-  if (scanFlow.step === "results" || scanFlow.step === "documentTrace") {
+  if (scanFlow.step === "results") {
     return <AppShell active={activeNav} />;
   }
 
@@ -825,16 +822,17 @@ export default function UploadScreen({ navigation }) {
                 <ShowStepsRow step={1} onShowSteps={() => setJourneyOpen(true)} />
                 <Text style={styles.cardTitle}>Upload Format Mechanics</Text>
                 <Text style={styles.cardHint}>
-                  Choose a saved format, upload a guide for extraction, or customize fields manually.
-                  Format Fields always reflect the rules inside the mechanics you select or upload.
+                  Upload or select a format guide (not your manuscript) — Format Fields are filled from that
+                  file. Customize only when a displayed value does not match your mechanics.
                 </Text>
 
                 <View style={styles.sampleBanner}>
                   <View>
                     <Text style={styles.sampleTitle}>Don’t have a format guide yet?</Text>
                     <Text style={styles.sampleBody}>
-                      Download a sample DOCX, then upload it here or use Customize to edit the
-                      starter rules.
+                      Download the sample DOCX. Keep every section and field label (like Margins and Top). Put a
+                      real value, or type IGNORE to skip that check — don’t use N/A or delete labels. Then upload
+                      it here or use Customize.
                     </Text>
                   </View>
                   <Pressable
@@ -1072,7 +1070,7 @@ export default function UploadScreen({ navigation }) {
                 {mode === "customize" && (
                   <View style={{ marginTop: 16 }}>
                     <Text style={[styles.cardHint, { marginTop: 0, marginBottom: 14 }]}>
-                      Starter format rules are loaded below - edit any field to match your
+                      Starter format rules are loaded below — edit any field to match your
                       requirements, then save the profile for reuse.
                     </Text>
                     <FormatMechanicsFields
@@ -1131,8 +1129,8 @@ export default function UploadScreen({ navigation }) {
                       ? msPreparing
                         ? `${formatFileSize(msFile.size)} · Preparing document preview below…`
                         : msUploading
-                          ? `${formatFileSize(msFile.size)} · Uploading - see progress below`
-                          : `${formatFileSize(msFile.size)} · Preview appears below - confirm Upload when ready`
+                          ? `${formatFileSize(msFile.size)} · Uploading — see progress below`
+                          : `${formatFileSize(msFile.size)} · Preview appears below — confirm Upload when ready`
                       : `Tap to browse · PDF only · Max ${formatFileSize(maxBytes)}`}
                   </Text>
                   <View style={styles.browsePill}>
@@ -1167,10 +1165,10 @@ export default function UploadScreen({ navigation }) {
                     }
                     footer={
                       msUploading
-                        ? "Uploading in progress - stay on this page until it completes."
+                        ? "Uploading in progress — stay on this page until it completes."
                         : msPreparing
                           ? "Preparing live preview of your academic document…"
-                          : "Live preview of your uploaded manuscript - scroll to see pages below."
+                          : "Live preview of your uploaded manuscript — scroll to see pages below."
                     }
                   >
                     <DocumentPreview
@@ -1222,7 +1220,7 @@ export default function UploadScreen({ navigation }) {
                   <View style={styles.readyBanner}>
                     <Text style={styles.readyBannerTitle}>{fileDetailsNotice}</Text>
                     <Text style={styles.readyBannerBody}>
-                      Review the files below, then click Upload & Analyse to scan - or Cancel upload
+                      Review the files below, then click Upload & Analyse to scan — or Cancel upload
                       to discard.
                     </Text>
                   </View>

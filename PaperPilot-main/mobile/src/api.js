@@ -51,7 +51,7 @@ function statusMessage(status) {
   if (status === 401) return "Your session has expired. Sign in again, then retry.";
   if (status === 403) return "Your account can't do this yet. Check your plan on the Subscription page.";
   if (status === 404) {
-    return "That item was not found. It may have been deleted on another device - refresh and try again.";
+    return "That item was not found. It may have been deleted on another device — refresh and try again.";
   }
   if (status === 413) {
     return "This file is too large for your plan. Free plans allow 15 MB, Premium 45 MB, and Pro 120 MB.";

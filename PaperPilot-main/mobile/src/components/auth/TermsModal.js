@@ -44,7 +44,7 @@ export const TERMS_SECTIONS = [
   },
 ];
 
-export default function TermsModal({ open, onClose }) {
+export default function TermsModal({ open, onClose, onAgree }) {
   const { width, height } = useWindowDimensions();
   const cardWidth = Math.min(720, Math.max(320, width - 32));
   const cardMaxHeight = Math.min(height * 0.9, 720);
@@ -60,7 +60,6 @@ export default function TermsModal({ open, onClose }) {
           <View style={styles.header}>
             <View style={styles.headerText}>
               <Text style={styles.title}>Terms and Conditions</Text>
-              <Text style={styles.subtitle}>Please review before creating your account.</Text>
             </View>
             <Pressable
               onPress={onClose}
@@ -80,6 +79,24 @@ export default function TermsModal({ open, onClose }) {
               </View>
             ))}
           </ScrollView>
+          <View style={styles.footer}>
+            <Pressable
+              onPress={onClose}
+              style={({ pressed }) => [styles.footerBtn, styles.closeBtn, pressed && styles.xBtnPressed]}
+              accessibilityRole="button"
+            >
+              <Text style={styles.closeBtnText}>Close</Text>
+            </Pressable>
+            {onAgree ? (
+              <Pressable
+                onPress={onAgree}
+                style={({ pressed }) => [styles.footerBtn, styles.agreeBtn, pressed && styles.agreeBtnPressed]}
+                accessibilityRole="button"
+              >
+                <Text style={styles.agreeBtnText}>I agree</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       </View>
     </Modal>
@@ -144,4 +161,20 @@ const styles = StyleSheet.create({
   bodyContent: { paddingHorizontal: 22, paddingVertical: 18, gap: 18, paddingBottom: 24 },
   heading: { fontSize: 16, fontWeight: "600", color: "#1e293b" },
   text: { marginTop: 6, fontSize: 15, lineHeight: 23, color: "#475569" },
+  footer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: 12,
+    paddingHorizontal: 22,
+    paddingVertical: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f5f9",
+  },
+  footerBtn: { height: 48, minWidth: 112, borderRadius: 10, paddingHorizontal: 24, alignItems: "center", justifyContent: "center" },
+  closeBtn: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.white },
+  closeBtnText: { fontSize: 14, fontWeight: "600", color: "#475569" },
+  agreeBtn: { backgroundColor: colors.accent },
+  agreeBtnPressed: { opacity: 0.85 },
+  agreeBtnText: { fontSize: 14, fontWeight: "600", color: colors.navy },
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { otpBypassToken, resetPasswordWithOtp, sendOtp } from "../../api";
 import {
@@ -7,7 +7,6 @@ import {
   passwordChecks,
   passwordError,
 } from "../../lib/validation";
-import { maskEmail } from "../../lib/maskEmail";
 import { colors } from "../../theme";
 import PrimaryButton from "../ui/PrimaryButton";
 import TextField from "../ui/TextField";
@@ -30,6 +29,16 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordErrors, setPasswordErrors] = useState({});
   const [touched, setTouched] = useState({});
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!cooldownUntil || cooldownUntil <= Date.now()) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [cooldownUntil]);
+
+  const cooldownLeft = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
 
   const backToLogin = (
     <Text style={styles.footer}>
@@ -44,6 +53,10 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
     const err = emailError(email);
     setEmailErr(err);
     if (err) return;
+    if (cooldownLeft > 0) {
+      setFormError(`Please wait ${cooldownLeft} second(s) before requesting another code.`);
+      return;
+    }
     setBusy(true);
     try {
       const res = await sendOtp({ email: email.trim(), purpose: "reset_password" });
@@ -54,8 +67,11 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
         return;
       }
       setOtpMeta({ expiresIn: res.expires_in, resendIn: res.resend_in, devCode: res.dev_code });
+      setCooldownUntil(Date.now() + (res.resend_in || 30) * 1000);
       setStep("otp");
     } catch (err2) {
+      const wait = Number(err2.retryAfter) || 0;
+      if (wait > 0) setCooldownUntil(Date.now() + wait * 1000);
       setFormError(err2.message);
     } finally {
       setBusy(false);
@@ -131,7 +147,7 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
       <AuthShell
         variant="forgot"
         title="Set a new password"
-        subtitle={`Choose a new password for ${maskEmail(email.trim())}.`}
+        subtitle={`Choose a new password for ${email.trim()}.`}
         footer={backToLogin}
       >
         <View style={styles.form}>
@@ -225,8 +241,9 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
         {formError ? <Text style={styles.error}>{formError}</Text> : null}
 
         <PrimaryButton
-          title={busy ? "Sending code…" : "Send verification code"}
+          title={busy ? "Sending code…" : cooldownLeft > 0 ? `Try again in ${cooldownLeft}s` : "Send verification code"}
           onPress={onRequestCode}
+          disabled={busy || cooldownLeft > 0}
           busy={busy}
           style={styles.submit}
         />

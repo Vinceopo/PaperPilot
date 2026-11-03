@@ -758,7 +758,7 @@ export function AppDataProvider({ children }) {
         const flow = scanFlowRef.current;
         const viewingThis =
           flow?.result && (flow.result.documentId === before.id || flow.result.documentId === after?.id);
-        const onVersionScreen = ["summary", "documentTrace", "results"].includes(flow?.step);
+        const onVersionScreen = ["summary", "results"].includes(flow?.step);
         if (!latest) {
           setCurrentVersion(null);
           setManuscriptReady(false);

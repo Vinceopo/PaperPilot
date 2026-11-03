@@ -11,7 +11,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "../../theme";
 import PaperPilotLogo from "./PaperPilotLogo";
-import { UploadIcon } from "./icons";
+import { CloseIcon, UploadIcon } from "./icons";
 
 const SIDEBAR_MAX_WIDTH = 320;
 
@@ -128,11 +128,11 @@ export default function Sidebar({
             <Pressable
               style={styles.closeBtn}
               onPress={onClose}
-              accessibilityLabel="Collapse sidebar"
-              accessibilityHint="Hides the navigation drawer"
+              accessibilityLabel="Hide sidebar"
+              accessibilityHint="Closes the navigation drawer"
               hitSlop={6}
             >
-              <Text style={styles.collapseChevrons}>≪</Text>
+              <CloseIcon size={16} color="#cbd5e1" />
             </Pressable>
           </View>
 

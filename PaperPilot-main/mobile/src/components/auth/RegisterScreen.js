@@ -207,21 +207,24 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
         <FloatingLabelInput
           {...inputProps("lastName", "Last name", { icon: "user", autoComplete: "family-name", autoCapitalize: "words" })}
         />
-        <View style={styles.identityRow}>
-          <FloatingLabelInput
-            {...inputProps("username", "Username", {
-              icon: "at",
-              autoComplete: "username",
-              maxLength: 20,
-              hint: "3-20 characters: letters, numbers, underscore, or period.",
-            })}
-            style={styles.identityCell}
-          />
-          <FloatingLabelInput
-            {...inputProps("email", "Email", { icon: "mail", keyboardType: "email-address", autoComplete: "email" })}
-            style={styles.identityCell}
-          />
-        </View>
+        <FloatingLabelInput
+          {...inputProps("email", "Email", {
+            icon: "mail",
+            keyboardType: "email-address",
+            autoComplete: "email",
+            autoCapitalize: "none",
+          })}
+        />
+        <FloatingLabelInput
+          {...inputProps("username", "Username", {
+            icon: "at",
+            autoComplete: "username",
+            autoCapitalize: "none",
+            autoCorrect: false,
+            maxLength: 20,
+            hint: "3–20 chars: letters, numbers, _ or .",
+          })}
+        />
         <View>
           <FloatingLabelInput
             {...inputProps("password", "Password", {
@@ -289,7 +292,14 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
         />
       </View>
 
-      <TermsModal open={termsOpen} onClose={() => setTermsOpen(false)} />
+      <TermsModal
+        open={termsOpen}
+        onClose={() => setTermsOpen(false)}
+        onAgree={() => {
+          setAgreed(true);
+          setTermsOpen(false);
+        }}
+      />
     </AuthShell>
   );
 }
@@ -299,8 +309,6 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: "row", gap: 14 },
   nameStack: { gap: 14 },
   nameCell: { flex: 1, width: "auto" },
-  identityRow: { flexDirection: "row", gap: 14 },
-  identityCell: { flex: 1, width: "auto" },
   checks: { flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 4, marginTop: 8 },
   check: { fontSize: 12.5, lineHeight: 16, color: colors.muted },
   checkMet: { color: colors.accent },

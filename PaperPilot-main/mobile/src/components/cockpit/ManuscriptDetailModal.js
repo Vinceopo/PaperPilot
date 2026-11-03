@@ -61,7 +61,7 @@ function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, i
         </Svg>
         <View style={styles.ringLabel}>
           <Text style={[styles.ringPct, { color: evaluated ? stroke : "#94a3b8" }]}>
-            {evaluated ? formatPct(safe, 1) : "-"}
+            {evaluated ? formatPct(safe, 1) : "—"}
           </Text>
         </View>
       </View>
@@ -79,7 +79,7 @@ const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
 
 function formatDate(iso) {
-  if (!iso) return "-";
+  if (!iso) return "—";
   try {
     return new Date(iso + (iso.length <= 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, {
       year: "numeric",
@@ -278,7 +278,7 @@ export default function ManuscriptDetailModal({
   const selected = selectedFromLibrary;
   const band = scoreBand(selected?.score);
   const tone = bandTone(band);
-  const versionLabel = selected ? `v${selected.versionNumber}.0` : "-";
+  const versionLabel = selected ? `v${selected.versionNumber}.0` : "—";
 
   async function openFullResult(ver) {
     if (!ver || !onOpenResult || openingResult) return;
@@ -298,7 +298,7 @@ export default function ManuscriptDetailModal({
       );
       return;
     }
-    // Short summary only - full Scan Results open via "View full results".
+    // Short summary only — full Scan Results open via "View full results".
     setSelectedId(ver.id);
   }
 
@@ -310,11 +310,12 @@ export default function ManuscriptDetailModal({
       const payload = resolveResult
         ? await resolveResult(manuscript, selected)
         : versionToScanResult(manuscript, selected);
+      if (!payload) throw new Error("This version’s report could not be loaded. Check your connection, then try again.");
       const report = await downloadReport(payload, { versionNumber: selected.versionNumber });
       if (report?.shared) return;
       if (report?.summary) Alert.alert("Analysis report", report.summary);
     } catch (err) {
-      setDownloadError(err?.message || "Download failed.");
+      setDownloadError(err?.message || "The report could not be downloaded. Try again in a moment.");
     } finally {
       setDownloadBusy(false);
     }
@@ -333,10 +334,7 @@ export default function ManuscriptDetailModal({
               {manuscript.title}
             </Text>
             <Text style={styles.subtitle}>
-              {[manuscript.institution, manuscript.citationStyle]
-                .map((part) => String(part || "").trim())
-                .filter((part) => part && part !== "-" && part !== "—")
-                .join(" · ")}
+              {manuscript.institution || "—"} · {manuscript.citationStyle}
             </Text>
             <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
               <Text style={[styles.pillText, { color: tone.pillText }]}>
@@ -443,13 +441,14 @@ export default function ManuscriptDetailModal({
                     disabled={downloadBusy}
                     style={({ pressed }) => [
                       styles.downloadBtn,
-                      pressed && styles.downloadBtnPressed,
+                      styles.downloadBtnOutline,
+                      pressed && styles.downloadBtnOutlinePressed,
                       downloadBusy && styles.downloadBtnBusy,
                     ]}
                   >
-                    <DownloadIcon size={14} />
-                    <Text style={styles.downloadText}>
-                      {downloadBusy ? "Generating report…" : `Download · ${versionLabel}`}
+                    <DownloadIcon size={14} color="#334155" />
+                    <Text style={[styles.downloadText, styles.downloadTextOutline]}>
+                      {downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
                     </Text>
                   </Pressable>
                 </View>
@@ -505,7 +504,7 @@ export default function ManuscriptDetailModal({
                 Detected issues <Text style={styles.issuesCount}>({issues.length})</Text>
               </Text>
               <Text style={styles.issuesHint}>
-                Each card is one rule finding - expand locations to see every page/line hit.
+                Each card is one rule finding — expand locations to see every page/line hit.
               </Text>
 
               {hydrateError ? (
@@ -781,5 +780,8 @@ const styles = StyleSheet.create({
   },
   downloadBtnPressed: { backgroundColor: "#243049" },
   downloadBtnBusy: { opacity: 0.5 },
+  downloadBtnOutline: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.white },
+  downloadBtnOutlinePressed: { backgroundColor: "#f8fafc" },
   downloadText: { fontSize: 12, fontWeight: "700", color: colors.white },
+  downloadTextOutline: { color: "#334155" },
 });

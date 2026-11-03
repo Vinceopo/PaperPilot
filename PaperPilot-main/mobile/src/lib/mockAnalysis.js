@@ -178,7 +178,7 @@ export async function downloadReport(result, opts = {}) {
     Y = MT;
     doc.setFontSize(7).setTextColor(...SLATE);
     doc.text(
-      "PaperPilot · Formatting compliance only - grammar, content, and plagiarism are not evaluated.",
+      "PaperPilot · Formatting compliance only — grammar, content, and plagiarism are not evaluated.",
       PW / 2,
       PH - 8,
       { align: "center" }
@@ -486,7 +486,7 @@ export async function downloadReport(result, opts = {}) {
     doc.setPage(p);
     doc.setFontSize(7).setTextColor(...SLATE);
     doc.text(
-      "PaperPilot · Formatting compliance only - grammar, content, and plagiarism are not evaluated.",
+      "PaperPilot · Formatting compliance only — grammar, content, and plagiarism are not evaluated.",
       PW / 2,
       PH - 8,
       { align: "center" }

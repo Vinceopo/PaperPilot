@@ -1,15 +1,20 @@
-import { useCallback, useEffect } from "react";
+/**
+ * ScanResultScreen — RN port of web ScanResultsScreen: report-style results with
+ * brand lockup, meta strip, overall score + Compliant/Non-Compliant bar, breakdown,
+ * and Issue tracing & XAI (preview + clickable findings in one section).
+ */
+
+import { useCallback, useEffect, useRef } from "react";
 import { Alert, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import Svg, { Circle, Path } from "react-native-svg";
+import { useFonts, Quicksand_600SemiBold, Quicksand_700Bold } from "@expo-google-fonts/quicksand";
 import { useAppData } from "../context/AppDataContext";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
-import IssuesDetectedPanel, {
-  categoryForIssue,
-  normalizeDetectedIssues,
-} from "../components/cockpit/IssuesDetectedPanel";
-import TraceDocumentViewer from "../components/cockpit/TraceDocumentViewer";
+import { PaperPilotMark } from "../components/shell/PaperPilotLogo";
+import IssueTracingSection from "../components/cockpit/IssueTracingSection";
+import { categoryForIssue, normalizeDetectedIssues } from "../components/cockpit/IssuesDetectedPanel";
 import PrimaryButton from "../components/ui/PrimaryButton";
 import {
   CATEGORY_STATUS_LABEL,
@@ -19,22 +24,44 @@ import {
   formatPct,
   formatScore,
   hasValue,
-  plural,
   reconcileDisplayedUnits,
   resolveCategoryUnitDisplays,
   roundSharesToTotal,
 } from "../lib/scoreFormat";
-import { isApproximateTracing } from "../lib/documentPreviewLocate";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 
 function scoreBand(score) {
   if (!hasValue(score))
-    return { label: "NOT EVALUATED", text: "#64748b", ring: "#cbd5e1", border: "#e2e8f0", bg: "#f8fafc" };
+    return {
+      label: "NOT EVALUATED",
+      textColor: "#64748b",
+      badgeBorder: "#e2e8f0",
+      badgeBg: "#f8fafc",
+      scoreColor: "#64748b",
+    };
   if (score >= 80)
-    return { label: "GOOD STANDING", text: "#059669", ring: "#16bfa8", border: "#a7f3d0", bg: "#ecfdf5" };
+    return {
+      label: "GOOD STANDING",
+      textColor: "#157347",
+      badgeBorder: "#b7e4c7",
+      badgeBg: "#eaf7ef",
+      scoreColor: "#157347",
+    };
   if (score >= 50)
-    return { label: "UNDER REVIEW", text: "#d97706", ring: "#f59e0b", border: "#fde68a", bg: "#fffbeb" };
-  return { label: "ATTENTION REQUIRED", text: "#e11d48", ring: "#ef4444", border: "#fecdd3", bg: "#fff1f2" };
+    return {
+      label: "UNDER REVIEW",
+      textColor: "#B57200",
+      badgeBorder: "#f0d9a0",
+      badgeBg: "#fff8e8",
+      scoreColor: "#B57200",
+    };
+  return {
+    label: "ATTENTION REQUIRED",
+    textColor: "#B02A37",
+    badgeBorder: "#f0c2c7",
+    badgeBg: "#fdf0f1",
+    scoreColor: "#B02A37",
+  };
 }
 
 function ringStroke(score) {
@@ -42,6 +69,26 @@ function ringStroke(score) {
   if (score >= 80) return "#157347";
   if (score >= 50) return "#B57200";
   return "#B02A37";
+}
+
+function formatReportDate(value) {
+  if (!value) return "—";
+  const raw = String(value);
+  const d = new Date(raw.length <= 10 ? `${raw}T12:00:00` : raw);
+  if (Number.isNaN(d.getTime())) return "—";
+  const datePart = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: APP_TIME_ZONE,
+  });
+  if (raw.length <= 10) return datePart;
+  const timePart = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: APP_TIME_ZONE,
+  });
+  return `${datePart} · ${timePart}`;
 }
 
 function CategoryScoreCard({
@@ -53,11 +100,12 @@ function CategoryScoreCard({
   displayIssueCount,
   displayScore,
 }) {
-  // Ring % follows failed units; issue findings are subtitle-only (may exceed units).
-  const fromUnits = compliancePercentFromUnits(displayTotal, displayNonCompliant);
+  // Ring % and subtitle use the same issue count: (total − issues) / total.
+  const issueCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
+  const fromShown = compliancePercentFromUnits(displayTotal, issueCount);
   const pct =
-    fromUnits != null
-      ? fromUnits
+    fromShown != null
+      ? fromShown
       : hasValue(displayScore)
         ? Number(displayScore)
         : hasValue(score)
@@ -70,10 +118,10 @@ function CategoryScoreCard({
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
-  const findingCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
-  const detail = formatCategoryIssuesDetail(findingCount, displayTotal)
-    || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
-    || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
+  const detail =
+    formatCategoryIssuesDetail(issueCount, displayTotal) ||
+    (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated") ||
+    (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
   return (
     <View style={styles.catCard}>
@@ -93,8 +141,8 @@ function CategoryScoreCard({
           />
         </Svg>
         <View style={styles.catRingCenter}>
-          <Text style={[styles.catRingValue, { color: evaluated ? stroke : "#94a3b8", fontSize: 11 }]}>
-            {evaluated ? formatPct(safe, 2) : "-"}
+          <Text style={[styles.catRingValue, { color: evaluated ? stroke : "#94a3b8" }]}>
+            {evaluated ? formatPct(safe, 2) : "—"}
           </Text>
         </View>
       </View>
@@ -110,11 +158,11 @@ function CategoryScoreCard({
 
 function DownloadIcon() {
   return (
-    <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+    <Svg width={14} height={14} viewBox="0 0 24 24" fill="none">
       <Path
-        d="M12 4v12m0 0 4-4m-4 4-4-4M4 20h16"
+        d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M7.5 12l4.5 4.5m0 0l4.5-4.5M12 16.5V3"
         stroke={colors.white}
-        strokeWidth={2}
+        strokeWidth={2.5}
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -158,6 +206,9 @@ export default function ScanResultScreen({ navigation }) {
 function ScanResultBody({ navigation }) {
   const { scanFlow } = useAppData();
   const result = scanFlow?.result;
+  const scrollRef = useRef(null);
+  const tracingY = useRef(0);
+  const [fontsLoaded] = useFonts({ Quicksand_600SemiBold, Quicksand_700Bold });
 
   // Mirror web: hard-refresh / empty Results is not a sticky destination - send authors home.
   useEffect(() => {
@@ -165,6 +216,11 @@ function ScanResultBody({ navigation }) {
     const t = setTimeout(() => navigation.navigate("Library"), 0);
     return () => clearTimeout(t);
   }, [result, navigation]);
+
+  // Stacked layout: selecting a finding brings the preview (top of the tracing section) into view.
+  const focusPreview = useCallback(() => {
+    scrollRef.current?.scrollTo({ y: Math.max(0, tracingY.current - 8), animated: true });
+  }, []);
 
   if (!result) {
     return (
@@ -194,26 +250,19 @@ function ScanResultBody({ navigation }) {
     scannedAt,
     citationStyle = "APA",
     overallScore = null,
-    overallCategories = null,
     rightPct,
     wrongPct,
     scoreBreakdown = [],
     formatChecks = [],
-    pageCount = 0,
-    pagination = null,
-    cloudinaryUrl = "",
-    documentName = "",
-    documentPreview = null,
     unitsChecked,
     unitsPassed,
     unitsFailed,
     scoringConsistency = null,
   } = result;
 
-  const issueTypes = formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
   const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
-  // Tracing expands locations into findings for the subtitle only — never override unit %.
-  const tracedEntries = normalizeDetectedIssues(formatChecks, pageCount || 0).entries;
+  // Same expansion as Issue Tracing — cards, rings, and header all use these counts.
+  const tracedEntries = normalizeDetectedIssues(formatChecks, result.pageCount || 0).entries;
   const tracedByCategory = {};
   tracedEntries.forEach((entry) => {
     const key = entry.category || categoryForIssue(entry) || "Other";
@@ -227,21 +276,33 @@ function ScanResultBody({ navigation }) {
       : hasValue(row.displayIssueCount)
         ? row.displayIssueCount
         : row.displayNonCompliant;
+    const total = row.displayTotal;
+    // Failed count for % must match the issues shown: (total − issues) / total.
+    const displayNonCompliant =
+      hasValue(total) && hasValue(displayIssueCount)
+        ? Math.min(Math.max(0, Number(total)), Math.max(0, Number(displayIssueCount)))
+        : row.displayNonCompliant;
+    const displayCompliant =
+      hasValue(total) && hasValue(displayNonCompliant)
+        ? Math.max(0, Number(total) - Number(displayNonCompliant))
+        : row.displayCompliant;
+    const displayScore = compliancePercentFromUnits(total, displayNonCompliant);
     return {
       ...row,
       displayIssueCount,
+      displayNonCompliant,
+      displayCompliant,
+      displayScore: displayScore != null ? displayScore : row.displayScore,
     };
   });
+
   // Header totals = sum of category cards so they always match what the user adds up.
   const {
     total: totalUnits,
     compliant: compliantUnits,
     nonCompliant: nonCompliantUnits,
-  } = reconcileDisplayedUnits(
-    { unitsChecked, unitsPassed, unitsFailed },
-    categoryCards,
-  );
-  // Bar shares only - percent numbers are not shown in the public results UI.
+  } = reconcileDisplayedUnits({ unitsChecked, unitsPassed, unitsFailed }, categoryCards);
+  // Bar shares only — percent numbers are not shown in the public results UI.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
       ? [
@@ -249,27 +310,25 @@ function ScanResultBody({ navigation }) {
           (Number(nonCompliantUnits) / Number(totalUnits)) * 100,
         ]
       : [rightPct, wrongPct];
-  const [shownRight, shownWrong] = roundSharesToTotal(fromOverallUnits, 2);
-  const compliantShare = hasValue(shownRight) ? Math.max(0, Math.min(100, Number(shownRight))) : 0;
-  const nonCompliantShare = hasValue(shownWrong) ? Math.max(0, Math.min(100, Number(shownWrong))) : 0;
+  const [shownCompliant, shownNonCompliant] = roundSharesToTotal(fromOverallUnits, 2);
   const evaluatedCards = categoryCards.filter(
-    (row) => hasValue(row.displayTotal) && Number(row.displayTotal) > 0 && hasValue(row.displayScore),
+    (row) => hasValue(row.displayTotal) && Number(row.displayTotal) > 0 && hasValue(row.displayScore)
   );
   const overallFromCards = evaluatedCards.length
     ? evaluatedCards.reduce((sum, row) => sum + Number(row.displayScore), 0) / evaluatedCards.length
     : overallScore;
-  const overallBand = scoreBand(overallFromCards);
-  const scannedDate = scannedAt
-    ? new Date(scannedAt).toLocaleDateString("en-US", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        timeZone: APP_TIME_ZONE,
-      })
-    : "-";
+  const band = scoreBand(overallFromCards);
+  const evaluated = hasValue(overallFromCards);
+  const compliantShare = hasValue(shownCompliant)
+    ? Math.max(0, Math.min(100, Number(shownCompliant)))
+    : 0;
+  const nonCompliantShare = hasValue(shownNonCompliant)
+    ? Math.max(0, Math.min(100, Number(shownNonCompliant)))
+    : 0;
 
   const versionLabel = `v${scanFlow.versionNumber || 1}.0`;
-  const hasPreview = Boolean(scanFlow.file || cloudinaryUrl || documentPreview);
+  const scannedLabel = formatReportDate(scannedAt);
+  const generatedLabel = formatReportDate(new Date().toISOString());
 
   async function onDownload() {
     const report = await scanFlow.downloadReport();
@@ -284,78 +343,140 @@ function ScanResultBody({ navigation }) {
     if (report?.summary) Alert.alert("Analysis report", report.summary);
   }
 
-  function openReferenceTracing(entry = null) {
-    // Open the tracer without auto-jump unless the user picked a specific issue.
-    scanFlow.openDocumentTrace(entry || null);
-    navigation.navigate("DocumentReference");
-  }
-
   return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
-      <View style={styles.hero}>
-        <View style={styles.heroTopRow}>
-          <View style={styles.heroLinks}>
-            <Pressable onPress={() => openReferenceTracing(null)} hitSlop={6}>
-              <Text style={styles.heroTrace}>Open reference tracing</Text>
-            </Pressable>
-          </View>
+    <ScrollView ref={scrollRef} style={styles.root} contentContainerStyle={styles.scroll}>
+      <View style={styles.topRow}>
+        <View style={styles.lockup}>
+          <PaperPilotMark size={40} />
+          <Text
+            style={[
+              styles.brandWord,
+              fontsLoaded && { fontFamily: "Quicksand_700Bold", fontWeight: undefined },
+            ]}
+          >
+            PAPERPILOT
+          </Text>
+          <Text
+            style={[
+              styles.brandSub,
+              fontsLoaded && { fontFamily: "Quicksand_600SemiBold", fontWeight: undefined },
+            ]}
+          >
+            * RESULTS
+          </Text>
+        </View>
+        <View style={styles.downloadWrap}>
+          {scanFlow.downloadError ? (
+            <Text style={styles.downloadError} accessibilityRole="alert">
+              {scanFlow.downloadError}
+            </Text>
+          ) : null}
           <Pressable
             onPress={onDownload}
             disabled={scanFlow.downloadBusy}
             style={({ pressed }) => [
-              styles.downloadBtnTop,
-              pressed && { backgroundColor: "#f1f5f9" },
+              styles.downloadBtn,
+              pressed && { backgroundColor: "#12ae99", borderColor: "#12ae99" },
               scanFlow.downloadBusy && { opacity: 0.5 },
             ]}
           >
             <DownloadIcon />
-            <Text style={styles.downloadTextTop}>
-              {scanFlow.downloadBusy ? "Generating PDF…" : `Download · ${versionLabel}`}
+            <Text style={styles.downloadText}>
+              {scanFlow.downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
             </Text>
           </Pressable>
         </View>
-        {scanFlow.downloadError ? (
-          <Text style={styles.downloadError} accessibilityRole="alert">
-            {scanFlow.downloadError}
-          </Text>
-        ) : null}
-        <Text style={styles.scope}>SCOPE: FORMATTING ONLY</Text>
-        <Text style={styles.heroTitle}>{documentTitle}</Text>
-        {campus || college ? (
-          <Text style={styles.heroSub}>{[college, campus].filter(Boolean).join(" · ")}</Text>
-        ) : null}
-        <View style={styles.metaTable}>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaKey}>Scanned</Text>
-            <Text style={styles.metaValue}>{scannedDate}</Text>
-          </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaKey}>Version</Text>
-            <Text style={styles.metaVersion}>{versionLabel}</Text>
-          </View>
-          <View style={styles.metaRow}>
-            <Text style={styles.metaKey}>Citation style</Text>
-            <Text style={styles.metaValue}>{citationStyle}</Text>
-          </View>
-        </View>
-        <Text style={styles.heroNote}>
-          Structure and content are not evaluated - results reflect formatting compliance only.
-        </Text>
       </View>
 
-      <View style={{ gap: 12 }}>
-        <View style={styles.dualRow}>
-          <Text style={[styles.dualLabel, { color: "#047857" }]}>Compliant</Text>
-          <Text style={[styles.dualLabel, { color: "#be123c" }]}>Non-Compliant</Text>
+      <View style={styles.card}>
+        <View style={styles.metaGrid}>
+          <View>
+            <Text style={styles.metaLabel}>Document</Text>
+            <Text style={styles.metaValue} numberOfLines={1}>
+              {documentTitle}
+            </Text>
+            {campus || college ? (
+              <Text style={styles.metaSub} numberOfLines={1}>
+                {[college, campus].filter(Boolean).join(" · ")}
+              </Text>
+            ) : null}
+          </View>
+          <View>
+            <Text style={styles.metaLabel}>Citation style</Text>
+            <Text style={styles.metaValue}>
+              {citationStyle} · {versionLabel}
+            </Text>
+          </View>
+          <View>
+            <Text style={styles.metaLabel}>Scanned</Text>
+            <Text style={styles.metaValue}>{scannedLabel}</Text>
+          </View>
+          <View>
+            <Text style={styles.metaLabel}>Generated</Text>
+            <Text style={styles.metaValue}>{generatedLabel}</Text>
+          </View>
         </View>
-        <View style={styles.shareBar}>
-          {hasValue(shownRight) || hasValue(shownWrong) ? (
-            <>
-              <View style={[styles.shareSeg, { flex: compliantShare || 0.0001, backgroundColor: "#047857" }]} />
-              <View style={[styles.shareSeg, { flex: nonCompliantShare || 0.0001, backgroundColor: "#be123c" }]} />
-            </>
-          ) : null}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.kicker}>Overall compliance score</Text>
+        <View style={styles.scoreLine}>
+          <Text style={[styles.scoreValue, { color: band.scoreColor }]}>
+            {evaluated ? formatScore(overallFromCards, 0) : "—"}
+          </Text>
+          {evaluated ? <Text style={[styles.scorePct, { color: band.scoreColor }]}>%</Text> : null}
         </View>
+        <View
+          style={[
+            styles.bandPill,
+            { backgroundColor: band.badgeBg, borderColor: band.badgeBorder },
+          ]}
+        >
+          <Text style={[styles.bandText, { color: band.textColor }]}>{band.label}</Text>
+        </View>
+
+        <View style={styles.barBlock}>
+          <View style={styles.dualRow}>
+            <Text style={[styles.dualLabel, { color: "#157347" }]}>Compliant</Text>
+            <Text style={[styles.dualLabel, { color: "#B02A37" }]}>Non-Compliant</Text>
+          </View>
+          <View style={styles.shareBar}>
+            {hasValue(shownCompliant) || hasValue(shownNonCompliant) ? (
+              <>
+                <View
+                  style={[
+                    styles.shareSeg,
+                    { flex: compliantShare || 0.0001, backgroundColor: "#157347" },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.shareSeg,
+                    { flex: nonCompliantShare || 0.0001, backgroundColor: "#B02A37" },
+                  ]}
+                />
+              </>
+            ) : null}
+          </View>
+
+          <View style={styles.statGrid}>
+            <View style={styles.stat}>
+              <Text style={[styles.statNum, { color: "#1e293b" }]}>{formatCount(totalUnits)}</Text>
+              <Text style={styles.statLabel}>Total Units</Text>
+            </View>
+            <View style={styles.stat}>
+              <Text style={[styles.statNum, { color: "#157347" }]}>{formatCount(compliantUnits)}</Text>
+              <Text style={styles.statLabel}>Compliant Units</Text>
+            </View>
+            <View style={styles.stat}>
+              <Text style={[styles.statNum, { color: "#B02A37" }]}>
+                {formatCount(nonCompliantUnits)}
+              </Text>
+              <Text style={styles.statLabel}>Non-Compliant Units</Text>
+            </View>
+          </View>
+        </View>
+
         {scoringConsistency && !scoringConsistency.ok ? (
           <Text style={styles.consistencyWarn} accessibilityRole="alert">
             These results failed an internal consistency check. Re-run the analysis before relying on
@@ -365,43 +486,7 @@ function ScanResultBody({ navigation }) {
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.cardKicker}>Overall compliance score</Text>
-        <View style={styles.overallScoreLine}>
-          <Text style={[styles.overallScoreValue, { color: overallBand.text }]}>
-            {formatScore(overallFromCards, 0)}
-          </Text>
-          {hasValue(overallFromCards) ? (
-            <Text style={[styles.overallScorePct, { color: overallBand.text }]}>%</Text>
-          ) : null}
-        </View>
-        <View style={[styles.bandPill, { alignSelf: "flex-start", marginTop: 12, backgroundColor: overallBand.bg, borderColor: overallBand.border }]}>
-          <Text style={[styles.bandText, { color: overallBand.text }]}>{overallBand.label}</Text>
-        </View>
-        <Text style={[styles.circleHint, { textAlign: "left", marginTop: 8 }]}>
-          {evaluatedCards.length
-            ? `Average of the ${evaluatedCards.length} measured ${plural(evaluatedCards.length, "category", "categories")}`
-            : Array.isArray(overallCategories) && overallCategories.length
-              ? `Average of the ${overallCategories.length} measured ${plural(overallCategories.length, "category", "categories")}`
-              : "Average of categories that were actually measured"}
-        </Text>
-        <View style={[styles.statGrid, { marginTop: 16 }]}>
-          <View style={[styles.stat, { backgroundColor: "#f8fafc" }]}>
-            <Text style={[styles.statNum, { color: "#334155" }]}>{formatCount(totalUnits)}</Text>
-            <Text style={[styles.statLabel, { color: "#64748b" }]}>Total Units</Text>
-          </View>
-          <View style={[styles.stat, { backgroundColor: "#ecfdf5" }]}>
-            <Text style={[styles.statNum, { color: "#059669" }]}>{formatCount(compliantUnits)}</Text>
-            <Text style={[styles.statLabel, { color: "#10b981" }]}>Compliant Units</Text>
-          </View>
-          <View style={[styles.stat, { backgroundColor: "#fff1f2" }]}>
-            <Text style={[styles.statNum, { color: "#e11d48" }]}>{formatCount(nonCompliantUnits)}</Text>
-            <Text style={[styles.statLabel, { color: "#f43f5e" }]}>Non-Compliant Units</Text>
-          </View>
-        </View>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardKicker}>Score Breakdown</Text>
+        <Text style={styles.breakdownTitle}>Score Breakdown</Text>
         <View style={styles.catGrid}>
           {categoryCards.map((item) => (
             <CategoryScoreCard
@@ -418,69 +503,14 @@ function ScanResultBody({ navigation }) {
         </View>
       </View>
 
-      <View style={styles.previewCard}>
-        <View style={styles.previewHead}>
-          <View style={{ flex: 1, minWidth: 180 }}>
-            <Text style={styles.previewTitle}>Document preview</Text>
-            <Text style={styles.previewSub}>
-              Starts on page 1. Scroll to read every page, or trace an issue to jump to it.
-            </Text>
-            {isApproximateTracing(pagination) ? (
-              <Text style={styles.approxNote}>
-                Approximate locations - this Word file was scanned without exact page breaks.
-                Highlights may be near the issue. For precise tracing, upload a PDF of the same
-                manuscript.
-              </Text>
-            ) : null}
-          </View>
-          <Pressable
-            onPress={() => openReferenceTracing(null)}
-            style={({ pressed }) => [styles.traceBtn, pressed && { backgroundColor: "#047857" }]}
-          >
-            <Text style={styles.traceBtnText}>Trace issues in document</Text>
-          </Pressable>
-        </View>
-        {hasPreview ? (
-          <View style={styles.previewBody}>
-            <View style={styles.previewFrame}>
-              <TraceDocumentViewer
-                key={scanFlow.file?.uri || cloudinaryUrl || "empty"}
-                file={scanFlow.file}
-                documentUrl={cloudinaryUrl}
-                documentName={documentName || scanFlow.file?.name || ""}
-                preview={documentPreview}
-                pageCount={pageCount}
-                formatChecks={formatChecks}
-                highlight={null}
-                emptyLabel="Preview unavailable for this version."
-              />
-            </View>
-          </View>
-        ) : null}
-      </View>
-
-      <View>
-        <View style={styles.issuesHead}>
-          <View style={{ flex: 1, minWidth: 200 }}>
-            <Text style={styles.issuesTitle}>Issue tracing</Text>
-            <Text style={styles.issuesSub}>
-              Tap a finding to open the document at that location. Nothing jumps until you choose.
-            </Text>
-          </View>
-          {issueTypes > 0 ? (
-            <Text style={styles.issuesBadge}>
-              {issueTypes} issue type{issueTypes === 1 ? "" : "s"}
-            </Text>
-          ) : null}
-        </View>
-        <IssuesDetectedPanel
-          formatChecks={formatChecks}
-          pageCount={pageCount}
-          pagination={pagination}
-          onTraceIssue={(entry) => openReferenceTracing(entry)}
+      <View onLayout={(e) => (tracingY.current = e.nativeEvent.layout.y)}>
+        <IssueTracingSection
+          result={result}
+          file={scanFlow.file}
+          documentLoading={Boolean(scanFlow.documentLoading)}
+          onFocusPreview={focusPreview}
         />
       </View>
-
     </ScrollView>
   );
 }
@@ -503,57 +533,73 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textAlign: "center",
   },
-  hero: { borderRadius: 12, backgroundColor: "#172033", padding: 20 },
-  heroTopRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 8,
-  },
-  heroLinks: { flexDirection: "row", flexWrap: "wrap", gap: 14 },
-  heroTrace: { fontSize: 11, fontWeight: "600", color: "#cbd5e1" },
-  downloadBtnTop: {
+  topRow: { gap: 12 },
+  lockup: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 12, rowGap: 8 },
+  brandWord: { fontSize: 18, fontWeight: "700", letterSpacing: 1.44, color: "#172033" },
+  brandSub: { fontSize: 14, fontWeight: "600", letterSpacing: 1.4, color: "#4a5568" },
+  downloadWrap: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 12 },
+  downloadError: { fontSize: 12, color: "#f43f5e" },
+  downloadBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.45)",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  downloadTextTop: { fontSize: 11, fontWeight: "700", color: "#e2e8f0" },
-  scope: {
-    alignSelf: "flex-start",
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(22,191,168,0.4)",
-    backgroundColor: "rgba(22,191,168,0.1)",
+    gap: 8,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: "#bfeee5",
+    backgroundColor: "#16bfa8",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  downloadText: { fontSize: 12, fontWeight: "700", color: colors.white },
+  card: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: colors.white,
+    padding: 20,
+    shadowColor: "#0f172a",
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  metaGrid: { gap: 16 },
+  metaLabel: {
     fontSize: 10,
     fontWeight: "700",
-    letterSpacing: 1.5,
-    color: colors.accent,
+    letterSpacing: 1.4,
+    textTransform: "uppercase",
+    color: "#94a3b8",
   },
-  heroTitle: { marginTop: 8, fontSize: 20, lineHeight: 26, fontWeight: "700", color: colors.white },
-  heroSub: { marginTop: 4, fontSize: 14, color: "#94a3b8" },
-  metaTable: { marginTop: 16, gap: 4 },
-  metaRow: { flexDirection: "row" },
-  metaKey: { width: 96, fontSize: 12, color: "#64748b" },
-  metaValue: { flex: 1, fontSize: 12, fontWeight: "500", color: "#e2e8f0" },
-  metaVersion: { flex: 1, fontSize: 12, color: "#94a3b8" },
-  heroNote: { marginTop: 16, fontSize: 12, lineHeight: 17, color: "#64748b" },
-  dualRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  metaValue: { marginTop: 4, fontSize: 14, fontWeight: "700", color: "#0f172a" },
+  metaSub: { marginTop: 2, fontSize: 12, color: "#64748b" },
+  kicker: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.6,
+    textTransform: "uppercase",
+    color: "#94a3b8",
   },
-  dualLabel: { fontSize: 13, fontWeight: "700" },
+  scoreLine: { marginTop: 8, flexDirection: "row", alignItems: "flex-end", gap: 4 },
+  scoreValue: { fontSize: 48, fontWeight: "800", fontVariant: ["tabular-nums"], lineHeight: 52 },
+  scorePct: { fontSize: 24, fontWeight: "800", fontVariant: ["tabular-nums"], paddingBottom: 6 },
+  bandPill: {
+    alignSelf: "flex-start",
+    marginTop: 12,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  bandText: { fontSize: 10, fontWeight: "700", letterSpacing: 1.2 },
+  barBlock: { marginTop: 24, gap: 16 },
+  dualRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
+  dualLabel: { fontSize: 14, fontWeight: "600" },
   shareBar: {
     height: 6,
     borderRadius: 999,
@@ -562,7 +608,28 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   shareSeg: { height: "100%" },
+  statGrid: { flexDirection: "row", gap: 8 },
+  stat: {
+    flex: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    paddingHorizontal: 6,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  statNum: { fontSize: 20, fontWeight: "800", fontVariant: ["tabular-nums"] },
+  statLabel: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    textAlign: "center",
+    color: "#64748b",
+  },
   consistencyWarn: {
+    marginTop: 12,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "#fde68a",
@@ -575,7 +642,8 @@ const styles = StyleSheet.create({
     color: "#92400e",
     textAlign: "center",
   },
-  catGrid: { marginTop: 16, gap: 10 },
+  breakdownTitle: { fontSize: 18, fontWeight: "700", color: "#0f172a" },
+  catGrid: { marginTop: 20, gap: 12 },
   catCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -584,7 +652,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#e2e8f0",
     backgroundColor: "#f4f6f8",
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 12,
   },
   catRingWrap: { width: 64, height: 64, alignItems: "center", justifyContent: "center" },
@@ -597,152 +665,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  catRingValue: { fontSize: 12, fontWeight: "800" },
+  catRingValue: { fontSize: 12, fontWeight: "800", fontVariant: ["tabular-nums"] },
   catCopy: { flex: 1, minWidth: 0 },
   catTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
   catDetail: { marginTop: 2, fontSize: 11, lineHeight: 15, color: "#64748b" },
-  statNote: { marginTop: 8, fontSize: 10, lineHeight: 14, color: "#94a3b8" },
-  overallScoreLine: { flexDirection: "row", alignItems: "flex-end", gap: 2 },
-  overallScoreValue: { fontSize: 48, fontWeight: "800", fontVariant: ["tabular-nums"], lineHeight: 52 },
-  overallScorePct: { fontSize: 24, fontWeight: "800", fontVariant: ["tabular-nums"], paddingBottom: 6 },
-  card: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    padding: 20,
-    shadowColor: "#0f172a",
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  cardHeadRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 },
-  cardKicker: {
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.8,
-    textTransform: "uppercase",
-    color: "#94a3b8",
-  },
-  cardAside: { fontSize: 10, fontWeight: "500", color: "#94a3b8" },
-  circleWrap: { alignItems: "center", gap: 16, paddingVertical: 16 },
-  circleCenter: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  circleValue: { fontSize: 30, fontWeight: "800", color: "#1e293b" },
-  circleOutOf: {
-    fontSize: 10,
-    fontWeight: "600",
-    letterSpacing: 1.5,
-    textTransform: "uppercase",
-    color: "#94a3b8",
-  },
-  bandPill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 6 },
-  bandText: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8 },
-  circleHint: { fontSize: 12, color: "#94a3b8", textAlign: "center" },
-  statGrid: { marginTop: 16, flexDirection: "row", gap: 8 },
-  stat: { flex: 1, borderRadius: 8, padding: 12, alignItems: "center" },
-  statNum: { fontSize: 24, fontWeight: "800" },
-  statLabel: {
-    marginTop: 2,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-  },
-  tagRow: { marginTop: 16, flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  tag: {
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: "#f8fafc",
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    fontSize: 11,
-    fontWeight: "500",
-    color: "#475569",
-  },
-  tagPass: { borderColor: "#a7f3d0", backgroundColor: "#ecfdf5", color: "#047857" },
-  downloadError: { marginTop: 12, fontSize: 12, color: "#f43f5e" },
-  downloadBtn: {
-    marginTop: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    borderRadius: 12,
-    backgroundColor: "#172033",
-    paddingVertical: 12,
-  },
-  downloadText: { fontSize: 12, fontWeight: "700", color: colors.white },
-  previewCard: {
-    overflow: "hidden",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-  },
-  previewHead: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
-    backgroundColor: "#f8fffd",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  previewTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
-  previewSub: { marginTop: 2, fontSize: 11, lineHeight: 16, color: "#64748b" },
-  approxNote: {
-    marginTop: 8,
-    fontSize: 11,
-    lineHeight: 16,
-    color: "#92400e",
-    backgroundColor: "#fffbeb",
-    borderWidth: 1,
-    borderColor: "#fde68a",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  traceBtn: {
-    borderRadius: 8,
-    backgroundColor: "#059669",
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
-  traceBtnText: { fontSize: 11, fontWeight: "700", color: colors.white },
-  previewBody: { backgroundColor: "#e8ecf1", padding: 12 },
-  previewFrame: { height: 520, overflow: "hidden", borderRadius: 8, backgroundColor: "#e8ecf1" },
-  issuesHead: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    gap: 8,
-    marginBottom: 12,
-  },
-  issuesTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
-  issuesSub: { marginTop: 2, fontSize: 12, lineHeight: 17, color: "#94a3b8" },
-  issuesBadge: {
-    overflow: "hidden",
-    backgroundColor: "#ffe4e6",
-    color: "#be123c",
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    fontSize: 12,
-    fontWeight: "700",
-  },
 });

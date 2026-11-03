@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { File, Paths } from "expo-file-system";
 import { colors } from "../../theme";
@@ -80,7 +80,7 @@ function MarginBand({ side, severity }) {
 }
 
 /** Extracted-text pages, used when the original file cannot be rendered. */
-function TextTrace({ preview, pageCount, formatChecks, highlight, emptyLabel }) {
+function TextTrace({ preview, pageCount, formatChecks, highlight, scrollTarget, emptyLabel }) {
   const scrollRef = useRef(null);
   const pageOffsets = useRef({});
   const lineOffsets = useRef({});
@@ -94,14 +94,17 @@ function TextTrace({ preview, pageCount, formatChecks, highlight, emptyLabel }) 
     !highlight?.bbox &&
     highlight?.line == null;
 
+  const scrollToken = scrollTarget?.token;
   useEffect(() => {
-    if (!highlight?.page || !scrollRef.current) return;
-    const pageY = pageOffsets.current[highlight.page];
+    const target = scrollTarget || highlight;
+    if (!target?.page || !scrollRef.current) return;
+    const pageY = pageOffsets.current[target.page];
     if (typeof pageY !== "number") return;
     const lineY =
-      marginTrace || paginationBand ? 0 : lineOffsets.current[`${highlight.page}:${highlight.line}`] || 0;
+      marginTrace || paginationBand ? 0 : lineOffsets.current[`${target.page}:${target.line}`] || 0;
     scrollRef.current.scrollTo({ y: Math.max(0, pageY + lineY - 80), animated: true });
-  }, [highlight, pages.length, marginTrace, paginationBand]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlight, scrollToken, pages.length, marginTrace, paginationBand]);
 
   if (!pages.length) {
     return (
@@ -178,6 +181,8 @@ export default function TraceDocumentViewer({
   pageCount,
   formatChecks,
   highlight,
+  scrollTarget = null,
+  documentLoading = false,
   emptyLabel,
 }) {
   const kind = kindOf(file?.name || documentName, file ? "" : documentUrl);
@@ -192,10 +197,15 @@ export default function TraceDocumentViewer({
     setReady(false);
   }, [canRender, file?.uri, documentUrl]);
 
+  // Retrace when the highlight changes or the same issue is re-selected (new scroll token).
+  const scrollToken = scrollTarget?.token;
   useEffect(() => {
-    if (!ready || !highlight) return;
-    webRef.current?.injectJavaScript(`window.PP && PP.trace(${JSON.stringify(highlight)}); true;`);
-  }, [ready, highlight]);
+    if (!ready) return;
+    const payload = scrollTarget && highlight ? { ...highlight, ...scrollTarget } : highlight || scrollTarget;
+    if (!payload) return;
+    webRef.current?.injectJavaScript(`window.PP && PP.trace(${JSON.stringify(payload)}); true;`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, highlight, scrollToken]);
 
   async function sendDocument() {
     if (sendingRef.current) return;
@@ -233,6 +243,15 @@ export default function TraceDocumentViewer({
     }
   }
 
+  if (documentLoading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={colors.accent} />
+        <Text style={[styles.muted, { marginTop: 10 }]}>Loading document…</Text>
+      </View>
+    );
+  }
+
   if (failed) {
     return (
       <TextTrace
@@ -240,6 +259,7 @@ export default function TraceDocumentViewer({
         pageCount={pageCount}
         formatChecks={formatChecks}
         highlight={highlight}
+        scrollTarget={scrollTarget}
         emptyLabel={emptyLabel}
       />
     );

@@ -160,7 +160,8 @@ export function useScanFlow({
   const openDocumentTrace = useCallback((highlight) => {
     // null clears any prior pin so the preview does not jump until the user picks an issue.
     setTraceHighlight(highlight ? traceTarget(highlight) : null);
-    setStep("documentTrace");
+    // Tracing now lives inside the Results screen (Issue tracing & XAI section).
+    setStep("results");
   }, []);
 
   const dismissSummary = useCallback(() => {

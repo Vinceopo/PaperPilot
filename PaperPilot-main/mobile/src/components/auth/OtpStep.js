@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { sendOtp, verifyOtp } from "../../api";
-import { maskEmail } from "../../lib/maskEmail";
 import { formatCountdown } from "../../lib/messages";
 import { colors } from "../../theme";
 import OtpInput from "../ui/OtpInput";
@@ -30,7 +29,7 @@ export default function OtpStep({
   const checkScale = useRef(new Animated.Value(0.4)).current;
   const checkOpacity = useRef(new Animated.Value(0)).current;
   const [devCode, setDevCode] = useState(initialDevCode || "");
-  const [expiresAt, setExpiresAt] = useState(() => Date.now() + (expiresIn || 600) * 1000);
+  const [expiresAt, setExpiresAt] = useState(() => Date.now() + (expiresIn || 300) * 1000);
   const [resendAt, setResendAt] = useState(() => Date.now() + (resendIn || 30) * 1000);
   const [now, setNow] = useState(() => Date.now());
   const attemptedRef = useRef("");
@@ -86,7 +85,7 @@ export default function OtpStep({
     setInfo("");
     try {
       const res = await sendOtp({ email, purpose });
-      setExpiresAt(Date.now() + (res.expires_in || 600) * 1000);
+      setExpiresAt(Date.now() + (res.expires_in || 300) * 1000);
       setResendAt(Date.now() + (res.resend_in || 30) * 1000);
       setDevCode(res.dev_code || "");
       setCode("");
@@ -124,7 +123,7 @@ export default function OtpStep({
     <View style={styles.wrap}>
       <View style={styles.emailCard}>
         <Text style={styles.emailCopy}>
-          We sent a 6-digit code to <Text style={styles.emailStrong}>{maskEmail(email)}</Text>
+          We sent a 6-digit code to <Text style={styles.emailStrong}>{email}</Text>
         </Text>
       </View>
 
@@ -142,13 +141,7 @@ export default function OtpStep({
         />
       </View>
 
-      {devCode ? (
-        <View style={styles.devBox}>
-          <Text style={styles.devText}>
-            Dev mode (no SMTP configured): your code is <Text style={styles.devCode}>{devCode}</Text>
-          </Text>
-        </View>
-      ) : null}
+      {/* Dev code banner removed — Resend delivers codes via email (matches web) */}
 
       <View style={styles.metaRow}>
         <Text style={[styles.metaLeft, expired ? styles.expired : null]}>
@@ -202,15 +195,6 @@ const styles = StyleSheet.create({
   emailCopy: { fontSize: 14, color: colors.slate, lineHeight: 20 },
   emailStrong: { fontWeight: "700", color: colors.navy },
   otpBlock: { marginTop: 20 },
-  devBox: {
-    marginTop: 12,
-    borderRadius: 10,
-    backgroundColor: colors.amberBg,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  devText: { fontSize: 13, color: colors.amber },
-  devCode: { fontWeight: "700" },
   metaRow: {
     marginTop: 14,
     flexDirection: "row",
