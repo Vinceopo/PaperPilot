@@ -1,5 +1,5 @@
 /**
- * useScanFlow — state machine for the upload-to-results scan flow (RN port).
+ * useScanFlow - state machine for the upload-to-results scan flow (RN port).
  * File shape: { uri, name, mimeType, size }
  */
 

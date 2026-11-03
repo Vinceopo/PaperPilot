@@ -4,10 +4,18 @@ const KEY = "paperpilot.pendingCheckout";
 const MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 /** Remember a started PayMongo checkout so it can be confirmed even if the app restarts. */
-export async function savePendingCheckout(uid, checkoutSessionId) {
+export async function savePendingCheckout(uid, checkoutSessionId, plan = "") {
   if (!uid || !checkoutSessionId) return;
   try {
-    await AsyncStorage.setItem(KEY, JSON.stringify({ uid, checkoutSessionId, at: Date.now() }));
+    await AsyncStorage.setItem(
+      KEY,
+      JSON.stringify({
+        uid,
+        checkoutSessionId,
+        plan: plan || "",
+        at: Date.now(),
+      })
+    );
   } catch {
     // Confirmation still runs in the current session.
   }
@@ -21,6 +29,9 @@ export async function clearPendingCheckout() {
   }
 }
 
+/**
+ * @returns {Promise<{ checkoutSessionId: string, plan: string } | null>}
+ */
 export async function readPendingCheckout(uid) {
   if (!uid) return null;
   try {
@@ -30,7 +41,10 @@ export async function readPendingCheckout(uid) {
       await clearPendingCheckout();
       return null;
     }
-    return String(saved.checkoutSessionId);
+    return {
+      checkoutSessionId: String(saved.checkoutSessionId),
+      plan: String(saved.plan || ""),
+    };
   } catch {
     return null;
   }

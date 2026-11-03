@@ -155,9 +155,8 @@ export default function Sidebar({
               />
             ) : null}
             <NavItem
-              iconAccent
               iconNode={
-                <UploadIcon size={16} color={active === "upload" ? "#ffffff" : "#22c9b4"} />
+                <UploadIcon size={16} color={active === "upload" ? "#ffffff" : "#94a3b8"} />
               }
               label="Upload & Analyze"
               active={active === "upload"}
@@ -180,7 +179,7 @@ export default function Sidebar({
               onPress={() => select(onSignOut)}
               accessibilityRole="button"
             >
-              <Text style={styles.signOutText}>↪ Sign Out</Text>
+              <Text style={styles.signOutText}>↪ Log out</Text>
             </Pressable>
           </View>
         </Animated.View>

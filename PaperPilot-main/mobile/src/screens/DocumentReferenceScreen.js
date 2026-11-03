@@ -126,7 +126,7 @@ export default function DocumentReferenceScreen({ navigation }) {
           .toLowerCase()
           .includes("estimat") ? (
           <Text style={styles.approxNote}>
-            Approximate locations — Word page breaks were estimated. For precise tracing, upload a
+            Approximate locations - Word page breaks were estimated. For precise tracing, upload a
             PDF of the same manuscript.
           </Text>
         ) : null}

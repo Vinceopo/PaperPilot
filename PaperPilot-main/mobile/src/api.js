@@ -1,4 +1,6 @@
 import Constants from "expo-constants";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import { auth } from "./firebase";
 
 const extra = Constants.expoConfig?.extra || {};
@@ -18,12 +20,13 @@ function resolveApiUrl(configured) {
 }
 
 export class ApiError extends Error {
-  constructor(message, status, detail) {
+  constructor(message, status, detail, retryAfter = 0) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
     this.code = detail && typeof detail === "object" ? detail.code : undefined;
+    this.retryAfter = Number(retryAfter) || 0;
   }
 }
 
@@ -48,7 +51,7 @@ function statusMessage(status) {
   if (status === 401) return "Your session has expired. Sign in again, then retry.";
   if (status === 403) return "Your account can't do this yet. Check your plan on the Subscription page.";
   if (status === 404) {
-    return "That item was not found. It may have been deleted on another device — refresh and try again.";
+    return "That item was not found. It may have been deleted on another device - refresh and try again.";
   }
   if (status === 413) {
     return "This file is too large for your plan. Free plans allow 15 MB, Premium 45 MB, and Pro 120 MB.";
@@ -115,7 +118,19 @@ function parseBody(body) {
 
 async function responseData(res) {
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(detailMessage(data, statusMessage(res.status), res.status), res.status, data.detail);
+  if (!res.ok) {
+    const retryHeader = typeof res.headers?.get === "function" ? res.headers.get("Retry-After") : null;
+    const retryAfter =
+      (data?.detail && typeof data.detail === "object" && data.detail.retry_after) ||
+      retryHeader ||
+      0;
+    throw new ApiError(
+      detailMessage(data, statusMessage(res.status), res.status),
+      res.status,
+      data.detail,
+      retryAfter
+    );
+  }
   return data;
 }
 
@@ -148,7 +163,7 @@ async function authorizedFetch(path, options = {}) {
   };
   try {
     let res = await send(false);
-    // Retry once with a fresh token. Never sign out on API 401 — only the
+    // Retry once with a fresh token. Never sign out on API 401 - only the
     // caller / auth listener should clear the session for fatal Firebase errors.
     if (res.status === 401) {
       try {
@@ -241,7 +256,7 @@ async function uploadToS3({ uri, name, mimeType, size }) {
   if (!uploadUrl || !publicUrl) {
     throw new ApiError("Upload could not be prepared. Try again.", 0);
   }
-  // Never navigate to upload_url — it is PUT-only. Preview/download must use public_url.
+  // Never navigate to upload_url - it is PUT-only. Preview/download must use public_url.
   if (/[?&]X-Amz-Signature=/i.test(publicUrl) || !/[?&]X-Amz-Signature=/i.test(uploadUrl)) {
     throw new ApiError("Upload could not be prepared. Try again.", 0);
   }
@@ -362,11 +377,107 @@ export function sampleMechanicsUrl() {
   return `${API}/mechanics/sample`;
 }
 
+/**
+ * Wake the API before parallel dashboard calls.
+ * Retries briefly through cold-start 502/503 windows; never throws.
+ */
+export async function warmApi({ attempts = 4, delayMs = 1500 } = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const res = await fetch(`${API}/health`, { method: "GET" });
+      if (res.ok) return true;
+    } catch {
+      // keep trying
+    }
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  return false;
+}
+
+function bytesToBase64(bytes) {
+  const chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  if (typeof globalThis.btoa === "function") return globalThis.btoa(binary);
+  // Fallback for environments without btoa.
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i];
+    const b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    const triplet = (a << 16) | (b << 8) | c;
+    out += chars[(triplet >> 18) & 63];
+    out += chars[(triplet >> 12) & 63];
+    out += i + 1 < bytes.length ? chars[(triplet >> 6) & 63] : "=";
+    out += i + 2 < bytes.length ? chars[triplet & 63] : "=";
+  }
+  return out;
+}
+
+/** Download sample Format Mechanics DOCX with PK/ZIP validation, then share/save. */
+export async function downloadSampleMechanics() {
+  const user = auth?.currentUser;
+  if (!user) throw new ApiError("Sign in to use the compliance checker.", 401);
+  try {
+    const token = await user.getIdToken();
+    const res = await fetch(`${API}/mechanics/sample`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(
+        detailMessage(data, "Could not download sample mechanics.", res.status),
+        res.status,
+        data.detail
+      );
+    }
+    const buffer = await res.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    // DOCX is a ZIP (PK…). Reject HTML/text error bodies that would save as a corrupt file.
+    if (bytes.byteLength < 64 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+      throw new ApiError(
+        "Sample format download failed. The server did not return a DOCX file.",
+        res.status || 502
+      );
+    }
+    const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+    if (!dir) {
+      throw new ApiError("This device cannot save files for sharing.", 500);
+    }
+    const filename = "Sample_Format_Mechanics.docx";
+    const uri = `${dir}${filename}`;
+    await FileSystem.writeAsStringAsync(uri, bytesToBase64(bytes), {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    if (!(await Sharing.isAvailableAsync())) {
+      throw new ApiError(
+        "Sharing is not available on this device. The sample was downloaded but could not be saved.",
+        500
+      );
+    }
+    await Sharing.shareAsync(uri, {
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      dialogTitle: "Save sample format mechanics",
+      UTI: "org.openxmlformats.wordprocessingml.document",
+    });
+    return true;
+  } catch (err) {
+    throw networkError(err);
+  }
+}
+
 export function listMechanics() {
   return authorizedFetch("/mechanics");
 }
 
-export function extractMechanics({ uri, name, mimeType }) {
+export async function extractMechanics({ uri, name, mimeType }) {
+  // Avoid racing a Python cold-start on the first authenticated call.
+  await warmApi({ attempts: 2, delayMs: 1000 });
   return postUploadedDocument("/mechanics/extract", { uri, name, mimeType }, "mechanics.pdf");
 }
 
@@ -544,7 +655,7 @@ export function cancelSubscription({ immediate = true } = {}) {
   });
 }
 
-/** After PayMongo checkout — verify the paid session and activate Premium. */
+/** After PayMongo checkout - verify the paid session and activate Premium. */
 export function confirmCheckoutPayment({ checkoutSessionId } = {}) {
   return authorizedFetch("/subscription/confirm", {
     method: "POST",

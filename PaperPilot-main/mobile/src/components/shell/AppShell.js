@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -8,6 +8,7 @@ import { signOutUser } from "../../services/auth";
 import { colors } from "../../theme";
 import { planName, resetWindow } from "../../lib/plans";
 import BackToDashboardButton from "../ui/BackToDashboardButton";
+import ConfirmDialog from "../ui/ConfirmDialog";
 import Sidebar from "./Sidebar";
 import NotificationsPanel from "./NotificationsPanel";
 import { BellIcon, MenuIcon } from "./icons";
@@ -22,6 +23,8 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notificationsAnchor, setNotificationsAnchor] = useState(null);
+  const [leaveAnalyzingConfirm, setLeaveAnalyzingConfirm] = useState(null);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const bellRef = useRef(null);
   const {
     subscription,
@@ -40,6 +43,45 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
     currentVersion,
     resetUploadWizard,
   } = useAppData();
+
+  const isAnalyzing = scanFlow?.step === "analyzing";
+
+  useEffect(() => {
+    if (!isAnalyzing) setLeaveAnalyzingConfirm(null);
+  }, [isAnalyzing]);
+
+  function requestLeaveWhileAnalyzing(next) {
+    if (typeof next !== "function") return;
+    if (!isAnalyzing) {
+      next();
+      return;
+    }
+    setMenuOpen(false);
+    setLeaveAnalyzingConfirm({ run: next });
+  }
+
+  function stayOnAnalyzing() {
+    setLeaveAnalyzingConfirm(null);
+  }
+
+  function confirmStopAnalyzing() {
+    const pending = leaveAnalyzingConfirm?.run;
+    setLeaveAnalyzingConfirm(null);
+    if (scanFlow?.step === "analyzing") {
+      handleBackToDashboard();
+    }
+    pending?.();
+  }
+
+  function requestSignOut() {
+    setMenuOpen(false);
+    setLogoutConfirmOpen(true);
+  }
+
+  function confirmLogOut() {
+    setLogoutConfirmOpen(false);
+    requestLeaveWhileAnalyzing(() => signOutUser(auth));
+  }
 
   const unreadLabel = notificationUnread > 9 ? "9+" : String(notificationUnread);
   const showHeading = Boolean(title);
@@ -162,21 +204,52 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
         onClose={() => setMenuOpen(false)}
         showComplianceResult={Boolean(scanFlow?.result)}
         onUpload={() => {
-          // Leave results and analysis, and don't resume File details after the manuscript is gone.
-          if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
-            handleBackToDashboard();
-            navigation.navigate("Upload", { fresh: true });
+          requestLeaveWhileAnalyzing(() => {
+            // Leave results and analysis, and don't resume File details after the manuscript is gone.
+            if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
+              handleBackToDashboard();
+              navigation.navigate("Upload", { fresh: true });
+              return;
+            }
+            if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file))) {
+              resetUploadWizard(1);
+            }
+            navigation.navigate("Upload");
+          });
+        }}
+        onManuscripts={() => requestLeaveWhileAnalyzing(() => navigation.navigate("Library"))}
+        onComplianceResult={() => {
+          if (isAnalyzing && scanFlow?.result) {
+            setLeaveAnalyzingConfirm(null);
+            navigation.navigate("Results");
             return;
           }
-          if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file))) {
-            resetUploadWizard(1);
-          }
-          navigation.navigate("Upload");
+          requestLeaveWhileAnalyzing(() => navigation.navigate("Results"));
         }}
-        onManuscripts={() => navigation.navigate("Library")}
-        onComplianceResult={() => navigation.navigate("Results")}
-        onAccount={() => navigation.navigate("Account")}
-        onSignOut={() => signOutUser(auth)}
+        onAccount={() => requestLeaveWhileAnalyzing(() => navigation.navigate("Account"))}
+        onSignOut={requestSignOut}
+      />
+
+      <ConfirmDialog
+        open={logoutConfirmOpen}
+        title="Log out"
+        message="Are you sure you want to log out?"
+        confirmLabel="Yes"
+        cancelLabel="No"
+        tone="danger"
+        onCancel={() => setLogoutConfirmOpen(false)}
+        onConfirm={confirmLogOut}
+      />
+
+      <ConfirmDialog
+        open={Boolean(leaveAnalyzingConfirm)}
+        title="Leave while analyzing?"
+        message="Your document is still being checked. If you leave now, the analysis will stop and you will need to start it again from the beginning."
+        confirmLabel="Stop analyzing"
+        cancelLabel="Stay"
+        tone="danger"
+        onCancel={stayOnAnalyzing}
+        onConfirm={confirmStopAnalyzing}
       />
     </View>
   );

@@ -30,6 +30,7 @@ import {
   saveMechanicsProfile,
   updateMechanicsProfile,
   uploadManuscriptVersion,
+  warmApi,
 } from "../api";
 import { isServerId, mapComplianceScanToResult, scanTargetIds } from "../lib/scanMapper";
 import { supportedCitationStyle } from "../lib/formatMechanicsForm";
@@ -358,7 +359,7 @@ export function AppDataProvider({ children }) {
       lastSavedScanKey.current = "";
       const notes = await loadNotifications(user?.uid);
       if (!cancelled) setNotifications(notes);
-      // Show last-known Saved Mechanics immediately — never flash empty while the API loads.
+      // Show last-known Saved Mechanics immediately - never flash empty while the API loads.
       const cachedMechanics = await loadCachedMechanics(user?.uid);
       if (cancelled || !cachedMechanics.length) return;
       setMechanics(cachedMechanics);
@@ -404,18 +405,64 @@ export function AppDataProvider({ children }) {
   const loadDashboard = useCallback(async (opts) => {
     if (!auth?.currentUser) return;
     const silent = opts?.silent === true;
+    const uid = auth.currentUser.uid;
     if (!silent) {
       setLoading(true);
       setError("");
     }
     try {
-      // A failure on one resource must not wipe the others that loaded.
-      const subscriptionTicket = nextSubscriptionTicket();
-      const mechanicsChange = mechanicsChangeRef.current;
-      const [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] =
-        await Promise.allSettled([listMechanics(), listManuscripts(), getSubscription(), listScans()]);
+      // Wake the API so parallel dashboard calls don't all race a cold start.
+      if (!silent) await warmApi();
+
+      // Mirror web: retry when local caches were wiped and the first reply is empty/cold.
+      const maxAttempts = silent ? 1 : 3;
+      let mechanicsResult;
+      let manuscriptsResult;
+      let subscriptionResult;
+      let scansResult;
+      let subscriptionTicket = nextSubscriptionTicket();
+      let mechanicsChange = mechanicsChangeRef.current;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        subscriptionTicket = nextSubscriptionTicket();
+        mechanicsChange = mechanicsChangeRef.current;
+        // A failure on one resource must not wipe the others that loaded.
+        [mechanicsResult, manuscriptsResult, subscriptionResult, scansResult] =
+          await Promise.allSettled([listMechanics(), listManuscripts(), getSubscription(), listScans()]);
+
+        if (attempt >= maxAttempts) break;
+
+        const mechItems =
+          mechanicsResult.status === "fulfilled"
+            ? itemsFrom(mechanicsResult.value, "mechanics")
+            : [];
+        const scanItems =
+          scansResult.status === "fulfilled" ? itemsFrom(scansResult.value, "items") : [];
+        const gotAnyRows = mechItems.length > 0 || scanItems.length > 0;
+        const localMechEmpty = (await loadCachedMechanics(uid)).length === 0;
+        const localLibEmpty =
+          !(scannedLibraryRef.current || []).length &&
+          (await loadScannedManuscripts(uid)).length === 0;
+        const localSubEmpty = !subscriptionRef.current;
+        const wipedLocal = localMechEmpty && localLibEmpty && localSubEmpty;
+        const transientFail = [
+          mechanicsResult,
+          manuscriptsResult,
+          subscriptionResult,
+          scansResult,
+        ].some((result) => {
+          if (result.status !== "rejected") return false;
+          const status = result.reason?.status;
+          return status === 0 || status === 502 || status === 503 || status === 504;
+        });
+        const suspiciousEmpty = wipedLocal && !gotAnyRows;
+
+        if (!transientFail && !suspiciousEmpty) break;
+        await warmApi({ attempts: 2, delayMs: 800 });
+        await new Promise((resolve) => setTimeout(resolve, 750 * attempt));
+      }
+
       if (scansResult.status === "fulfilled") {
-        const uid = auth.currentUser?.uid;
         const dismissed = await loadDismissedScanIds(uid);
         const { items, changed } = mergeServerScans(
           scannedLibraryRef.current,

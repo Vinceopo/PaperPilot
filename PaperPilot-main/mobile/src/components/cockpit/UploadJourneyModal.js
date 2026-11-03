@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
 
@@ -19,14 +20,33 @@ export const UPLOAD_JOURNEY = [
   },
 ];
 
-let journeySeen = false;
+const JOURNEY_SEEN_KEY = "paperpilot.uploadJourneySeen";
+let journeySeenMemory = false;
+let journeySeenHydrated = false;
 
 export function uploadJourneySeen() {
-  return journeySeen;
+  return journeySeenMemory;
 }
 
-export function markUploadJourneySeen() {
-  journeySeen = true;
+/** Load persisted “seen” flag once (call from upload screen mount). */
+export async function hydrateUploadJourneySeen() {
+  if (journeySeenHydrated) return journeySeenMemory;
+  journeySeenHydrated = true;
+  try {
+    journeySeenMemory = (await AsyncStorage.getItem(JOURNEY_SEEN_KEY)) === "1";
+  } catch {
+    journeySeenMemory = false;
+  }
+  return journeySeenMemory;
+}
+
+export async function markUploadJourneySeen() {
+  journeySeenMemory = true;
+  try {
+    await AsyncStorage.setItem(JOURNEY_SEEN_KEY, "1");
+  } catch {
+    // Closing the modal is still enough for this session.
+  }
 }
 
 /** Step label + "Show Steps" control shown above each wizard panel heading. */

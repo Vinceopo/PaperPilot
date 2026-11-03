@@ -15,7 +15,7 @@ export default function RegistrationSuccessScreen({ profile, onContinue }) {
       <View style={styles.card}>
         <View style={styles.accentBar} />
         <View style={styles.logoWrap}>
-          <PaperPilotLogo tone="light" markSize={64} subtitle={false} />
+          <PaperPilotLogo tone="light" subtitle={false} markSize={64} />
         </View>
         <View style={styles.checkCircle}>
           <Text style={styles.checkMark}>✓</Text>
@@ -77,19 +77,20 @@ const styles = StyleSheet.create({
     height: 4,
     backgroundColor: "#16bfa8",
   },
-  logoWrap: { alignItems: "center", marginBottom: 12 },
+  logoWrap: { alignItems: "center", marginBottom: 8 },
   checkCircle: {
     alignSelf: "center",
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    marginTop: 12,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: "#16bfa8",
-    borderWidth: 5,
+    borderWidth: 6,
     borderColor: "#dff7f3",
     alignItems: "center",
     justifyContent: "center",
   },
-  checkMark: { color: colors.white, fontSize: 22, fontWeight: "700" },
+  checkMark: { color: colors.white, fontSize: 24, fontWeight: "700" },
   title: {
     marginTop: 12,
     textAlign: "center",

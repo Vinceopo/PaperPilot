@@ -40,7 +40,7 @@ export function buildDocumentPages({ preview, pageCount = 0, formatChecks = [] }
   return Array.from({ length: maxPage }, (_, index) => ({
     page: index + 1,
     pageIndex: index,
-    lines: ["(Page text preview is unavailable on mobile — tap issues to jump to page/line markers.)"],
+    lines: ["(Page text preview is unavailable on mobile - tap issues to jump to page/line markers.)"],
     text: "",
   }));
 }

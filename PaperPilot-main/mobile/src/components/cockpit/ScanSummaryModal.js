@@ -73,7 +73,7 @@ export default function ScanSummaryModal({
               {result.documentTitle || "Your manuscript"}
             </Text>
             <Text style={styles.subtitle}>
-              Formatting compliance summary — not grammar or content.
+              Formatting compliance summary - not grammar or content.
               {issueCount > 0
                 ? ` ${issueCount} issue type${issueCount === 1 ? "" : "s"} flagged.`
                 : " No format issues flagged."}
@@ -83,7 +83,7 @@ export default function ScanSummaryModal({
               <View style={[styles.scoreBox, styles.scoreOverall]}>
                 <Text style={[styles.scoreLabel, { color: colors.muted }]}>Overall</Text>
                 <Text style={[styles.scoreValue, { color: "#172033" }]}>
-                  {hasValue(overall) ? `${formatScore(overall, 0)}%` : "—"}
+                  {hasValue(overall) ? `${formatScore(overall, 0)}%` : "-"}
                 </Text>
               </View>
               <View style={[styles.scoreBox, styles.scoreRight]}>

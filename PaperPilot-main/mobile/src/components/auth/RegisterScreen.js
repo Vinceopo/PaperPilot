@@ -213,7 +213,7 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
               icon: "at",
               autoComplete: "username",
               maxLength: 20,
-              hint: "3–20 characters: letters, numbers, underscore, or period.",
+              hint: "3-20 characters: letters, numbers, underscore, or period.",
             })}
             style={styles.identityCell}
           />
@@ -289,14 +289,7 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
         />
       </View>
 
-      <TermsModal
-        open={termsOpen}
-        onClose={() => setTermsOpen(false)}
-        onAgree={() => {
-          setAgreed(true);
-          setTermsOpen(false);
-        }}
-      />
+      <TermsModal open={termsOpen} onClose={() => setTermsOpen(false)} />
     </AuthShell>
   );
 }

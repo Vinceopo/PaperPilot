@@ -39,7 +39,7 @@ export default function OtpInput({
   function onChangeDigit(i, text) {
     const cleaned = (text || "").replace(/\D/g, "");
     if (cleaned.length > 1) {
-      // Paste into this box — fill remaining slots.
+      // Paste into this box - fill remaining slots.
       const merged = ((value || "").slice(0, i) + cleaned).replace(/\D/g, "").slice(0, 6);
       onChange(merged);
       refs.current[Math.min(merged.length, 5)]?.focus();

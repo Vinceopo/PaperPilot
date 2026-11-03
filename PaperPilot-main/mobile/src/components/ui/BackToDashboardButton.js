@@ -16,7 +16,7 @@ function ArrowLeftIcon({ size = 14, color = "#109b89" }) {
 }
 
 /**
- * Shared “Back to Dashboard” control — pill mint style used across cockpit screens.
+ * Shared “Back to Dashboard” control - pill mint style used across cockpit screens.
  * Wrapper keeps top/bottom padding consistent on every screen.
  */
 export default function BackToDashboardButton({

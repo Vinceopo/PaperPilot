@@ -14,24 +14,22 @@ import {
   TrashIcon,
   UploadIcon,
 } from "../components/shell/icons";
-import { bandTone, manuscriptSummary } from "../lib/scoreBand";
+import { bandTone, manuscriptSummary, sortManuscriptsByLatestScan } from "../lib/scoreBand";
 import { removeManuscriptVersion } from "../lib/scannedLibrary";
 import { deleteManuscriptVersion } from "../api";
 import { formatScore } from "../lib/scoreFormat";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 8;
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
   { id: "compliant", label: "Good Standing" },
   { id: "needs_revision", label: "Under Review" },
   { id: "critical", label: "Attention Required" },
 ];
-const COLUMNS = { title: 210, scanned: 112, score: 84, status: 160, actions: 96 };
-const TABLE_WIDTH = Object.values(COLUMNS).reduce((sum, w) => sum + w, 0);
 
 function formatDate(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     return new Date(iso + (iso.length <= 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, {
       year: "numeric",
@@ -42,6 +40,19 @@ function formatDate(iso) {
   } catch {
     return iso;
   }
+}
+
+function formatMeta(row) {
+  const parts = [];
+  const institution = String(row.institution || "").trim();
+  if (institution && institution !== "-" && institution !== "—") parts.push(institution);
+  if (row.citationStyle) parts.push(row.citationStyle);
+  if (row.versionCount > 0) {
+    parts.push(
+      `${row.versionCount} version${row.versionCount === 1 ? "" : "s"} (${row.latestVersionLabel})`
+    );
+  }
+  return parts.join(" · ");
 }
 
 function StatCard({ label, value, sub, accent }) {
@@ -55,7 +66,7 @@ function StatCard({ label, value, sub, accent }) {
 }
 
 /**
- * My Manuscripts — checker/viewer only (no content editing).
+ * My Manuscripts - checker/viewer only (no content editing).
  * Only manuscripts the user has scanned appear here.
  */
 export default function ManuscriptsScreen({ navigation }) {
@@ -92,11 +103,13 @@ export default function ManuscriptsScreen({ navigation }) {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return summaries.filter((m) => {
-      if (statusFilter !== "all" && m.status !== statusFilter) return false;
-      if (!q) return true;
-      return (m.title || "").toLowerCase().includes(q);
-    });
+    return sortManuscriptsByLatestScan(
+      summaries.filter((m) => {
+        if (statusFilter !== "all" && m.status !== statusFilter) return false;
+        if (!q) return true;
+        return (m.title || "").toLowerCase().includes(q);
+      })
+    );
   }, [summaries, query, statusFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -311,83 +324,83 @@ export default function ManuscriptsScreen({ navigation }) {
           </View>
         </View>
 
-        <View style={styles.tableCard}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false}>
-            <View style={{ minWidth: TABLE_WIDTH }}>
-              <View style={styles.thead}>
-                <Text style={[styles.th, { width: COLUMNS.title, paddingLeft: 20 }]}>Title</Text>
-                <Text style={[styles.th, { width: COLUMNS.scanned }]}>Scanned</Text>
-                <Text style={[styles.th, { width: COLUMNS.score }]}>Score</Text>
-                <Text style={[styles.th, { width: COLUMNS.status }]}>Status</Text>
-                <Text style={[styles.th, styles.thRight, { width: COLUMNS.actions }]}>Actions</Text>
-              </View>
+        <View style={styles.listWrap}>
+          {pageRows.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyText}>
+                {items.length === 0
+                  ? "No manuscripts yet. Upload and analyse a document to see it here."
+                  : "No manuscripts match your search or filter."}
+              </Text>
+            </View>
+          ) : (
+            pageRows.map((row) => {
+              const tone = bandTone(row.band);
+              const meta = formatMeta(row);
+              return (
+                <View key={row.id} style={styles.msCard}>
+                  <View style={[styles.bandBar, { backgroundColor: tone.bar }]} />
+                  <Pressable
+                    onPress={() => setViewId(row.id)}
+                    style={({ pressed }) => [styles.msCardBody, pressed && styles.msCardPressed]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`View ${row.title}`}
+                  >
+                    <Text style={styles.rowTitle} numberOfLines={3}>
+                      {row.title}
+                    </Text>
+                    {meta ? (
+                      <Text style={styles.rowMeta} numberOfLines={3}>
+                        {meta}
+                      </Text>
+                    ) : null}
 
-              {pageRows.length === 0 ? (
-                <View style={styles.emptyRow}>
-                  <Text style={styles.emptyText}>
-                    {items.length === 0
-                      ? "No manuscripts yet. Upload and analyse a document to see it here."
-                      : "No manuscripts match your search or filter."}
-                  </Text>
-                </View>
-              ) : (
-                pageRows.map((row, index) => {
-                  const tone = bandTone(row.band);
-                  return (
-                    <View
-                      key={row.id}
-                      style={[styles.tr, index === pageRows.length - 1 && styles.trLast]}
-                    >
-                      <View style={[styles.td, styles.titleCell, { width: COLUMNS.title }]}>
-                        <View style={[styles.bandBar, { backgroundColor: tone.bar }]} />
-                        <Text style={styles.rowTitle} numberOfLines={2}>
-                          {row.title}
-                        </Text>
-                        <Text style={styles.rowMeta} numberOfLines={2}>
-                          {row.institution} · {row.citationStyle}
-                          {row.versionCount > 0
-                            ? ` · ${row.versionCount} version${row.versionCount === 1 ? "" : "s"} (${row.latestVersionLabel})`
-                            : ""}
-                        </Text>
-                      </View>
-                      <View style={[styles.td, { width: COLUMNS.scanned }]}>
-                        <Text style={styles.rowDate}>{formatDate(row.scannedDate)}</Text>
-                      </View>
-                      <View style={[styles.td, { width: COLUMNS.score }]}>
+                    <View style={styles.msField}>
+                      <Text style={styles.msLabel}>Scanned</Text>
+                      <Text style={styles.rowDate}>{formatDate(row.scannedDate)}</Text>
+                    </View>
+
+                    <View style={styles.msFieldRow}>
+                      <View style={styles.msFieldHalf}>
+                        <Text style={styles.msLabel}>Score</Text>
                         <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
-                          <Text style={[styles.scorePillText, { color: tone.pillText }]}>{formatScore(row.latestScore, 0)}</Text>
+                          <Text style={[styles.scorePillText, { color: tone.pillText }]}>
+                            {formatScore(row.latestScore, 0)}
+                          </Text>
                         </View>
                       </View>
-                      <View style={[styles.td, { width: COLUMNS.status }]}>
+                      <View style={styles.msFieldHalf}>
+                        <Text style={styles.msLabel}>Status</Text>
                         <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
                           <Text style={[styles.statusPillText, { color: tone.pillText }]}>{row.band.label}</Text>
                         </View>
                       </View>
-                      <View style={[styles.td, styles.actionsCell, { width: COLUMNS.actions }]}>
-                        <Pressable
-                          onPress={() => setViewId(row.id)}
-                          style={({ pressed }) => [styles.viewBtn, pressed && styles.viewBtnPressed]}
-                          accessibilityLabel={`View ${row.title}`}
-                        >
-                          <Text style={styles.viewText}>View</Text>
-                        </Pressable>
-                        <Pressable
-                          onPress={() => {
-                            setDeleteError("");
-                            setDeleteId(row.id);
-                          }}
-                          style={({ pressed }) => [styles.trashBtn, pressed && styles.trashBtnPressed]}
-                          accessibilityLabel={`Delete ${row.title}`}
-                        >
-                          {({ pressed }) => <TrashIcon size={16} color={pressed ? "#e11d48" : colors.slate} />}
-                        </Pressable>
-                      </View>
                     </View>
-                  );
-                })
-              )}
-            </View>
-          </ScrollView>
+                  </Pressable>
+
+                  <View style={styles.actionsCell}>
+                    <Pressable
+                      onPress={() => setViewId(row.id)}
+                      style={({ pressed }) => [styles.viewBtn, pressed && styles.viewBtnPressed]}
+                      accessibilityLabel={`View ${row.title}`}
+                    >
+                      <Text style={styles.viewText}>View</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        setDeleteError("");
+                        setDeleteId(row.id);
+                      }}
+                      style={({ pressed }) => [styles.trashBtn, pressed && styles.trashBtnPressed]}
+                      accessibilityLabel={`Delete ${row.title}`}
+                    >
+                      {({ pressed }) => <TrashIcon size={16} color={pressed ? "#e11d48" : colors.slate} />}
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })
+          )}
         </View>
 
         <View style={styles.footer}>
@@ -559,8 +572,19 @@ const styles = StyleSheet.create({
   },
   uploadBtnPressed: { backgroundColor: "#1E293B" },
   uploadText: { fontSize: 12, fontWeight: "700", color: colors.white },
-  tableCard: {
-    marginTop: 20,
+  listWrap: { marginTop: 20, gap: 12 },
+  emptyCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingHorizontal: 20,
+    paddingVertical: 48,
+    ...cardShadow,
+  },
+  emptyText: { fontSize: 14, color: colors.muted, textAlign: "center" },
+  msCard: {
+    position: "relative",
     overflow: "hidden",
     borderRadius: 12,
     borderWidth: 1,
@@ -568,40 +592,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     ...cardShadow,
   },
-  thead: {
-    flexDirection: "row",
-    borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
-    backgroundColor: "#F8FAFC",
-    paddingVertical: 12,
+  msCardPressed: { backgroundColor: "#f8fafc" },
+  msCardBody: { paddingLeft: 20, paddingRight: 16, paddingTop: 16, paddingBottom: 8, gap: 10 },
+  bandBar: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: 4,
   },
-  th: {
-    paddingHorizontal: 16,
+  rowTitle: { fontSize: 15, fontWeight: "700", color: "#0F1729" },
+  rowMeta: { fontSize: 12, color: colors.muted, lineHeight: 18 },
+  msField: { gap: 4 },
+  msFieldRow: { flexDirection: "row", gap: 12 },
+  msFieldHalf: { flex: 1, gap: 4 },
+  msLabel: {
     fontSize: 10,
     fontWeight: "600",
-    letterSpacing: 1,
+    letterSpacing: 0.8,
     textTransform: "uppercase",
     color: colors.muted,
   },
-  thRight: { textAlign: "right" },
-  emptyRow: { width: TABLE_WIDTH, paddingHorizontal: 20, paddingVertical: 48 },
-  emptyText: { fontSize: 14, color: colors.muted, textAlign: "center" },
-  tr: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: "#f8fafc" },
-  trLast: { borderBottomWidth: 0 },
-  td: { paddingHorizontal: 16, paddingVertical: 16, justifyContent: "center" },
-  titleCell: { position: "relative", paddingLeft: 20 },
-  bandBar: {
-    position: "absolute",
-    top: 8,
-    bottom: 8,
-    left: 0,
-    width: 4,
-    borderTopRightRadius: 4,
-    borderBottomRightRadius: 4,
-  },
-  rowTitle: { fontSize: 14, fontWeight: "700", color: "#0F1729" },
-  rowMeta: { marginTop: 2, fontSize: 12, color: colors.muted },
-  rowDate: { fontSize: 12, color: colors.slate },
+  rowDate: { fontSize: 13, color: colors.slate },
   pill: {
     alignSelf: "flex-start",
     borderWidth: 1,
@@ -611,11 +623,22 @@ const styles = StyleSheet.create({
   },
   scorePillText: { fontSize: 11, fontWeight: "700", fontVariant: ["tabular-nums"] },
   statusPillText: { fontSize: 10, fontWeight: "700", letterSpacing: 0.5 },
-  actionsCell: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 4 },
-  viewBtn: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
+  actionsCell: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 4,
+    marginLeft: 20,
+    marginRight: 16,
+    marginBottom: 12,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f5f9",
+  },
+  viewBtn: { borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
   viewBtnPressed: { backgroundColor: "#f1f5f9" },
-  viewText: { fontSize: 12, fontWeight: "600", color: "#475569" },
-  trashBtn: { width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  viewText: { fontSize: 13, fontWeight: "600", color: "#475569" },
+  trashBtn: { width: 40, height: 40, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   trashBtnPressed: { backgroundColor: "#fff1f2" },
   footer: { marginTop: 16, gap: 16 },
   showing: { fontSize: 12, color: colors.slate },

@@ -15,13 +15,15 @@ import { useAppData } from "../context/AppDataContext";
 import { auth } from "../firebase";
 import { getProfile, otpBypassToken, resetPasswordWithOtp, sendOtp, updateUserProfile } from "../api";
 import { markPasswordChanged, signOutUser } from "../services/auth";
+import { emailsMatch } from "../lib/maskEmail";
 import { loadNotifications, pushNotification, saveNotifications } from "../lib/notifications";
-import { nameError, phoneError, usernameError } from "../lib/validation";
+import { emailError, nameError, phoneError, usernameError } from "../lib/validation";
 import { isPaidTier, planName } from "../lib/plans";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import OtpStep from "../components/auth/OtpStep";
 import BackToDashboardButton from "../components/ui/BackToDashboardButton";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { CameraIcon, EyeIcon, PadlockIcon, PencilIcon } from "../components/shell/icons";
 
 function digitsOnly(value, max = 11) {
@@ -167,7 +169,7 @@ function BackLink({ onPress, label = "Back to account" }) {
 
 export default function AccountScreen({ navigation }) {
   const { user, tier } = useAppData();
-  const [view, setView] = useState("summary"); // summary | edit | pwOtp | pwNew
+  const [view, setView] = useState("summary"); // summary | edit | pwEmail | pwOtp | pwNew
 
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState(null);
@@ -183,6 +185,10 @@ export default function AccountScreen({ navigation }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  const [confirmEmail, setConfirmEmail] = useState("");
+  const [confirmEmailErr, setConfirmEmailErr] = useState("");
+  const [emailMismatchOpen, setEmailMismatchOpen] = useState(false);
 
   const [otpMeta, setOtpMeta] = useState(null);
   const [sendingOtp, setSendingOtp] = useState(false);
@@ -220,7 +226,7 @@ export default function AccountScreen({ navigation }) {
     loadProfile();
   }, [loadProfile]);
 
-  const fullName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(" ") || "—";
+  const fullName = [form.firstName, form.middleName, form.lastName].filter(Boolean).join(" ") || "-";
   const providers = user?.providerData || [];
   const hasPasswordProvider = providers.some((p) => p?.providerId === "password");
   const isGoogleAccount = providers.some((p) => p?.providerId === "google.com");
@@ -303,11 +309,26 @@ export default function AccountScreen({ navigation }) {
     setView("summary");
   }
 
-  async function handleStartChangePassword() {
-    setSendingOtp(true);
+  function handleStartChangePassword() {
+    setConfirmEmail("");
+    setConfirmEmailErr("");
     setSendOtpError("");
+    setEmailMismatchOpen(false);
+    setView("pwEmail");
+  }
+
+  async function handleConfirmChangePasswordEmail() {
+    setSendOtpError("");
+    const formatErr = emailError(confirmEmail);
+    setConfirmEmailErr(formatErr);
+    if (formatErr) return;
+    if (!emailsMatch(confirmEmail, email)) {
+      setEmailMismatchOpen(true);
+      return;
+    }
+    setSendingOtp(true);
     try {
-      const res = await sendOtp({ email, purpose: "reset_password" });
+      const res = await sendOtp({ email: email.trim(), purpose: "reset_password" });
       const bypass = otpBypassToken(res, "reset_password");
       if (bypass) {
         setResetToken(bypass);
@@ -412,7 +433,7 @@ export default function AccountScreen({ navigation }) {
                   placeholder="e.g. vince.opo"
                   maxLength={20}
                   autoCapitalize="none"
-                  hint="Required. 3–20 characters; letters, numbers, underscore, or period. Blank is not allowed."
+                  hint="Required. 3-20 characters; letters, numbers, underscore, or period. Blank is not allowed."
                   error={userErr}
                 />
               ) : null}
@@ -428,7 +449,7 @@ export default function AccountScreen({ navigation }) {
                 keyboardType="number-pad"
                 maxLength={11}
                 placeholder="0912xxxxxxx"
-                hint="Example: 0912xxxxxxx — 11 digits, starts with 09."
+                hint="Example: 0912xxxxxxx - 11 digits, starts with 09."
                 error={mobileErr}
               />
 
@@ -475,9 +496,67 @@ export default function AccountScreen({ navigation }) {
       );
     }
 
-    if (view === "pwOtp") {
+    if (view === "pwEmail") {
       const back = () => {
         setView("summary");
+        setSendOtpError("");
+        setConfirmEmailErr("");
+      };
+      return (
+        <>
+          <BackLink onPress={back} />
+          <View style={styles.formCard}>
+            <Text style={styles.formTitle}>Confirm your email</Text>
+            <Text style={styles.formSubtitle}>
+              Enter the email you use to sign in. We will send a 6-digit code there.
+            </Text>
+            <View style={styles.formFields}>
+              <Field
+                label="Email address"
+                value={confirmEmail}
+                onChangeText={(text) => {
+                  setConfirmEmail(text);
+                  if (confirmEmailErr) setConfirmEmailErr(emailError(text));
+                  setSendOtpError("");
+                }}
+                placeholder="you@example.com"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                error={confirmEmailErr}
+              />
+            </View>
+
+            {sendOtpError ? <Text style={styles.errorText}>{sendOtpError}</Text> : null}
+
+            <Pressable
+              onPress={handleConfirmChangePasswordEmail}
+              disabled={sendingOtp || !confirmEmail.trim()}
+              style={({ pressed }) => [
+                styles.setPwBtn,
+                pressed && styles.saveBtnPressed,
+                (sendingOtp || !confirmEmail.trim()) && styles.btnDisabled,
+              ]}
+            >
+              <Text style={styles.saveText}>{sendingOtp ? "Sending code…" : "Send verification code"}</Text>
+            </Pressable>
+          </View>
+
+          <ConfirmDialog
+            open={emailMismatchOpen}
+            title="Wrong email"
+            message="Please use the same email you use to sign in to this account."
+            confirmLabel="OK"
+            cancelLabel={null}
+            onConfirm={() => setEmailMismatchOpen(false)}
+            onCancel={() => setEmailMismatchOpen(false)}
+          />
+        </>
+      );
+    }
+
+    if (view === "pwOtp") {
+      const back = () => {
+        setView("pwEmail");
         setSendOtpError("");
       };
       return (
@@ -496,7 +575,7 @@ export default function AccountScreen({ navigation }) {
               devCode={otpMeta?.dev_code || ""}
               onVerified={handleOtpVerified}
               onBack={back}
-              backLabel="Cancel"
+              backLabel="Use a different email"
             />
           </View>
         </>
@@ -632,28 +711,18 @@ export default function AccountScreen({ navigation }) {
 
             <Pressable
               onPress={handleStartChangePassword}
-              disabled={sendingOtp}
-              style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed, sendingOtp && styles.pwBtnBusy]}
+              style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed]}
             >
-              {sendingOtp ? (
-                <>
-                  <ActivityIndicator size="small" color={colors.white} />
-                  <Text style={styles.pwBtnText}>Sending code…</Text>
-                </>
-              ) : (
-                <>
-                  <PadlockIcon size={16} />
-                  <Text style={styles.pwBtnText}>
-                    {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
-                  </Text>
-                </>
-              )}
+              <PadlockIcon size={16} />
+              <Text style={styles.pwBtnText}>
+                {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
+              </Text>
             </Pressable>
           </View>
 
           {isGoogleAccount ? (
             <Text style={styles.googleNote}>
-              You sign in with Google. Setting a password is optional and only needed if you also want email login — no
+              You sign in with Google. Setting a password is optional and only needed if you also want email login - no
               username is required.
             </Text>
           ) : null}
@@ -664,8 +733,6 @@ export default function AccountScreen({ navigation }) {
           >
             <Text style={styles.manageText}>Manage subscription</Text>
           </Pressable>
-
-          {sendOtpError ? <Text style={styles.errorText}>{sendOtpError}</Text> : null}
         </View>
       </View>
     );

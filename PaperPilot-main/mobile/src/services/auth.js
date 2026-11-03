@@ -35,7 +35,7 @@ export async function clearPasswordChangedNotice() {
   }
 }
 
-/** Only these mean the session is truly dead — never sign out on network blips. */
+/** Only these mean the session is truly dead - never sign out on network blips. */
 const FATAL_AUTH_CODES = new Set([
   "auth/user-token-expired",
   "auth/invalid-user-token",

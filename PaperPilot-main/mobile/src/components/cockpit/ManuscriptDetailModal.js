@@ -61,7 +61,7 @@ function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, i
         </Svg>
         <View style={styles.ringLabel}>
           <Text style={[styles.ringPct, { color: evaluated ? stroke : "#94a3b8" }]}>
-            {evaluated ? formatPct(safe, 1) : "—"}
+            {evaluated ? formatPct(safe, 1) : "-"}
           </Text>
         </View>
       </View>
@@ -79,7 +79,7 @@ const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 const MONO = Platform.select({ ios: "Menlo", default: "monospace" });
 
 function formatDate(iso) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     return new Date(iso + (iso.length <= 10 ? "T12:00:00" : "")).toLocaleDateString(undefined, {
       year: "numeric",
@@ -278,7 +278,7 @@ export default function ManuscriptDetailModal({
   const selected = selectedFromLibrary;
   const band = scoreBand(selected?.score);
   const tone = bandTone(band);
-  const versionLabel = selected ? `v${selected.versionNumber}.0` : "—";
+  const versionLabel = selected ? `v${selected.versionNumber}.0` : "-";
 
   async function openFullResult(ver) {
     if (!ver || !onOpenResult || openingResult) return;
@@ -298,7 +298,7 @@ export default function ManuscriptDetailModal({
       );
       return;
     }
-    // Short summary only — full Scan Results open via "View full results".
+    // Short summary only - full Scan Results open via "View full results".
     setSelectedId(ver.id);
   }
 
@@ -333,7 +333,10 @@ export default function ManuscriptDetailModal({
               {manuscript.title}
             </Text>
             <Text style={styles.subtitle}>
-              {manuscript.institution || "—"} · {manuscript.citationStyle}
+              {[manuscript.institution, manuscript.citationStyle]
+                .map((part) => String(part || "").trim())
+                .filter((part) => part && part !== "-" && part !== "—")
+                .join(" · ")}
             </Text>
             <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
               <Text style={[styles.pillText, { color: tone.pillText }]}>
@@ -502,7 +505,7 @@ export default function ManuscriptDetailModal({
                 Detected issues <Text style={styles.issuesCount}>({issues.length})</Text>
               </Text>
               <Text style={styles.issuesHint}>
-                Each card is one rule finding — expand locations to see every page/line hit.
+                Each card is one rule finding - expand locations to see every page/line hit.
               </Text>
 
               {hydrateError ? (

@@ -168,7 +168,7 @@ function TextTrace({ preview, pageCount, formatChecks, highlight, emptyLabel }) 
 
 /**
  * Original PDF/DOCX rendered in a WebView (pdf.js / docx-preview) with the
- * selected issue painted and scrolled into view — the web's paged preview.
+ * selected issue painted and scrolled into view - the web's paged preview.
  */
 export default function TraceDocumentViewer({
   file,

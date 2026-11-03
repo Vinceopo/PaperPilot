@@ -45,7 +45,7 @@ export function normalizeTitle(title) {
     .trim()
     .toLowerCase()
     .replace(/\.(pdf|docx)$/i, "")
-    .replace(/[\s_–—−-]+/g, " ")
+    .replace(/[\s_\-\u2013\u2014\u2212]+/g, " ")
     .replace(/\s+/g, " ");
 }
 
@@ -110,26 +110,29 @@ export function dedupeManuscriptsByTitle(items) {
     if (m.createdThisMonth) existing.createdThisMonth = true;
   }
 
-  return [...map.values()].map((m) => {
-    const chronological = uniqueByScanId(m.versions || []).sort((a, b) => {
-      const da = versionTime(a);
-      const db = versionTime(b);
-      if (da !== db) return da.localeCompare(db);
-      return (Number(a.versionNumber) || 0) - (Number(b.versionNumber) || 0);
-    });
-    // Server numbers are kept as-is (gaps after a delete are expected); only
-    // legacy versions without one get the next number in order.
-    let last = 0;
-    const versions = chronological
-      .map((v) => {
-        const own = Number(v.versionNumber);
-        const versionNumber = own > 0 ? own : last + 1;
-        last = Math.max(last, versionNumber);
-        return { ...v, manuscriptId: m.id, versionNumber };
-      })
-      .reverse();
-    return { ...m, versions };
-  });
+  return [...map.values()]
+    .map((m) => {
+      const chronological = uniqueByScanId(m.versions || []).sort((a, b) => {
+        const da = versionTime(a);
+        const db = versionTime(b);
+        if (da !== db) return da.localeCompare(db);
+        return (Number(a.versionNumber) || 0) - (Number(b.versionNumber) || 0);
+      });
+      // Server numbers are kept as-is (gaps after a delete are expected); only
+      // legacy versions without one get the next number in order.
+      let last = 0;
+      const versions = chronological
+        .map((v) => {
+          const own = Number(v.versionNumber);
+          const versionNumber = own > 0 ? own : last + 1;
+          last = Math.max(last, versionNumber);
+          return { ...v, manuscriptId: m.id, versionNumber };
+        })
+        .reverse();
+      return { ...m, versions };
+    })
+    // Newest last scan first so My Manuscripts / Upload targets surface it immediately.
+    .sort((a, b) => versionTime((b.versions || [])[0]).localeCompare(versionTime((a.versions || [])[0])));
 }
 
 function versionPartsFromResult(scanResult) {
@@ -222,7 +225,7 @@ export function mergeServerScans(items, summaries, dismissed = new Set(), delete
         id: manuscriptId || `doc-${scanId}`,
         serverManuscriptId: manuscriptId || undefined,
         title,
-        institution: "—",
+        institution: "-",
         citationStyle: "APA",
         createdThisMonth: String(scan.created_at || "").startsWith(monthPrefix),
         versions: [],
@@ -330,7 +333,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
       ...existing,
       id: documentId,
       title: title || existing.title,
-      institution: scanResult.campus || existing.institution || "—",
+      institution: scanResult.campus || existing.institution || "-",
       citationStyle: scanResult.citationStyle || existing.citationStyle || "APA",
       versions: [version, ...(existing.versions || [])],
     };
@@ -338,7 +341,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
     list.unshift({
       id: documentId,
       title,
-      institution: scanResult.campus || scanResult.college || "—",
+      institution: scanResult.campus || scanResult.college || "-",
       citationStyle: scanResult.citationStyle || "APA",
       createdThisMonth: true,
       versions: [version],
@@ -379,7 +382,7 @@ export function versionToScanResult(manuscript, version) {
   return {
     documentId: manuscript?.id || version.manuscriptId,
     documentTitle: manuscript?.title || "Untitled",
-    campus: manuscript?.institution || "—",
+    campus: manuscript?.institution || "-",
     citationStyle: manuscript?.citationStyle || "APA",
     scannedAt: version.scannedAt || version.scannedDate,
     overallScore: version.score,
