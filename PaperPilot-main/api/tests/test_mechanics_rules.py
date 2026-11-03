@@ -303,7 +303,9 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         result = run_compliance_scan(self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER), rules)
         self.assertNotIn("alignment", _issue_types(result))
         alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
-        self.assertEqual(alignment["status"], "not_applicable")
+        self.assertEqual(alignment["status"], "pass")
+        self.assertGreater(alignment["units_checked"], 0)
+        self.assertEqual(alignment["units_failed"], 0)
 
     def test_justified_synonym_still_checks_alignment(self):
         """Legacy / form labels like 'Justified' must appear on Score Breakdown."""
@@ -316,17 +318,20 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         self.assertGreater(alignment["units_checked"], 0)
         self.assertIn("alignment", _issue_types(result))
 
-    def test_ignore_alignment_still_skips(self):
+    def test_ignore_alignment_passes_with_units(self):
+        """IGNORE counts eligible alignment units as all passed (no issues)."""
         result = run_compliance_scan(
             self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER),
             {"alignment": "IGNORE"},
         )
         alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
-        self.assertEqual(alignment["status"], "not_applicable")
+        self.assertEqual(alignment["status"], "pass")
+        self.assertGreater(alignment["units_checked"], 0)
+        self.assertEqual(alignment["units_failed"], 0)
         self.assertNotIn("alignment", _issue_types(result))
 
     def test_blank_mechanics_fields_are_not_enforced(self):
-        """Any blank / NA mechanics field must not invent a rule or issue."""
+        """Blank / NA fields must not invent mismatch issues; units may still pass."""
         rules = normalize_mechanics_rules(
             {
                 "font": {
@@ -351,6 +356,19 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         paper = rules.get("paper") or {}
         self.assertNotIn("orientation", paper)
         result = run_compliance_scan(self._body_doc(size=14, align=WD_ALIGN_PARAGRAPH.CENTER), rules)
+        self.assertEqual(result["issues"], [])
+        by_cat = {item["category"]: item for item in result["scoring"]["categories"]}
+        self.assertEqual(by_cat["Alignment"]["status"], "pass")
+        self.assertGreater(by_cat["Alignment"]["units_checked"], 0)
+
+    def test_empty_mechanics_pass_alignment_and_spacing_units(self):
+        """Unset categories still show checked units that all pass on Score Breakdown."""
+        result = run_compliance_scan(self._body_doc(align=WD_ALIGN_PARAGRAPH.LEFT), {})
+        by_cat = {item["category"]: item for item in result["scoring"]["categories"]}
+        for name in ("Alignment", "Spacing"):
+            self.assertEqual(by_cat[name]["units_failed"], 0, name)
+            self.assertGreater(by_cat[name]["units_checked"], 0, name)
+            self.assertEqual(by_cat[name]["status"], "pass", name)
         self.assertEqual(result["issues"], [])
 
     def test_rule_is_set_preserves_zero_false_and_black(self):

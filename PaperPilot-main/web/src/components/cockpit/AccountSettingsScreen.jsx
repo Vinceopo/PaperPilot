@@ -9,7 +9,8 @@
  * ─────
  *  "summary"  - default two-panel read-only page
  *  "edit"     - edit First / Middle / Last / Contact, pre-filled, Save/Cancel
- *  "pwOtp"    - OTP entry (code was sent on button click)
+ *  "pwEmail"  - confirm account email before sending a password-reset code
+ *  "pwOtp"    - OTP entry (after email confirmed and code sent)
  *  "pwNew"    - new-password + confirm-password, shown only after OTP verified
  */
 
@@ -17,8 +18,10 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { sendOtp, resetPasswordWithOtp, getProfile, updateUserProfile, otpBypassToken } from "../../api.js";
 import { markPasswordChanged } from "../../services/auth.js";
 import BackToDashboardButton from "../BackToDashboardButton.jsx";
+import ConfirmDialog from "../ConfirmDialog.jsx";
 import OtpStep from "../auth/OtpStep.jsx";
-import { nameError, phoneError, usernameError } from "../auth/validation.js";
+import { emailError, nameError, phoneError, usernameError } from "../auth/validation.js";
+import { emailsMatch } from "../../lib/maskEmail.js";
 import { isPaidTier, planName } from "../../lib/plans.js";
 import {
   loadNotifications,
@@ -197,7 +200,7 @@ function BackLink({ onClick, label = "Back to account" }) {
 // ─── main component ───────────────────────────────────────────────────────────
 
 export default function AccountSettingsScreen({ user, tier = "free", onSignOut, onManageSubscription }) {
-  const [view, setView] = useState("summary"); // summary | edit | pwOtp | pwNew
+  const [view, setView] = useState("summary"); // summary | edit | pwEmail | pwOtp | pwNew
 
   // Profile state (loaded from RTDB)
   const [loading, setLoading] = useState(true);
@@ -217,6 +220,11 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Change-password: confirm login email first
+  const [confirmEmail, setConfirmEmail] = useState("");
+  const [confirmEmailErr, setConfirmEmailErr] = useState("");
+  const [emailMismatchOpen, setEmailMismatchOpen] = useState(false);
 
   // Change-password OTP
   const [otpMeta, setOtpMeta] = useState(null);   // { expires_in, resend_in, dev_code }
@@ -343,11 +351,27 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
   }
 
   // ── change-password handlers ─────────────────────────────────────────────
-  async function handleStartChangePassword() {
-    setSendingOtp(true);
+  function handleStartChangePassword() {
+    setConfirmEmail("");
+    setConfirmEmailErr("");
     setSendOtpError("");
+    setEmailMismatchOpen(false);
+    setView("pwEmail");
+  }
+
+  async function handleConfirmChangePasswordEmail(e) {
+    e.preventDefault();
+    setSendOtpError("");
+    const formatErr = emailError(confirmEmail);
+    setConfirmEmailErr(formatErr);
+    if (formatErr) return;
+    if (!emailsMatch(confirmEmail, email)) {
+      setEmailMismatchOpen(true);
+      return;
+    }
+    setSendingOtp(true);
     try {
-      const res = await sendOtp({ email, purpose: "reset_password" });
+      const res = await sendOtp({ email: email.trim(), purpose: "reset_password" });
       const bypass = otpBypassToken(res, "reset_password");
       if (bypass) {
         setResetToken(bypass);
@@ -500,11 +524,73 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
     );
   }
 
+  // ══ VIEW: CONFIRM EMAIL (change password) ═════════════════════════════════
+  if (view === "pwEmail") {
+    return (
+      <div className="mx-auto max-w-sm">
+        <BackLink
+          onClick={() => {
+            setView("summary");
+            setSendOtpError("");
+            setConfirmEmailErr("");
+          }}
+        />
+        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-800">Confirm your email</h2>
+          <p className="mt-0.5 text-xs text-slate-400">
+            Enter the email you use to sign in. We will send a 6-digit code there.
+          </p>
+
+          <form onSubmit={handleConfirmChangePasswordEmail} className="mt-6 space-y-4" noValidate>
+            <Field
+              label="Email address"
+              id="pw-confirm-email"
+              type="email"
+              value={confirmEmail}
+              onChange={(e) => {
+                setConfirmEmail(e.target.value);
+                if (confirmEmailErr) setConfirmEmailErr(emailError(e.target.value));
+                setSendOtpError("");
+              }}
+              placeholder="you@example.com"
+              error={confirmEmailErr}
+            />
+
+            {sendOtpError && <p className="text-xs text-rose-500" role="alert">{sendOtpError}</p>}
+
+            <button
+              type="submit"
+              disabled={sendingOtp || !confirmEmail.trim()}
+              className="mt-2 w-full rounded-xl bg-[#16bfa8] py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {sendingOtp ? "Sending code…" : "Send verification code"}
+            </button>
+          </form>
+        </div>
+
+        <ConfirmDialog
+          open={emailMismatchOpen}
+          title="Wrong email"
+          message="Please use the same email you use to sign in to this account."
+          confirmLabel="OK"
+          cancelLabel={null}
+          onConfirm={() => setEmailMismatchOpen(false)}
+          onCancel={() => setEmailMismatchOpen(false)}
+        />
+      </div>
+    );
+  }
+
   // ══ VIEW: OTP STEP (change password) ══════════════════════════════════════
   if (view === "pwOtp") {
     return (
       <div className="mx-auto max-w-sm">
-        <BackLink onClick={() => { setView("summary"); setSendOtpError(""); }} />
+        <BackLink
+          onClick={() => {
+            setView("pwEmail");
+            setSendOtpError("");
+          }}
+        />
         <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
           <h2 className="text-lg font-bold text-slate-800">Verify your identity</h2>
           <p className="mt-0.5 text-xs text-slate-400">Enter the 6-digit code we sent to your email before setting a new password.</p>
@@ -512,13 +598,16 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
             email={email}
             purpose="reset_password"
             title="Check your email"
-            subtitle={`Enter the 6-digit code sent to ${email}`}
+            subtitle="Enter the 6-digit code we sent to your email"
             expiresIn={otpMeta?.expires_in || 300}
             resendIn={otpMeta?.resend_in || 30}
             devCode={otpMeta?.dev_code || ""}
             onVerified={handleOtpVerified}
-            onBack={() => { setView("summary"); setSendOtpError(""); }}
-            backLabel="Cancel"
+            onBack={() => {
+              setView("pwEmail");
+              setSendOtpError("");
+            }}
+            backLabel="Use a different email"
           />
         </div>
       </div>
@@ -676,22 +765,12 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
           <button
             type="button"
             onClick={handleStartChangePassword}
-            disabled={sendingOtp}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#16bfa8] px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#16bfa8] px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#12ae99]"
           >
-            {sendingOtp ? (
-              <>
-                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                Sending code…
-              </>
-            ) : (
-              <>
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
-                </svg>
-                {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
-              </>
-            )}
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+            </svg>
+            {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
           </button>
         </div>
 
@@ -709,10 +788,6 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
           >
             Manage subscription
           </button>
-        )}
-
-        {sendOtpError && (
-          <p className="mt-3 text-xs text-rose-500" role="alert">{sendOtpError}</p>
         )}
 
       </div>

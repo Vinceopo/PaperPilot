@@ -92,12 +92,11 @@ function CategoryScoreCard({
   displayIssueCount,
   displayScore,
 }) {
-  // Ring % and subtitle use the same issue count: (total − issues) / total.
-  const issueCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
-  const fromShown = compliancePercentFromUnits(displayTotal, issueCount);
+  // Ring % follows failed units; issue findings are subtitle-only (may exceed units).
+  const fromUnits = compliancePercentFromUnits(displayTotal, displayNonCompliant);
   const pct =
-    fromShown != null
-      ? fromShown
+    fromUnits != null
+      ? fromUnits
       : hasValue(displayScore)
         ? Number(displayScore)
         : hasValue(score)
@@ -110,7 +109,8 @@ function CategoryScoreCard({
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
-  const detail = formatCategoryIssuesDetail(issueCount, displayTotal)
+  const findingCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
+  const detail = formatCategoryIssuesDetail(findingCount, displayTotal)
     || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
     || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
@@ -180,7 +180,7 @@ export default function ScanResultsScreen({
   } = result;
 
   const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
-  // Same expansion as Issue Tracing - cards, rings, and header all use these counts.
+  // Tracing expands locations into findings for the subtitle only — never override unit %.
   const tracedEntries = normalizeDetectedIssues(formatChecks, result.pageCount || 0).entries;
   const tracedByCategory = {};
   tracedEntries.forEach((entry) => {
@@ -195,21 +195,9 @@ export default function ScanResultsScreen({
       : hasValue(row.displayIssueCount)
         ? row.displayIssueCount
         : row.displayNonCompliant;
-    const total = row.displayTotal;
-    // Failed count for % must match the issues shown: (total − issues) / total.
-    const displayNonCompliant = hasValue(total) && hasValue(displayIssueCount)
-      ? Math.min(Math.max(0, Number(total)), Math.max(0, Number(displayIssueCount)))
-      : row.displayNonCompliant;
-    const displayCompliant = hasValue(total) && hasValue(displayNonCompliant)
-      ? Math.max(0, Number(total) - Number(displayNonCompliant))
-      : row.displayCompliant;
-    const displayScore = compliancePercentFromUnits(total, displayNonCompliant);
     return {
       ...row,
       displayIssueCount,
-      displayNonCompliant,
-      displayCompliant,
-      displayScore: displayScore != null ? displayScore : row.displayScore,
     };
   });
 

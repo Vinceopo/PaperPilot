@@ -65,7 +65,7 @@ function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, i
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
           <span
-            className={`text-[12px] font-extrabold tabular-nums leading-none ${evaluated ? "" : "text-slate-400"}`}
+            className={`text-sm font-extrabold tabular-nums leading-none ${evaluated ? "" : "text-slate-400"}`}
             style={evaluated ? { color: stroke } : undefined}
           >
             {evaluated ? formatPct(safe, 1) : "-"}
@@ -74,7 +74,7 @@ function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, i
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-bold text-slate-800">{section}</p>
-        {detail ? <p className="mt-0.5 text-[11px] leading-snug text-slate-500">{detail}</p> : null}
+        {detail ? <p className="mt-0.5 text-xs leading-snug text-slate-500">{detail}</p> : null}
       </div>
     </div>
   );
@@ -260,15 +260,18 @@ export default function ManuscriptDetailModal({
   );
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,41,0.05)]">
-      <div className="border-b border-slate-100 px-6 py-5 sm:px-8">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Manuscript detail</p>
+    <div className="flex h-[calc(100dvh-7.5rem)] max-h-[calc(100dvh-7.5rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,41,0.05)]">
+      <div className="shrink-0 border-b border-slate-100 px-6 py-5 sm:px-8">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Manuscript detail</p>
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-          <h2 id="ms-detail-title" className="max-w-full truncate text-xl font-bold text-[#0F1729] sm:text-2xl">
+          <h2 id="ms-detail-title" className="max-w-full truncate text-xl font-bold text-[#0F1729]">
             {manuscript.title}
           </h2>
           <p className="shrink-0 text-sm text-slate-500">
-            {manuscript.institution || "-"} · {manuscript.citationStyle}
+            {[manuscript.institution, manuscript.citationStyle]
+              .map((part) => String(part || "").trim())
+              .filter((part) => part && part !== "-" && part !== "—")
+              .join(" · ") || "—"}
           </p>
           <span className={`rounded-full border px-3 py-1 text-xs font-bold ${band.pillClass}`}>
             {formatScore(selected?.score, 0)} · {band.label}
@@ -279,12 +282,13 @@ export default function ManuscriptDetailModal({
         </div>
       </div>
 
-      <div className="grid min-h-0 gap-0 lg:h-[min(72vh,42rem)] lg:grid-cols-[240px_1fr]">
-        <aside className="flex min-h-0 flex-col border-b border-slate-100 bg-[#F8FAFC] lg:border-b-0 lg:border-r">
-          <p className="flex shrink-0 items-center gap-1.5 px-4 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-            <Clock className="h-3.5 w-3.5" /> Versions
+      {/* Independent panes: Versions stays put while Short result scrolls (and vice versa). */}
+      <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[240px_1fr]">
+        <aside className="flex max-h-64 min-h-0 flex-col border-b border-slate-100 bg-[#F8FAFC] lg:max-h-none lg:border-b-0 lg:border-r">
+          <p className="flex shrink-0 items-center gap-1.5 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <Clock className="h-4 w-4" /> Versions
           </p>
-          <ul className="pp-scroll max-h-56 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-3 pb-3 lg:max-h-none">
+          <ul className="pp-scroll min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-3 pb-3">
             {versionsDesc.map((ver) => {
               const vb = scoreBand(ver.score);
               const active = ver.id === selected?.id;
@@ -304,15 +308,15 @@ export default function ManuscriptDetailModal({
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <p className={`text-xs font-medium ${active ? "text-slate-300" : "text-slate-400"}`}>
+                      <p className={`text-sm font-medium ${active ? "text-slate-300" : "text-slate-500"}`}>
                         v{ver.versionNumber}.0
                       </p>
                       {locked ? <Lock className="h-3.5 w-3.5 shrink-0 text-slate-400" /> : null}
                     </div>
-                    <p className={`mt-0.5 text-[11px] ${active ? "text-slate-300" : "text-slate-400"}`}>
+                    <p className={`mt-0.5 text-xs ${active ? "text-slate-300" : "text-slate-400"}`}>
                       {formatDateTime(ver.scannedAt || ver.scannedDate)}
                     </p>
-                    <p className={`mt-1 text-[10px] font-semibold ${active ? "text-[#16bfa8]" : locked ? "text-slate-400" : vb.textClass}`}>
+                    <p className={`mt-1 text-xs font-semibold ${active ? "text-[#16bfa8]" : locked ? "text-slate-400" : vb.textClass}`}>
                       {locked ? "Premium only" : `Score ${formatScore(ver.score, 0)}`}
                     </p>
                   </button>
@@ -320,11 +324,11 @@ export default function ManuscriptDetailModal({
                     <button
                       type="button"
                       onClick={() => setPendingDeleteId(ver.id)}
-                      className="grid w-7 shrink-0 place-items-center self-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      className="grid w-8 shrink-0 place-items-center self-center rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                       aria-label={`Delete version ${ver.versionNumber}`}
                       title="Delete version"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Trash2 className="h-4 w-4" />
                     </button>
                   ) : null}
                 </li>
@@ -332,27 +336,27 @@ export default function ManuscriptDetailModal({
             })}
           </ul>
           {!isPremium && versionsDesc.length > 1 ? (
-            <p className="shrink-0 border-t border-slate-200/80 px-4 py-2 text-[10px] leading-relaxed text-slate-500">
+            <p className="shrink-0 border-t border-slate-200/80 px-4 py-2.5 text-xs leading-relaxed text-slate-500">
               Free plan: only the latest version is viewable. Upgrade for full history.
             </p>
           ) : null}
         </aside>
 
-        <div className="pp-scroll min-h-0 max-h-[min(70vh,36rem)] overflow-y-auto overscroll-contain px-6 py-6 sm:px-8 lg:max-h-none">
+        <div className="pp-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-6 sm:px-8">
           {!selected ? (
             <p className="text-sm text-slate-400">No versions available.</p>
           ) : (
             <>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Short result</p>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Short result</p>
                   <p className="mt-1 text-sm font-bold text-slate-900">
                     {versionLabel} · {formatDateTime(selected.scannedAt || selected.scannedDate)}
                   </p>
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   {downloadError ? (
-                    <p className="text-xs text-rose-500" role="alert">
+                    <p className="text-sm text-rose-500" role="alert">
                       {downloadError}
                     </p>
                   ) : null}
@@ -362,7 +366,7 @@ export default function ManuscriptDetailModal({
                         type="button"
                         onClick={() => void openFullResult(selected)}
                         disabled={openingResult}
-                        className="inline-flex items-center gap-2 rounded-xl bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex items-center gap-2 rounded-xl bg-[#16bfa8] px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {openingResult ? "Opening…" : "View full results"}
                       </button>
@@ -371,9 +375,9 @@ export default function ManuscriptDetailModal({
                       type="button"
                       onClick={onDownload}
                       disabled={downloadBusy}
-                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <Download className="h-3.5 w-3.5" />
+                      <Download className="h-4 w-4" />
                       {downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
                     </button>
                   </div>
@@ -381,7 +385,7 @@ export default function ManuscriptDetailModal({
               </div>
 
               <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,41,0.04)]">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
                   Overall compliance score
                 </p>
                 <div className="mt-2 flex flex-wrap items-end gap-3">
@@ -391,7 +395,7 @@ export default function ManuscriptDetailModal({
                     </span>
                     <span className={`pb-1 text-2xl font-extrabold tabular-nums ${band.textClass}`}>%</span>
                   </div>
-                  <span className={`mb-1 inline-flex rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-wider ${band.pillClass}`}>
+                  <span className={`mb-1 inline-flex rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${band.pillClass}`}>
                     {band.label}
                   </span>
                 </div>
@@ -400,14 +404,14 @@ export default function ManuscriptDetailModal({
               <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,41,0.04)]">
                 <h3 className="text-lg font-bold text-slate-900">Score Breakdown</h3>
                 {hydrating && !(selected.breakdown || []).length ? (
-                  <div className="mt-4 flex items-center gap-2 text-xs text-slate-500">
+                  <div className="mt-4 flex items-center gap-2 text-sm text-slate-500">
                     <Spinner className="h-4 w-4 text-[#16bfa8]" />
                     Loading score breakdown…
                   </div>
                 ) : null}
                 {(selected.breakdown || []).length > 0 &&
                 (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
-                  <p className="mt-1 text-[11px] text-slate-500">
+                  <p className="mt-1 text-sm text-slate-500">
                     Unit counts were not stored with this scan. Re-analyse the manuscript to generate the full scoring breakdown.
                   </p>
                 ) : null}
@@ -436,7 +440,7 @@ export default function ManuscriptDetailModal({
                       Detected issues{" "}
                       <span className="font-normal text-slate-400">({issues.length})</span>
                     </h3>
-                    <p className="mt-0.5 text-[11px] text-slate-500">
+                    <p className="mt-0.5 text-sm text-slate-500">
                       Each card is one rule finding - expand locations to see every page/line hit.
                     </p>
                   </div>
@@ -470,24 +474,24 @@ export default function ManuscriptDetailModal({
                           <div className="flex flex-wrap items-start justify-between gap-2">
                             <div className="min-w-0">
                               <p className="text-sm font-bold leading-snug">{issue.category}</p>
-                              <p className="mt-1 text-xs leading-relaxed opacity-90">
+                              <p className="mt-1 text-sm leading-relaxed opacity-90">
                                 {issue.explanation || issue.description}
                               </p>
                             </div>
-                            <span className="shrink-0 rounded-full border border-current/20 bg-white/60 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
+                            <span className="shrink-0 rounded-full border border-current/20 bg-white/60 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide">
                               {issue.severity}
                             </span>
                           </div>
 
                           {issue.recommendation ? (
-                            <p className="mt-2 rounded-lg border border-emerald-200/60 bg-white/70 px-3 py-2 text-[11px] font-medium text-emerald-800">
+                            <p className="mt-2 rounded-lg border border-emerald-200/60 bg-white/70 px-3 py-2 text-sm font-medium text-emerald-800">
                               Fix: {issue.recommendation}
                             </p>
                           ) : null}
 
                           {locs.length > 0 ? (
                             <details className="mt-3 group">
-                              <summary className="cursor-pointer list-none text-[11px] font-bold uppercase tracking-wide opacity-80">
+                              <summary className="cursor-pointer list-none text-xs font-bold uppercase tracking-wide opacity-80">
                                 <span className="underline-offset-2 group-open:underline">
                                   {locs.length} location{locs.length === 1 ? "" : "s"}
                                   {pages.length
@@ -499,14 +503,14 @@ export default function ManuscriptDetailModal({
                                 {locs.slice(0, 40).map((loc, locIdx) => (
                                   <span
                                     key={`${idx}-${locIdx}`}
-                                    className="rounded-md border border-current/15 bg-white/80 px-2 py-1 font-mono text-[10px] font-semibold"
+                                    className="rounded-md border border-current/15 bg-white/80 px-2 py-1 font-mono text-xs font-semibold"
                                   >
                                     {formatLocationChip(loc)}
                                     {loc.section ? ` · ${loc.section}` : ""}
                                   </span>
                                 ))}
                                 {locs.length > 40 ? (
-                                  <span className="rounded-md bg-white/60 px-2 py-1 text-[10px] font-semibold">
+                                  <span className="rounded-md bg-white/60 px-2 py-1 text-xs font-semibold">
                                     +{locs.length - 40} more
                                   </span>
                                 ) : null}

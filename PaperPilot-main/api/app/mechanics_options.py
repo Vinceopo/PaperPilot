@@ -85,7 +85,11 @@ def _rule_unset(value) -> bool:
 
 
 def rule_unset(value) -> bool:
-    """Public alias: blank / IGNORE / NA mechanics fields must not be scored."""
+    """Public alias: blank / IGNORE / NA means no concrete rule to enforce.
+
+    Compliance still counts eligible units as passed for those fields (Score Breakdown
+    shows 100%, not Not applicable). Real values are compared and can fail.
+    """
     return _rule_unset(value)
 
 

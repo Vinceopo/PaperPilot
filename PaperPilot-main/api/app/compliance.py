@@ -215,12 +215,20 @@ class CategoryStats:
         self.checked = 0
         self.failed = 0
         # False until a check finds a rule for this category in the mechanics file.
+        # Blank/IGNORE rules still set applicable and pass eligible units (see _pass_all).
         self.applicable = False
 
     def observe(self, ok: bool) -> None:
         self.checked += 1
         if not ok:
             self.failed += 1
+
+
+def _pass_all(stats: CategoryStats, count: int) -> None:
+    """Blank / IGNORE / missing mechanics: count eligible units as all passed (no issues)."""
+    stats.applicable = True
+    for _ in range(max(0, int(count))):
+        stats.observe(True)
 
 
 def _location(page: int | None, line: int | None, category: str) -> dict:
@@ -1293,6 +1301,18 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         re.search(r"black|automatic", color_rule, re.I)
     )
     if not allowed_fonts and not listed_sizes and not role_sizes and not want_black:
+        # Blank / IGNORE font rules: still count prose font units as passed.
+        n = 0
+        for unit in units:
+            role = unit.get("role") or "body"
+            text = (unit.get("text") or "").strip()
+            if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure"}:
+                continue
+            shown_font, sample_size = _dominant_font_sample(unit)
+            if not shown_font and sample_size is None and not _line_font_samples(unit):
+                continue
+            n += 1
+        _pass_all(stats, n)
         return
     stats.applicable = True
     required_families = ", ".join(font_rule.get("families") or [])
@@ -1610,6 +1630,10 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
         # A binding gutter is added to the inside (left) margin.
         expected_margins["left"] = round(expected_margins["left"] + gutter, 3)
     if not expected and not expected_margins:
+        # Blank / IGNORE margins: one passed unit per page side (top/bottom/left/right).
+        is_pdf = (parsed.get("metadata") or {}).get("format") == "pdf"
+        sources = _page_sources(parsed) if is_pdf else _docx_page_sources(parsed, units)
+        _pass_all(stats, len(sources) * 4)
         return
     stats.applicable = True
 
@@ -1817,6 +1841,11 @@ def _prose_paragraphs(units: list[dict]) -> list[list[dict]]:
 def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     expected = rules.get("line_spacing")
     if expected is None or rule_unset(expected):
+        # Blank / IGNORE spacing: count intra-paragraph line pairs as passed.
+        n = 0
+        for paragraph in _prose_paragraphs(units):
+            n += max(0, len(paragraph) - 1)
+        _pass_all(stats, n)
         return
     stats.applicable = True
     expected = float(expected)
@@ -1880,8 +1909,10 @@ def _measured_indent(unit: dict, body_left: float) -> float | None:
 
 def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     expected = rules.get("first_line_indent_inches")
-    # 0 is a valid indent rule; only None / IGNORE / blank skip the check.
+    # 0 is a valid indent rule; blank / IGNORE pass multi-line paragraph starts.
     if expected is None or rule_unset(expected):
+        n = sum(1 for paragraph in _prose_paragraphs(units) if len(paragraph) >= 2)
+        _pass_all(stats, n)
         return
     stats.applicable = True
     expected = float(expected)
@@ -1911,11 +1942,31 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
 def _check_alignment(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     raw = rules.get("alignment")
     if rule_unset(raw):
-        # No alignment rule → do not flag any body alignment.
+        # Blank / IGNORE: count long body lines as passed (same eligibility as a real rule).
+        n = 0
+        for paragraph in _prose_paragraphs(units):
+            lines = paragraph[:-1] if len(paragraph) > 1 else paragraph
+            for unit in lines:
+                if not _is_body_line(unit):
+                    continue
+                if len((unit.get("text") or "").strip()) < 40:
+                    continue
+                n += 1
+        _pass_all(stats, n)
         return
     # Accept synonyms ("Justified", "flush left", …); exact tokens alone missed legacy rules.
     expected = parse_alignment(raw)
     if expected not in {"left", "right", "center", "justify"}:
+        n = 0
+        for paragraph in _prose_paragraphs(units):
+            lines = paragraph[:-1] if len(paragraph) > 1 else paragraph
+            for unit in lines:
+                if not _is_body_line(unit):
+                    continue
+                if len((unit.get("text") or "").strip()) < 40:
+                    continue
+                n += 1
+        _pass_all(stats, n)
         return
     allowed = {expected}
     stats.applicable = True
@@ -2122,6 +2173,12 @@ def _check_pagination(
     prelim_style = canonical_preliminary_style(pagination.get("preliminary_style"))
     body_numbering = canonical_body_numbering(pagination.get("body_numbering"))
     if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering)):
+        # Blank / IGNORE pagination: one passed unit per page.
+        is_pdf = (parsed or {}).get("metadata", {}).get("format") == "pdf"
+        page_count = max((unit["page_index"] for unit in units), default=-1) + 1
+        if is_pdf:
+            page_count = max(page_count, len((parsed or {}).get("pages") or []))
+        _pass_all(stats, max(0, page_count))
         return
     stats.applicable = True
     markers = set(canonical_chapter_markers(pagination.get("chapter_markers"))) or set(DEFAULT_CHAPTER_MARKERS)
@@ -2573,12 +2630,25 @@ def _check_citations(
     stats: CategoryStats | None = None,
 ) -> None:
     style = str(rules.get("citation_style") or "").upper()
-    if not style:
+    if not style or rule_unset(rules.get("citation_style")):
+        # Blank / IGNORE citations: pass each line that has a citation marker; invent none.
+        n = 0
+        for unit in units:
+            if _citation_marker_families(unit.get("text") or ""):
+                n += 1
+        if stats is not None:
+            _pass_all(stats, n)
         return
     from app.citation_ml import classify_citation
 
     allowed = _expected_citation_families(style)
     if not allowed:
+        n = 0
+        for unit in units:
+            if _citation_marker_families(unit.get("text") or ""):
+                n += 1
+        if stats is not None:
+            _pass_all(stats, n)
         return
 
     numeric = len(IN_TEXT_NUMERIC_RE.findall(text or ""))
@@ -2828,6 +2898,30 @@ def _check_word_spacing(
 ) -> None:
     rule = canonical_word_spacing(rules.get("word_spacing"))
     if rule not in {WORD_SPACING_SINGLE, WORD_SPACING_TWO}:
+        # Blank / IGNORE word spacing: pass eligible body paragraphs.
+        paragraph_text = {
+            paragraph.get("paragraph_index"): str(paragraph.get("text") or "")
+            for paragraph in parsed.get("paragraphs") or []
+        }
+        seen: set = set()
+        n = 0
+        for unit in units:
+            if unit.get("role") not in {"body", "caption"} and not _is_heading_role(unit.get("role")):
+                continue
+            if (unit.get("source") or "body") != "body":
+                continue
+            key = unit.get("paragraph_index")
+            if key is not None:
+                if key in seen:
+                    continue
+                seen.add(key)
+                text = paragraph_text.get(key, unit.get("text") or "")
+            else:
+                text = unit.get("text") or ""
+            if len(text.strip()) < 2 or "\t" in text.strip() or re.search(r"\.{3,}|…", text):
+                continue
+            n += 1
+        _pass_all(stats, n)
         return
     stats.applicable = True
     paragraph_text = {

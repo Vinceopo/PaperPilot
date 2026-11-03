@@ -33,16 +33,16 @@ const FONT_FAMILY_OPTIONS = FONT_FAMILIES.map((value) => ({ value }));
 const FONT_COLOR_OPTIONS = ["Black/Automatic", "Black", "Automatic"].map((value) => ({ value }));
 
 const inputClass =
-  "mt-1.5 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
+  "mt-1.5 h-11 w-full rounded-lg border border-slate-200 bg-white px-3.5 text-sm text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
 const areaClass =
-  "mt-1.5 min-h-[4.5rem] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
+  "mt-1.5 min-h-[5rem] w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
 
 function Field({ label, children, hint }) {
   return (
-    <label className="block text-[11px] font-semibold text-slate-600">
+    <label className="block text-sm font-semibold text-slate-600">
       {label}
       {children}
-      {hint ? <span className="mt-1 block text-[10px] font-normal text-slate-400">{hint}</span> : null}
+      {hint ? <span className="mt-1 block text-xs font-normal text-slate-400">{hint}</span> : null}
     </label>
   );
 }
@@ -176,8 +176,8 @@ function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "IGNORE
 
 function Section({ title, children }) {
   return (
-    <div className="space-y-3 border-t border-slate-200/80 pt-3 first:border-t-0 first:pt-0">
-      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#109b89]">{title}</p>
+    <div className="space-y-3.5 border-t border-slate-200/80 pt-4 first:border-t-0 first:pt-0">
+      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#109b89]">{title}</p>
       {children}
     </div>
   );
@@ -218,13 +218,13 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
   }
 
   return (
-    <div className="flex max-h-[min(32rem,70vh)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#f8f9fb]">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 px-4 py-3">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{title}</p>
-        <p className="text-[10px] text-slate-400">Edit any rule to customize</p>
+    <div className="flex max-h-[min(40rem,75vh)] min-h-[22rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#f8f9fb]">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 px-5 py-3.5">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{title}</p>
+        <p className="text-xs text-slate-400">Edit any rule to customize</p>
       </div>
 
-      <div className="pp-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div className="pp-scroll min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
       <Field label="Profile name">
         <input
           disabled={disabled}

@@ -90,7 +90,7 @@ function PaidPlanCard({ plan, selected, isCurrent, billingPeriod, features, badg
       {/* Reserved row so Current Plan never shifts title/price vs other cards */}
       <div className="mb-2 flex h-4 items-center">
         {isCurrent ? (
-          <p className="text-[10px] font-bold uppercase tracking-wider text-[#3b82f6]">Current Plan ✓</p>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Plan ✓</p>
         ) : null}
       </div>
       <p className="text-sm font-semibold text-slate-700">{planName(plan)} Plan</p>
@@ -135,28 +135,35 @@ export default function SubscriptionScreen({
   const [billingPeriod, setBillingPeriod] = useState(
     subscription?.billing_period === "annual" ? "annual" : "monthly"
   );
-  const [selectedPlan, setSelectedPlan] = useState(
-    () => storedCheckoutPlan() || (isPremium ? tier : "premium")
-  );
+  // null until the user clicks a plan card — avoids a permanent blue selection.
+  const [selectedPlan, setSelectedPlan] = useState(() => storedCheckoutPlan() || null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [paymentCanceled, setPaymentCanceled] = useState(false);
   const [activating, setActivating] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [checkoutOpen, setCheckoutOpen] = useState(!isPremium);
+  // Manage layout for every plan (including Free); checkout only after "Change plan".
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [confirmFreeOpen, setConfirmFreeOpen] = useState(false);
 
+  const showManage = !checkoutOpen;
   const price = planPrice(selectedPlan, billingPeriod);
   const perPeriod = billingPeriod === "annual" ? "year" : "month";
   const switchingPlan = isPremium && isPaidTier(selectedPlan) && selectedPlan !== tier;
-  const subscribeCta =
-    isPremium && selectedPlan === tier
+  const subscribeCta = !selectedPlan
+    ? "Choose a plan to continue"
+    : isPremium && selectedPlan === tier
       ? `Renew with PayMongo - ${peso(price)}/${perPeriod}`
       : switchingPlan
         ? `Switch to ${planName(selectedPlan)} with PayMongo - ${peso(price)}/${perPeriod}`
         : `Pay with PayMongo - ${peso(price)}/${perPeriod}`;
+
+  function openCheckout(plan = null) {
+    setSelectedPlan(plan);
+    setCheckoutOpen(true);
+  }
 
   const history = useMemo(
     () => (Array.isArray(subscription?.history) ? subscription.history : []),
@@ -302,9 +309,16 @@ export default function SubscriptionScreen({
     setError("");
     setSuccess("");
 
+    if (!selectedPlan) {
+      setError("Choose a plan first.");
+      return;
+    }
+
     if (selectedPlan === "free") {
       if (!isPremium) {
         setSuccess("You are already on the Free plan.");
+        setCheckoutOpen(false);
+        setSelectedPlan(null);
         return;
       }
       setConfirmFreeOpen(true);
@@ -349,6 +363,7 @@ export default function SubscriptionScreen({
       const next = await subscribeToPlan({ plan: "free" });
       paidActivatedRef.current = false;
       pushSubscription(next, { allowDowngrade: true });
+      setSelectedPlan(null);
       setCheckoutOpen(false);
       setSuccess("Switched to Free plan.");
       setConfirmFreeOpen(false);
@@ -371,8 +386,8 @@ export default function SubscriptionScreen({
       const next = await cancelSubscription({ immediate: true });
       paidActivatedRef.current = false;
       pushSubscription(next, { allowDowngrade: true });
-      setCheckoutOpen(true);
-      setSelectedPlan("premium");
+      setSelectedPlan(null);
+      setCheckoutOpen(false);
       setSuccess("Subscription canceled. You are on the Free plan - 3 scans this month.");
       setConfirmCancelOpen(false);
     } catch (err) {
@@ -392,14 +407,27 @@ export default function SubscriptionScreen({
             Settings / Subscription
           </p>
           <h2 className="mt-1 text-2xl font-bold text-[#172033]">
-            {isPremium && !checkoutOpen ? "Manage Subscription" : "Upgrade your plan"}
+            {showManage ? "Manage Subscription" : "Upgrade your plan"}
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            {isPremium && !checkoutOpen
+            {showManage
               ? "View status, renewal date, and billing history."
               : "Secure checkout powered by PayMongo (Card, GCash, Maya, and more)."}
           </p>
         </div>
+        {isPremium && checkoutOpen ? (
+          <button
+            type="button"
+            onClick={() => {
+              setCheckoutOpen(false);
+              setSelectedPlan(null);
+              setError("");
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            View current plan
+          </button>
+        ) : null}
       </div>
 
       <ConfirmDialog
@@ -428,8 +456,7 @@ export default function SubscriptionScreen({
               type="button"
               onClick={() => {
                 setSuccess("");
-                setSelectedPlan(isPaidTier(selectedPlan) ? selectedPlan : "premium");
-                setCheckoutOpen(true);
+                openCheckout(isPaidTier(selectedPlan) ? selectedPlan : null);
               }}
               className="mt-3 rounded-lg bg-[#16bfa8] px-5 py-2 text-xs font-bold text-[#092823] hover:bg-[#12ae99]"
             >
@@ -444,7 +471,7 @@ export default function SubscriptionScreen({
         </div>
       )}
 
-      {isPremium && !checkoutOpen && (
+      {showManage && (
         <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current plan</p>
@@ -457,25 +484,30 @@ export default function SubscriptionScreen({
               <div className="flex justify-between gap-3 border-b border-slate-100 pb-2">
                 <dt className="text-slate-500">Billing period</dt>
                 <dd className="font-semibold capitalize text-slate-800">
-                  {subscription?.billing_period || "monthly"}
+                  {isPremium ? subscription?.billing_period || "monthly" : "—"}
                 </dd>
               </div>
               <div className="flex justify-between gap-3 border-b border-slate-100 pb-2">
                 <dt className="text-slate-500">Payment method</dt>
                 <dd className="font-semibold uppercase text-slate-800">
-                  {subscription?.payment_method || "PayMongo"}
+                  {isPremium ? subscription?.payment_method || "PayMongo" : "—"}
                 </dd>
               </div>
               <div className="flex justify-between gap-3 border-b border-slate-100 pb-2">
                 <dt className="text-slate-500">Current billing period</dt>
                 <dd className="font-semibold text-slate-800">
-                  {formatDate(subscription?.billing_period_start)} -{" "}
-                  {formatDate(subscription?.billing_period_end || subscription?.renews_at)}
+                  {isPremium
+                    ? `${formatDate(subscription?.billing_period_start)} - ${formatDate(
+                        subscription?.billing_period_end || subscription?.renews_at
+                      )}`
+                    : "—"}
                 </dd>
               </div>
               <div className="flex justify-between gap-3 border-b border-slate-100 pb-2">
                 <dt className="text-slate-500">Renewal date</dt>
-                <dd className="font-semibold text-slate-800">{formatDate(subscription?.renews_at)}</dd>
+                <dd className="font-semibold text-slate-800">
+                  {isPremium ? formatDate(subscription?.renews_at) : "—"}
+                </dd>
               </div>
               <div className="flex justify-between gap-3">
                 <dt className="text-slate-500">Scan allowance</dt>
@@ -493,25 +525,26 @@ export default function SubscriptionScreen({
             <div className="mt-6 flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedPlan(tier);
-                  setCheckoutOpen(true);
-                }}
+                onClick={() => openCheckout(null)}
                 className="rounded-lg bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-white hover:bg-[#12ae99]"
               >
-                {String(subscription?.status || "").toLowerCase() === "canceled"
-                  ? "Pay again"
-                  : "Change plan"}
+                {isPremium
+                  ? String(subscription?.status || "").toLowerCase() === "canceled"
+                    ? "Pay again"
+                    : "Change plan"
+                  : "Upgrade plan"}
               </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={handleCancelSubscription}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-white px-5 py-2.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
-              >
-                {busy ? <Spinner className="h-3.5 w-3.5" /> : null}
-                Cancel subscription
-              </button>
+              {isPremium ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={handleCancelSubscription}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-white px-5 py-2.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  {busy ? <Spinner className="h-3.5 w-3.5" /> : null}
+                  Cancel subscription
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -611,7 +644,7 @@ export default function SubscriptionScreen({
               >
                 <div className="mb-2 flex h-4 items-center">
                   {tier === "free" ? (
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-[#3b82f6]">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                       Current Plan ✓
                     </p>
                   ) : null}
@@ -671,12 +704,14 @@ export default function SubscriptionScreen({
               </p>
               <div className="mt-2 flex items-center justify-between text-sm">
                 <span className="text-slate-600">
-                  {isPaidTier(selectedPlan)
-                    ? `${planName(selectedPlan)} (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
-                    : "Free Plan"}
+                  {!selectedPlan
+                    ? "No plan selected"
+                    : isPaidTier(selectedPlan)
+                      ? `${planName(selectedPlan)} (${billingPeriod === "annual" ? "Annual" : "Monthly"})`
+                      : "Free Plan"}
                 </span>
                 <span className="font-semibold text-slate-800">
-                  {isPaidTier(selectedPlan) ? peso(price) : "₱0"}
+                  {!selectedPlan ? "—" : isPaidTier(selectedPlan) ? peso(price) : "₱0"}
                 </span>
               </div>
               {isPaidTier(selectedPlan) && billingPeriod === "annual" && (
@@ -687,7 +722,7 @@ export default function SubscriptionScreen({
               <div className="mt-3 flex items-end justify-between border-t border-slate-200 pt-3">
                 <span className="text-xs font-semibold text-slate-500">Total due today</span>
                 <span className="text-2xl font-bold text-[#16bfa8]">
-                  {isPaidTier(selectedPlan) ? `${peso(price)}.00` : "₱0.00"}
+                  {!selectedPlan ? "—" : isPaidTier(selectedPlan) ? `${peso(price)}.00` : "₱0.00"}
                 </span>
               </div>
             </div>
@@ -695,7 +730,7 @@ export default function SubscriptionScreen({
             <form onSubmit={handleSubscribe} className="mt-5 space-y-3">
               <button
                 type="submit"
-                disabled={busy || activating}
+                disabled={busy || activating || !selectedPlan}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#16bfa8] py-3 text-sm font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:opacity-50"
               >
                 {busy || activating ? <Spinner /> : null}
@@ -703,6 +738,8 @@ export default function SubscriptionScreen({
                   ? "Redirecting to PayMongo…"
                   : activating
                     ? "Confirming your payment…"
+                  : !selectedPlan
+                    ? "Choose a plan to continue"
                   : selectedPlan === "free"
                     ? isPremium
                       ? "Switch to Free Plan"

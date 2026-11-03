@@ -459,12 +459,12 @@ export default function MechanicsPanel({
   }
 
   return (
-    <section className="relative w-full rounded-xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+    <section className="relative flex min-h-[calc(100dvh-7.5rem)] w-full flex-col rounded-xl border border-slate-200 bg-white p-8 shadow-sm md:p-10">
       {(busy) && !confirmBusy && (
         <div className="absolute inset-0 z-10 grid place-items-center rounded-xl bg-white/70 backdrop-blur-[1px]">
           <div className="flex flex-col items-center gap-3 text-[#16bfa8]">
             <DocumentLoader className="h-28 w-28" />
-            <p className="text-sm font-bold text-slate-700">
+            <p className="text-base font-bold text-slate-700">
               Processing…
             </p>
           </div>
@@ -472,16 +472,16 @@ export default function MechanicsPanel({
       )}
 
       <ShowStepsRow step={1} onShowSteps={onShowSteps} />
-      <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Format Mechanics</h2>
-      <p className="mt-1 text-xs leading-relaxed text-slate-400">
+      <h2 className="mt-2 text-2xl font-bold text-[#172033]">Upload Format Mechanics</h2>
+      <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-500">
         Upload or select a format guide (not your manuscript) - Format Fields are filled from that file. Customize only
         when a displayed value does not match your mechanics.
       </p>
 
-      <div className="mt-4 flex flex-col gap-2 rounded-xl border border-dashed border-[#18bda9]/60 bg-[#f7fcfc] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-6 flex flex-col gap-3 rounded-xl border border-dashed border-[#18bda9]/60 bg-[#f7fcfc] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-xs font-semibold text-slate-700">Don’t have a format guide yet?</p>
-          <p className="mt-0.5 text-[11px] text-slate-400">
+          <p className="text-sm font-semibold text-slate-700">Don’t have a format guide yet?</p>
+          <p className="mt-1 text-sm leading-relaxed text-slate-500">
             Download the sample DOCX. Keep every section and field label (like Margins and Top). Put a
             real value, or type IGNORE to skip that check - don’t use N/A or delete labels. Then upload
             it here or use Customize.
@@ -491,7 +491,7 @@ export default function MechanicsPanel({
           type="button"
           disabled={panelBusy}
           onClick={() => void onDownloadSample()}
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#16bfa8] bg-white px-4 text-[11px] font-bold text-[#109b89] hover:bg-[#eefbf8] disabled:opacity-40"
+          className="inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[#16bfa8] bg-white px-5 text-sm font-bold text-[#109b89] hover:bg-[#eefbf8] disabled:opacity-40"
         >
           {sampleBusy ? (
             <>
@@ -510,7 +510,7 @@ export default function MechanicsPanel({
             type="button"
             disabled={panelBusy}
             onClick={() => switchMode(item.id)}
-            className={`flex-1 rounded-lg px-3 py-2.5 text-[11px] font-bold transition disabled:opacity-40 ${
+            className={`flex-1 rounded-lg px-3 py-3 text-sm font-bold transition disabled:opacity-40 ${
               mode === item.id
                 ? "bg-white text-[#109b89] shadow-sm"
                 : "text-slate-500 hover:text-slate-700"
@@ -526,7 +526,7 @@ export default function MechanicsPanel({
           <div className="space-y-4">
             {items.length ? (
               <>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Saved mechanics
                   <select
                     value={selectedId}
@@ -632,7 +632,7 @@ export default function MechanicsPanel({
                   type="button"
                   disabled={!selectedId || panelBusy}
                   onClick={requestUpdateSaved}
-                  className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-4 text-xs font-bold text-white hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                  className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-4 text-sm font-bold text-white hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
                 >
                   {busy ? (
                     <>
@@ -658,7 +658,7 @@ export default function MechanicsPanel({
               onDragOver={onDropZoneDragOver}
               onDragLeave={onDropZoneDragLeave}
               onDrop={onDropZoneDrop}
-              className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-5 text-center outline-none transition ${
+              className={`relative flex min-h-56 flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 text-center outline-none transition ${
                 dropPulse
                   ? "border-rose-400 bg-rose-50 ring-2 ring-rose-300"
                   : extracting || busy
@@ -685,12 +685,12 @@ export default function MechanicsPanel({
                         ? file.name
                         : "Drop your format guide here"}
                   </span>
-                  <span className="mt-1 text-[11px] text-slate-400">
+                  <span className="mt-2 text-sm text-slate-500">
                     {file
                       ? `${formatFileSize(file.size)} · Confirm extraction to fill Format Fields beside this panel`
                       : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(maxBytes)}`}
                   </span>
-                  <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
+                  <span className="mt-4 rounded-full border border-[#16bfa8] bg-white px-6 py-2 text-sm font-semibold text-[#109b89]">
                     Browse files
                   </span>
                 </>
@@ -755,7 +755,7 @@ export default function MechanicsPanel({
                   type="button"
                   disabled={busy || extracting}
                   onClick={requestSaveProfile}
-                  className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-6 text-xs font-bold text-white hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                  className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-6 text-sm font-bold text-white hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
                 >
                   {busy ? (
                     <>
@@ -799,7 +799,7 @@ export default function MechanicsPanel({
             type="button"
             disabled={busy}
             onClick={requestSaveProfile}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-6 text-xs font-bold text-white hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-6 text-sm font-bold text-white hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
           >
             {busy ? (
               <>

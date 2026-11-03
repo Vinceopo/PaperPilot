@@ -4,6 +4,7 @@ import { otpBypassToken, resetPasswordWithOtp, sendOtp } from "../../api.js";
 import { auth } from "../../firebase.js";
 import { markPasswordChanged } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
+import { maskEmail } from "../../lib/maskEmail.js";
 import AuthShell from "./AuthShell.jsx";
 import OtpStep from "./OtpStep.jsx";
 import { passwordChecks, confirmPasswordError, emailError, passwordError } from "./validation.js";
@@ -156,7 +157,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
         slideDir="left"
         panelKey="forgot-password"
         title="Set a new password"
-        subtitle={`Choose a new password for ${email.trim()}.`}
+        subtitle={`Choose a new password for ${maskEmail(email.trim())}.`}
         footer={backToLogin}
       >
         <form className="mt-5 flex flex-col gap-3.5" onSubmit={onSetPassword} noValidate>

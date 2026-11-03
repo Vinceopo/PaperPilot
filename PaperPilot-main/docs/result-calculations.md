@@ -109,8 +109,9 @@ Every number on the results page is calculated once, on the server, by `scoring.
 - **Issue**: one rule broken at one place. A failed unit makes **at least one** issue, and can make more. For example, a line in the wrong font *and* the wrong size is **1 failed Fonts unit** but **2 issues**. Some checks look at the whole page and have no unit at all: paper size and orientation (counted under Margins), table and figure captions (counted under Captions) and citations (counted under Citations). So the issue count of a category can be **larger** than its failed units.
 - **Issue type**: one row in the issues list (for example "Line spacing differs"). It groups every place where that rule was broken.
 - **Severity**: how serious an issue type is (critical, moderate or minor). It is set by a fixed rule for each check (see the first part of this page). Margin issues get their severity from how far off the margin is, and an issue type takes the **worst** severity among its places. If the Gemini helper is switched on, it may move a severity **one step** up or down. The issue then shows `severity_source: "gemini"` and keeps the original as `rule_severity`. Severity never changes any unit count or score.
-- **Not applicable**: the format mechanics have no rule for that category, so nothing was checked.
-- **Not evaluated**: there is a rule, but nothing in the paper could be measured for it (for example, no paragraph with two or more lines). Both are shown as "N/A" and are **never** counted as 100%.
+- **Blank / IGNORE / N/A field**: there is no concrete rule to enforce for that category. Eligible units are still counted and **all pass** (typically 100% on Score Breakdown). They **are** included in Overall when at least one unit was checked. This is not a fake “perfect manuscript” claim — it means that dimension was intentionally not enforced.
+- **Not applicable**: reserved for categories that are not part of scoring, or when the engine has no eligible units and never opened the category.
+- **Not evaluated**: a rule exists (or the category was opened) but nothing in the paper could be measured for it (for example, no multi-line paragraph for indentation). Shown as "N/A" when `units_checked` is 0.
 
 ### Formulas
 

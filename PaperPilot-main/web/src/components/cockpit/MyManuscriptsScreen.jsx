@@ -15,7 +15,7 @@ import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 import ManuscriptDetailModal from "./ManuscriptDetailModal.jsx";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 8;
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
   { id: "compliant", label: "Good Standing" },
@@ -37,12 +37,25 @@ function formatDate(iso) {
   }
 }
 
+function formatMeta(row) {
+  const parts = [];
+  const institution = String(row.institution || "").trim();
+  if (institution && institution !== "-" && institution !== "—") parts.push(institution);
+  if (row.citationStyle) parts.push(row.citationStyle);
+  if (row.versionCount > 0) {
+    parts.push(
+      `${row.versionCount} version${row.versionCount === 1 ? "" : "s"} (${row.latestVersionLabel})`
+    );
+  }
+  return parts.join(" · ");
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
-    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
-      <p className={`mt-2 text-2xl font-bold tabular-nums text-[#0F1729] ${accent || ""}`}>{value}</p>
-      {sub ? <p className={`mt-1 text-[11px] font-medium ${sub.className}`}>{sub.text}</p> : null}
+    <div className="rounded-xl border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className={`mt-1.5 text-xl font-bold tabular-nums text-[#0F1729] ${accent || ""}`}>{value}</p>
+      {sub ? <p className={`mt-1 text-xs font-medium ${sub.className}`}>{sub.text}</p> : null}
     </div>
   );
 }
@@ -187,9 +200,9 @@ export default function MyManuscriptsScreen({
   }
 
   return (
-    <div>
+    <div className="flex min-h-[calc(100dvh-7.5rem)] flex-col">
       {/* Stat cards */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid shrink-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Total Manuscripts"
           value={stats.total}
@@ -219,7 +232,7 @@ export default function MyManuscriptsScreen({
       </div>
 
       {/* Search + filters */}
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-4 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <label className="relative block w-full max-w-md">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
@@ -239,9 +252,9 @@ export default function MyManuscriptsScreen({
             <button
               type="button"
               onClick={() => setFilterOpen((o) => !o)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 shadow-sm hover:bg-slate-50"
             >
-              <Filter className="h-3.5 w-3.5" />
+              <Filter className="h-4 w-4" />
               {STATUS_FILTERS.find((f) => f.id === statusFilter)?.label || "All"}
             </button>
             {filterOpen && (
@@ -252,7 +265,7 @@ export default function MyManuscriptsScreen({
                     <li key={f.id}>
                       <button
                         type="button"
-                        className={`block w-full px-4 py-2 text-left text-xs font-medium ${
+                        className={`block w-full px-4 py-2.5 text-left text-sm font-medium ${
                           statusFilter === f.id ? "bg-[#F5F6F8] text-[#0F1729]" : "text-slate-600 hover:bg-slate-50"
                         }`}
                         onClick={() => {
@@ -273,19 +286,19 @@ export default function MyManuscriptsScreen({
           <button
             type="button"
             onClick={onUploadNew}
-            className="inline-flex items-center gap-2 rounded-xl bg-[#0F1729] px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#1E293B]"
+            className="inline-flex items-center gap-2 rounded-xl bg-[#0F1729] px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#1E293B]"
           >
-            <Upload className="h-3.5 w-3.5" />
+            <Upload className="h-4 w-4" />
             Upload New
           </button>
         </div>
       </div>
 
-      {/* Table */}
-      <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
+      {/* Table fills remaining viewport; pagination (8/page) — no inner scrollbar */}
+      <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="min-h-0 flex-1 overflow-hidden">
           <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-slate-100 bg-[#F8FAFC] text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            <thead className="border-b border-slate-100 bg-[#F8FAFC] text-xs font-semibold uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-5 py-3">Title</th>
                 <th className="px-4 py-3 whitespace-nowrap">Scanned</th>
@@ -297,106 +310,104 @@ export default function MyManuscriptsScreen({
             <tbody>
               {pageRows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-5 py-12 text-center text-sm text-slate-400">
+                  <td colSpan={5} className="px-5 py-16 text-center text-sm text-slate-400">
                     {items.length === 0
                       ? "No manuscripts yet. Upload and analyse a document to see it here."
                       : "No manuscripts match your search or filter."}
                   </td>
                 </tr>
               ) : (
-                pageRows.map((row) => (
-                  <tr key={row.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60">
-                    <td className="relative px-5 py-4">
-                      <span className={`absolute inset-y-2 left-0 w-1 rounded-r ${row.band.barClass}`} />
-                      <p className="font-bold text-[#0F1729]">{row.title}</p>
-                      <p className="mt-0.5 text-xs text-slate-400">
-                        {row.institution} · {row.citationStyle}
-                        {row.versionCount > 0
-                          ? ` · ${row.versionCount} version${row.versionCount === 1 ? "" : "s"} (${row.latestVersionLabel})`
-                          : ""}
-                      </p>
-                    </td>
-                    <td className="px-4 py-4 whitespace-nowrap text-xs text-slate-500">{formatDate(row.scannedDate)}</td>
-                    <td className="px-4 py-4">
-                      <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-bold tabular-nums ${row.band.pillClass}`}>
-                        {formatScore(row.latestScore, 0)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wide ${row.band.pillClass}`}>
-                        {row.band.label}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setViewId(row.id)}
-                          className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-[#0F1729]"
-                          aria-label={`View ${row.title}`}
-                        >
-                          View
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDeleteError("");
-                            setDeleteId(row.id);
-                          }}
-                          className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-rose-50 hover:text-rose-600"
-                          aria-label={`Delete ${row.title}`}
-                          title="Delete"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                pageRows.map((row) => {
+                  const meta = formatMeta(row);
+                  return (
+                    <tr key={row.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
+                      <td className="relative px-5 py-3">
+                        <span className={`absolute inset-y-2 left-0 w-1 rounded-r ${row.band.barClass}`} />
+                        <p className="text-sm font-semibold text-[#0F1729]">{row.title}</p>
+                        {meta ? <p className="mt-0.5 text-sm text-slate-500">{meta}</p> : null}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-600">{formatDate(row.scannedDate)}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-sm font-bold tabular-nums ${row.band.pillClass}`}>
+                          {formatScore(row.latestScore, 0)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-semibold tracking-wide ${row.band.pillClass}`}>
+                          {row.band.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setViewId(row.id)}
+                            className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-[#0F1729]"
+                            aria-label={`View ${row.title}`}
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeleteError("");
+                              setDeleteId(row.id);
+                            }}
+                            className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-rose-50 hover:text-rose-600"
+                            aria-label={`Delete ${row.title}`}
+                            title="Delete"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
-      </div>
 
-      {/* Footer: count, pagination, legend */}
-      <div className="mt-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <p className="text-xs text-slate-500">
-          Showing {pageRows.length} of {filtered.length} manuscripts
-          {filtered.length !== items.length ? ` (filtered from ${items.length})` : ""}
-        </p>
+        {/* Footer stays pinned to the bottom of the filled card */}
+        <div className="flex shrink-0 flex-col gap-3 border-t border-slate-100 bg-[#F8FAFC] px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-slate-500">
+            Showing {pageRows.length} of {filtered.length} manuscripts
+            {filtered.length !== items.length ? ` (filtered from ${items.length})` : ""}
+          </p>
 
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            disabled={safePage <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 disabled:opacity-40"
-            aria-label="Previous page"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          {Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => (
+          <div className="flex items-center gap-1">
             <button
-              key={n}
               type="button"
-              onClick={() => setPage(n)}
-              className={`grid h-8 min-w-8 place-items-center rounded-lg px-2 text-xs font-semibold ${
-                n === safePage ? "bg-[#0F1729] text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
+              disabled={safePage <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 disabled:opacity-40"
+              aria-label="Previous page"
             >
-              {n}
+              <ChevronLeft className="h-4 w-4" />
             </button>
-          ))}
-          <button
-            type="button"
-            disabled={safePage >= pageCount}
-            onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 disabled:opacity-40"
-            aria-label="Next page"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
+            {Array.from({ length: pageCount }, (_, i) => i + 1).map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setPage(n)}
+                className={`grid h-9 min-w-9 place-items-center rounded-lg px-2 text-sm font-semibold ${
+                  n === safePage ? "bg-[#0F1729] text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={safePage >= pageCount}
+              onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+              className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 disabled:opacity-40"
+              aria-label="Next page"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
 

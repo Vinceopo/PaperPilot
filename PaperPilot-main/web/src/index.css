@@ -17,7 +17,7 @@ body {
   }
 
   .fl-input {
-    @apply h-[52px] w-full rounded-[10px] border border-slate-200 bg-white pl-11 pr-4 text-[15px] text-navy outline-none transition-[border-color] duration-180 ease-in-out;
+    @apply h-14 w-full rounded-[10px] border border-slate-200 bg-white pl-11 pr-4 text-base text-navy outline-none transition-[border-color] duration-180 ease-in-out;
   }
 
   .fl-field:has(.fl-toggle) .fl-input {
@@ -34,7 +34,7 @@ body {
   }
 
   .fl-label {
-    @apply pointer-events-none absolute left-11 top-1/2 origin-left -translate-y-1/2 bg-transparent px-1 text-[15px] text-slate-400 transition-[top,transform,font-size,color,background-color] duration-180 ease-in-out;
+    @apply pointer-events-none absolute left-11 top-1/2 origin-left -translate-y-1/2 bg-transparent px-1 text-base text-slate-400 transition-[top,transform,font-size,color,background-color] duration-180 ease-in-out;
   }
 
   .fl-input:focus ~ .fl-label,
@@ -55,9 +55,9 @@ body {
     @apply absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition hover:text-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50;
   }
 
-  /* Dense auth form (registration) - same look, less vertical height */
+  /* Dense auth form (registration) - slightly roomier than before, still fits one viewport */
   .auth-form-compact .fl-input {
-    @apply h-11 rounded-[9px] pl-10 text-sm;
+    @apply h-12 rounded-[10px] pl-10 text-[15px];
   }
 
   .auth-form-compact .fl-field:has(.fl-toggle) .fl-input {
@@ -69,16 +69,16 @@ body {
   }
 
   .auth-form-compact .fl-icon svg {
-    @apply h-4 w-4;
+    @apply h-[17px] w-[17px];
   }
 
   .auth-form-compact .fl-label {
-    @apply left-10 text-sm;
+    @apply left-10 text-[15px];
   }
 
   .auth-form-compact .fl-input:focus ~ .fl-label,
   .auth-form-compact .fl-input:not(:placeholder-shown) ~ .fl-label {
-    @apply text-[11px];
+    @apply text-xs;
   }
 
   .auth-form-compact .fl-toggle {
@@ -90,7 +90,7 @@ body {
   }
 
   .auth-form-compact .fl-meta {
-    @apply mt-0.5 text-[11px] leading-[14px];
+    @apply mt-0.5 text-xs leading-[15px];
   }
 }
 
@@ -137,15 +137,15 @@ body {
 input[type="checkbox"].auth-check {
   appearance: none;
   -webkit-appearance: none;
-  width: 1rem;
-  height: 1rem;
+  width: 1.125rem;
+  height: 1.125rem;
   flex-shrink: 0;
   border: 1.5px solid #cbd5e1;
   border-radius: 0.25rem;
   background-color: #fff;
   background-position: center;
   background-repeat: no-repeat;
-  background-size: 0.7rem 0.7rem;
+  background-size: 0.75rem 0.75rem;
   cursor: pointer;
   transition: border-color 150ms ease;
 }
@@ -320,36 +320,44 @@ input[type="checkbox"].auth-check:focus-visible {
   }
 }
 
-/* PaperPilot panel scrollbars - thin teal track/thumb matched to accent navy UI */
+/*
+ * PaperPilot scrollbars — one look everywhere (Versions, Short result, tracing, modals).
+ * Theme: soft slate track + teal thumb (#16bfa8 family) on navy UI.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #7dcdc2 #e8eef4;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #e8eef4;
+  border-radius: 999px;
+  margin-block: 4px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #7dcdc2;
+  border-radius: 999px;
+  border: 2px solid #e8eef4;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #16bfa8;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 @layer utilities {
   .pp-scroll {
     scrollbar-width: thin;
     scrollbar-color: #7dcdc2 #e8eef4;
-  }
-
-  .pp-scroll::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-
-  .pp-scroll::-webkit-scrollbar-track {
-    background: #e8eef4;
-    border-radius: 999px;
-    margin-block: 4px;
-  }
-
-  .pp-scroll::-webkit-scrollbar-thumb {
-    background: #7dcdc2;
-    border-radius: 999px;
-    border: 2px solid #e8eef4;
-  }
-
-  .pp-scroll::-webkit-scrollbar-thumb:hover {
-    background: #16bfa8;
-  }
-
-  .pp-scroll::-webkit-scrollbar-corner {
-    background: transparent;
   }
 
   .pp-scroll-panel {

@@ -7,6 +7,7 @@ import {
   passwordChecks,
   passwordError,
 } from "../../lib/validation";
+import { maskEmail } from "../../lib/maskEmail";
 import { colors } from "../../theme";
 import PrimaryButton from "../ui/PrimaryButton";
 import TextField from "../ui/TextField";
@@ -130,7 +131,7 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
       <AuthShell
         variant="forgot"
         title="Set a new password"
-        subtitle={`Choose a new password for ${email.trim()}.`}
+        subtitle={`Choose a new password for ${maskEmail(email.trim())}.`}
         footer={backToLogin}
       >
         <View style={styles.form}>

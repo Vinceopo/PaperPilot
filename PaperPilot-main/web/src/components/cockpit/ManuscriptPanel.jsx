@@ -265,7 +265,7 @@ export default function ManuscriptPanel({
 
   return (
     <section
-      className={`relative w-full rounded-xl border p-6 shadow-sm transition md:p-8 ${
+      className={`relative flex min-h-[calc(100dvh-7.5rem)] w-full flex-col rounded-xl border p-8 shadow-sm transition md:p-10 ${
         mechanicsSelected
           ? "border-slate-200 bg-white"
           : "border-slate-200 bg-white opacity-50 grayscale"
@@ -273,8 +273,8 @@ export default function ManuscriptPanel({
       aria-disabled={!mechanicsSelected}
     >
       <ShowStepsRow step={2} onShowSteps={onShowSteps} />
-      <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Manuscript</h2>
-      <p className="mt-1 text-xs leading-relaxed text-slate-400">
+      <h2 className="mt-2 text-2xl font-bold text-[#172033]">Upload Manuscript</h2>
+      <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-500">
         Upload the manuscript you want to check against the confirmed format guide.
       </p>
 
@@ -287,7 +287,7 @@ export default function ManuscriptPanel({
             onDragOver={onDropZoneDragOver}
             onDragLeave={onDropZoneDragLeave}
             onDrop={onDropZoneDrop}
-            className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 text-center transition outline-none ${
+            className={`relative flex min-h-56 flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 text-center transition outline-none ${
               dropPulse
                 ? "border-rose-400 bg-rose-50 ring-2 ring-rose-300"
                 : dragOver && canPickFile
@@ -310,7 +310,7 @@ export default function ManuscriptPanel({
                     ? file.name
                     : "Drop your manuscript here"}
               </p>
-              <p className="mt-1 text-[11px] text-slate-400">
+              <p className="mt-2 text-sm text-slate-500">
                 {file
                   ? previewPreparing
                     ? `${formatFileSize(file.size)} · Preparing document preview on the right…`
@@ -319,7 +319,7 @@ export default function ManuscriptPanel({
                       : `${formatFileSize(file.size)} · Preview appears beside this panel - confirm Upload when ready`
                   : `Drag & drop or browse · PDF only · Max ${formatFileSize(maxBytes)}`}
               </p>
-              <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
+              <span className="mt-4 rounded-full border border-[#16bfa8] bg-white px-6 py-2 text-sm font-semibold text-[#109b89]">
                 Browse files
               </span>
             </>
@@ -440,14 +440,14 @@ export default function ManuscriptPanel({
               else onCancel?.();
             }}
             disabled={previewUploading}
-            className="rounded-lg border border-slate-200 bg-white px-7 py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg border border-slate-200 bg-white px-7 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={!mechanicsSelected || !file || panelBusy}
-            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-2.5 text-xs font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-3 text-sm font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {previewUploading ? (
               <>

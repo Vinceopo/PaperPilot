@@ -65,7 +65,7 @@ export default function AuthShell({
           <h1
             key={`h-${variant}`}
             className={`${
-              compact ? "text-[2rem]" : "text-[2.35rem]"
+              compact ? "text-[2.15rem]" : "text-[2.55rem]"
             } font-semibold leading-[1.15] tracking-tight auth-copy-${slideDir}`}
           >
             {copy.headlineBefore}
@@ -74,7 +74,7 @@ export default function AuthShell({
           <p
             key={`s-${variant}`}
             className={`${
-              compact ? "mt-3 text-[14px]" : "mt-4 text-[15px]"
+              compact ? "mt-3.5 text-[15px]" : "mt-4 text-base"
             } leading-relaxed text-slate-300/90 auth-copy-${slideDir}`}
           >
             {copy.sub}
@@ -83,7 +83,7 @@ export default function AuthShell({
             {["Format Checker", "AI Feedback", "Compliance Report"].map((item) => (
               <li
                 key={item}
-                className="rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-xs font-medium tracking-wide text-slate-200"
+                className="rounded-full border border-white/10 bg-white/[0.06] px-3.5 py-1.5 text-[13px] font-medium tracking-wide text-slate-200"
               >
                 {item}
               </li>
@@ -96,7 +96,7 @@ export default function AuthShell({
             compact ? "pt-4" : "pt-6"
           }`}
         >
-          <p className={`leading-relaxed text-slate-300 ${compact ? "text-[13px]" : "text-sm"}`}>
+          <p className={`leading-relaxed text-slate-300 ${compact ? "text-sm" : "text-[15px]"}`}>
             {copy.quote}
           </p>
         </blockquote>
@@ -111,11 +111,11 @@ export default function AuthShell({
       >
         <div
           className={`w-full ${
-            compact ? "max-w-[460px] sm:px-4" : "max-w-[440px] sm:px-9 sm:py-10"
+            compact ? "max-w-[520px] sm:px-4" : "max-w-[500px] sm:px-9 sm:py-10"
           }`}
         >
-          <div className={`flex justify-center lg:hidden ${compact ? "mb-4" : "mb-8"}`}>
-            <PaperPilotLogo markClassName={compact ? "h-9 w-9" : "h-10 w-10"} />
+          <div className={`flex justify-center lg:hidden ${compact ? "mb-5" : "mb-8"}`}>
+            <PaperPilotLogo markClassName={compact ? "h-10 w-10" : "h-11 w-11"} />
           </div>
 
           <div className="relative overflow-hidden">
@@ -126,8 +126,8 @@ export default function AuthShell({
               <h2
                 className={`font-semibold tracking-tight text-navy ${
                   compact
-                    ? "text-[1.35rem] leading-snug"
-                    : "text-[1.65rem] leading-snug"
+                    ? "text-[1.55rem] leading-snug"
+                    : "text-[1.85rem] leading-snug"
                 }`}
               >
                 {title}
@@ -135,7 +135,7 @@ export default function AuthShell({
               {subtitle ? (
                 <p
                   className={`text-slate-500 ${
-                    compact ? "mt-1 text-[13px] leading-4" : "mt-1.5 text-sm leading-5"
+                    compact ? "mt-1.5 text-sm leading-5" : "mt-2 text-[15px] leading-6"
                   }`}
                 >
                   {subtitle}

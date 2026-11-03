@@ -12,9 +12,9 @@ export function formatPct(value, digits = 1) {
 }
 
 /**
- * Compliance % from the same counts shown in the UI:
- * (total − nonCompliant) / total × 100.
- * Example: 66 issues on 218 units → (218 − 66) / 218 → 69.72.
+ * Compliance % from unit counts (not issue findings):
+ * (unitsChecked − unitsFailed) / unitsChecked × 100.
+ * Example: 66 failed units on 218 checked → (218 − 66) / 218 → 69.72.
  */
 export function compliancePercentFromUnits(total, nonCompliant) {
   if (!hasValue(total) || Number(total) <= 0) return null;
@@ -102,8 +102,8 @@ function issuesFromScore(total, score) {
 
 /**
  * Per-category display counts from the backend unit fields.
- * Ring % is (total − issues) / total × 100 from those same counts
- * (e.g. 66 of 218 → 30.28% non-compliant → 69.72% on the ring).
+ * Ring % uses failed units: (total − unitsFailed) / total × 100.
+ * Issue findings may exceed failed units when one unit breaks multiple rules.
  *
  * Never invent unit totals from score alone (that made category sums diverge
  * from the header Total Units). Missing counts stay null → N/A on the card.
@@ -136,23 +136,17 @@ export function resolveCategoryUnitDisplays(rows = []) {
       compliant = total - nonCompliant;
     }
 
-    // Prefer occurrence counts so "issues found" and ring % share one formula.
+    // Findings are informational only — never drive the ring % / unit totals.
     const occurrenceIssues = hasValue(row.issueCount)
       ? Math.max(0, Math.round(Number(row.issueCount)))
       : null;
     const displayIssueCount = occurrenceIssues != null ? occurrenceIssues : nonCompliant;
-    const failedForScore =
-      total != null && hasValue(displayIssueCount)
-        ? Math.min(total, Math.max(0, Number(displayIssueCount)))
-        : nonCompliant;
-    const compliantForScore =
-      total != null && failedForScore != null ? total - failedForScore : compliant;
-    const displayScore = compliancePercentFromUnits(total, failedForScore);
+    const displayScore = compliancePercentFromUnits(total, nonCompliant);
     return {
       ...row,
       displayTotal: total,
-      displayCompliant: compliantForScore,
-      displayNonCompliant: failedForScore,
+      displayCompliant: compliant,
+      displayNonCompliant: nonCompliant,
       displayIssueCount,
       displayScore: displayScore != null ? displayScore : hasValue(row.score) ? Number(row.score) : null,
     };

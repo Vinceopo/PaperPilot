@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { sendOtp, verifyOtp } from "../../api.js";
+import { maskEmail } from "../../lib/maskEmail.js";
 import OtpInput from "../OtpInput.jsx";
 import { formatCountdown } from "./messages.js";
 
@@ -107,7 +108,7 @@ export default function OtpStep({
         </h2>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-          We sent a 6-digit code to <span className="font-semibold text-navy">{email}</span>
+          We sent a 6-digit code to <span className="font-semibold text-navy">{maskEmail(email)}</span>
         </div>
       )}
 

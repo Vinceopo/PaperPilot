@@ -292,7 +292,11 @@ export default function App() {
   const [journeyOpen, setJourneyOpen] = useState(false);
   const [fileDetailsConfirm, setFileDetailsConfirm] = useState(null); // "cancel" | "analyse" | null
   const [fileDetailsConfirmBusy, setFileDetailsConfirmBusy] = useState(false);
+  /** Pending navigation while analysis is running: { run: () => void }. */
+  const [leaveAnalyzingConfirm, setLeaveAnalyzingConfirm] = useState(null);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const uploadSessionRef = useRef(0);
+  const analyzingRef = useRef(false);
   const signedIn = Boolean(user);
 
   function clearUploadSession({ discardPending = true } = {}) {
@@ -311,16 +315,46 @@ export default function App() {
     scanFlow.backToDashboard();
   }
 
+  /**
+   * If a scan is in progress, ask before leaving. Otherwise run the action now.
+   * Used for My Manuscripts, Account, Log out, Upload restart, hash changes, etc.
+   */
+  function requestLeaveWhileAnalyzing(next) {
+    if (typeof next !== "function") return;
+    if (scanFlowRef.current?.step !== "analyzing" && !analyzingRef.current) {
+      next();
+      return;
+    }
+    setLeaveAnalyzingConfirm({ run: next });
+  }
+
+  function stayOnAnalyzing() {
+    setLeaveAnalyzingConfirm(null);
+  }
+
+  function confirmStopAnalyzing() {
+    const pending = leaveAnalyzingConfirm?.run;
+    setLeaveAnalyzingConfirm(null);
+    if (scanFlowRef.current?.step === "analyzing") {
+      clearUploadSession();
+    }
+    pending?.();
+  }
+
   function handleBackToDashboard() {
-    clearUploadSession();
-    setActivePage("manuscripts");
+    requestLeaveWhileAnalyzing(() => {
+      clearUploadSession();
+      setActivePage("manuscripts");
+    });
   }
 
   /** Always open Upload at Format Mechanics (step 1), leaving any prior results view. */
   function beginFreshUpload() {
-    clearUploadSession();
-    closeManuscriptDetailRef.current?.();
-    setActivePage("upload");
+    requestLeaveWhileAnalyzing(() => {
+      clearUploadSession();
+      closeManuscriptDetailRef.current?.();
+      setActivePage("upload");
+    });
   }
 
   const dismissJourney = useCallback(() => {
@@ -697,11 +731,46 @@ export default function App() {
 
   const scanFlowRef = useRef(null);
   scanFlowRef.current = scanFlow;
+  analyzingRef.current = scanFlow.step === "analyzing";
+
+  // If analysis finishes while the leave dialog is open, dismiss it and keep results.
+  useEffect(() => {
+    if (scanFlow.step !== "analyzing") setLeaveAnalyzingConfirm(null);
+  }, [scanFlow.step]);
+
+  // Warn on tab close / refresh while a scan is still running.
+  useEffect(() => {
+    if (scanFlow.step !== "analyzing") return undefined;
+    const onBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [scanFlow.step]);
 
   useEffect(() => {
     const onHashChange = () => {
       const raw = hashSegment();
       if (raw === "results") {
+        if (analyzingRef.current) {
+          window.history.replaceState(
+            {},
+            "",
+            `${window.location.pathname}${window.location.search}${hashForPage("upload")}`
+          );
+          setLeaveAnalyzingConfirm({
+            run: () => {
+              if (scanFlowRef.current?.result) {
+                setActivePage("upload");
+                scanFlowRef.current.openFullResults?.();
+              } else {
+                setActivePage("manuscripts");
+              }
+            },
+          });
+          return;
+        }
         if (scanFlowRef.current?.result) {
           setActivePage("upload");
           scanFlowRef.current.openFullResults?.();
@@ -712,6 +781,17 @@ export default function App() {
         return;
       }
       const page = pageFromHash();
+      if (analyzingRef.current && page !== "upload") {
+        window.history.replaceState(
+          {},
+          "",
+          `${window.location.pathname}${window.location.search}${hashForPage("upload")}`
+        );
+        setLeaveAnalyzingConfirm({
+          run: () => setActivePage(page),
+        });
+        return;
+      }
       setActivePage((current) => (current === page ? current : page));
     };
     window.addEventListener("hashchange", onHashChange);
@@ -1374,6 +1454,24 @@ export default function App() {
       // Already signed out.
     }
     setUser(null);
+    // Land on Sign in (not the marketing page) after logout.
+    try {
+      const next = `${window.location.pathname}${window.location.search}#/login`;
+      window.history.replaceState(null, "", next);
+    } catch {
+      // Ignore history failures (file://, restricted contexts).
+    }
+  }
+
+  function requestSignOut() {
+    setLogoutConfirmOpen(true);
+  }
+
+  function confirmLogOut() {
+    setLogoutConfirmOpen(false);
+    requestLeaveWhileAnalyzing(() => {
+      void doSignOut();
+    });
   }
 
   // Page metadata driven by activePage
@@ -1417,14 +1515,30 @@ export default function App() {
   function openUploadMechanics() {
     // Leave results / analysis / error and start (or resume) the upload wizard.
     // Do not bounce to My Manuscripts - sidebar "Upload & Analyze" must stay on Upload.
-    if (scanFlow.step !== "idle" && scanFlow.step !== "fileSelected") {
-      beginFreshUpload();
-      return;
-    }
-    setActivePage("upload");
-    if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file))) {
-      resetUploadWizard(1);
-    }
+    requestLeaveWhileAnalyzing(() => {
+      const step = scanFlowRef.current?.step;
+      if (step !== "idle" && step !== "fileSelected") {
+        clearUploadSession();
+        closeManuscriptDetailRef.current?.();
+        setActivePage("upload");
+        return;
+      }
+      setActivePage("upload");
+      if (uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlowRef.current?.file))) {
+        resetUploadWizard(1);
+      }
+    });
+  }
+
+  function goToManuscripts() {
+    requestLeaveWhileAnalyzing(() => {
+      closeManuscriptDetailRef.current?.();
+      setActivePage("manuscripts");
+    });
+  }
+
+  function goToAccount() {
+    requestLeaveWhileAnalyzing(() => setActivePage("account"));
   }
 
   const showingUploadFace =
@@ -1440,6 +1554,14 @@ export default function App() {
 
   function openComplianceResult() {
     if (!scanFlow.result) return;
+    // If the API finished while the analyzing screen is still up, open results
+    // instead of asking the user to abort a completed scan.
+    if (scanFlow.step === "analyzing") {
+      setLeaveAnalyzingConfirm(null);
+      setActivePage("upload");
+      scanFlow.openFullResults();
+      return;
+    }
     setActivePage("upload");
     scanFlow.openFullResults();
   }
@@ -1515,7 +1637,7 @@ export default function App() {
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               e.preventDefault();
-              setActivePage("manuscripts");
+              goToManuscripts();
             }}
             className={`flex w-full rounded-xl px-1 pb-2 pt-1 transition hover:bg-white/5 ${
               sidebarExpanded ? "justify-center" : "justify-center md:pt-1"
@@ -1547,7 +1669,7 @@ export default function App() {
         </div>
 
         <nav className={`mt-8 flex flex-col ${sidebarExpanded ? "" : "md:items-stretch"}`}>
-          <p className={`px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ${navLabelClass}`}>
+          <p className={`px-3 text-xs font-semibold uppercase tracking-wide text-slate-500 ${navLabelClass}`}>
             Dashboard
           </p>
           <a
@@ -1556,7 +1678,7 @@ export default function App() {
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               e.preventDefault();
-              setActivePage("manuscripts");
+              goToManuscripts();
             }}
             className={`mt-2 ${navItemClass(activePage === "manuscripts")}`}
           >
@@ -1604,7 +1726,7 @@ export default function App() {
         </nav>
 
         <nav className="mt-auto flex flex-col">
-          <p className={`px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600 ${navLabelClass}`}>
+          <p className={`px-3 text-xs font-semibold uppercase tracking-wide text-slate-500 ${navLabelClass}`}>
             Settings
           </p>
           <a
@@ -1613,7 +1735,7 @@ export default function App() {
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
               e.preventDefault();
-              setActivePage("account");
+              goToAccount();
             }}
             className={`mt-2 ${navItemClass(activePage === "account" || activePage === "subscription")}`}
           >
@@ -1624,14 +1746,14 @@ export default function App() {
           </a>
           <button
             type="button"
-            title="Sign Out"
+            title="Log out"
             className={`mt-6 flex w-full items-center text-sm font-medium text-rose-400 transition hover:text-rose-300 ${
               sidebarExpanded ? "gap-2 px-3 py-2 text-left" : "justify-center px-2 py-2 md:justify-center max-md:gap-2 max-md:px-3 max-md:text-left"
             }`}
-            onClick={doSignOut}
+            onClick={requestSignOut}
           >
             <span aria-hidden>↪</span>
-            <span className={navLabelClass}>Sign Out</span>
+            <span className={navLabelClass}>Log out</span>
           </button>
         </nav>
       </aside>
@@ -1656,13 +1778,13 @@ export default function App() {
             />
           ) : !hidePageHeading ? (
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{breadcrumb}</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{breadcrumb}</p>
             <div className="flex flex-wrap items-center gap-2.5">
               <div>
                 <h1 className="text-xl font-bold tracking-tight text-[#172033]">{pageTitle}</h1>
               </div>
               {activePage === "notifications" && notificationUnread > 0 && (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e8f3ff] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-[#2f6fed]">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#e8f3ff] px-3 py-1 text-xs font-bold uppercase tracking-wide text-[#2f6fed]">
                   <span className="h-1.5 w-1.5 rounded-full bg-[#16bfa8]" />
                   {notificationUnread} new
                 </span>
@@ -1678,8 +1800,8 @@ export default function App() {
         <div className="flex items-center gap-3 sm:gap-4">
           {activePage !== "notifications" && activePage !== "subscription" ? (
             <div className="text-right">
-              <p className="text-xs font-semibold capitalize text-slate-700">{tier} plan</p>
-              <p className="text-[10px] text-slate-400">
+              <p className="text-sm font-semibold capitalize text-slate-700">{tier} plan</p>
+              <p className="text-xs text-slate-400">
                 {remaining} of {limit} scans remaining this {resetWindow(tier)}
               </p>
             </div>
@@ -1725,8 +1847,8 @@ export default function App() {
             </div>
           )}
           </div>
-          <button className="text-sm text-slate-500 md:hidden" onClick={doSignOut}>
-            Sign out
+          <button className="text-sm text-slate-500 md:hidden" onClick={requestSignOut}>
+            Log out
           </button>
         </div>
       </header>
@@ -1753,7 +1875,9 @@ export default function App() {
             user={user}
             tier={tier}
             onSignOut={doSignOut}
-            onManageSubscription={() => setActivePage("subscription")}
+            onManageSubscription={() =>
+              requestLeaveWhileAnalyzing(() => setActivePage("subscription"))
+            }
           />
         )}
 
@@ -1774,7 +1898,7 @@ export default function App() {
 
         {activePage === "manuscripts" && (
           loading ? (
-            <div className="grid min-h-64 place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
+            <div className="grid min-h-[calc(100dvh-7.5rem)] place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
               <div className="flex flex-col items-center gap-3">
                 <PaperPlaneLoader className="h-32 w-56" />
                 Loading your compliance workspace…
@@ -1968,37 +2092,37 @@ export default function App() {
               <section
                 ref={fileDetailsRef}
                 id="file-details"
-                className={`w-full scroll-mt-6 rounded-xl border bg-white p-6 shadow-sm transition md:p-8 ${
+                className={`flex min-h-[calc(100dvh-7.5rem)] w-full scroll-mt-6 flex-col rounded-xl border bg-white p-8 shadow-sm transition md:p-10 ${
                   fileDetailsNotice
                     ? "border-[#16bfa8] ring-2 ring-[#16bfa8]/25"
                     : "border-slate-200"
                 }`}
               >
                 <ShowStepsRow step={3} onShowSteps={() => setJourneyOpen(true)} />
-                <div className="mt-1 border-b border-slate-100 pb-4">
-                  <h2 className="text-lg font-bold text-[#172033]">File details</h2>
+                <div className="mt-2 border-b border-slate-100 pb-5">
+                  <h2 className="text-2xl font-bold text-[#172033]">File details</h2>
                 </div>
 
                 {fileDetailsNotice && (
                   <div
-                    className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3"
+                    className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4"
                     role="status"
                   >
-                    <p className="text-sm font-bold text-emerald-800">{fileDetailsNotice}</p>
-                    <p className="mt-0.5 text-xs text-emerald-700">
+                    <p className="text-base font-bold text-emerald-800">{fileDetailsNotice}</p>
+                    <p className="mt-1 text-sm text-emerald-700">
                       Review the files below, then click Upload &amp; Analyse to scan - or Cancel upload to discard.
                     </p>
                   </div>
                 )}
 
-                <p className="mt-4 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Files attached
                 </p>
-                <div className="mt-3 grid gap-4 lg:grid-cols-2">
+                <div className="mt-4 grid gap-5 lg:grid-cols-2">
                   {/* Format Mechanics */}
                   <div>
-                    <p className="mb-2 text-xs font-semibold text-slate-600">Format Mechanics</p>
-                    <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-[#fafbfc] p-4">
+                    <p className="mb-2 text-sm font-semibold text-slate-600">Format Mechanics</p>
+                    <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-[#fafbfc] p-5">
                       <FileTypeIcon
                         fileType={selectedMechanics?.file_type}
                         filename={
@@ -2008,25 +2132,25 @@ export default function App() {
                         }
                       />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-slate-700">
+                        <p className="truncate text-base font-semibold text-slate-700">
                           {selectedMechanics?.source_filename || selectedMechanics?.filename || selectedMechanics?.name || "No format guide selected"}
                         </p>
-                        <p className="text-[11px] text-slate-400">
+                        <p className="mt-0.5 text-sm text-slate-500">
                           {selectedMechanics?.name ? selectedMechanics.name : "Format guide"}
                         </p>
                       </div>
                       {selectedMechanics ? (
-                        <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-semibold text-emerald-700">✓ Ready</span>
+                        <span className="rounded-full bg-emerald-100 px-3.5 py-1.5 text-xs font-semibold text-emerald-700">✓ Ready</span>
                       ) : (
-                        <span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-semibold text-slate-400">Needed</span>
+                        <span className="rounded-full bg-slate-100 px-3.5 py-1.5 text-xs font-semibold text-slate-400">Needed</span>
                       )}
                     </div>
                   </div>
 
                   {/* Academic Document */}
                   <div>
-                    <p className="mb-2 text-xs font-semibold text-slate-600">Academic Document</p>
-                    <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-[#fafbfc] p-4">
+                    <p className="mb-2 text-sm font-semibold text-slate-600">Academic Document</p>
+                    <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-[#fafbfc] p-5">
                       <FileTypeIcon
                         fileType={currentVersion?.file_type}
                         filename={
@@ -2036,23 +2160,23 @@ export default function App() {
                         }
                       />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-slate-700">
+                        <p className="truncate text-base font-semibold text-slate-700">
                           {scanFlow.file?.name ||
                             currentVersion?.source_filename ||
                             currentVersion?.filename ||
                             "No manuscript uploaded"}
                         </p>
-                        <p className="text-[11px] text-slate-400">
+                        <p className="mt-0.5 text-sm text-slate-500">
                           {scanFlow.file?.size ? `${formatFileSize(scanFlow.file.size)} · ` : ""}
                           {currentManuscript?.title || "Manuscript"}
                         </p>
                       </div>
                       {scanReady ? (
-                        <span className="rounded-full bg-emerald-100 px-3 py-1 text-[10px] font-semibold text-emerald-700">
+                        <span className="rounded-full bg-emerald-100 px-3.5 py-1.5 text-xs font-semibold text-emerald-700">
                           ✓ Ready to scan
                         </span>
                       ) : (
-                        <span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-semibold text-slate-400">
+                        <span className="rounded-full bg-slate-100 px-3.5 py-1.5 text-xs font-semibold text-slate-400">
                           Needed
                         </span>
                       )}
@@ -2062,20 +2186,20 @@ export default function App() {
 
                 {/* Version label (only when a real API version exists) */}
                 {currentVersion && (
-                  <div className="mt-5 max-w-xs">
-                    <label className="text-xs font-semibold text-slate-600">Version label</label>
-                    <div className="mt-2 rounded-lg border border-slate-200 bg-[#f8f9fb] px-4 py-3 text-xs font-medium text-slate-400">
+                  <div className="mt-6 max-w-sm">
+                    <label className="text-sm font-semibold text-slate-600">Version label</label>
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-[#f8f9fb] px-4 py-3.5 text-sm font-medium text-slate-500">
                       v{Number(currentVersion.version_number || scanFlow.versionNumber || 1)}.0
                     </div>
                   </div>
                 )}
 
                 {/* Action row */}
-                <div className="mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-5">
+                <div className="mt-auto flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-6 mt-8">
                   <button
                     type="button"
                     onClick={() => setFileDetailsConfirm("cancel")}
-                    className="rounded-lg border border-slate-200 bg-white px-7 py-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                    className="rounded-lg border border-slate-200 bg-white px-7 py-3.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
                   >
                     Cancel upload
                   </button>
@@ -2101,7 +2225,7 @@ export default function App() {
                       setFileDetailsConfirm("analyse");
                     }}
                     disabled={!scanReady || !selectedMechanicsId}
-                    className="inline-flex min-w-44 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-7 py-3 text-xs font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
+                    className="inline-flex min-w-48 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] px-8 py-3.5 text-sm font-bold text-white shadow-sm hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Analyse document
                   </button>
@@ -2115,13 +2239,13 @@ export default function App() {
                 )}
 
                 {uploadWizardStep === 3 && !(manuscriptReady && (currentVersion || scanFlow.file)) && (
-                  <div className="w-full rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-                    <p className="text-sm font-semibold text-slate-700">No manuscript ready yet</p>
-                    <p className="mt-1 text-xs text-slate-400">Upload a manuscript in Step 2 to continue.</p>
+                  <div className="flex min-h-[calc(100dvh-7.5rem)] w-full flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+                    <p className="text-lg font-semibold text-slate-700">No manuscript ready yet</p>
+                    <p className="mt-2 text-sm text-slate-500">Upload a manuscript in Step 2 to continue.</p>
                     <button
                       type="button"
                       onClick={() => goToUploadWizardStep(2)}
-                      className="mt-4 rounded-lg bg-[#16bfa8] px-5 py-2.5 text-xs font-bold text-white hover:bg-[#12ae99]"
+                      className="mt-6 rounded-lg bg-[#16bfa8] px-6 py-3 text-sm font-bold text-white hover:bg-[#12ae99]"
                     >
                       Back to Upload Manuscript
                     </button>
@@ -2131,6 +2255,28 @@ export default function App() {
         )}
         </div>{/* close upload wrapper */}
       </main>
+
+      <ConfirmDialog
+        open={logoutConfirmOpen}
+        title="Log out"
+        message="Are you sure you want to log out?"
+        confirmLabel="Yes"
+        cancelLabel="No"
+        tone="danger"
+        onCancel={() => setLogoutConfirmOpen(false)}
+        onConfirm={confirmLogOut}
+      />
+
+      <ConfirmDialog
+        open={Boolean(leaveAnalyzingConfirm)}
+        title="Leave while analyzing?"
+        message="Your document is still being checked. If you leave now, the analysis will stop and you will need to start it again from the beginning."
+        confirmLabel="Stop analyzing"
+        cancelLabel="Stay"
+        tone="danger"
+        onCancel={stayOnAnalyzing}
+        onConfirm={confirmStopAnalyzing}
+      />
 
       <ConfirmDialog
         open={Boolean(fileDetailsConfirm)}
@@ -2182,7 +2328,7 @@ export default function App() {
         onClose={() => setUpgradeMessage("")}
         onUpgrade={() => {
           setUpgradeMessage("");
-          setActivePage("subscription");
+          requestLeaveWhileAnalyzing(() => setActivePage("subscription"));
         }}
       />
     </div>

@@ -1885,42 +1885,116 @@ def derive_mechanics_rules(text: str) -> dict:
             sizes = sorted(set([*sizes, contents_pt]))
             font["sizes_points"] = sizes
     if "body_size" not in font:
-        # "Font Type and Size: … 12" / "Font size: 12" / "typeface size 12".
-        typeface_size = re.search(
+        # Many guides state a manuscript-wide typeface size and later a different
+        # title/cover size. Collect candidates and prefer body/typeface wording
+        # over title-only "Font size N" so any school guide works — not one template.
+        candidates: list[tuple[int, int, float]] = []  # (score, -start, pt)
+
+        def _local_context(start: int, end: int) -> tuple[str, str]:
+            # Prefer what the size is describing (before). After stays in-clause only
+            # so a later title/cover rule cannot poison an earlier body size.
+            before = flat[max(0, start - 120) : start]
+            rest = flat[end : min(len(flat), end + 80)]
+            stop = re.search(r"[.;\n]", rest)
+            after = rest[: stop.start()] if stop else rest[:40]
+            return before, after
+
+        def _is_title_or_heading_exception(before: str, after: str) -> bool:
+            # Reject sizes that clearly describe title/cover text only.
+            clause = f"{before[-90:]}{after}"
+            return bool(
+                re.search(
+                    r"(?i)\b(?:"
+                    r"title\s+page|cover\s+page|chapter\s+title|section\s+title|"
+                    r"thesis\s+title|dissertation\s+title|"
+                    r"uppercase\s+letters|all\s+caps|"
+                    r"bold\s+style|boldface"
+                    r")\b",
+                    clause,
+                )
+            )
+
+        def _add_candidate(start: int, end: int, value: float | None, base: int) -> None:
+            if value is None or not (6 <= float(value) <= 72):
+                return
+            before, after = _local_context(start, end)
+            if _is_title_or_heading_exception(before, after):
+                return
+            window = f"{before}{after}"
+            score = base
+            if re.search(
+                r"(?i)\b(?:throughout|entire\s+manuscript|whole\s+manuscript|must\s+be\s+used)\b",
+                window,
+            ):
+                score += 4
+            if re.search(
+                r"(?i)\b(?:typeface|font\s*(?:family|type)|body(?:\s*text)?|main\s+text|manuscript\s+text)\b",
+                window,
+            ):
+                score += 3
+            if re.search(
+                r"(?i)\b(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica)\b",
+                window,
+            ):
+                score += 2
+            # Earlier manuscript rules beat later exceptions when scores tie.
+            candidates.append((score, -start, float(value)))
+
+        for match in re.finditer(
+            r"\b(?:typeface|font(?:\s*(?:family|type))?|type)\b(.{0,40}?)\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+            re.I,
+        ):
+            if re.search(r"(?i)\bheading\b", match.group(1) or ""):
+                continue
+            _add_candidate(match.start(), match.end(), float(match.group(2)), base=5)
+
+        for match in re.finditer(
             r"\bfont\s*(?:type\s*)?(?:and|&|/)\s*size\b\s*:?\s*[^.\d]{0,60}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
-            r"|\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b"
             r"|\b(?:typeface|font\s*(?:family|type)|type)\s+size\b\s*(?:=|:)?\s*(\d{1,2}(?:\.\d+)?)\b",
             flat,
             re.I,
-        )
-        number = None
-        if typeface_size:
-            number = float(next(group for group in typeface_size.groups() if group))
-        else:
-            # Prose: "… font, size 12 …" - allow a short gap, but never across "Heading N".
-            spanned = re.search(
-                r"\b(?:typeface|font(?:\s*(?:family|type))?|type)\b(.{0,40}?)\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
-                flat,
-                re.I,
-            )
-            if spanned and not re.search(r"(?i)\bheading\b", spanned.group(1) or ""):
-                number = float(spanned.group(2))
-        # Institutional prose: "Times New Roman, font 12" / "Font style … font 12".
-        if number is None:
-            prose_font = re.search(
-                r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica|"
-                r"font\s*style|typeface)\b[^.]{0,80}?\bfont\s+(\d{1,2})\b"
-                r"|\bfont\s+style\b[^.]{0,100}?\b(\d{1,2})\b(?!\s*(?:inch|mm|cm|heading))",
-                flat,
-            )
-            if prose_font and not re.search(
+        ):
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=4)
+
+        for match in re.finditer(
+            r"\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+            re.I,
+        ):
+            _add_candidate(match.start(), match.end(), float(match.group(1)), base=1)
+
+        for match in re.finditer(
+            r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica|"
+            r"font\s*style|typeface)\b[^.]{0,80}?\bfont\s+(\d{1,2})\b"
+            r"|\bfont\s+style\b[^.]{0,100}?\b(\d{1,2})\b(?!\s*(?:inch|mm|cm|heading))",
+            flat,
+        ):
+            if re.search(
                 r"(?i)\bheading\b.{0,30}\bfont\s+\d",
-                flat[
-                    max(0, (prose_font.start() - 40)) : prose_font.end() + 10
-                ],
+                flat[max(0, match.start() - 40) : match.end() + 10],
             ):
-                number = float(next(group for group in prose_font.groups() if group))
-        if number is not None and 6 <= number <= 72:
+                continue
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=3)
+
+        # "Calibri, size 12" / "main text … size 12" without the word "font" before size.
+        for match in re.finditer(
+            r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica)\b"
+            r".{0,40}?\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b"
+            r"|\b(?:main\s+text|body(?:\s*text)?|manuscript(?:\s*text)?)\b"
+            r".{0,80}?\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+        ):
+            if re.search(r"(?i)\bheading\b", match.group(0) or ""):
+                continue
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=4)
+
+        if candidates:
+            candidates.sort(reverse=True)
+            number = candidates[0][2]
             font["body_size"] = number
             sizes = sorted(set([*sizes, number]))
             font["sizes_points"] = sizes

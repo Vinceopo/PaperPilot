@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { sendOtp, verifyOtp } from "../../api";
+import { maskEmail } from "../../lib/maskEmail";
 import { formatCountdown } from "../../lib/messages";
 import { colors } from "../../theme";
 import OtpInput from "../ui/OtpInput";
@@ -123,7 +124,7 @@ export default function OtpStep({
     <View style={styles.wrap}>
       <View style={styles.emailCard}>
         <Text style={styles.emailCopy}>
-          We sent a 6-digit code to <Text style={styles.emailStrong}>{email}</Text>
+          We sent a 6-digit code to <Text style={styles.emailStrong}>{maskEmail(email)}</Text>
         </Text>
       </View>
 

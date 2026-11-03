@@ -76,6 +76,8 @@ overall_score = average(scores of categories that were actually measured)
 
 Only categories with `checked > 0` are included. Unmeasured categories do not drag the average.
 
+Blank / IGNORE / N/A mechanics fields still **measure** eligible units and mark them all **passed** (typically 100% on Score Breakdown). They count toward Overall. “Not applicable” is only for categories with nothing to measure — not for intentionally unset rules.
+
 ### Scan summary (Errors / Warnings / Checks)
 
 Separate from unit math: count of **rule-level findings** (severity tickets), not the 9,000+ micro-units.

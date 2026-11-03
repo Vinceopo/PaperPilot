@@ -499,6 +499,31 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(stolen.get("heading1_size"), 16.0)
         self.assertNotEqual(stolen.get("body_size"), 16.0)
 
+    def test_body_typeface_size_wins_over_later_title_font_size(self):
+        """Any guide: manuscript-wide typeface size must beat later title-only Font size."""
+        # Outline-style school guide (typeface first, title exception later).
+        outline = derive_mechanics_rules(
+            "A. Typeface - Arial/Times New Roman font, size 12 must be used throughout "
+            "the manuscript unless otherwise indicated (as in Titles, Headings). "
+            "b. Spacing - Double spacing throughout the manuscript. "
+            "Title - written in uppercase letters. Font size 14, bold style."
+        )["font"]
+        self.assertEqual(outline["body_size"], 12.0)
+        self.assertEqual(outline["sizes_points"], [12.0])
+
+        # Different wording / institution style — same conflict pattern.
+        prose = derive_mechanics_rules(
+            "Use Times New Roman for the entire manuscript at font size 11. "
+            "Line spacing is double. "
+            "On the cover page, the thesis title is centered. Font size 16."
+        )["font"]
+        self.assertEqual(prose["body_size"], 11.0)
+        self.assertEqual(prose["sizes_points"], [11.0])
+
+        # Bare "Font size N" alone (no title exception) still sets body size.
+        plain = derive_mechanics_rules("Font type: Calibri\nFont size: 12\n")["font"]
+        self.assertEqual(plain["body_size"], 12.0)
+
     def test_bare_content_label_maps_to_body_text_size(self):
         """Guides often write Content: 11 (no 'size' / no 'pt') for body text."""
         font = derive_mechanics_rules(
