@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 
+from app.documents import parse_alignment
 from app.gemini_client import enrich_compliance_issues
 from app.mechanics_options import (
     BODY_CONTINUOUS,
@@ -1908,9 +1909,13 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
 
 
 def _check_alignment(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
-    expected = str(rules.get("alignment") or "").strip().lower()
-    if expected not in {"left", "right", "center", "justify"}:
+    raw = rules.get("alignment")
+    if rule_unset(raw):
         # No alignment rule → do not flag any body alignment.
+        return
+    # Accept synonyms ("Justified", "flush left", …); exact tokens alone missed legacy rules.
+    expected = parse_alignment(raw)
+    if expected not in {"left", "right", "center", "justify"}:
         return
     allowed = {expected}
     stats.applicable = True

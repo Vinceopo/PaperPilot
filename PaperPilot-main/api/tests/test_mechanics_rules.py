@@ -305,6 +305,26 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
         self.assertEqual(alignment["status"], "not_applicable")
 
+    def test_justified_synonym_still_checks_alignment(self):
+        """Legacy / form labels like 'Justified' must appear on Score Breakdown."""
+        result = run_compliance_scan(
+            self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER),
+            {"alignment": "Justified"},
+        )
+        alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
+        self.assertNotEqual(alignment["status"], "not_applicable")
+        self.assertGreater(alignment["units_checked"], 0)
+        self.assertIn("alignment", _issue_types(result))
+
+    def test_ignore_alignment_still_skips(self):
+        result = run_compliance_scan(
+            self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER),
+            {"alignment": "IGNORE"},
+        )
+        alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
+        self.assertEqual(alignment["status"], "not_applicable")
+        self.assertNotIn("alignment", _issue_types(result))
+
     def test_blank_mechanics_fields_are_not_enforced(self):
         """Any blank / NA mechanics field must not invent a rule or issue."""
         rules = normalize_mechanics_rules(

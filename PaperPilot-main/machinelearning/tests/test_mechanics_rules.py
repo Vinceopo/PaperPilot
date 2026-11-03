@@ -313,6 +313,26 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
         self.assertEqual(alignment["status"], "not_applicable")
 
+    def test_justified_synonym_still_checks_alignment(self):
+        """Legacy / form labels like 'Justified' must appear on Score Breakdown."""
+        result = run_compliance_scan(
+            self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER),
+            {"alignment": "Justified"},
+        )
+        alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
+        self.assertNotEqual(alignment["status"], "not_applicable")
+        self.assertGreater(alignment["units_checked"], 0)
+        self.assertIn("alignment", _issue_types(result))
+
+    def test_ignore_alignment_still_skips(self):
+        result = run_compliance_scan(
+            self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER),
+            {"alignment": "IGNORE"},
+        )
+        alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
+        self.assertEqual(alignment["status"], "not_applicable")
+        self.assertNotIn("alignment", _issue_types(result))
+
     def test_explicit_body_size_still_flags_mismatch(self):
         rules = normalize_mechanics_rules({"font": {"body_size": 12}})
         result = run_compliance_scan(self._body_doc(size=11), rules)

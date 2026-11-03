@@ -388,7 +388,9 @@ def _feature_tier(tier: str) -> str:
 
 def _scan_rules(rules: dict, ignored_fields: list[str] | None = None) -> dict:
     """Normalize rules for a scan; strip IGNORE / empty Format Fields so they do not enforce."""
-    out = apply_ignored_fields_to_rules(rules or {}, ignored_fields)
+    out = apply_ignored_fields_to_rules(
+        normalize_mechanics_rules(rules or {}), ignored_fields
+    )
     style = str(out.get("citation_style") or "").strip().upper()
     if style == "CHICAGO":
         out["citation_style"] = "APA"
