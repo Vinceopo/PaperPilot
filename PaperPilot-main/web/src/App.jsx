@@ -149,6 +149,18 @@ function subscriptionStamp(sub) {
   return String(sub?.updated_at || sub?.renews_at || sub?.billing_period_end || "");
 }
 
+/** True when a Free snapshot still carries active paid billing signals (stale read). */
+function subscriptionLooksStaleFree(sub) {
+  if (!sub || typeof sub !== "object") return false;
+  if (isPaidTier(sub.tier)) return false;
+  const status = String(sub.status || "").toLowerCase();
+  if (status === "canceled" || status === "expired") return false;
+  if (status === "active" || status === "past_due" || status === "paid") return true;
+  if (sub.paymongo_subscription_id && status !== "canceled") return true;
+  const renews = Date.parse(sub.renews_at || "");
+  return Number.isFinite(renews) && renews > Date.now();
+}
+
 function pendingRegistration(user) {
   try {
     const saved = JSON.parse(sessionStorage.getItem(REGISTRATION_SUCCESS_KEY) || "null");
@@ -249,21 +261,28 @@ export default function App() {
   const subscriptionTicketRef = useRef(0);
   const subscriptionAppliedRef = useRef(0);
   const subscriptionRef = useRef(null);
+  // After site-data clear, a silent manuscripts refresh can finish before the paid
+  // dashboard reply and lock Free into memory/localStorage. Track session paid state.
+  const paidActivatedRef = useRef(false);
   const nextSubscriptionTicket = useCallback(() => ++subscriptionTicketRef.current, []);
   const storeSubscription = useCallback((next, ticket, opts = {}) => {
     if (!next || typeof next !== "object") return false;
     const order = ticket ?? ++subscriptionTicketRef.current;
-    if (order < subscriptionAppliedRef.current) return false;
 
     const current = subscriptionRef.current;
     const nextTier = String(next.tier || "free").toLowerCase();
     const currentTier = String(current?.tier || "free").toLowerCase();
+    const upgradingToPaid = isPaidTier(nextTier) && !isPaidTier(currentTier);
+    // Free→Paid must win even when an older dashboard request finishes after a
+    // newer silent refresh that still saw Free (ticket order alone is not enough).
+    if (!upgradingToPaid && order < subscriptionAppliedRef.current) return false;
+
     // After PayMongo confirm, an in-flight GET /subscription often still returns Free.
     // That stale snapshot must not wipe the paid plan from the header / scan limits.
     // A newer Free snapshot (explicit cancel, or period ended) is still allowed through.
     if (
       !opts.allowDowngrade &&
-      isPaidTier(currentTier) &&
+      (isPaidTier(currentTier) || paidActivatedRef.current) &&
       !isPaidTier(nextTier)
     ) {
       const curStamp = subscriptionStamp(current);
@@ -273,8 +292,20 @@ export default function App() {
       }
     }
 
-    subscriptionAppliedRef.current = order;
+    // After cache clear there is no paid tier in memory yet. Do not persist a Free
+    // snapshot that still carries active billing fields - retry will replace it.
+    if (
+      !opts.allowDowngrade &&
+      !isPaidTier(nextTier) &&
+      !isPaidTier(currentTier) &&
+      subscriptionLooksStaleFree(next)
+    ) {
+      return false;
+    }
+
+    subscriptionAppliedRef.current = Math.max(subscriptionAppliedRef.current, order);
     subscriptionRef.current = next;
+    if (isPaidTier(nextTier)) paidActivatedRef.current = true;
     setSubscription(next);
     writeCachedSubscription(auth?.currentUser?.uid, next);
     return true;
@@ -910,9 +941,15 @@ export default function App() {
           setSubscription((current) => {
             if (current) return current;
             subscriptionRef.current = cached;
+            if (isPaidTier(cached.tier)) paidActivatedRef.current = true;
             return cached;
           });
         }
+      } else {
+        paidActivatedRef.current = false;
+        subscriptionRef.current = null;
+        subscriptionAppliedRef.current = ++subscriptionTicketRef.current;
+        setSubscription(null);
       }
       setAuthReady(true);
     });
@@ -945,6 +982,11 @@ export default function App() {
         const local = loadScannedManuscripts(uid);
         if (local.length) scannedLibraryRef.current = local;
       }
+
+      // Site-data clear wipes paperpilot.subscription.* - the first Free reply must
+      // not be committed until plan-only retries have had a chance to return Paid.
+      const startedWithoutSubCache =
+        !readCachedSubscription(uid) && !isPaidTier(subscriptionRef.current?.tier);
 
       // Vercel Python cold-starts install deps on first request - warm first so
       // the three parallel dashboard calls don't all race a 60s install.
@@ -998,8 +1040,21 @@ export default function App() {
         // Local caches wiped + still no rows: one warm-up reply can be falsely empty.
         // Stop retrying once any mechanics/scans arrive (new accounts stay empty after retries).
         const suspiciousEmpty = wipedLocal && !gotAnyRows;
+        // After site-data clear, mechanics/scans can succeed while /subscription still
+        // returns a warm-up Free snapshot. Retry the parallel burst once; dedicated
+        // plan-only retries below cover a stubborn Free reply.
+        const subValue =
+          subscriptionResult.status === "fulfilled" ? subscriptionResult.value : null;
+        const subTier = String(subValue?.tier || "free").toLowerCase();
+        const suspiciousFreeAfterWipe =
+          localSubEmpty &&
+          !paidActivatedRef.current &&
+          attempt === 1 &&
+          (subscriptionResult.status === "rejected" ||
+            !isPaidTier(subTier) ||
+            subscriptionLooksStaleFree(subValue));
 
-        if (!transientFail && !suspiciousEmpty) break;
+        if (!transientFail && !suspiciousEmpty && !suspiciousFreeAfterWipe) break;
 
         await warmApi({ attempts: 2, delayMs: 800 });
         await sleep(750 * attempt);
@@ -1037,9 +1092,43 @@ export default function App() {
         failures.push(manuscriptsResult.reason?.message || "Could not load manuscripts.");
       }
       if (subscriptionResult.status === "fulfilled") {
-        storeSubscription(subscriptionResult.value, subscriptionTicket);
+        let latestSub = subscriptionResult.value;
+        const deferFreeCommit =
+          !silent &&
+          startedWithoutSubCache &&
+          !paidActivatedRef.current &&
+          !isPaidTier(latestSub?.tier);
+
+        if (deferFreeCommit) {
+          // Don't write Free to localStorage yet - a warm-up Free would stick until
+          // hard refresh. Re-fetch plan only, then commit whichever tier we end on.
+          for (let extra = 1; extra <= 2 && !isPaidTier(latestSub?.tier); extra += 1) {
+            await warmApi({ attempts: 1, delayMs: 400 });
+            await sleep(600 * extra);
+            try {
+              latestSub = await getSubscription();
+            } catch {
+              // Keep the last successful snapshot if a retry fails.
+            }
+          }
+          storeSubscription(latestSub, nextSubscriptionTicket());
+        } else {
+          storeSubscription(latestSub, subscriptionTicket);
+        }
       } else {
         failures.push(subscriptionResult.reason?.message || "Could not load subscription.");
+        if (!silent && !subscriptionRef.current) {
+          for (let extra = 1; extra <= 2; extra += 1) {
+            await sleep(600 * extra);
+            try {
+              const ticket = nextSubscriptionTicket();
+              const again = await getSubscription();
+              if (storeSubscription(again, ticket)) break;
+            } catch {
+              // Leave plan unset; header stays on Checking until a later refresh.
+            }
+          }
+        }
       }
       if (failures.length && !silent) {
         setError(failures[0]);
@@ -1077,8 +1166,14 @@ export default function App() {
     };
   }, [signedIn, loadDashboard]);
 
+  // Refresh when navigating back to My Manuscripts - not on the initial signed-in
+  // mount (that races the first paid /subscription after a cache clear).
+  const previousPageRef = useRef(activePage);
   useEffect(() => {
-    if (signedIn && activePage === "manuscripts") void loadDashboard({ silent: true });
+    const previous = previousPageRef.current;
+    previousPageRef.current = activePage;
+    if (!signedIn || activePage !== "manuscripts" || previous === "manuscripts") return;
+    void loadDashboard({ silent: true });
   }, [signedIn, activePage, loadDashboard]);
 
   // Stored versions can be trimmed / server summaries only; fetch the full scan when opened.
@@ -1440,6 +1535,7 @@ export default function App() {
     );
   }
 
+  const planReady = Boolean(subscription);
   const tier = String(subscription?.tier || "free").toLowerCase();
   const used = Number(subscription?.used ?? subscription?.scans_used ?? 0);
   const limit = Number(subscription?.limit) || planLimit(tier);
@@ -1800,9 +1896,13 @@ export default function App() {
         <div className="flex items-center gap-3 sm:gap-4">
           {activePage !== "notifications" && activePage !== "subscription" ? (
             <div className="text-right">
-              <p className="text-sm font-semibold capitalize text-slate-700">{tier} plan</p>
+              <p className="text-sm font-semibold capitalize text-slate-700">
+                {planReady ? `${tier} plan` : "Checking plan…"}
+              </p>
               <p className="text-xs text-slate-400">
-                {remaining} of {limit} scans remaining this {resetWindow(tier)}
+                {planReady
+                  ? `${remaining} of ${limit} scans remaining this ${resetWindow(tier)}`
+                  : "Loading your scan allowance"}
               </p>
             </div>
           ) : null}

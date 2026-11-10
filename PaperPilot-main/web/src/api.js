@@ -133,7 +133,8 @@ async function authorizedFetch(path, options = {}) {
     headers.set("Content-Type", "application/json");
   }
   try {
-    const res = await fetch(apiUrl(path), { ...options, headers });
+    // Plan/usage must not come from a disk-cached Free snapshot after site-data clears.
+    const res = await fetch(apiUrl(path), { ...options, headers, cache: "no-store" });
     // Backend 401 alone must NOT force logout (misconfigured Admin SDK, etc.).
     // Only sign out when Firebase itself says the token is revoked/invalid.
     if (res.status === 401 && auth?.currentUser) {
