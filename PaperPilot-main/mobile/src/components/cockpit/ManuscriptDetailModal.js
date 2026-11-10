@@ -347,12 +347,19 @@ export default function ManuscriptDetailModal({
           </View>
         </View>
 
+        {/* Independent panes: Versions stays put while Short result scrolls (and vice versa). */}
+        <View style={styles.panes}>
         <View style={styles.aside}>
           <View style={styles.asideLabelRow}>
             <ClockIcon size={14} />
             <Text style={styles.asideLabel}>Versions</Text>
           </View>
-          <ScrollView style={styles.versionScroll} contentContainerStyle={styles.versionList} nestedScrollEnabled>
+          <ScrollView
+            style={styles.versionScroll}
+            contentContainerStyle={styles.versionList}
+            nestedScrollEnabled
+            showsVerticalScrollIndicator
+          >
             {versionsDesc.map((ver) => {
               const vb = scoreBand(ver.score);
               const active = ver.id === selected?.id;
@@ -407,7 +414,12 @@ export default function ManuscriptDetailModal({
           ) : null}
         </View>
 
-        <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+        <ScrollView
+          style={styles.body}
+          contentContainerStyle={styles.bodyContent}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+        >
           {!selected ? (
             <Text style={styles.emptyText}>No versions available.</Text>
           ) : (
@@ -526,6 +538,7 @@ export default function ManuscriptDetailModal({
             </>
           )}
         </ScrollView>
+        </View>
 
         <ConfirmDialog
           open={Boolean(pendingDeleteId)}
@@ -570,6 +583,8 @@ export default function ManuscriptDetailModal({
 
 const styles = StyleSheet.create({
   root: {
+    flex: 1,
+    minHeight: 0,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
@@ -581,7 +596,12 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
+  panes: {
+    flex: 1,
+    minHeight: 0,
+  },
   header: {
+    flexShrink: 0,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
     paddingHorizontal: 24,
@@ -608,8 +628,21 @@ const styles = StyleSheet.create({
   pillText: { fontSize: 12, fontWeight: "700" },
   pillNeutral: { borderColor: colors.border, backgroundColor: "#f8fafc" },
   pillNeutralText: { color: "#475569" },
-  aside: { borderBottomWidth: 1, borderBottomColor: "#f1f5f9", backgroundColor: "#F8FAFC" },
-  asideLabelRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 16, paddingVertical: 12 },
+  aside: {
+    flexShrink: 0,
+    maxHeight: 256,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+    backgroundColor: "#F8FAFC",
+  },
+  asideLabelRow: {
+    flexShrink: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
   asideLabel: {
     fontSize: 10,
     fontWeight: "600",
@@ -617,7 +650,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     color: colors.slate,
   },
-  versionScroll: { maxHeight: 200 },
+  versionScroll: { flexGrow: 0, maxHeight: 180 },
   versionList: { paddingHorizontal: 12, paddingBottom: 12, gap: 4 },
   versionRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   versionBtn: {
@@ -644,6 +677,7 @@ const styles = StyleSheet.create({
   versionScore: { marginTop: 4, fontSize: 10, fontWeight: "600" },
   versionDelete: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   freeNote: {
+    flexShrink: 0,
     borderTopWidth: 1,
     borderTopColor: colors.border,
     paddingHorizontal: 16,
@@ -652,7 +686,7 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: colors.slate,
   },
-  body: { flexGrow: 1, maxHeight: 560 },
+  body: { flex: 1, minHeight: 0 },
   bodyContent: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 28 },
   emptyText: { fontSize: 14, color: colors.muted },
   selectedRow: {

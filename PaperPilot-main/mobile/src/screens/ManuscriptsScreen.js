@@ -181,11 +181,7 @@ export default function ManuscriptsScreen({ navigation }) {
         title="Manuscript Detail"
         onBack={() => setViewId(null)}
       >
-        <ScrollView
-          style={styles.root}
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-        >
+        <View style={styles.detailHost}>
           <ManuscriptDetailModal
             manuscript={viewing}
             tier={tier}
@@ -197,7 +193,7 @@ export default function ManuscriptsScreen({ navigation }) {
             onOpenResult={(version) => onOpenResult(viewing, version)}
             resolveResult={resolveSavedResult}
           />
-        </ScrollView>
+        </View>
         <ConfirmDialog
           open={Boolean(pendingDelete)}
           title="Delete manuscript?"
@@ -473,6 +469,7 @@ const cardShadow = {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.pageBg },
+  detailHost: { flex: 1, minHeight: 0, padding: 16, paddingBottom: 12, backgroundColor: colors.pageBg },
   loadingBox: {
     flex: 1,
     minHeight: 280,

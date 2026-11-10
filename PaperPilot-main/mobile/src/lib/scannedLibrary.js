@@ -347,7 +347,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
       versions: [version],
     });
   }
-  return list;
+  return dedupeManuscriptsByTitle(list);
 }
 
 /**
@@ -397,6 +397,18 @@ export function versionToScanResult(manuscript, version) {
       issueCount: b.issueCount == null ? null : Number(b.issueCount),
       failedShare: b.failedShare == null ? null : Number(b.failedShare),
     })),
+    unitsChecked: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsChecked == null ? 0 : Number(b.unitsChecked) || 0),
+      0,
+    ),
+    unitsPassed: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsPassed == null ? 0 : Number(b.unitsPassed) || 0),
+      0,
+    ),
+    unitsFailed: (version.breakdown || []).reduce(
+      (sum, b) => sum + (b.unitsFailed == null ? 0 : Number(b.unitsFailed) || 0),
+      0,
+    ),
     formatChecks: issues.map((issue, idx) => ({
       id: issue.issue_type || `issue-${idx}`,
       issue_type: issue.issue_type || "",

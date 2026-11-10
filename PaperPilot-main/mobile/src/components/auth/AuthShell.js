@@ -1,7 +1,6 @@
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "../../theme";
-import PaperPilotLogo from "../shell/PaperPilotLogo";
 
 const QUOTE = "PaperPilot helps you get every academic document format-ready.";
 const CHIPS = ["Format Checker", "AI Feedback", "Compliance Report"];
@@ -50,7 +49,6 @@ export default function AuthShell({ variant = "login", title, subtitle, children
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.header}>
-            <PaperPilotLogo tone="dark" align="start" markSize={44} style={styles.brand} />
             <Text style={styles.headline}>
               {copy.headlineBefore}
               <Text style={styles.headlineAccent}>{copy.headlineAccent}</Text>
@@ -100,7 +98,6 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 28,
   },
-  brand: { marginBottom: 22 },
   headline: {
     fontSize: 26,
     fontWeight: "700",
