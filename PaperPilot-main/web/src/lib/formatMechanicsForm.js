@@ -67,11 +67,13 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
       starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "left" }),
     ],
     paginationPosition: "Top right",
-    paginationTitlePage: "Number shown",
+    // Leave unset: schools differ on whether page 1 shows a number. Cover-like pages still auto-skip.
+    paginationTitlePage: "",
     paginationFirstPageRule: "Same position as other pages",
     paginationPreliminaryStyle: "",
+    // Body numbering / chapter-start markers removed from Format Fields UI.
     paginationBodyNumbering: "",
-    paginationChapterMarkers: ["chapter_roman", "chapter_arabic"],
+    paginationChapterMarkers: [],
     pageBreaks: "Only to start each new chapter and the reference list",
     tableLayout:
       "Table number in bold, with the title in italic title case on the next line, both placed above it",
@@ -384,15 +386,11 @@ export function formToRules(form) {
     ["paginationFirstPageRule", "first_page_of_chapter"],
     ["paginationTitlePage", "title_page"],
     ["paginationPreliminaryStyle", "preliminary_style"],
-    ["paginationBodyNumbering", "body_numbering"],
   ]) {
     const value = formText(form[field]);
     if (value) pagination[key] = value;
   }
-  const markers = isIgnoreFormValue(form.paginationChapterMarkers)
-    ? []
-    : canonicalChapterMarkers(form.paginationChapterMarkers);
-  if (markers.length) pagination.chapter_markers = markers;
+  // Body numbering + chapter-start markers are no longer Format Fields controls.
   if (Object.keys(pagination).length) {
     rules.pagination = pagination;
     rules.pagination_requirements = Object.values(pagination).filter((value) => typeof value === "string");

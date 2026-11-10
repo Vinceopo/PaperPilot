@@ -8,7 +8,14 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt
 
-from app.compliance import _page_token, run_compliance_scan
+from app.compliance import (
+    CategoryStats,
+    IssueCollector,
+    _observe_spacing,
+    _page_token,
+    _spacing_matches,
+    run_compliance_scan,
+)
 from app.documents import normalize_mechanics_rules, parse_document
 
 BODY = (
@@ -58,6 +65,10 @@ def _number_header(section, where="header", align=WD_ALIGN_PARAGRAPH.RIGHT, firs
             first_paragraph = first_part.paragraphs[0]
             first_paragraph.alignment = first_align
             _page_field(first_paragraph)
+    else:
+        # New sections inherit Different First Page from the previous section; clear it when
+        # this section should number every page the same way.
+        section.different_first_page_header_footer = False
 
 
 def _body(doc, text=BODY, count=2):
@@ -159,7 +170,11 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(pages, {3, 5})
 
     def test_compliant_thesis_has_no_pagination_issues(self):
-        result = self.scan(_thesis(), PAGINATION_RULES)
+        # PAGINATION_RULES asks for bottom-center on chapter openers.
+        result = self.scan(
+            _thesis(chapter_first_page=("footer", WD_ALIGN_PARAGRAPH.CENTER)),
+            PAGINATION_RULES,
+        )
         self.assertEqual(_issue_types(result, "pagination"), set())
         self.assertEqual(_section(result, "Pagination")["formatting_score"], 100.0)
         self.assertGreater(_section(result, "Pagination")["issue_count"], -1)
@@ -175,14 +190,27 @@ class PaginationTests(unittest.TestCase):
         compliant = self.scan(_thesis(align=WD_ALIGN_PARAGRAPH.LEFT), rules)
         self.assertNotIn("pagination_position", _issue_types(compliant))
 
-    def test_style_and_sequence_are_not_checked(self):
-        result = self.scan(_thesis(prelim_fmt="decimal", body_start=5), PAGINATION_RULES)
-        self.assertEqual(_issue_types(result, "pagination"), set())
+    def test_style_and_sequence_mismatches_are_flagged(self):
+        result = self.scan(
+            _thesis(prelim_fmt="decimal", body_start=5, chapter_first_page=("footer", WD_ALIGN_PARAGRAPH.CENTER)),
+            PAGINATION_RULES,
+        )
+        types = _issue_types(result, "pagination")
+        self.assertTrue(types & {"pagination_style", "pagination_sequence"})
 
     def test_chapter_first_and_title_rules_are_not_flagged(self):
         hidden_rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "No page number shown"}}
-        self.assertEqual(_issue_types(self.scan(_thesis(), hidden_rules), "pagination"), set())
-        shown_title = self.scan(_thesis(title_first_page=None), PAGINATION_RULES)
+        self.assertEqual(
+            _issue_types(self.scan(_thesis(chapter_first_page="hidden"), hidden_rules), "pagination"),
+            set(),
+        )
+        shown_title_rules = {
+            "pagination": {**PAGINATION_RULES["pagination"], "title_page": "Number shown"}
+        }
+        shown_title = self.scan(
+            _thesis(title_first_page=None, chapter_first_page=("footer", WD_ALIGN_PARAGRAPH.CENTER)),
+            shown_title_rules,
+        )
         self.assertEqual(_issue_types(shown_title, "pagination"), set())
 
     def test_page_tokens(self):
@@ -206,16 +234,92 @@ class PaginationTests(unittest.TestCase):
         pages = [
             page(0, None),
             page(1, "ii"),
-            page(2, "III"),
-            page(3, None, heading="CHAPTER I"),
+            page(2, "iii"),
+            page(3, "1", heading="CHAPTER I"),
             page(4, "2"),
-            page(5, "4", x=72, y=750),
+            page(5, "3", x=72, y=750),
         ]
         parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
         result = self.scan(parsed, {"pagination": {"position": "Top right"}})
         issues = [issue for issue in result["issues"] if issue["issue_type"].startswith("pagination")]
         self.assertEqual({issue["issue_type"] for issue in issues}, {"pagination_position"})
         self.assertEqual(issues[0]["locations"][0]["page"], 6)
+
+    def test_no_page_numbers_mode_passes_without_marks(self):
+        def page(index, heading=None):
+            lines = [{
+                "text": heading or f"Body text line on page {index + 1} with enough words.",
+                "bbox": [72, 300, 540, 314],
+                "spans": [{"text": "x", "size": 12, "font": "Times"}],
+                "page_index": index,
+                "line_index": 0,
+            }]
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [page(0, "A STUDY OF FORMATTING"), page(1), page(2, "CHAPTER I")],
+        }
+        result = self.scan(
+            parsed,
+            {
+                "pagination": {
+                    "position": "No page numbers",
+                    "first_page_of_chapter": "No page number shown",
+                    "title_page": "Number shown",
+                }
+            },
+        )
+        self.assertEqual(_issue_types(result, "pagination"), set())
+
+    def test_schedule_cell_chapter_mention_is_not_chapter_start(self):
+        """Mid-doc table/schedule lines that mention Chapter N must not hide-number false positives."""
+        def page(index, lines, number=None):
+            out = []
+            for line_index, text in enumerate(lines):
+                out.append({
+                    "text": text,
+                    "bbox": [72, 120 + line_index * 18, 540, 134 + line_index * 18],
+                    "spans": [{"text": text, "size": 11, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": line_index,
+                    "table_row": True,
+                })
+            if number is not None:
+                out.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(out),
+                })
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": out}
+
+        pages = [
+            page(0, ["A STUDY OF MANUSCRIPT FORMATTING"]),
+            page(1, ["ABSTRACT", BODY[:80]], number="ii"),
+            page(
+                2,
+                [
+                    "Chapter 3 implementation tasks for sprint planning",
+                    "Review of Related Literature  environment variables",
+                    "shared components and project board",
+                ],
+                number="25",
+            ),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "title_page": "Hidden but counted",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
+        result = self.scan(parsed, rules)
+        self.assertNotIn("pagination_chapter_first", _issue_types(result, "pagination"))
 
 
 class HeadingAndSpacingTests(unittest.TestCase):
@@ -239,6 +343,446 @@ class HeadingAndSpacingTests(unittest.TestCase):
         self.assertNotIn("bold", issue["explanation"])
         rules["font"]["heading_styles"]["heading1"]["case"] = "title"
         self.assertNotIn("heading1_style", _issue_types(run_compliance_scan(self._doc(), rules)))
+
+    def test_measured_one_point_six_four_matches_one_and_a_half_spacing(self):
+        """PDF gap math often reports Word 1.5 spacing as 1.64. That is not a mismatch."""
+        self.assertTrue(_spacing_matches(1.64, 1.5))
+        self.assertTrue(_spacing_matches(1.5, 1.5))
+        self.assertTrue(_spacing_matches(1.02, 1.0))
+        self.assertFalse(_spacing_matches(1.64, 2.0))
+        self.assertFalse(_spacing_matches(1.15, 1.0))
+        self.assertFalse(_spacing_matches(1.0, 1.5))
+        stats = CategoryStats()
+        collector = IssueCollector()
+        _observe_spacing(
+            {"page_index": 0, "line_index": 4, "text": "This paragraph is set to 1.5 line spacing."},
+            1.64,
+            1.5,
+            stats,
+            collector,
+        )
+        self.assertEqual(stats.failed, 0)
+        self.assertEqual(collector.result(), [])
+
+    def test_lists_and_table_columns_skip_first_line_indent(self):
+        """Numbered questions and far-right table cells are not body indent targets."""
+        from app.compliance import CategoryStats, IssueCollector, _check_indentation
+
+        list_units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "text": "3. How often do students use AI writing tools during school work?",
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 0,
+                "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 1,
+                "text": "This wraps onto a second line of the same numbered question item.",
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 0,
+                "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+                "spans": [],
+            },
+        ]
+        table_units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "text": "gemini_wording_rejected stores rejected wording for an issue.",
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 1,
+                "formatting": {},
+                "bbox": [72 + 3.9 * 72, 120, 72 + 5.2 * 72, 134],
+                "column": (72.0, 540.0),
+                "page_width": 612,
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 1,
+                "text": "Second wrapped cell line in the same far-right table column.",
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 1,
+                "formatting": {},
+                "bbox": [72 + 3.9 * 72, 140, 72 + 5.2 * 72, 154],
+                "column": (72.0, 540.0),
+                "page_width": 612,
+                "spans": [],
+            },
+        ]
+        rules = {"first_line_indent_inches": 0.5}
+        for units in (list_units, table_units):
+            collector = IssueCollector()
+            _check_indentation(units, rules, CategoryStats(), collector)
+            self.assertNotIn("first_line_indent", collector.items)
+
+    def test_pdf_table_cells_skip_spacing_and_indent(self):
+        """Wrapped left-column PDF table lines must not get body spacing/indent hits."""
+        from app.compliance import (
+            CategoryStats,
+            IssueCollector,
+            _check_indentation,
+            _check_spacing,
+            _document_units,
+            _promote_pdf_table_cells,
+        )
+
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [
+                {
+                    "page_index": 0,
+                    "width_points": 612,
+                    "height_points": 792,
+                    "lines": [
+                        {
+                            "text": "Sprint  Task owner  Status",
+                            "bbox": [72, 120, 500, 134],
+                            "spans": [{"text": "x", "size": 11, "font": "Times"}],
+                            "page_index": 0,
+                            "line_index": 0,
+                            "table_row": True,
+                        },
+                        {
+                            # Narrow left-column wrap - no cell gap on this row alone.
+                            "text": "Build the formatter pipeline for chapter one",
+                            "bbox": [72, 150, 250, 164],
+                            "spans": [{"text": "x", "size": 11, "font": "Times"}],
+                            "page_index": 0,
+                            "line_index": 1,
+                            "table_row": False,
+                        },
+                        {
+                            "text": "Continue the same cell on the next visual row",
+                            "bbox": [72, 168, 240, 182],
+                            "spans": [{"text": "x", "size": 11, "font": "Times"}],
+                            "page_index": 0,
+                            "line_index": 2,
+                            "table_row": False,
+                        },
+                    ],
+                }
+            ],
+        }
+        units = _document_units(parsed, {"first_line_indent_inches": 0.5, "line_spacing": 1.5})
+        self.assertTrue(any(unit.get("source") == "table" for unit in units[1:]))
+        spacing_collector = IssueCollector()
+        indent_collector = IssueCollector()
+        _check_spacing(units, {"line_spacing": 1.5}, CategoryStats(), spacing_collector)
+        _check_indentation(units, {"first_line_indent_inches": 0.5}, CategoryStats(), indent_collector)
+        self.assertEqual(spacing_collector.result(), [])
+        self.assertNotIn("first_line_indent", indent_collector.items)
+        # Direct promote helper stays idempotent on already-marked cells.
+        _promote_pdf_table_cells(units)
+        self.assertTrue(all(unit.get("source") == "table" for unit in units if unit.get("text")))
+
+    def test_single_line_paragraph_indent_is_checked(self):
+        """A one-line body sentence with 0.5 inch indent must fail a 1.0 inch rule."""
+        from app.compliance import CategoryStats, IssueCollector, _check_indentation
+
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "text": "This single-line body paragraph should still be checked for indentation.",
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 0,
+                "formatting": {"first_line_indent_inches": 0.5, "left_indent_inches": 0.0},
+                "spans": [],
+            }
+        ]
+        collector = IssueCollector()
+        _check_indentation(units, {"first_line_indent_inches": 1.0}, CategoryStats(), collector)
+        self.assertIn("first_line_indent", collector.items)
+
+    def test_pdf_wrap_jitter_does_not_start_indent_paragraph(self):
+        """A slightly inset wrap line is not a new paragraph first-line indent."""
+        from app.compliance import CategoryStats, IssueCollector, _check_indentation
+
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                # Correct 0.5 inch first-line indent.
+                "text": "Students prepare manuscripts with careful attention to indent rules across pages.",
+                "role": "body",
+                "source": "body",
+                "formatting": {},
+                "bbox": [72.0 + 36.0, 120.0, 520.0, 134.0],
+                "column": (72.0, 540.0),
+                "page_width": 612,
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 1,
+                # ~0.17 inch nudge (>9pt old threshold, <0.28 inch new) - wrap jitter.
+                "text": "Continuation of the same paragraph should not be scored as a new indent.",
+                "role": "body",
+                "source": "body",
+                "formatting": {},
+                "bbox": [72.0 + 12.0, 140.0, 520.0, 154.0],
+                "column": (72.0, 540.0),
+                "page_width": 612,
+                "spans": [],
+            },
+        ]
+        collector = IssueCollector()
+        _check_indentation(units, {"first_line_indent_inches": 0.5}, CategoryStats(), collector)
+        self.assertNotIn("first_line_indent", collector.items)
+
+    def test_one_line_address_skips_justified_alignment(self):
+        """A one-line address or contact block is not a JUSTIFIED body line."""
+        from app.compliance import CategoryStats, IssueCollector, _check_alignment
+
+        address = "Department of Computer Science, 123 University Avenue, City, State 12345"
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "text": address,
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 0,
+                "alignment": "center",
+                "formatting": {"alignment": "center"},
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 1,
+                "text": "This study examines how students format their manuscripts and how a checker can help.",
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 1,
+                "alignment": "left",
+                "formatting": {"alignment": "left"},
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 2,
+                "text": "It describes the problem, the method, and the expected results in plain language.",
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 1,
+                "alignment": "left",
+                "formatting": {"alignment": "left"},
+                "spans": [],
+            },
+        ]
+        stats = CategoryStats()
+        collector = IssueCollector()
+        _check_alignment(units, {"alignment": "JUSTIFIED"}, stats, collector)
+        excerpts = " ".join(loc.get("excerpt") or "" for loc in collector.items["alignment"]["locations"])
+        self.assertNotIn("University Avenue", excerpts)
+        self.assertEqual(stats.failed, 1)
+        self.assertIn("manuscripts", excerpts)
+
+    def test_list_item_flag_skips_indent(self):
+        """Word numbering (w:numPr) skips indent even when the text has no list marker."""
+        from app.compliance import CategoryStats, IssueCollector, _check_indentation
+
+        text = "Students review the formatting guide before they submit the final manuscript today."
+        base = {
+            "page_index": 0,
+            "line_index": 0,
+            "text": text,
+            "role": "body",
+            "source": "body",
+            "paragraph_index": 0,
+            "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+            "spans": [],
+        }
+        skipped = IssueCollector()
+        _check_indentation([{**base, "list_item": True}], {"first_line_indent_inches": 0.5}, CategoryStats(), skipped)
+        self.assertNotIn("first_line_indent", skipped.items)
+        flagged = IssueCollector()
+        _check_indentation([{**base, "list_item": False}], {"first_line_indent_inches": 0.5}, CategoryStats(), flagged)
+        self.assertIn("first_line_indent", flagged.items)
+
+    def test_decorative_drawing_is_not_a_missing_figure_caption(self):
+        """Logos and seals under 1.5 inches are not figures that need a caption."""
+        from app.compliance import IssueCollector, _check_captions
+
+        body = {
+            "page_index": 0,
+            "line_index": 0,
+            "text": "This study examines how students format their manuscripts and how a checker can help them succeed.",
+            "role": "body",
+            "source": "body",
+            "spans": [],
+        }
+        rules = {"figure_layout_requirements": "Caption placed above the figure"}
+        small = IssueCollector()
+        _check_captions(
+            [
+                body,
+                {
+                    "page_index": 0,
+                    "line_index": 1,
+                    "text": "",
+                    "role": "figure",
+                    "source": "figure",
+                    "has_drawing": True,
+                    "bbox": [72, 220, 140, 280],
+                    "page_width": 612,
+                    "page_height": 792,
+                },
+            ],
+            rules,
+            small,
+        )
+        self.assertNotIn("figure_caption_missing", small.items)
+        large = IssueCollector()
+        _check_captions(
+            [
+                body,
+                {
+                    "page_index": 0,
+                    "line_index": 1,
+                    "text": "",
+                    "role": "figure",
+                    "source": "figure",
+                    "has_drawing": True,
+                    "bbox": [72, 220, 400, 520],
+                    "page_width": 612,
+                    "page_height": 792,
+                },
+            ],
+            rules,
+            large,
+        )
+        self.assertIn("figure_caption_missing", large.items)
+
+    def test_pdf_column_left_prefers_body_edge_over_indent_cluster(self):
+        """A majority 0.5 inch indent cluster must not become the column left."""
+        from app.compliance import (
+            CategoryStats,
+            IssueCollector,
+            PT_PER_INCH,
+            _check_indentation,
+            _column_from_boxes,
+            _document_units,
+            _measured_indent,
+        )
+
+        body_edge = 72.0
+        indented = body_edge + 0.5 * PT_PER_INCH
+        boxes = [[indented, 0, 540, 12]] * 5 + [[body_edge, 0, 540, 12]] * 2
+        left, _right = _column_from_boxes(boxes)
+        self.assertEqual(left, body_edge)
+
+        lines = []
+        y = 100.0
+        specs = [
+            (indented, "Students prepare manuscripts with a half-inch first-line indent on this page."),
+            (body_edge, "The wrapped continuation sits on the body edge and must not reset the column."),
+            (indented, "Another paragraph begins with the same half-inch indent measured from that edge."),
+            (body_edge, "Continuation text stays at the body edge so the indent cluster stays the majority."),
+            (indented, "A third indented opening still measures one half inch rather than zero inches."),
+            (indented, "A fourth indented opening keeps the indented left edge as the common cluster."),
+            (indented, "A fifth indented opening confirms the body edge is still chosen as column left."),
+        ]
+        for index, (x, text) in enumerate(specs):
+            lines.append(
+                {
+                    "text": text,
+                    "bbox": [x, y, 540.0, y + 12],
+                    "spans": [{"text": text, "size": 12, "font": "Times"}],
+                    "page_index": 0,
+                    "line_index": index,
+                }
+            )
+            y += 16
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [{"page_index": 0, "width_points": 612, "height_points": 792, "lines": lines}],
+        }
+        units = _document_units(parsed, {"first_line_indent_inches": 0.5})
+        self.assertEqual(units[0]["column"][0], body_edge)
+        opening = next(unit for unit in units if abs(unit["bbox"][0] - indented) < 1)
+        self.assertAlmostEqual(_measured_indent(opening, 0.0), 0.5, places=2)
+        self.assertNotEqual(_measured_indent(opening, 0.0), 0)
+        collector = IssueCollector()
+        _check_indentation(units, {"first_line_indent_inches": 0.5}, CategoryStats(), collector)
+        self.assertNotIn("first_line_indent", collector.items)
+
+    def test_numbered_subheading_maps_to_heading2(self):
+        """1.1 maps to Heading 2 when that level is defined, even if Heading 1 exists."""
+        from app.compliance import _annotate_roles
+
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "text": "1.1 Research Design",
+                "style": None,
+                "source": "body",
+                "formatting": {"first_line_indent_inches": 0.0},
+                "spans": [{"text": "1.1 Research Design", "size": 14}],
+            }
+        ]
+        _annotate_roles(
+            units,
+            {"font": {"heading1_size": 16, "heading2_size": 14, "body_size": 12}},
+        )
+        self.assertEqual(units[0]["role"], "heading2")
+
+    def test_running_chapter_head_is_not_a_new_chapter_start(self):
+        """A repeated CHAPTER I running head on later pages must not hide page numbers."""
+        from app.compliance import _section_starts
+
+        units = [
+            {
+                "page_index": 2,
+                "line_index": 0,
+                "text": "CHAPTER I",
+                "role": "heading1",
+                "source": "body",
+                "formatting": {"bold": True},
+                "spans": [],
+            },
+            {
+                "page_index": 2,
+                "line_index": 1,
+                "text": "Introduction to the study and its scope for readers.",
+                "role": "body",
+                "source": "body",
+                "spans": [],
+            },
+            {
+                "page_index": 3,
+                "line_index": 0,
+                "text": "CHAPTER I",
+                "role": "heading1",
+                "source": "body",
+                "formatting": {"bold": True},
+                "spans": [],
+            },
+            {
+                "page_index": 3,
+                "line_index": 1,
+                "text": "Body text continues on the next page of the same chapter.",
+                "role": "body",
+                "source": "body",
+                "spans": [],
+            },
+        ]
+        starts = _section_starts(units)
+        self.assertEqual(starts.get(2), "chapter_roman")
+        self.assertNotIn(3, starts)
 
     def test_word_spacing(self):
         rules = normalize_mechanics_rules({"word_spacing": "One space between words and after periods"})

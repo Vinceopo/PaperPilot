@@ -40,8 +40,6 @@ const FIELD_FORM_KEYS = {
   "pagination:title_page": ["paginationTitlePage"],
   "pagination:first_page_of_chapter": ["paginationFirstPageRule"],
   "pagination:preliminary_pages": ["paginationPreliminaryStyle"],
-  "pagination:body_numbering": ["paginationBodyNumbering"],
-  "pagination:chapter_starts": ["paginationChapterMarkers"],
   "page_breaks:page_breaks": ["pageBreaks"],
   "table_layout:table_layout": ["tableLayout"],
   "figure_layout:figure_layout": ["figureLayout"],
@@ -75,8 +73,6 @@ const FIELD_COVERED = {
   "pagination:title_page": (rules) => Boolean(rules?.pagination?.title_page),
   "pagination:first_page_of_chapter": (rules) => Boolean(rules?.pagination?.first_page_of_chapter),
   "pagination:preliminary_pages": (rules) => Boolean(rules?.pagination?.preliminary_style),
-  "pagination:body_numbering": (rules) => Boolean(rules?.pagination?.body_numbering),
-  "pagination:chapter_starts": (rules) => Boolean(rules?.pagination?.chapter_markers?.length),
   "page_breaks:page_breaks": (rules) => Boolean(rules?.page_break_requirements?.length),
   "table_layout:table_layout": (rules) => Boolean(rules?.table_layout_requirements?.length),
   "figure_layout:figure_layout": (rules) => Boolean(rules?.figure_layout_requirements?.length),
@@ -97,14 +93,12 @@ const CATEGORY_FIELDS = {
   ],
   font: ["heading1_size", "heading2_size", "body_size", "font_type", "font_color"],
   heading_styles: ["heading1_style", "heading2_style"],
-  // Must match Format Fields Pagination controls (including Chapter starts).
+  // Must match Format Fields Pagination controls.
   pagination: [
     "page_number_position",
     "title_page",
     "first_page_of_chapter",
     "preliminary_pages",
-    "body_numbering",
-    "chapter_starts",
   ],
   page_breaks: ["page_breaks"],
   table_layout: ["table_layout"],

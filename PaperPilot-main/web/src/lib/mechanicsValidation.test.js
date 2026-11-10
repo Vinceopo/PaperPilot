@@ -50,7 +50,8 @@ describe("fillEmptyFieldsWithIgnore", () => {
     expect(form.marginLeft).toBe("IGNORE");
     expect(form.bodySize).toBe("IGNORE");
     expect(form.paginationTitlePage).toBe("IGNORE");
-    expect(form.paginationChapterMarkers).toBe("IGNORE");
+    // Chapter starts / body numbering were removed from Format Fields.
+    expect(form.paginationChapterMarkers).toEqual([]);
     expect(form.headings).toEqual([]);
   });
 
@@ -132,16 +133,12 @@ describe("applyIgnoredFieldsToForm", () => {
       "pagination:title_page",
       "pagination:first_page_of_chapter",
       "pagination:preliminary_pages",
-      "pagination:body_numbering",
-      "pagination:chapter_starts",
     ];
     const form = applyIgnoredFieldsToForm(rulesToForm(rules, "Capstone"), ignored);
     expect(form.paginationPosition).toBe("Top right");
     expect(form.paginationTitlePage).toBe("IGNORE");
     expect(form.paginationFirstPageRule).toBe("IGNORE");
     expect(form.paginationPreliminaryStyle).toBe("IGNORE");
-    expect(form.paginationBodyNumbering).toBe("IGNORE");
-    expect(form.paginationChapterMarkers).toBe("IGNORE");
   });
 
   it("round-trips IGNORE through ignoredFieldsFromForm", () => {

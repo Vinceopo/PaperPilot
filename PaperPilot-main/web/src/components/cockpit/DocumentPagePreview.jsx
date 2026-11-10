@@ -535,29 +535,42 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
       lineIdx >= 1 &&
       ys[Math.min(ys.length, Math.max(1, Math.round(lineIdx))) - 1] != null &&
       Math.abs(y - Number(ys[Math.min(ys.length, Math.max(1, Math.round(lineIdx))) - 1])) < 1;
+    // Prefer scanner bbox ink when present. Line pin only moves the vertical
+    // anchor - never stretch to the next row or flood 84% of the page width.
+    const hasInkBox =
+      bbox &&
+      Number.isFinite(Number(bbox.x)) &&
+      Number.isFinite(Number(bbox.w)) &&
+      Number(bbox.w) > 0.015;
     let markHeight;
-    if (bbox && Number.isFinite(Number(bbox.y)) && !usedLine) {
-      markHeight = Math.max(0.012, Number(bbox.h) || 0.025) * pageHeight;
+    if (hasInkBox) {
+      const boxH = Math.max(0.012, Number(bbox.h) || 0.022);
+      markHeight = boxH * pageHeight;
       setMark({
         page: pageNumber,
         kind: "box",
         severity: target.severity,
-        top: `${Number(bbox.y) * 100}%`,
+        top: usedLine ? `${y}px` : `${Number(bbox.y) * 100}%`,
         left: `${Number(bbox.x) * 100}%`,
-        width: `${Math.max(0.02, Number(bbox.w) || 0.84) * 100}%`,
-        height: `${Math.max(0.012, Number(bbox.h) || 0.025) * 100}%`,
+        width: `${Math.max(0.02, Number(bbox.w)) * 100}%`,
+        height: `${boxH * 100}%`,
       });
     } else {
-      const row = Math.min(ys.length, Math.max(1, Math.round(Number(target.line) || 1))) - 1;
-      const next = ys[row + 1];
-      markHeight = next != null && next > y ? Math.max(14, next - y) : Math.max(18, pageHeight * 0.03);
+      // One glyph-tall band - not the full gap to the next text row (that paints blank space).
+      // Without a bbox, estimate width from the excerpt instead of flooding 84% of the page.
+      markHeight = Math.max(16, Math.min(28, pageHeight * 0.028));
+      const excerptLen = String(target.excerpt || "").trim().length;
+      const widthPct = excerptLen
+        ? Math.max(28, Math.min(68, 18 + excerptLen * 0.9))
+        : 56;
+      const leftPct = Math.max(8, (100 - widthPct) / 2);
       setMark({
         page: pageNumber,
         kind: "box",
         severity: target.severity,
         top: `${y}px`,
-        left: "8%",
-        width: "84%",
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
         height: `${markHeight}px`,
       });
     }
@@ -738,6 +751,29 @@ function lineCountBox(section, line, scroller) {
   const delta = index === hit.index ? hit.delta : 0;
   const top = base.top + Math.max(0, delta) * scale;
   const height = Math.max(12, Math.min(block.lineHeight * scale, base.height || block.lineHeight * scale));
+  // Soft-wrapped paragraphs expose one client rect per visual line - paint that
+  // ink box instead of the full paragraph width (avoids blank right/side space).
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(block.el);
+    const ink = [...range.getClientRects()]
+      .filter((box) => box.width > 2 && box.height > 2)
+      .map((box) => contentBox(scroller, box));
+    if (ink.length) {
+      const lineIndex = Math.min(
+        ink.length - 1,
+        Math.max(0, Math.round(Math.max(0, delta) / Math.max(1, block.lineHeight)))
+      );
+      const chosen = ink[lineIndex] || ink[0];
+      return {
+        rects: [{ top: chosen.top, left: chosen.left, width: Math.max(chosen.width, 24), height: Math.max(12, chosen.height) }],
+        top: chosen.top,
+        height: Math.max(12, chosen.height),
+      };
+    }
+  } catch {
+    /* fall through to paragraph band */
+  }
   return { rects: [{ top, left: base.left, width: Math.max(base.width, 24), height }], top, height };
 }
 

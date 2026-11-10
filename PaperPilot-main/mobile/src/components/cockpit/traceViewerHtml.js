@@ -275,10 +275,35 @@ const SCRIPT = String.raw`
         if (Math.abs(bboxY - lineY) <= tolerance) useLine = false;
       }
       clearMarks();
+      var hasInk =
+        bbox &&
+        isFinite(Number(bbox.x)) &&
+        isFinite(Number(bbox.w)) &&
+        Number(bbox.w) > 0.015;
+      // Prefer scanner bbox ink. Line pin only moves the vertical anchor - never
+      // stretch to the next row or flood 84% of the page (blank space).
+      if (useLine && hasInk) {
+        var inkH = Math.max(0.012, Number(bbox.h) || 0.022);
+        paintBox(pageEl, {
+          top: lineY + "px",
+          left: Number(bbox.x) * 100 + "%",
+          width: Math.max(0.02, Number(bbox.w)) * 100 + "%",
+          height: inkH * 100 + "%"
+        }, t.severity);
+        scrollMarkIntoView(elementTopIn(pageEl, lineY), inkH * pageHeight);
+        return;
+      }
       if (useLine) {
-        var next = ys[Math.min(ys.length, Math.max(1, rounded))];
-        var markHeight = next != null && next > lineY ? Math.max(14, next - lineY) : Math.max(18, pageHeight * 0.03);
-        paintBox(pageEl, { top: lineY + "px", left: "8%", width: "84%", height: markHeight + "px" }, t.severity);
+        var markHeight = Math.max(16, Math.min(28, pageHeight * 0.028));
+        var excerptLen = String(t.excerpt || "").trim().length;
+        var widthPct = excerptLen ? Math.max(28, Math.min(68, 18 + excerptLen * 0.9)) : 56;
+        var leftPct = Math.max(8, (100 - widthPct) / 2);
+        paintBox(pageEl, {
+          top: lineY + "px",
+          left: leftPct + "%",
+          width: widthPct + "%",
+          height: markHeight + "px"
+        }, t.severity);
         scrollMarkIntoView(elementTopIn(pageEl, lineY), markHeight);
         return;
       }
@@ -294,9 +319,16 @@ const SCRIPT = String.raw`
         return;
       }
       var y = 0;
-      var fallbackNext = ys[1];
-      var fallbackH = fallbackNext != null ? Math.max(14, fallbackNext - y) : Math.max(18, pageHeight * 0.03);
-      paintBox(pageEl, { top: y + "px", left: "8%", width: "84%", height: fallbackH + "px" }, t.severity);
+      var fallbackH = Math.max(16, Math.min(28, pageHeight * 0.028));
+      var fbLen = String(t.excerpt || "").trim().length;
+      var fbWidth = fbLen ? Math.max(28, Math.min(68, 18 + fbLen * 0.9)) : 56;
+      var fbLeft = Math.max(8, (100 - fbWidth) / 2);
+      paintBox(pageEl, {
+        top: y + "px",
+        left: fbLeft + "%",
+        width: fbWidth + "%",
+        height: fallbackH + "px"
+      }, t.severity);
       scrollMarkIntoView(elementTopIn(pageEl, y), fallbackH);
     });
   }

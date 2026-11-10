@@ -7,7 +7,16 @@ from __future__ import annotations
 
 import re
 
-PAGE_POSITIONS = ("Top left", "Top center", "Top right", "Bottom left", "Bottom center", "Bottom right")
+PAGE_NO_NUMBERS = "No page numbers"
+PAGE_POSITIONS = (
+    "Top left",
+    "Top center",
+    "Top right",
+    "Bottom left",
+    "Bottom center",
+    "Bottom right",
+    PAGE_NO_NUMBERS,
+)
 
 CHAPTER_FIRST_HIDDEN = "No page number shown"
 CHAPTER_FIRST_SAME = "Same position as other pages"
@@ -56,7 +65,7 @@ def _text(value) -> str:
 
 
 def _rule_unset(value) -> bool:
-    """True when the mechanics field is blank / IGNORE / NA — no rule to enforce."""
+    """True when the mechanics field is blank / IGNORE / NA - no rule to enforce."""
     if value is None:
         return True
     if isinstance(value, bool):
@@ -80,7 +89,7 @@ def _rule_unset(value) -> bool:
         "not check",
         "none",
         "-",
-        "—",
+        "-",
     }
 
 
@@ -98,9 +107,27 @@ def rule_is_set(value) -> bool:
     return not _rule_unset(value)
 
 
+def pagination_omits_all_numbers(value) -> bool:
+    """True when the format says the manuscript should have no page numbers at all."""
+    if _rule_unset(value):
+        return False
+    text = _text(value)
+    if text == _text(PAGE_NO_NUMBERS):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:no\s+page\s+numbers|without\s+page\s+numbers?|"
+            r"page\s+numbers?\s+not\s+required|unnumbered\s+(?:manuscript|document|paper|thesis)|"
+            r"do\s+not\s+(?:use|include|put|require)\s+page\s+numbers?|"
+            r"entire\s+(?:manuscript|document|paper).{0,40}no\s+page\s+numbers?)\b",
+            text,
+        )
+    )
+
+
 def page_position_parts(value) -> tuple[str | None, str | None]:
     """'Top right', 'upper-right corner', 'bottom centre of the footer' -> ('top', 'right')."""
-    if _rule_unset(value):
+    if _rule_unset(value) or pagination_omits_all_numbers(value):
         return None, None
     text = _text(value)
     vertical = (
@@ -118,6 +145,8 @@ def page_position_parts(value) -> tuple[str | None, str | None]:
 
 
 def canonical_page_position(value) -> str:
+    if pagination_omits_all_numbers(value):
+        return PAGE_NO_NUMBERS
     vertical, horizontal = page_position_parts(value)
     if vertical and horizontal:
         return f"{vertical.title()} {horizontal}"
@@ -178,7 +207,7 @@ def canonical_title_page(value) -> str:
 
 
 def title_page_rule(value) -> str | None:
-    """None when the title-page field is NA / unset — do not score that rule."""
+    """None when the title-page field is NA / unset - do not score that rule."""
     return {
         TITLE_HIDDEN_COUNTED: "hidden_counted",
         TITLE_HIDDEN_NOT_COUNTED: "hidden_not_counted",
@@ -336,7 +365,8 @@ def normalize_pagination_rules(pagination_in: dict, raw: dict) -> dict:
     if str(position).strip():
         out["position"] = canonical_page_position(position)[:200]
     # Prefer an explicit flag; otherwise read it from the position wording (e.g. "Top right, no extra characters").
-    if page_number_only(
+    # "No page numbers" is not the same as "number only" (bare numeral).
+    if not pagination_omits_all_numbers(out.get("position") or position) and page_number_only(
         pagination_in.get("number_only")
         if "number_only" in pagination_in
         else position or raw.get("pagination_position") or raw.get("pagination_number_only")

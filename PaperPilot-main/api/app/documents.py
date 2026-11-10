@@ -21,6 +21,7 @@ from app.mechanics_options import (
     FONT_SIZE_KEYS,
     MAX_HEADING_LEVELS,
     CHAPTER_FIRST_HIDDEN,
+    PAGE_NO_NUMBERS,
     PRELIM_ROMAN,
     TITLE_HIDDEN_COUNTED,
     WORD_SPACING_TWO,
@@ -37,6 +38,7 @@ from app.mechanics_options import (
     normalize_pagination_rules,
     page_number_only,
     page_position_parts,
+    pagination_omits_all_numbers,
     rule_unset,
 )
 
@@ -776,6 +778,12 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
     formats = _paragraph_formats(paragraph)
     run_sizes = [run["size"] for run in runs if run.get("size") and str(run.get("text") or "").strip()]
     first_line, left_indent, right_indent = _docx_indents(paragraph, formats)
+    list_item = False
+    try:
+        p_pr = paragraph._p.pPr
+        list_item = bool(p_pr is not None and p_pr.numPr is not None)
+    except Exception:
+        list_item = False
     record = {
         "paragraph_index": paragraph_index,
         "source": source,
@@ -784,6 +792,7 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
         "lines": lines,
         "runs": runs,
         "has_drawing": _docx_has_drawing(paragraph),
+        "list_item": list_item,
         "formatting": {
             "line_spacing": _docx_line_spacing(paragraph, formats, run_sizes[0] if run_sizes else None),
             "alignment": _docx_alignment(paragraph, formats),
@@ -1574,15 +1583,21 @@ def derive_mechanics_rules(text: str) -> dict:
         flat, ("Spacing", "Line spacing", "Line space", "Lines spacing"), stop
     )
     spacing_val = _parse_spacing(spacing_raw) if spacing_raw else None
-    if spacing_val is None:
-        spacing_match = re.search(
-            r"\b(single|double|one(?:[\s-]and[\s-]a[\s-]half)|1(?:\.0)?|1\.5|2(?:\.0)?)"
-            r"(?:[\s-]+line)?[\s-]+spac(?:e|ed|ing)\b",
-            flat,
-            re.I,
-        )
-        if spacing_match:
-            spacing_val = _parse_spacing(spacing_match.group(0))
+    spacing_matches = re.findall(
+        r"\b(single|double|one(?:[\s-]and[\s-]a[\s-]half)|1(?:\.0)?|1\.5|2(?:\.0)?)"
+        r"(?:[\s-]+line)?[\s-]+spac(?:e|ed|ing)\b",
+        flat,
+        re.I,
+    )
+    spacing_options: list[float] = []
+    for token in spacing_matches:
+        parsed = _parse_spacing(token)
+        if parsed is not None and parsed not in spacing_options:
+            spacing_options.append(parsed)
+    if spacing_val is None and spacing_options:
+        spacing_val = spacing_options[0]
+    if spacing_val is not None and spacing_val not in spacing_options:
+        spacing_options.insert(0, spacing_val)
     if spacing_val is not None:
         rules["line_spacing"] = spacing_val
         rules["spacing"] = str(spacing_val).rstrip("0").rstrip(".") if isinstance(spacing_val, float) else str(spacing_val)
@@ -1592,6 +1607,8 @@ def derive_mechanics_rules(text: str) -> dict:
             rules["spacing"] = "1.5"
         elif spacing_val == 2.0:
             rules["spacing"] = "2"
+    if len(spacing_options) > 1:
+        rules["line_spacings"] = spacing_options
 
     indent_raw = _value_after_label(
         flat,
@@ -2014,13 +2031,25 @@ def derive_mechanics_rules(text: str) -> dict:
 
     pagination: dict = {}
     position = _line_value(text, ("Page number position", "Pagination position", "Page numbers", "Page number"))
-    if not all(page_position_parts(position)):
+    # Prefer the Position line; only infer from whole-guide phrasing that clearly means
+    # the manuscript has no numbers at all (not "no page number on the title page").
+    if pagination_omits_all_numbers(position) or re.search(
+        r"(?i)\b(?:page\s+numbers?\s+not\s+required|"
+        r"do\s+not\s+(?:use|include|put|require)\s+page\s+numbers?|"
+        r"unnumbered\s+(?:manuscript|document|paper|thesis)|"
+        r"entire\s+(?:manuscript|document|paper).{0,40}no\s+page\s+numbers?|"
+        r"no\s+page\s+numbers?\s+(?:throughout|anywhere|at\s+all))\b",
+        flat,
+    ):
+        position = PAGE_NO_NUMBERS
+    elif not all(page_position_parts(position)):
         found = re.search(r"\b(?:top|bottom|upper|lower)[\s-]+(?:left|right|cent(?:er|re))\b", flat, re.I)
         position = found.group(0) if found else position
     if position.strip():
         pagination["position"] = canonical_page_position(position)[:120]
-        if page_number_only(position) or page_number_only(
-            _line_value(text, ("Pagination", "Page numbering", "Page numbers"))
+        if not pagination_omits_all_numbers(pagination["position"]) and (
+            page_number_only(position)
+            or page_number_only(_line_value(text, ("Pagination", "Page numbering", "Page numbers")))
         ):
             pagination["number_only"] = True
     first_page = _line_value(text, ("First page of each chapter", "First page of a chapter", "Chapter first page"))
@@ -2405,6 +2434,13 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     if spacing is not None:
         rules["line_spacing"] = spacing
         rules.setdefault("spacing", f"{spacing:g}")
+    spacing_options: list[float] = []
+    for raw_spacing in list(raw.get("line_spacings") or []) + ([spacing] if spacing is not None else []):
+        parsed = parse_line_spacing(raw_spacing)
+        if parsed is not None and parsed not in spacing_options:
+            spacing_options.append(parsed)
+    if len(spacing_options) > 1:
+        rules["line_spacings"] = spacing_options
 
     indention = str(raw.get("indention") or "").strip()
     if rule_unset(indention):

@@ -270,11 +270,13 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(loc0.get("page_height"), 792)
         self.assertIn("explanation", loc0)
         self.assertEqual([item["section"] for item in result["sections"]], [
-            "Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination",
+            "Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination", "Citations",
         ])
         fonts = next(item for item in result["sections"] if item["section"] == "Fonts")
         self.assertEqual(fonts["formatting_score"], 0)
-        self.assertEqual(result["overall_score"], fonts["formatting_score"])
+        # Unset margin, spacing, and pagination rules still pass their units, so the
+        # overall score is the mean of those passes with the failed font check.
+        self.assertEqual(result["overall_score"], 75.0)
 
     def test_sample_guide_is_accepted_as_mechanics(self):
         text = parse_document(build_sample_mechanics_docx(), "docx")["text"]
@@ -372,7 +374,11 @@ class MechanicsExtractionTests(unittest.TestCase):
         scores = {item["section"]: item["formatting_score"] for item in result["sections"]}
         self.assertEqual(scores["Fonts"], 50)
         self.assertEqual(scores["Margins"], 100)
-        self.assertEqual(result["overall_score"], 75.0)
+        self.assertEqual(scores["Indentation"], 100)
+        self.assertEqual(scores["Spacing"], 100)
+        self.assertEqual(scores["Pagination"], 100)
+        # Mean of the five categories that checked at least one unit.
+        self.assertEqual(result["overall_score"], 90.0)
         self.assertEqual(result["issues"][0]["locations"][0]["page"], 1)
         self.assertEqual(result["issues"][0]["locations"][0]["line"], 1)
         self.assertEqual(result["page_count"], 1)
@@ -1931,7 +1937,10 @@ class LayoutAndPageTests(unittest.TestCase):
         spacing = next(
             item for item in result["scoring"]["categories"] if item["category"] == "Spacing"
         )
-        self.assertEqual(spacing["status"], "not_applicable")
+        # IGNORE still scores eligible line pairs as passed; it does not raise a spacing issue.
+        self.assertEqual(spacing["status"], "pass")
+        self.assertEqual(spacing["units_failed"], 0)
+        self.assertGreater(spacing["units_checked"], 0)
         self.assertNotIn("line_spacing", {issue["issue_type"] for issue in result["issues"]})
 
 

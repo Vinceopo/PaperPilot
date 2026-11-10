@@ -7,13 +7,12 @@ import { supportedCitationStyle } from "../../lib/formatMechanicsForm.js";
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, Plus, Trash2, X } from "lucide-react";
 import {
-  BODY_NUMBERING_OPTIONS,
   CHAPTER_FIRST_PAGE_OPTIONS,
-  CHAPTER_MARKER_OPTIONS,
   FONT_FAMILIES,
   HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
   MAX_HEADING_LEVELS,
+  PAGE_NO_NUMBERS,
   PAGE_POSITIONS,
   PRELIMINARY_STYLE_OPTIONS,
   TITLE_PAGE_OPTIONS,
@@ -21,8 +20,6 @@ import {
   emptyHeading,
   headingLabel,
 } from "../../lib/mechanicsOptions";
-import { isIgnoreFormValue } from "../../lib/formatMechanicsForm.js";
-
 const LINE_SPACING_OPTIONS = [
   { value: "1", label: "1 (Single)" },
   { value: "1.15" },
@@ -191,6 +188,29 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
     return (value) => onChange?.({ ...form, [key]: value });
   }
   const headings = Array.isArray(form.headings) ? form.headings : [];
+  const noPageNumbers = String(form.paginationPosition || "") === PAGE_NO_NUMBERS;
+  function applyNoPageNumbers() {
+    onChange?.({
+      ...form,
+      paginationPosition: PAGE_NO_NUMBERS,
+      paginationTitlePage: "IGNORE",
+      paginationFirstPageRule: "IGNORE",
+      paginationPreliminaryStyle: "IGNORE",
+      paginationBodyNumbering: "",
+      paginationChapterMarkers: [],
+    });
+  }
+  function clearNoPageNumbers() {
+    onChange?.({
+      ...form,
+      paginationPosition: "",
+      paginationTitlePage: "",
+      paginationFirstPageRule: "",
+      paginationPreliminaryStyle: "",
+      paginationBodyNumbering: "",
+      paginationChapterMarkers: [],
+    });
+  }
   function setHeadings(next) {
     onChange?.({ ...form, headings: next });
   }
@@ -480,18 +500,46 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
       </Section>
 
       <Section title="Pagination">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200/90 bg-slate-50/80 px-3 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-[12px] font-semibold text-slate-800">Entire manuscript</p>
+            <p className="text-[11px] leading-snug text-slate-500">
+              Use when the format does not require page numbers on any page.
+            </p>
+          </div>
+          {!disabled ? (
+            <button
+              type="button"
+              onClick={noPageNumbers ? clearNoPageNumbers : applyNoPageNumbers}
+              className={
+                noPageNumbers
+                  ? "shrink-0 rounded-lg border border-[#16bfa8]/40 bg-[#16bfa8]/10 px-3 py-1.5 text-[11px] font-semibold text-[#0f7f72]"
+                  : "shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:border-[#16bfa8] hover:text-[#109b89]"
+              }
+            >
+              {noPageNumbers ? "No page numbers · selected" : "No page numbers"}
+            </button>
+          ) : (
+            <span className="shrink-0 text-[11px] font-semibold text-slate-500">
+              {noPageNumbers ? "No page numbers" : "Page numbers required"}
+            </span>
+          )}
+        </div>
+        <div className={`grid gap-3 sm:grid-cols-2 ${noPageNumbers ? "opacity-50" : ""}`}>
           <Field label="Position" hint="Where page numbers sit on normal pages">
             <ChoiceSelect
-              disabled={disabled}
+              disabled={disabled || noPageNumbers}
               value={form.paginationPosition}
               onChange={setValue("paginationPosition")}
               options={PAGE_POSITIONS}
             />
           </Field>
-          <Field label="Title page" hint="Document page 1">
+          <Field
+            label="Title page"
+            hint="Document page 1 — leave IGNORE unless your guide says whether page 1 shows a number"
+          >
             <ChoiceSelect
-              disabled={disabled}
+              disabled={disabled || noPageNumbers}
               value={form.paginationTitlePage}
               onChange={setValue("paginationTitlePage")}
               options={TITLE_PAGE_OPTIONS}
@@ -499,7 +547,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
           </Field>
           <Field label="First page of each chapter">
             <ChoiceSelect
-              disabled={disabled}
+              disabled={disabled || noPageNumbers}
               value={form.paginationFirstPageRule}
               onChange={setValue("paginationFirstPageRule")}
               options={CHAPTER_FIRST_PAGE_OPTIONS}
@@ -507,64 +555,11 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
           </Field>
           <Field label="Preliminary pages" hint="Pages before Chapter 1">
             <ChoiceSelect
-              disabled={disabled}
+              disabled={disabled || noPageNumbers}
               value={form.paginationPreliminaryStyle}
               onChange={setValue("paginationPreliminaryStyle")}
               options={PRELIMINARY_STYLE_OPTIONS}
             />
-          </Field>
-          <Field label="Body numbering" hint="From Chapter 1 onward">
-            <ChoiceSelect
-              disabled={disabled}
-              value={form.paginationBodyNumbering}
-              onChange={setValue("paginationBodyNumbering")}
-              options={BODY_NUMBERING_OPTIONS}
-            />
-          </Field>
-          <Field
-            label="Chapter starts"
-            hint="How chapter headings are written - set IGNORE if your guide does not specify this"
-          >
-            <select
-              disabled={disabled}
-              className={inputClass}
-              value={
-                isIgnoreFormValue(form.paginationChapterMarkers)
-                  ? "IGNORE"
-                  : Array.isArray(form.paginationChapterMarkers) && form.paginationChapterMarkers.length
-                    ? form.paginationChapterMarkers.join(",")
-                    : ""
-              }
-              onChange={(e) => {
-                const next = e.target.value;
-                if (next === "IGNORE") {
-                  onChange?.({ ...form, paginationChapterMarkers: "IGNORE" });
-                } else if (!next) {
-                  onChange?.({ ...form, paginationChapterMarkers: [] });
-                } else {
-                  onChange?.({
-                    ...form,
-                    paginationChapterMarkers: next.split(",").map((part) => part.trim()).filter(Boolean),
-                  });
-                }
-              }}
-            >
-              {!(
-                isIgnoreFormValue(form.paginationChapterMarkers) ||
-                (Array.isArray(form.paginationChapterMarkers) && form.paginationChapterMarkers.length)
-              ) ? (
-                <option value="">Choose…</option>
-              ) : null}
-              <option value="IGNORE">IGNORE</option>
-              <option value="chapter_roman,chapter_arabic">
-                CHAPTER I… and Chapter 1… (both)
-              </option>
-              {CHAPTER_MARKER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
           </Field>
         </div>
       </Section>

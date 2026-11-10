@@ -728,6 +728,12 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
     formats = _paragraph_formats(paragraph)
     run_sizes = [run["size"] for run in runs if run.get("size") and str(run.get("text") or "").strip()]
     first_line, left_indent, right_indent = _docx_indents(paragraph, formats)
+    list_item = False
+    try:
+        p_pr = paragraph._p.pPr
+        list_item = bool(p_pr is not None and p_pr.numPr is not None)
+    except Exception:
+        list_item = False
     record = {
         "paragraph_index": paragraph_index,
         "source": source,
@@ -736,6 +742,7 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
         "lines": lines,
         "runs": runs,
         "has_drawing": _docx_has_drawing(paragraph),
+        "list_item": list_item,
         "formatting": {
             "line_spacing": _docx_line_spacing(paragraph, formats, run_sizes[0] if run_sizes else None),
             "alignment": _docx_alignment(paragraph, formats),
@@ -1103,7 +1110,10 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["paper_size"] = paper_size_out
 
     # The text the user typed ("Double", "1/2 inch", "1.27 cm") is the source of truth over a pre-parsed number.
+    # Blank / NA fields are dropped - unset mechanics must not become enforceable rules.
     spacing_text = str(raw.get("spacing") or "").strip()
+    if rule_unset(spacing_text):
+        spacing_text = ""
     spacing = parse_line_spacing(spacing_text) if spacing_text else None
     if spacing is None:
         spacing = parse_line_spacing(raw.get("line_spacing"))
@@ -1112,8 +1122,17 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     if spacing is not None:
         rules["line_spacing"] = spacing
         rules.setdefault("spacing", f"{spacing:g}")
+    spacing_options: list[float] = []
+    for raw_spacing in list(raw.get("line_spacings") or []) + ([spacing] if spacing is not None else []):
+        parsed = parse_line_spacing(raw_spacing)
+        if parsed is not None and parsed not in spacing_options:
+            spacing_options.append(parsed)
+    if len(spacing_options) > 1:
+        rules["line_spacings"] = spacing_options
 
     indention = str(raw.get("indention") or "").strip()
+    if rule_unset(indention):
+        indention = ""
     if indention:
         rules["indention"] = indention[:120]
     indent = parse_length_inches(indention) if indention else None

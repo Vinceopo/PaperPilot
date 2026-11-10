@@ -38,7 +38,16 @@ export const FONT_FAMILIES = [
   "Verdana",
 ];
 
-export const PAGE_POSITIONS = ["Top left", "Top center", "Top right", "Bottom left", "Bottom center", "Bottom right"];
+export const PAGE_NO_NUMBERS = "No page numbers";
+export const PAGE_POSITIONS = [
+  "Top left",
+  "Top center",
+  "Top right",
+  "Bottom left",
+  "Bottom center",
+  "Bottom right",
+  PAGE_NO_NUMBERS,
+];
 
 export const TITLE_PAGE_OPTIONS = ["Hidden but counted", "Hidden and not counted", "Number shown"];
 
@@ -80,7 +89,22 @@ export const HEADING_RULE_FIELDS = [{ key: "size", label: "Size (pt)" }, ...HEAD
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLowerCase();
 
+export function paginationOmitsAllNumbers(value) {
+  const text = lower(value);
+  if (!text) return false;
+  if (text === lower(PAGE_NO_NUMBERS)) return true;
+  return (
+    /\bno\s+page\s+numbers\b/.test(text) ||
+    /\bwithout\s+page\s+numbers?\b/.test(text) ||
+    /\bpage\s+numbers?\s+not\s+required\b/.test(text) ||
+    /\bunnumbered\s+(?:manuscript|document|paper|thesis)\b/.test(text) ||
+    /\bdo\s+not\s+(?:use|include|put|require)\s+page\s+numbers?\b/.test(text) ||
+    /\bentire\s+(?:manuscript|document|paper).{0,40}no\s+page\s+numbers?\b/.test(text)
+  );
+}
+
 export function canonicalPagePosition(value) {
+  if (paginationOmitsAllNumbers(value)) return PAGE_NO_NUMBERS;
   const text = lower(value);
   const vertical = /\b(top|upper|header)\b/.test(text) ? "Top" : /\b(bottom|lower|footer)\b/.test(text) ? "Bottom" : "";
   const horizontal = /\bleft\b/.test(text)
