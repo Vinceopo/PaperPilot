@@ -612,28 +612,33 @@ def _document_units(parsed: dict, rules: dict) -> list[dict]:
             page_items: list[dict] = []
             for line in page.get("lines") or []:
                 is_table = bool(line.get("table_row"))
-                page_items.append(
-                    {
-                        "page_index": page_index,
-                        "text": line.get("text") or "",
-                        "spans": line.get("spans") or [],
-                        "bbox": line.get("bbox"),
-                        "page_width": page.get("width_points"),
-                        "page_height": page.get("height_points"),
-                        "formatting": {},
-                        "style": None,
-                        "source": "table" if is_table else "body",
-                        "table_row": is_table,
-                        "alignment": _pdf_alignment(line.get("bbox"), column),
-                        "column": column,
-                        "has_drawing": False,
-                        "_sort": (
-                            (line.get("bbox") or [0, 0, 0, 0])[1],
-                            (line.get("bbox") or [0, 0, 0, 0])[0],
-                            line.get("line_index", 0),
-                        ),
-                    }
-                )
+                item = {
+                    "page_index": page_index,
+                    "text": line.get("text") or "",
+                    "spans": line.get("spans") or [],
+                    "bbox": line.get("bbox"),
+                    "page_width": page.get("width_points"),
+                    "page_height": page.get("height_points"),
+                    "formatting": {},
+                    "style": None,
+                    "source": "table" if is_table else "body",
+                    "table_row": is_table,
+                    "alignment": _pdf_alignment(line.get("bbox"), column),
+                    "column": column,
+                    "has_drawing": False,
+                    "_sort": (
+                        (line.get("bbox") or [0, 0, 0, 0])[1],
+                        (line.get("bbox") or [0, 0, 0, 0])[0],
+                        line.get("line_index", 0),
+                    ),
+                }
+                cell_lefts = line.get("cell_lefts")
+                if cell_lefts:
+                    item["cell_lefts"] = list(cell_lefts)
+                cell_widths = line.get("cell_widths")
+                if cell_widths:
+                    item["cell_widths"] = list(cell_widths)
+                page_items.append(item)
             for image_index, image in enumerate(page.get("images") or []):
                 bbox = image.get("bbox") or [0, 0, 0, 0]
                 page_items.append(
@@ -1821,50 +1826,135 @@ def _promote_pdf_table_cells(units: list[dict]) -> None:
     left (or middle) column often has no gap on its own line, so it stayed body
     and falsely failed spacing/indent checks. Grow the table region by repeatedly
     absorbing nearby narrow column-aligned lines.
+
+    Per-cell left edges (cell_lefts) come only from merge-time seed rows. A match
+    that needs those extra edges must also be no wider than the widest seed cell.
+    All promotions stay inside per-table y-bands derived from seed-row clusters
+    (split when the vertical gap between seeds exceeds ~one line) so prose below
+    a table cannot cascade downward via ±40 pt nearness alone.
     """
     by_page: dict[int, list[dict]] = defaultdict(list)
     for unit in units:
         by_page[int(unit.get("page_index") or 0)].append(unit)
+
+    def _snap(value: float) -> float:
+        return round(float(value) / 4.0) * 4.0
+
+    def _seed_max_cell_width(seeds: list[dict]) -> float | None:
+        widths: list[float] = []
+        for seed in seeds:
+            cell_widths = seed.get("cell_widths") or []
+            if cell_widths:
+                widths.extend(float(w) for w in cell_widths)
+                continue
+            lefts = seed.get("cell_lefts") or []
+            bbox = seed.get("bbox") or []
+            if lefts and len(lefts) > 1 and len(bbox) >= 4:
+                ordered = sorted(float(x) for x in lefts)
+                for index, left in enumerate(ordered):
+                    if index + 1 < len(ordered):
+                        widths.append(max(1.0, ordered[index + 1] - left - 4.0))
+                    else:
+                        widths.append(max(1.0, float(bbox[2]) - left))
+            elif len(bbox) >= 4:
+                widths.append(float(bbox[2]) - float(bbox[0]))
+        return max(widths) if widths else None
+
+    def _seed_y_bands(seeds: list[dict]) -> list[tuple[float, float]]:
+        boxes = [seed["bbox"] for seed in seeds if _has_box(seed)]
+        if not boxes:
+            return []
+        boxes = sorted(boxes, key=lambda box: box[1])
+        heights = sorted(max(6.0, box[3] - box[1]) for box in boxes)
+        line_h = heights[len(heights) // 2]
+        gap_limit = max(52.0, 1.6 * line_h)
+        # Match the ±40 pt nearness window so one-line wraps under a seed header
+        # stay inside the cluster band without opening a page-wide corridor.
+        pad = 40.0
+        clusters: list[list[list[float]]] = [[boxes[0]]]
+        for box in boxes[1:]:
+            prev = clusters[-1][-1]
+            if box[1] - prev[3] > gap_limit:
+                clusters.append([box])
+            else:
+                clusters[-1].append(box)
+        return [
+            (min(box[1] for box in group) - pad, max(box[3] for box in group) + pad)
+            for group in clusters
+        ]
+
+    def _in_y_bands(bbox: list[float], bands: list[tuple[float, float]]) -> bool:
+        if not bands:
+            return False
+        return any(bbox[3] >= y0 and bbox[1] <= y1 for y0, y1 in bands)
+
     for page_units in by_page.values():
-        if not any(unit.get("table_row") or unit.get("source") == "table" for unit in page_units):
-            continue
-        # Grow until nearby wrapped cell lines are absorbed.
-        for _ in range(8):
-            anchors = [
-                unit
-                for unit in page_units
-                if (unit.get("table_row") or unit.get("source") == "table") and _has_box(unit)
-            ]
-            if not anchors:
-                break
-            lefts = sorted({round(float(unit["bbox"][0]) / 4.0) * 4.0 for unit in anchors})
-            changed = False
-            for unit in page_units:
-                if unit.get("source") == "table" or unit.get("table_row"):
-                    continue
-                if (unit.get("role") or "body") != "body" or not _has_box(unit):
-                    continue
-                bbox = unit["bbox"]
-                page_w = float(unit.get("page_width") or 612.0)
-                width = float(bbox[2]) - float(bbox[0])
-                # Near-full-page prose between tables stays body; wide cells can still join.
-                if width >= 0.85 * page_w:
-                    continue
-                left = float(bbox[0])
-                if not any(abs(left - edge) <= 10.0 for edge in lefts):
-                    continue
-                # Within ~one line of an existing table cell vertically.
-                near = any(
-                    bbox[1] <= anchor["bbox"][3] + 40.0 and bbox[3] >= anchor["bbox"][1] - 40.0
-                    for anchor in anchors
-                )
-                if not near:
-                    continue
-                unit["source"] = "table"
-                unit["table_row"] = True
-                changed = True
-            if not changed:
-                break
+        seeds = [
+            unit
+            for unit in page_units
+            if (unit.get("table_row") or unit.get("source") == "table") and _has_box(unit)
+        ]
+        if seeds:
+            max_seed_width = _seed_max_cell_width(seeds)
+            y_bands = _seed_y_bands(seeds)
+            # Grow until nearby wrapped cell lines are absorbed.
+            for _ in range(8):
+                anchors = [
+                    unit
+                    for unit in page_units
+                    if (unit.get("table_row") or unit.get("source") == "table") and _has_box(unit)
+                ]
+                if not anchors:
+                    break
+                # Original lefts: current anchors (cascade unchanged).
+                original_lefts = {_snap(unit["bbox"][0]) for unit in anchors}
+                # New cell_lefts: merge-time seeds only (not units promoted earlier).
+                cell_lefts: set[float] = set()
+                for seed in seeds:
+                    for cell_left in seed.get("cell_lefts") or []:
+                        try:
+                            cell_lefts.add(_snap(float(cell_left)))
+                        except (TypeError, ValueError):
+                            continue
+                changed = False
+                for unit in page_units:
+                    if unit.get("source") == "table" or unit.get("table_row"):
+                        continue
+                    if (unit.get("role") or "body") != "body" or not _has_box(unit):
+                        continue
+                    bbox = unit["bbox"]
+                    page_w = float(unit.get("page_width") or 612.0)
+                    width = float(bbox[2]) - float(bbox[0])
+                    # Near-full-page prose between tables stays body; wide cells can still join.
+                    if width >= 0.85 * page_w:
+                        continue
+                    left = float(bbox[0])
+                    match_original = any(abs(left - edge) <= 10.0 for edge in original_lefts)
+                    match_cell = any(abs(left - edge) <= 10.0 for edge in cell_lefts)
+                    if not match_original and not match_cell:
+                        continue
+                    # Within ~one line of an existing table cell vertically.
+                    near = any(
+                        bbox[1] <= anchor["bbox"][3] + 40.0 and bbox[3] >= anchor["bbox"][1] - 40.0
+                        for anchor in anchors
+                    )
+                    if not near:
+                        continue
+                    via_new_cell_lefts = (not match_original) and match_cell
+                    if (
+                        via_new_cell_lefts
+                        and max_seed_width is not None
+                        and width > max_seed_width + 12.0
+                    ):
+                        continue
+                    # Per-table cluster band (not page-wide): stop downward cascade.
+                    if not _in_y_bands(bbox, y_bands):
+                        continue
+                    unit["source"] = "table"
+                    unit["table_row"] = True
+                    changed = True
+                if not changed:
+                    break
         # Seed tables from tab / multi-space grid lines when no cell-gap row exists.
         for unit in page_units:
             if unit.get("source") == "table" or unit.get("table_row"):

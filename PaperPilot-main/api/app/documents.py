@@ -427,23 +427,27 @@ def _merge_pdf_rows(lines: list[dict], page_index: int) -> list[dict]:
         em = max(6.0, sorted(sizes)[len(sizes) // 2]) if sizes else 11.0
         # Word gaps in justified text stay under ~1 em; wider gaps separate table cells.
         cell_gaps = sum(1 for prev, nxt in zip(boxes, boxes[1:]) if nxt[0] - prev[2] > 1.6 * em)
-        merged.append(
-            {
-                "page_index": page_index,
-                "line_index": len(merged),
-                "text": " ".join(item["text"] for item in row),
-                "spans": [span for item in row for span in item["spans"]],
-                "table_row": cell_gaps >= 1,
-                "bbox": [
-                    min(box[0] for box in boxes),
-                    min(box[1] for box in boxes),
-                    max(box[2] for box in boxes),
-                    max(box[3] for box in boxes),
-                ]
-                if boxes
-                else row[0].get("bbox"),
-            }
-        )
+        entry = {
+            "page_index": page_index,
+            "line_index": len(merged),
+            "text": " ".join(item["text"] for item in row),
+            "spans": [span for item in row for span in item["spans"]],
+            "table_row": cell_gaps >= 1,
+            "bbox": [
+                min(box[0] for box in boxes),
+                min(box[1] for box in boxes),
+                max(box[2] for box in boxes),
+                max(box[3] for box in boxes),
+            ]
+            if boxes
+            else row[0].get("bbox"),
+        }
+        # Keep each fragment's left edge and width so wrapped right-column cells
+        # can still align to a column after the row bbox collapses leftmost.
+        if cell_gaps >= 1 and len(boxes) > 1:
+            entry["cell_lefts"] = [float(box[0]) for box in boxes]
+            entry["cell_widths"] = [float(box[2]) - float(box[0]) for box in boxes]
+        merged.append(entry)
     return merged
 
 

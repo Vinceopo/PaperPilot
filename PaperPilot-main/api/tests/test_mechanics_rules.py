@@ -485,6 +485,238 @@ class HeadingAndSpacingTests(unittest.TestCase):
         _promote_pdf_table_cells(units)
         self.assertTrue(all(unit.get("source") == "table" for unit in units if unit.get("text")))
 
+    def test_right_column_wrapped_duration_cell_is_marked_table(self):
+        """Per-cell left edges let a lone right-column '2 Weeks' wrap join the table."""
+        from app.compliance import _annotate_roles, _document_units
+
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [
+                {
+                    "page_index": 0,
+                    "width_points": 612,
+                    "height_points": 792,
+                    "lines": [
+                        {
+                            "text": "Agile Phase Sprint 5 Sprint 6 Sprint 7 Sprint 8",
+                            "bbox": [72, 120, 520, 134],
+                            "spans": [{"text": "x", "size": 11, "font": "Times"}],
+                            "page_index": 0,
+                            "line_index": 0,
+                            "table_row": True,
+                            # Column lefts from the multi-cell header row (incl. Sprint 7).
+                            "cell_lefts": [72.0, 140.0, 220.0, 320.0, 409.0],
+                            "cell_widths": [60.0, 70.0, 90.0, 80.0, 50.0],
+                        },
+                        {
+                            "text": "Duration: authentication",
+                            "bbox": [220, 150, 400, 164],
+                            "spans": [{"text": "x", "size": 11, "font": "Times"}],
+                            "page_index": 0,
+                            "line_index": 1,
+                            "table_row": True,
+                            "cell_lefts": [220.0, 409.0],
+                            "cell_widths": [90.0, 50.0],
+                        },
+                        {
+                            # Right-column wrap alone - no gap on this visual row.
+                            "text": "2 Weeks",
+                            "bbox": [409.3, 168, 450.2, 182],
+                            "spans": [{"text": "2 Weeks", "size": 11, "font": "Times"}],
+                            "page_index": 0,
+                            "line_index": 2,
+                            "table_row": False,
+                        },
+                        {
+                            # Ordinary body below the table - must stay body.
+                            "text": (
+                                "This paragraph continues the manuscript below the sprint plan "
+                                "and must not be absorbed into the table grid."
+                            ),
+                            "bbox": [72, 250, 540, 264],
+                            "spans": [{"text": "x", "size": 11, "font": "Times"}],
+                            "page_index": 0,
+                            "line_index": 3,
+                            "table_row": False,
+                        },
+                    ],
+                }
+            ],
+        }
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "families": ["Times New Roman"],
+                    "heading1_size": 14,
+                    "body_size": 11,
+                    "heading_levels": 1,
+                }
+            }
+        )
+        units = _document_units(parsed, rules)
+        _annotate_roles(units, rules)
+        weeks = next(unit for unit in units if (unit.get("text") or "").strip() == "2 Weeks")
+        self.assertEqual(weeks.get("source"), "table")
+        self.assertEqual(weeks.get("role"), "table")
+        body = next(
+            unit
+            for unit in units
+            if "continues the manuscript below the sprint plan" in (unit.get("text") or "")
+        )
+        self.assertEqual(body.get("source"), "body")
+        self.assertEqual(body.get("role"), "body")
+
+    def test_prose_below_table_not_promoted_via_cell_lefts(self):
+        """Wide prose under a sprint table must stay body even if x-aligned to a cell left."""
+        from app.compliance import _annotate_roles, _document_units
+
+        prose = (
+            "Table 2.3 presents the complete Agile Sprint Plan for PaperPilot, consisting of "
+            "twelve 12 two-week sprints. Each sprint follows the Requirements, Design,"
+        )
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [
+                {
+                    "page_index": 0,
+                    "width_points": 612,
+                    "height_points": 792,
+                    "lines": [
+                        {
+                            "text": "Review Review Sprint Review Sprint Review the",
+                            "bbox": [165.0, 168.0, 547.0, 180.0],
+                            "spans": [{"text": "x", "size": 11, "font": "TimesNewRoman", "flags": 0}],
+                            "page_index": 0,
+                            "line_index": 0,
+                            "table_row": True,
+                            "cell_lefts": [165.0, 246.0, 322.0, 408.0, 494.0],
+                            "cell_widths": [70.0, 70.0, 70.0, 70.0, 50.0],
+                        },
+                        {
+                            "text": "9 outputs. 10 outputs (AI 11 outputs complete",
+                            "bbox": [246.0, 180.0, 537.0, 192.0],
+                            "spans": [{"text": "x", "size": 11, "font": "TimesNewRoman", "flags": 0}],
+                            "page_index": 0,
+                            "line_index": 1,
+                            "table_row": True,
+                            "cell_lefts": [246.0, 322.0, 408.0, 494.0],
+                            "cell_widths": [70.0, 70.0, 70.0, 50.0],
+                        },
+                        {
+                            # Far below the seed cluster band; left near a cell column.
+                            "text": prose,
+                            "bbox": [155.0, 549.0, 542.0, 562.0],
+                            "spans": [{"text": prose, "size": 11, "font": "TimesNewRoman", "flags": 0}],
+                            "page_index": 0,
+                            "line_index": 2,
+                            "table_row": False,
+                        },
+                    ],
+                }
+            ],
+        }
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "families": ["Times New Roman"],
+                    "heading1_size": 14,
+                    "body_size": 11,
+                    "heading_levels": 1,
+                }
+            }
+        )
+        units = _document_units(parsed, rules)
+        _annotate_roles(units, rules)
+        below = next(unit for unit in units if "twelve 12 two-week sprints" in (unit.get("text") or ""))
+        self.assertEqual(below.get("source"), "body")
+        self.assertNotEqual(below.get("role"), "table")
+
+    def test_real_heading_font_size_mismatches_still_flagged(self):
+        """Real '1 Introduction' and 'CHAPTER I' with wrong sizes must still raise H1 issues."""
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [
+                {
+                    "page_index": 0,
+                    "width_points": 612,
+                    "height_points": 792,
+                    "lines": [
+                        {
+                            "text": "CHAPTER I",
+                            "bbox": [220, 100, 390, 118],
+                            "spans": [
+                                {
+                                    "text": "CHAPTER I",
+                                    "size": 11,
+                                    "font": "TimesNewRoman,Bold",
+                                    "flags": 16,
+                                }
+                            ],
+                            "page_index": 0,
+                            "line_index": 0,
+                            "table_row": False,
+                        },
+                        {
+                            "text": "1 Introduction",
+                            "bbox": [72, 160, 220, 176],
+                            "spans": [
+                                {
+                                    "text": "1 Introduction",
+                                    "size": 11,
+                                    "font": "TimesNewRoman,Bold",
+                                    "flags": 16,
+                                }
+                            ],
+                            "page_index": 0,
+                            "line_index": 1,
+                            "table_row": False,
+                        },
+                        {
+                            "text": BODY,
+                            "bbox": [72, 200, 540, 230],
+                            "spans": [
+                                {
+                                    "text": BODY,
+                                    "size": 11,
+                                    "font": "TimesNewRoman",
+                                    "flags": 0,
+                                }
+                            ],
+                            "page_index": 0,
+                            "line_index": 2,
+                            "table_row": False,
+                        },
+                    ],
+                }
+            ],
+        }
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "families": ["Times New Roman"],
+                    "heading1_size": 14,
+                    "heading2_size": 12,
+                    "body_size": 11,
+                    "heading_levels": 2,
+                }
+            }
+        )
+        result = run_compliance_scan(parsed, rules, "free")
+        types = _issue_types(result)
+        self.assertIn("font_size_heading1", types)
+        excerpts = []
+        for issue in result.get("issues") or []:
+            if issue.get("issue_type") != "font_size_heading1":
+                continue
+            for loc in issue.get("locations") or []:
+                excerpts.append(" ".join(str(loc.get("excerpt") or "").split()))
+        joined = " | ".join(excerpts)
+        self.assertIn("CHAPTER I", joined)
+        self.assertIn("1 Introduction", joined)
+
     def test_single_line_paragraph_indent_is_checked(self):
         """A one-line body sentence with 0.5 inch indent must fail a 1.0 inch rule."""
         from app.compliance import CategoryStats, IssueCollector, _check_indentation
