@@ -63,6 +63,7 @@ export function useScanFlow({
   const [analyzeProgress, setAnalyzeProgress] = useState(INITIAL_PROGRESS);
   const [traceHighlight, setTraceHighlight] = useState(null);
   const [persistScan, setPersistScan] = useState(false);
+  const [documentLoading, setDocumentLoading] = useState(false);
   const resultRef = useRef(null);
   // Bumped whenever the user leaves a scan, so a late result cannot reopen it.
   const runRef = useRef(0);
@@ -87,6 +88,7 @@ export function useScanFlow({
     setPersistScan(false);
     setError("");
     setTraceHighlight(null);
+    setDocumentLoading(false);
     setAnalyzeProgress({ percent: 0, stage: "queued", message: "Starting analysis…" });
     try {
       const active = getActiveManuscript?.() || {};
@@ -149,6 +151,9 @@ export function useScanFlow({
   /** After analyzing UI finishes, go straight to the full results page (no summary modal). */
   const revealSummary = useCallback(() => {
     if (!resultRef.current) return;
+    // Match My Manuscripts → full results: drop the picker file so Issue Tracing & XAI
+    // uses result.cloudinaryUrl (the path that already works on full results).
+    setFileInner(null);
     setStep((current) => (current === "analyzing" ? "results" : current));
   }, []);
 
@@ -201,11 +206,12 @@ export function useScanFlow({
     setResult(null);
     setPersistScan(false);
     setTraceHighlight(null);
+    setDocumentLoading(false);
     setAnalyzeProgress(INITIAL_PROGRESS);
     setStep("idle");
   }, []);
 
-  const showSavedResult = useCallback((saved, version) => {
+  const showSavedResult = useCallback((saved, version, { loadingDocument = false } = {}) => {
     runRef.current += 1;
     // The previewer prefers a local file, which belongs to the last upload, not this result.
     setFileInner(null);
@@ -219,7 +225,12 @@ export function useScanFlow({
     setDownloadError("");
     setTraceHighlight(null);
     setAnalyzeProgress(INITIAL_PROGRESS);
+    setDocumentLoading(Boolean(saved && loadingDocument));
     setStep(saved ? "results" : "idle");
+  }, []);
+
+  const setDocumentLoadingState = useCallback((loading) => {
+    setDocumentLoading(Boolean(loading));
   }, []);
 
   const patchResult = useCallback((patch) => {
@@ -245,6 +256,7 @@ export function useScanFlow({
     setError("");
     setDownloadError("");
     setTraceHighlight(null);
+    setDocumentLoading(false);
     setAnalyzeProgress(INITIAL_PROGRESS);
     setStep("idle");
   }, []);
@@ -261,6 +273,7 @@ export function useScanFlow({
     downloadBusy,
     downloadError,
     analyzeProgress,
+    documentLoading,
     traceHighlight,
     selectFile,
     analyze,
@@ -269,6 +282,7 @@ export function useScanFlow({
     uploadNewVersion,
     backToDashboard,
     showSavedResult,
+    setDocumentLoading: setDocumentLoadingState,
     patchResult,
     revealSummary,
     backToSummary,

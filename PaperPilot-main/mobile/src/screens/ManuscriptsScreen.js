@@ -20,7 +20,7 @@ import { deleteManuscriptVersion } from "../api";
 import { formatScore } from "../lib/scoreFormat";
 import { APP_TIME_ZONE } from "../lib/timeZone";
 
-const PAGE_SIZE = 8;
+const PAGE_SIZE = 5;
 const STATUS_FILTERS = [
   { id: "all", label: "All" },
   { id: "compliant", label: "Good Standing" },
@@ -44,14 +44,14 @@ function formatDate(iso) {
 
 function formatMeta(row) {
   const parts = [];
-  const institution = String(row.institution || "").trim();
-  if (institution && institution !== "-" && institution !== "—") parts.push(institution);
   if (row.citationStyle) parts.push(row.citationStyle);
   if (row.versionCount > 0) {
     parts.push(
       `${row.versionCount} version${row.versionCount === 1 ? "" : "s"} (${row.latestVersionLabel})`
     );
   }
+  const scanned = formatDate(row.scannedDate);
+  if (scanned && scanned !== "-") parts.push(scanned);
   return parts.join(" · ");
 }
 
@@ -181,7 +181,11 @@ export default function ManuscriptsScreen({ navigation }) {
         title="Manuscript Detail"
         onBack={() => setViewId(null)}
       >
-        <View style={styles.detailHost}>
+        <ScrollView
+          style={styles.root}
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+        >
           <ManuscriptDetailModal
             manuscript={viewing}
             tier={tier}
@@ -193,7 +197,7 @@ export default function ManuscriptsScreen({ navigation }) {
             onOpenResult={(version) => onOpenResult(viewing, version)}
             resolveResult={resolveSavedResult}
           />
-        </View>
+        </ScrollView>
         <ConfirmDialog
           open={Boolean(pendingDelete)}
           title="Delete manuscript?"
@@ -342,57 +346,59 @@ export default function ManuscriptsScreen({ navigation }) {
                     accessibilityRole="button"
                     accessibilityLabel={`View ${row.title}`}
                   >
-                    <Text style={styles.rowTitle} numberOfLines={3}>
+                    <Text style={styles.rowTitle} numberOfLines={2}>
                       {row.title}
                     </Text>
                     {meta ? (
-                      <Text style={styles.rowMeta} numberOfLines={3}>
+                      <Text style={styles.rowMeta} numberOfLines={1}>
                         {meta}
                       </Text>
                     ) : null}
 
-                    <View style={styles.msField}>
-                      <Text style={styles.msLabel}>Scanned</Text>
-                      <Text style={styles.rowDate}>{formatDate(row.scannedDate)}</Text>
-                    </View>
-
-                    <View style={styles.msFieldRow}>
-                      <View style={styles.msFieldHalf}>
-                        <Text style={styles.msLabel}>Score</Text>
-                        <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
-                          <Text style={[styles.scorePillText, { color: tone.pillText }]}>
+                    <View style={styles.msFooter}>
+                      <View style={styles.msBadges}>
+                        <View
+                          style={[
+                            styles.scoreCircle,
+                            { backgroundColor: tone.pillBg, borderColor: tone.pillBorder },
+                          ]}
+                        >
+                          <Text style={[styles.scoreCircleText, { color: tone.pillText }]}>
                             {formatScore(row.latestScore, 0)}
                           </Text>
                         </View>
-                      </View>
-                      <View style={styles.msFieldHalf}>
-                        <Text style={styles.msLabel}>Status</Text>
-                        <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
-                          <Text style={[styles.statusPillText, { color: tone.pillText }]}>{row.band.label}</Text>
+                        <View
+                          style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}
+                        >
+                          <Text style={[styles.statusPillText, { color: tone.pillText }]}>
+                            {row.band.label}
+                          </Text>
                         </View>
+                      </View>
+
+                      <View style={styles.actionsCell}>
+                        <Pressable
+                          onPress={() => setViewId(row.id)}
+                          style={({ pressed }) => [styles.viewBtn, pressed && styles.viewBtnPressed]}
+                          accessibilityLabel={`View ${row.title}`}
+                        >
+                          <Text style={styles.viewText}>View</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            setDeleteError("");
+                            setDeleteId(row.id);
+                          }}
+                          style={({ pressed }) => [styles.trashBtn, pressed && styles.trashBtnPressed]}
+                          accessibilityLabel={`Delete ${row.title}`}
+                        >
+                          {({ pressed }) => (
+                            <TrashIcon size={15} color={pressed ? "#e11d48" : colors.slate} />
+                          )}
+                        </Pressable>
                       </View>
                     </View>
                   </Pressable>
-
-                  <View style={styles.actionsCell}>
-                    <Pressable
-                      onPress={() => setViewId(row.id)}
-                      style={({ pressed }) => [styles.viewBtn, pressed && styles.viewBtnPressed]}
-                      accessibilityLabel={`View ${row.title}`}
-                    >
-                      <Text style={styles.viewText}>View</Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => {
-                        setDeleteError("");
-                        setDeleteId(row.id);
-                      }}
-                      style={({ pressed }) => [styles.trashBtn, pressed && styles.trashBtnPressed]}
-                      accessibilityLabel={`Delete ${row.title}`}
-                    >
-                      {({ pressed }) => <TrashIcon size={16} color={pressed ? "#e11d48" : colors.slate} />}
-                    </Pressable>
-                  </View>
                 </View>
               );
             })
@@ -469,79 +475,91 @@ const cardShadow = {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.pageBg },
-  detailHost: { flex: 1, minHeight: 0, padding: 16, paddingBottom: 12, backgroundColor: colors.pageBg },
   loadingBox: {
     flex: 1,
-    minHeight: 280,
+    minHeight: 240,
     alignItems: "center",
     justifyContent: "center",
-    gap: 12,
-    margin: 16,
-    borderRadius: 16,
+    gap: 10,
+    margin: 12,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
   },
-  loadingText: { fontSize: 14, color: colors.muted },
-  scroll: { padding: 16, paddingBottom: 40 },
-  statGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  loadingText: { fontSize: 13, color: colors.muted },
+  scroll: { padding: 12, paddingBottom: 32 },
+  statGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   statCard: {
     flexBasis: "47%",
     flexGrow: 1,
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: "rgba(226,232,240,0.8)",
     backgroundColor: colors.white,
-    padding: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     ...cardShadow,
   },
   statLabel: {
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: "600",
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
     textTransform: "uppercase",
     color: colors.muted,
   },
-  statValue: { marginTop: 8, fontSize: 24, fontWeight: "700", color: "#0F1729", fontVariant: ["tabular-nums"] },
-  statSub: { marginTop: 4, fontSize: 11, fontWeight: "500" },
-  toolbar: { marginTop: 24, gap: 12, zIndex: 10, elevation: 10 },
+  statValue: {
+    marginTop: 4,
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F1729",
+    fontVariant: ["tabular-nums"],
+  },
+  statSub: { marginTop: 2, fontSize: 10, fontWeight: "500" },
+  toolbar: { marginTop: 14, gap: 8, zIndex: 10, elevation: 10 },
   searchWrap: { position: "relative", justifyContent: "center" },
-  searchIcon: { position: "absolute", left: 12, zIndex: 1 },
+  searchIcon: { position: "absolute", left: 10, zIndex: 1 },
   searchInput: {
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
-    paddingVertical: 10,
-    paddingLeft: 40,
-    paddingRight: 12,
-    fontSize: 14,
+    paddingVertical: 8,
+    paddingLeft: 36,
+    paddingRight: 10,
+    fontSize: 13,
     color: "#334155",
   },
-  toolbarActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center", gap: 8 },
+  toolbarActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 6,
+  },
   filterWrap: { position: "relative", zIndex: 20 },
   filterBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    borderRadius: 12,
+    gap: 6,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     ...cardShadow,
   },
   filterBtnPressed: { backgroundColor: "#f8fafc" },
-  filterText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  filterText: { fontSize: 11, fontWeight: "600", color: "#475569" },
   filterMenu: {
     position: "absolute",
     top: "100%",
     right: 0,
     marginTop: 4,
-    minWidth: 180,
+    minWidth: 168,
     overflow: "hidden",
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
@@ -552,7 +570,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 8,
   },
-  filterOption: { paddingHorizontal: 16, paddingVertical: 9 },
+  filterOption: { paddingHorizontal: 14, paddingVertical: 8 },
   filterOptionActive: { backgroundColor: "#F5F6F8" },
   filterOptionPressed: { backgroundColor: "#f8fafc" },
   filterOptionText: { fontSize: 12, fontWeight: "500", color: "#475569" },
@@ -560,89 +578,94 @@ const styles = StyleSheet.create({
   uploadBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    borderRadius: 12,
+    gap: 6,
+    borderRadius: 10,
     backgroundColor: "#0F1729",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     ...cardShadow,
   },
   uploadBtnPressed: { backgroundColor: "#1E293B" },
-  uploadText: { fontSize: 12, fontWeight: "700", color: colors.white },
-  listWrap: { marginTop: 20, gap: 12 },
+  uploadText: { fontSize: 11, fontWeight: "700", color: colors.white },
+  listWrap: { marginTop: 12, gap: 8 },
   emptyCard: {
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
-    paddingHorizontal: 20,
-    paddingVertical: 48,
+    paddingHorizontal: 16,
+    paddingVertical: 36,
     ...cardShadow,
   },
-  emptyText: { fontSize: 14, color: colors.muted, textAlign: "center" },
+  emptyText: { fontSize: 13, color: colors.muted, textAlign: "center" },
   msCard: {
     position: "relative",
     overflow: "hidden",
-    borderRadius: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
     ...cardShadow,
   },
   msCardPressed: { backgroundColor: "#f8fafc" },
-  msCardBody: { paddingLeft: 20, paddingRight: 16, paddingTop: 16, paddingBottom: 8, gap: 10 },
+  msCardBody: {
+    paddingLeft: 14,
+    paddingRight: 10,
+    paddingTop: 10,
+    paddingBottom: 10,
+    gap: 6,
+  },
   bandBar: {
     position: "absolute",
     top: 0,
     bottom: 0,
     left: 0,
-    width: 4,
+    width: 3,
   },
-  rowTitle: { fontSize: 15, fontWeight: "700", color: "#0F1729" },
-  rowMeta: { fontSize: 12, color: colors.muted, lineHeight: 18 },
-  msField: { gap: 4 },
-  msFieldRow: { flexDirection: "row", gap: 12 },
-  msFieldHalf: { flex: 1, gap: 4 },
-  msLabel: {
-    fontSize: 10,
-    fontWeight: "600",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-    color: colors.muted,
+  rowTitle: { fontSize: 14, fontWeight: "700", color: "#0F1729" },
+  rowMeta: { fontSize: 11, color: colors.muted, lineHeight: 15 },
+  msFooter: {
+    marginTop: 2,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
   },
-  rowDate: { fontSize: 13, color: colors.slate },
+  msBadges: { flex: 1, flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
+  scoreCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  scoreCircleText: { fontSize: 11, fontWeight: "700", fontVariant: ["tabular-nums"] },
   pill: {
     alignSelf: "flex-start",
     borderWidth: 1,
     borderRadius: 999,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     paddingVertical: 2,
   },
-  scorePillText: { fontSize: 11, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  statusPillText: { fontSize: 10, fontWeight: "700", letterSpacing: 0.5 },
+  statusPillText: { fontSize: 9, fontWeight: "700", letterSpacing: 0.4 },
   actionsCell: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: 4,
-    marginLeft: 20,
-    marginRight: 16,
-    marginBottom: 12,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#f1f5f9",
+    gap: 2,
   },
-  viewBtn: { borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  viewBtn: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 6 },
   viewBtnPressed: { backgroundColor: "#f1f5f9" },
-  viewText: { fontSize: 13, fontWeight: "600", color: "#475569" },
-  trashBtn: { width: 40, height: 40, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  viewText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  trashBtn: { width: 32, height: 32, borderRadius: 6, alignItems: "center", justifyContent: "center" },
   trashBtnPressed: { backgroundColor: "#fff1f2" },
-  footer: { marginTop: 16, gap: 16 },
-  showing: { fontSize: 12, color: colors.slate },
+  footer: { marginTop: 12, gap: 12 },
+  showing: { fontSize: 11, color: colors.slate },
   pager: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 },
   pageArrow: {
-    width: 32,
-    height: 32,
+    width: 30,
+    height: 30,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border,
@@ -652,8 +675,8 @@ const styles = StyleSheet.create({
   },
   pageDisabled: { opacity: 0.4 },
   pageNum: {
-    minWidth: 32,
-    height: 32,
+    minWidth: 30,
+    height: 30,
     borderRadius: 8,
     paddingHorizontal: 8,
     alignItems: "center",
@@ -661,6 +684,6 @@ const styles = StyleSheet.create({
   },
   pageNumActive: { backgroundColor: "#0F1729" },
   pageNumIdle: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.white },
-  pageNumText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  pageNumText: { fontSize: 11, fontWeight: "600", color: "#475569" },
   pageNumTextActive: { color: colors.white },
 });

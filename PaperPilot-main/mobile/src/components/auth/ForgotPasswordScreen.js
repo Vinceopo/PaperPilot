@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { otpBypassToken, resetPasswordWithOtp, sendOtp } from "../../api";
+import { maskEmail } from "../../lib/maskEmail";
 import {
   confirmPasswordError,
   emailError,
@@ -147,7 +148,7 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
       <AuthShell
         variant="forgot"
         title="Set a new password"
-        subtitle={`Choose a new password for ${email.trim()}.`}
+        subtitle={`Choose a new password for ${maskEmail(email.trim())}.`}
         footer={backToLogin}
       >
         <View style={styles.form}>
@@ -253,17 +254,17 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
 }
 
 const styles = StyleSheet.create({
-  form: { marginTop: 20, gap: 14 },
+  form: { marginTop: 12, gap: 11 },
   checks: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
   check: { fontSize: 12.5, lineHeight: 16, color: colors.muted },
   checkMet: { color: colors.accentText },
   error: { fontSize: 14, lineHeight: 20, color: colors.rose },
   submit: {
     height: 52,
-    borderRadius: 10,
+    borderRadius: 14,
     paddingVertical: 0,
     minHeight: 52,
   },
-  footer: { marginTop: 20, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
-  footerLink: { fontWeight: "600", color: colors.accent },
+  footer: { marginTop: 14, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
+  footerLink: { fontWeight: "700", color: colors.accent },
 });

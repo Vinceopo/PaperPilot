@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Animated, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import Svg, { Circle, Path, Rect } from "react-native-svg";
+import { useKeyboardScroll } from "./KeyboardScrollContext";
 import { colors } from "../../theme";
 
 const FIELD_HEIGHT = 52;
@@ -94,6 +95,8 @@ export default function FloatingLabelInput({
   const [visible, setVisible] = useState(false);
   const floated = focused || Boolean(value);
   const anim = useRef(new Animated.Value(floated ? 1 : 0)).current;
+  const inputRef = useRef(null);
+  const keyboardScroll = useKeyboardScroll();
 
   useEffect(() => {
     Animated.timing(anim, {
@@ -111,6 +114,7 @@ export default function FloatingLabelInput({
     <View style={[styles.wrap, style]}>
       <View style={styles.field}>
         <TextInput
+          ref={inputRef}
           style={[
             styles.input,
             showPasswordToggle ? styles.inputWithToggle : null,
@@ -122,6 +126,7 @@ export default function FloatingLabelInput({
           onChangeText={onChangeText}
           onFocus={(e) => {
             setFocused(true);
+            keyboardScroll?.ensureVisible?.(inputRef);
             onFocus?.(e);
           }}
           onBlur={(e) => {

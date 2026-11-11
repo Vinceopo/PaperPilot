@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../api";
 import { auth, db, firebaseReady } from "../../firebase";
 import { FIREBASE_MISSING, authMessage } from "../../lib/messages";
@@ -12,7 +12,6 @@ import AuthShell from "./AuthShell";
 import OtpStep from "./OtpStep";
 import TermsModal from "./TermsModal";
 
-const TWO_COLUMN_MIN_WIDTH = 640;
 const TERMS_REQUIRED = "You must agree to the Terms and Conditions to create an account.";
 
 const EMPTY = {
@@ -36,8 +35,6 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [termsError, setTermsError] = useState("");
   const [termsOpen, setTermsOpen] = useState(false);
-  const { width } = useWindowDimensions();
-  const twoColumn = width >= TWO_COLUMN_MIN_WIDTH;
 
   function setAgreed(value) {
     setAgreedToTerms(value);
@@ -186,24 +183,20 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
     <AuthShell
       variant="register"
       title="Create your account"
-      subtitle="Join PaperPilot to save scores and reports."
+      subtitle="Save scores and reports in one place."
       footer={loginFooter}
     >
       <View style={styles.form}>
-        <View style={twoColumn ? styles.nameRow : styles.nameStack}>
-          <FloatingLabelInput
-            {...inputProps("firstName", "First name", { icon: "user", autoComplete: "given-name", autoCapitalize: "words" })}
-            style={twoColumn ? styles.nameCell : null}
-          />
-          <FloatingLabelInput
-            {...inputProps("middleName", "Middle name (optional)", {
-              icon: "user",
-              autoComplete: "additional-name",
-              autoCapitalize: "words",
-            })}
-            style={twoColumn ? styles.nameCell : null}
-          />
-        </View>
+        <FloatingLabelInput
+          {...inputProps("firstName", "First name", { icon: "user", autoComplete: "given-name", autoCapitalize: "words" })}
+        />
+        <FloatingLabelInput
+          {...inputProps("middleName", "Middle name (optional)", {
+            icon: "user",
+            autoComplete: "additional-name",
+            autoCapitalize: "words",
+          })}
+        />
         <FloatingLabelInput
           {...inputProps("lastName", "Last name", { icon: "user", autoComplete: "family-name", autoCapitalize: "words" })}
         />
@@ -222,7 +215,6 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
             autoCapitalize: "none",
             autoCorrect: false,
             maxLength: 20,
-            hint: "3–20 chars: letters, numbers, _ or .",
           })}
         />
         <View>
@@ -305,19 +297,16 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
 }
 
 const styles = StyleSheet.create({
-  form: { marginTop: 20, gap: 14 },
-  nameRow: { flexDirection: "row", gap: 14 },
-  nameStack: { gap: 14 },
-  nameCell: { flex: 1, width: "auto" },
-  checks: { flexDirection: "row", flexWrap: "wrap", columnGap: 16, rowGap: 4, marginTop: 8 },
-  check: { fontSize: 12.5, lineHeight: 16, color: colors.muted },
+  form: { marginTop: 8, gap: 7 },
+  checks: { flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 2, marginTop: 4 },
+  check: { fontSize: 11, lineHeight: 14, color: colors.muted },
   checkMet: { color: colors.accent },
-  error: { fontSize: 14, lineHeight: 20, color: colors.rose },
-  termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
+  error: { fontSize: 13, lineHeight: 18, color: colors.rose },
+  termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   checkbox: {
     marginTop: 1,
-    width: 16,
-    height: 16,
+    width: 15,
+    height: 15,
     borderRadius: 4,
     borderWidth: 1.5,
     borderColor: "#cbd5e1",
@@ -327,16 +316,16 @@ const styles = StyleSheet.create({
   },
   checkboxChecked: { borderColor: colors.accent, backgroundColor: colors.white },
   checkboxError: { borderColor: colors.rose },
-  checkboxMark: { fontSize: 11, lineHeight: 13, fontWeight: "700", color: colors.accent },
-  termsText: { flex: 1, fontSize: 14, lineHeight: 20, color: colors.slate },
+  checkboxMark: { fontSize: 10, lineHeight: 12, fontWeight: "700", color: colors.accent },
+  termsText: { flex: 1, fontSize: 12, lineHeight: 17, color: colors.slate },
   termsLink: { fontWeight: "600", color: colors.accent, textDecorationLine: "underline" },
-  termsError: { marginTop: 6, fontSize: 13, lineHeight: 16, color: colors.rose },
+  termsError: { marginTop: 4, fontSize: 12, lineHeight: 15, color: colors.rose },
   submit: {
-    height: 52,
-    borderRadius: 10,
+    height: 44,
+    borderRadius: 999,
     paddingVertical: 0,
-    minHeight: 52,
+    minHeight: 44,
   },
-  footer: { marginTop: 20, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
-  footerLink: { fontWeight: "600", color: colors.accent },
+  footer: { marginTop: 8, textAlign: "center", fontSize: 13, lineHeight: 18, color: colors.slate },
+  footerLink: { fontWeight: "700", color: colors.accent },
 });

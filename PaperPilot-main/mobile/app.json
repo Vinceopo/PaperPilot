@@ -14,7 +14,8 @@
     },
     "android": {
       "package": "com.paperpilot.app",
-      "runtimeVersion": "1.0.0"
+      "runtimeVersion": "1.0.0",
+      "softwareKeyboardLayoutMode": "resize"
     },
     "extra": {
       "apiUrl": "https://paperpilotph.vercel.app/api",
@@ -49,7 +50,9 @@
       ],
       "expo-image",
       "@react-native-google-signin/google-signin",
-      "expo-sharing"
+      "expo-sharing",
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "updates": {
       "url": "https://u.expo.dev/45e1cf04-e601-4357-aba5-09c75e874a04"

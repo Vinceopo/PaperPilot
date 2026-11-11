@@ -665,6 +665,10 @@ export function confirmCheckoutPayment({ checkoutSessionId } = {}) {
   });
 }
 
+export function getSubscriptionHistory() {
+  return authorizedFetch("/subscription/history");
+}
+
 export function getProfile() {
   return authorizedFetch("/profile");
 }
@@ -685,6 +689,10 @@ export function updateUserProfile(data) {
       remove_photo: data.removePhoto ?? false,
     }),
   });
+}
+
+export function deactivateAccount() {
+  return authorizedFetch("/account/deactivate", { method: "POST", body: JSON.stringify({}) });
 }
 
 export function itemsFrom(data, key) {

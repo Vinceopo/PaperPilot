@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -32,6 +32,12 @@ function Root() {
   const [registrationSuccess, setRegistrationSuccess] = useState(null);
   const [regChecked, setRegChecked] = useState(false);
   const signedIn = Boolean(user);
+  // After an explicit logout (or expired session), skip landing and open Login.
+  const hadSessionRef = useRef(false);
+
+  useEffect(() => {
+    if (user) hadSessionRef.current = true;
+  }, [user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +74,10 @@ function Root() {
     return (
       <>
         <StatusBar style="light" />
-        <AuthScreen onRegistered={onRegistered} />
+        <AuthScreen
+          onRegistered={onRegistered}
+          initialMode={hadSessionRef.current ? "login" : undefined}
+        />
       </>
     );
   }

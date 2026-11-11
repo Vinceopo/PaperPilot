@@ -3,10 +3,12 @@
  * Values shown are the actual rules (from extraction, saved profile, or sample starter).
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors } from "../../theme";
 import SelectField from "../ui/SelectField";
+import FocusAwareTextInput from "../ui/FocusAwareTextInput";
+import { useKeyboardScroll } from "../ui/KeyboardScrollContext";
 import { ChevronDownIcon, CloseIcon, TrashIcon } from "../shell/icons";
 import { supportedCitationStyle } from "../../lib/formatMechanicsForm";
 import {
@@ -82,6 +84,8 @@ function Section({ title, children }) {
 /** Free-text input with a dropdown that always lists every preset, whatever is typed. */
 function ComboInput({ value, onChange, options, disabled }) {
   const [open, setOpen] = useState(false);
+  const inputRef = useRef(null);
+  const keyboardScroll = useKeyboardScroll();
   const current = String(value ?? "").trim().toLowerCase();
 
   function choose(option) {
@@ -93,10 +97,12 @@ function ComboInput({ value, onChange, options, disabled }) {
     <View>
       <View>
         <TextInput
+          ref={inputRef}
           editable={!disabled}
           style={[styles.input, styles.comboInput, disabled && styles.inputDisabled]}
           value={value == null ? "" : String(value)}
           onChangeText={onChange}
+          onFocus={() => keyboardScroll?.ensureVisible?.(inputRef)}
           placeholderTextColor={colors.muted}
         />
         <Pressable
@@ -216,7 +222,7 @@ export default function FormatMechanicsFields({
   }
   function input(key, extra = {}) {
     return (
-      <TextInput
+      <FocusAwareTextInput
         editable={!disabled}
         style={[styles.input, disabled && styles.inputDisabled, extra.multiline && styles.area]}
         value={form[key] == null ? "" : String(form[key])}
@@ -237,7 +243,7 @@ export default function FormatMechanicsFields({
 
       <View style={styles.body}>
         <Field label="Profile name">
-          <TextInput
+          <FocusAwareTextInput
             ref={nameInputRef}
             editable={!disabled}
             style={[styles.input, disabled && styles.inputDisabled, nameError ? styles.inputError : null]}
@@ -387,7 +393,7 @@ export default function FormatMechanicsFields({
                           )}
                         </View>
                         {field.key === "size" ? (
-                          <TextInput
+                          <FocusAwareTextInput
                             editable={!disabled}
                             style={[styles.input, disabled && styles.inputDisabled]}
                             value={heading.size == null ? "" : String(heading.size)}

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { StyleSheet, Text, TextInput, View } from "react-native";
+import { useKeyboardScroll } from "./KeyboardScrollContext";
 import { colors } from "../../theme";
 
 /**
@@ -16,6 +17,7 @@ export default function OtpInput({
   const digits = (value || "").padEnd(6, " ").slice(0, 6).split("");
   const refs = useRef([]);
   const lastComplete = useRef("");
+  const keyboardScroll = useKeyboardScroll();
 
   useEffect(() => {
     if (autoFocus) refs.current[0]?.focus();
@@ -79,6 +81,7 @@ export default function OtpInput({
             value={d.trim()}
             onChangeText={(text) => onChangeDigit(i, text)}
             onKeyPress={(e) => onKeyPress(i, e)}
+            onFocus={() => keyboardScroll?.ensureVisible?.({ current: refs.current[i] })}
             keyboardType="number-pad"
             textContentType={i === 0 ? "oneTimeCode" : "none"}
             maxLength={6}

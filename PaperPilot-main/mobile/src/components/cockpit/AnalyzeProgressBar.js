@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated, StyleSheet, Text, View } from "react-native";
+import { Animated, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { colors } from "../../theme";
 import PaperRollAnimation from "../ui/PaperRollAnimation";
 import AnalysisProgress from "./AnalysisProgress";
@@ -13,6 +13,7 @@ const MAX_HOLD_MS = 2500;
  * page flies off on a paper plane before full results open (calls onReveal).
  */
 export default function AnalyzeProgressBar({ progress, resultReady = false, onReveal }) {
+  const { height: windowHeight } = useWindowDimensions();
   const target = Math.min(100, Math.max(0, Number(progress?.percent) || 0));
   const [shown, setShown] = useState(0);
   const shownRef = useRef(0);
@@ -64,17 +65,24 @@ export default function AnalyzeProgressBar({ progress, resultReady = false, onRe
     if (flightDone && resultReady) onReveal?.();
   }, [flightDone, resultReady, onReveal]);
 
+  // Nudge the analyzing block ~13% of screen height below geometric center.
+  const centerNudge = Math.round(windowHeight * 0.13);
+
   return (
     <View style={styles.page}>
-      <View style={styles.card}>
-        <Animated.View
-          style={[styles.inner, { opacity: fade }]}
-          pointerEvents={phase === "fly" ? "none" : "auto"}
-        >
-          <PaperRollAnimation size={176} />
-          <Text style={styles.title}>{stageDone ? "Analysis complete" : "Analysing your document…"}</Text>
-          <AnalysisProgress progress={progress} percent={shown} />
-        </Animated.View>
+      <View style={[styles.card, { minHeight: Math.max(420, windowHeight * 0.72) }]}>
+        <View style={[styles.centerSlot, { paddingTop: centerNudge }]}>
+          <Animated.View
+            style={[styles.inner, { opacity: fade }]}
+            pointerEvents={phase === "fly" ? "none" : "auto"}
+          >
+            <PaperRollAnimation size={176} />
+            <Text style={styles.title}>
+              {stageDone ? "Analysis complete" : "Analysing your document…"}
+            </Text>
+            <AnalysisProgress progress={progress} percent={shown} />
+          </Animated.View>
+        </View>
         {phase === "fly" ? <PaperCarryAway onDone={() => setFlightDone(true)} /> : null}
       </View>
     </View>
@@ -82,24 +90,43 @@ export default function AnalyzeProgressBar({ progress, resultReady = false, onRe
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, padding: 16, backgroundColor: colors.pageBg },
+  page: {
+    flex: 1,
+    backgroundColor: colors.pageBg,
+    padding: 16,
+  },
   card: {
     flex: 1,
-    minHeight: 360,
-    alignItems: "center",
-    justifyContent: "center",
+    width: "100%",
     overflow: "hidden",
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
-    paddingHorizontal: 24,
     shadowColor: "#0f172a",
     shadowOpacity: 0.05,
     shadowRadius: 2,
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
-  inner: { width: "100%", maxWidth: 420, alignItems: "center", gap: 20 },
-  title: { fontSize: 16, fontWeight: "700", color: "#1e293b", textAlign: "center" },
+  centerSlot: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  inner: {
+    width: "100%",
+    maxWidth: 420,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 20,
+  },
+  title: {
+    width: "100%",
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1e293b",
+    textAlign: "center",
+  },
 });

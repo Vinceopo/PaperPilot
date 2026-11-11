@@ -7,17 +7,19 @@ import { downloadReport } from "../../lib/mockAnalysis";
 import { versionScanId, versionToScanResult } from "../../lib/scannedLibrary";
 import {
   CATEGORY_STATUS_LABEL,
+  compliancePercentFromUnits,
   formatCount,
   formatPct,
   formatScore,
   hasValue,
-  plural,
+  resolveCategoryUnitDisplays,
 } from "../../lib/scoreFormat";
 import { APP_TIME_ZONE } from "../../lib/timeZone";
 import { isPaidTier } from "../../lib/plans";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import UpgradePrompt from "../ui/UpgradePrompt";
-import { ClockIcon, DownloadIcon, LockIcon, TrashIcon } from "../shell/icons";
+import { ChevronDownIcon, ClockIcon, DownloadIcon, LockIcon, TrashIcon } from "../shell/icons";
+import { categoryForIssue, normalizeDetectedIssues } from "./IssuesDetectedPanel";
 
 function ringStroke(score) {
   if (!hasValue(score)) return "#cbd5e1";
@@ -26,53 +28,127 @@ function ringStroke(score) {
   return "#B02A37";
 }
 
-/** Matches web / Scan Results category cards. */
-function CategoryRingCard({ section, score, status, unitsChecked, unitsFailed, issueCount }) {
-  const evaluated = hasValue(score);
-  const safe = evaluated ? Math.max(0, Math.min(100, Number(score))) : 0;
-  const radius = 26;
+/** Short subtitle for Manuscript Detail only (Scan Results keeps the longer wording). */
+function formatShortCategoryDetail(failed, total) {
+  if (!hasValue(total)) return null;
+  const units = Math.max(0, Math.round(Number(total)));
+  const fail = hasValue(failed) ? Math.max(0, Math.round(Number(failed))) : 0;
+  return `Checked ${formatCount(units)} · failed ${formatCount(fail)}`;
+}
+
+/**
+ * Same ring % math / ring look as Scan Results category cards.
+ * Subtitle uses the shorter "Checked X · failed Y" wording on this page only.
+ */
+function CategoryRingCard({
+  metric,
+  score,
+  status,
+  displayTotal,
+  displayNonCompliant,
+  displayIssueCount,
+  displayScore,
+}) {
+  // Same issue count used for ring % as on Scan Results.
+  const issueCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
+  const fromShown = compliancePercentFromUnits(displayTotal, issueCount);
+  const pct =
+    fromShown != null
+      ? fromShown
+      : hasValue(displayScore)
+        ? Number(displayScore)
+        : hasValue(score)
+          ? Number(score)
+          : null;
+  const evaluated = hasValue(pct);
+  const safe = evaluated ? Math.max(0, Math.min(100, Number(pct))) : 0;
+  const name = String(metric || "Category").trim() || "Category";
+  // Match Scan Results ring geometry (56×56, r=22, stroke 5).
+  const radius = 22;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
-  const detail = hasValue(unitsChecked)
-    ? `Checked ${formatCount(unitsChecked)}${hasValue(unitsFailed) ? ` · failed ${formatCount(unitsFailed)}` : ""}`
-    : hasValue(issueCount) && Number(issueCount) > 0
-      ? `${formatCount(issueCount)} ${plural(issueCount, "issue")} found`
-      : evaluated
-        ? null
-        : CATEGORY_STATUS_LABEL[status] || "Not evaluated";
+  const detail =
+    formatShortCategoryDetail(issueCount, displayTotal) ||
+    (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated") ||
+    (evaluated ? "Checked 0 · failed 0" : "Not evaluated");
 
   return (
-    <View style={styles.ringCard}>
-      <View style={styles.ringWrap}>
-        <Svg width={64} height={64} style={{ transform: [{ rotate: "-90deg" }] }}>
-          <Circle cx={32} cy={32} r={radius} stroke="#e2e8f0" strokeWidth={5.5} fill="none" />
+    <View style={styles.catCard}>
+      <View style={styles.catRingWrap}>
+        <Svg width={56} height={56} viewBox="0 0 56 56" style={{ transform: [{ rotate: "-90deg" }] }}>
+          <Circle cx={28} cy={28} r={radius} fill="none" stroke="#e2e8f0" strokeWidth={5} />
           <Circle
-            cx={32}
-            cy={32}
+            cx={28}
+            cy={28}
             r={radius}
-            stroke={stroke}
-            strokeWidth={5.5}
             fill="none"
+            stroke={stroke}
+            strokeWidth={5}
             strokeLinecap="round"
-            strokeDasharray={`${circumference} ${circumference}`}
+            strokeDasharray={`${circumference}`}
             strokeDashoffset={evaluated ? offset : circumference}
           />
         </Svg>
-        <View style={styles.ringLabel}>
-          <Text style={[styles.ringPct, { color: evaluated ? stroke : "#94a3b8" }]}>
-            {evaluated ? formatPct(safe, 1) : "—"}
+        <View style={styles.catRingCenter} pointerEvents="none">
+          <Text
+            style={[styles.catRingValue, { color: evaluated ? stroke : "#94a3b8" }]}
+            numberOfLines={1}
+          >
+            {evaluated ? formatPct(safe, 2) : "—"}
           </Text>
         </View>
       </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.ringTitle} numberOfLines={1}>
-          {section}
+      <View style={styles.catCopy}>
+        <Text style={styles.catTitle} numberOfLines={1}>
+          {name}
         </Text>
-        {detail ? <Text style={styles.ringDetail}>{detail}</Text> : null}
+        <Text style={styles.catDetail}>{detail}</Text>
       </View>
     </View>
   );
+}
+
+/** Build the same category card rows used on the full results screen. */
+function buildCategoryCards(manuscript, version) {
+  const result = versionToScanResult(manuscript, version) || {};
+  const breakdown = Array.isArray(result.scoreBreakdown) ? result.scoreBreakdown : [];
+  const categoryDisplays = resolveCategoryUnitDisplays(breakdown);
+  const tracedEntries = normalizeDetectedIssues(
+    result.formatChecks || [],
+    result.pageCount || 0
+  ).entries;
+  const tracedByCategory = {};
+  tracedEntries.forEach((entry) => {
+    const key = entry.category || categoryForIssue(entry) || "Other";
+    tracedByCategory[key] = (tracedByCategory[key] || 0) + 1;
+  });
+  return categoryDisplays.map((row) => {
+    const name = String(row.metric || row.section || "").trim();
+    const traced = name ? tracedByCategory[name] : null;
+    const displayIssueCount = hasValue(traced)
+      ? traced
+      : hasValue(row.displayIssueCount)
+        ? row.displayIssueCount
+        : row.displayNonCompliant;
+    const total = row.displayTotal;
+    const displayNonCompliant =
+      hasValue(total) && hasValue(displayIssueCount)
+        ? Math.min(Math.max(0, Number(total)), Math.max(0, Number(displayIssueCount)))
+        : row.displayNonCompliant;
+    const displayCompliant =
+      hasValue(total) && hasValue(displayNonCompliant)
+        ? Math.max(0, Number(total) - Number(displayNonCompliant))
+        : row.displayCompliant;
+    const displayScore = compliancePercentFromUnits(total, displayNonCompliant);
+    return {
+      ...row,
+      displayIssueCount,
+      displayNonCompliant,
+      displayCompliant,
+      displayScore: displayScore != null ? displayScore : row.displayScore,
+    };
+  });
 }
 
 const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
@@ -216,6 +292,7 @@ export default function ManuscriptDetailModal({
   const latestId = versionsDesc[0]?.id || "";
 
   const [selectedId, setSelectedId] = useState(latestId);
+  const [versionsOpen, setVersionsOpen] = useState(false);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const [openingResult, setOpeningResult] = useState(false);
@@ -228,6 +305,7 @@ export default function ManuscriptDetailModal({
 
   useEffect(() => {
     setSelectedId(latestId);
+    setVersionsOpen(false);
   }, [manuscript?.id, latestId]);
 
   const selectedFromLibrary =
@@ -300,6 +378,7 @@ export default function ManuscriptDetailModal({
     }
     // Short summary only — full Scan Results open via "View full results".
     setSelectedId(ver.id);
+    setVersionsOpen(false);
   }
 
   async function onDownload() {
@@ -324,13 +403,20 @@ export default function ManuscriptDetailModal({
   const issues = [...(selected?.issues || [])].sort(
     (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9)
   );
+  const categoryCards = selected ? buildCategoryCards(manuscript, selected) : [];
 
   return (
     <View style={styles.root}>
+      <ScrollView
+        style={styles.body}
+        contentContainerStyle={styles.bodyContent}
+        showsVerticalScrollIndicator
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.header}>
           <Text style={styles.kicker}>Manuscript detail</Text>
           <View style={styles.headerRow}>
-            <Text style={styles.title} numberOfLines={1}>
+            <Text style={styles.title} numberOfLines={2}>
               {manuscript.title}
             </Text>
             <Text style={styles.subtitle}>
@@ -347,66 +433,99 @@ export default function ManuscriptDetailModal({
           </View>
         </View>
 
-        {/* Independent panes: Versions stays put while Short result scrolls (and vice versa). */}
-        <View style={styles.panes}>
-        <View style={styles.aside}>
+        <View style={styles.versionBlock}>
           <View style={styles.asideLabelRow}>
             <ClockIcon size={14} />
-            <Text style={styles.asideLabel}>Versions</Text>
+            <Text style={styles.asideLabel}>Version</Text>
           </View>
-          <ScrollView
-            style={styles.versionScroll}
-            contentContainerStyle={styles.versionList}
-            nestedScrollEnabled
-            showsVerticalScrollIndicator
-          >
-            {versionsDesc.map((ver) => {
-              const vb = scoreBand(ver.score);
-              const active = ver.id === selected?.id;
-              const isLatest = ver.id === latestId;
-              const locked = !isPremium && !isLatest;
-              return (
-                <View key={ver.id} style={styles.versionRow}>
+
+          {selected ? (
+            <Pressable
+              onPress={() => setVersionsOpen((open) => !open)}
+              style={({ pressed }) => [styles.versionPicker, pressed && styles.versionPickerPressed]}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: versionsOpen }}
+              accessibilityLabel="Choose manuscript version"
+            >
+              <View style={styles.versionPickerText}>
+                <Text style={styles.versionPickerNum}>{versionLabel}</Text>
+                <Text style={styles.versionPickerDate}>
+                  {formatDateTime(selected.scannedAt || selected.scannedDate)}
+                </Text>
+                <Text style={[styles.versionPickerScore, { color: colors.accent }]}>
+                  Score {formatScore(selected.score, 0)}
+                </Text>
+              </View>
+              {onDeleteVersion ? (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.versionDeleteBtn,
+                    pressed && styles.versionDeleteBtnPressed,
+                  ]}
+                  onPress={() => setPendingDeleteId(selected.id)}
+                  accessibilityLabel={`Delete version ${selected.versionNumber}`}
+                  hitSlop={6}
+                >
+                  <TrashIcon size={15} color="#94a3b8" />
+                </Pressable>
+              ) : null}
+              <View
+                style={[
+                  styles.versionChevron,
+                  versionsOpen && { transform: [{ rotate: "180deg" }] },
+                ]}
+              >
+                <ChevronDownIcon size={16} color="#cbd5e1" />
+              </View>
+            </Pressable>
+          ) : null}
+
+          {versionsOpen ? (
+            <View style={styles.versionMenu}>
+              {versionsDesc.map((ver) => {
+                const vb = scoreBand(ver.score);
+                const active = ver.id === selected?.id;
+                const isLatest = ver.id === latestId;
+                const locked = !isPremium && !isLatest;
+                return (
                   <Pressable
+                    key={ver.id}
                     onPress={() => selectVersion(ver)}
                     style={({ pressed }) => [
-                      styles.versionBtn,
-                      active && styles.versionBtnActive,
-                      pressed && !active && styles.versionBtnPressed,
+                      styles.versionOption,
+                      active && styles.versionOptionActive,
+                      pressed && !active && styles.versionOptionPressed,
                     ]}
                   >
                     <View style={styles.versionTop}>
-                      <Text style={[styles.versionNum, active && styles.versionMutedActive]}>
+                      <Text style={[styles.versionOptionNum, active && styles.versionMutedActive]}>
                         v{ver.versionNumber}.0
                       </Text>
                       {locked ? <LockIcon size={14} /> : null}
                     </View>
-                    <Text style={[styles.versionDate, active && styles.versionMutedActive]}>
+                    <Text style={[styles.versionOptionDate, active && styles.versionMutedActive]}>
                       {formatDateTime(ver.scannedAt || ver.scannedDate)}
                     </Text>
                     <Text
                       style={[
-                        styles.versionScore,
-                        { color: active ? colors.accent : locked ? colors.muted : bandTone(vb).text },
+                        styles.versionOptionScore,
+                        {
+                          color: active
+                            ? colors.accent
+                            : locked
+                              ? colors.muted
+                              : bandTone(vb).text,
+                        },
                       ]}
                     >
                       {locked ? "Premium only" : `Score ${formatScore(ver.score, 0)}`}
                     </Text>
                   </Pressable>
-                  {onDeleteVersion ? (
-                    <Pressable
-                      style={styles.versionDelete}
-                      onPress={() => setPendingDeleteId(ver.id)}
-                      accessibilityLabel={`Delete version ${ver.versionNumber}`}
-                      hitSlop={6}
-                    >
-                      <TrashIcon size={14} color={colors.muted} />
-                    </Pressable>
-                  ) : null}
-                </View>
-              );
-            })}
-          </ScrollView>
+                );
+              })}
+            </View>
+          ) : null}
+
           {!isPremium && versionsDesc.length > 1 ? (
             <Text style={styles.freeNote}>
               Free plan: only the latest version is viewable. Upgrade for full history.
@@ -414,131 +533,134 @@ export default function ManuscriptDetailModal({
           ) : null}
         </View>
 
-        <ScrollView
-          style={styles.body}
-          contentContainerStyle={styles.bodyContent}
-          nestedScrollEnabled
-          showsVerticalScrollIndicator
-        >
-          {!selected ? (
-            <Text style={styles.emptyText}>No versions available.</Text>
-          ) : (
-            <>
-              <View style={styles.selectedRow}>
-                <View style={{ flex: 1, minWidth: 140 }}>
-                  <Text style={styles.selectedLabel}>Short result</Text>
-                  <Text style={styles.selectedMeta}>
-                    {versionLabel} · {formatDateTime(selected.scannedAt || selected.scannedDate)}
-                  </Text>
-                </View>
-                <View style={styles.footerActions}>
-                  {onOpenResult ? (
-                    <Pressable
-                      onPress={() => void openFullResult(selected)}
-                      disabled={openingResult}
-                      style={({ pressed }) => [
-                        styles.downloadBtn,
-                        { backgroundColor: "#16bfa8" },
-                        pressed && styles.downloadBtnPressed,
-                        openingResult && styles.downloadBtnBusy,
-                      ]}
-                    >
-                      <Text style={[styles.downloadText, { color: "#fff" }]}>
-                        {openingResult ? "Opening…" : "View full results"}
-                      </Text>
-                    </Pressable>
-                  ) : null}
+        {!selected ? (
+          <Text style={styles.emptyText}>No versions available.</Text>
+        ) : (
+          <>
+            <View style={styles.selectedRow}>
+              <View style={{ flex: 1, minWidth: 140 }}>
+                <Text style={styles.selectedLabel}>Short result</Text>
+                <Text style={styles.selectedMeta}>
+                  {versionLabel} · {formatDateTime(selected.scannedAt || selected.scannedDate)}
+                </Text>
+              </View>
+              <View style={styles.footerActions}>
+                {onOpenResult ? (
                   <Pressable
-                    onPress={onDownload}
-                    disabled={downloadBusy}
+                    onPress={() => void openFullResult(selected)}
+                    disabled={openingResult}
                     style={({ pressed }) => [
                       styles.downloadBtn,
-                      styles.downloadBtnOutline,
-                      pressed && styles.downloadBtnOutlinePressed,
-                      downloadBusy && styles.downloadBtnBusy,
+                      { backgroundColor: "#16bfa8" },
+                      pressed && styles.downloadBtnPressed,
+                      openingResult && styles.downloadBtnBusy,
                     ]}
                   >
-                    <DownloadIcon size={14} color="#334155" />
-                    <Text style={[styles.downloadText, styles.downloadTextOutline]}>
-                      {downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
+                    <Text style={[styles.downloadText, { color: "#fff" }]}>
+                      {openingResult ? "Opening…" : "View full results"}
                     </Text>
                   </Pressable>
-                </View>
-              </View>
-              {downloadError ? <Text style={styles.downloadError}>{downloadError}</Text> : null}
-
-              <View style={styles.overallCard}>
-                <Text style={styles.overallKicker}>Overall compliance score</Text>
-                <View style={styles.overallScoreLine}>
-                  <Text style={[styles.overallScoreValue, { color: tone.text }]}>
-                    {formatScore(selected.score, 0)}
+                ) : null}
+                <Pressable
+                  onPress={onDownload}
+                  disabled={downloadBusy}
+                  style={({ pressed }) => [
+                    styles.downloadBtn,
+                    styles.downloadBtnOutline,
+                    pressed && styles.downloadBtnOutlinePressed,
+                    downloadBusy && styles.downloadBtnBusy,
+                  ]}
+                >
+                  <DownloadIcon size={14} color="#334155" />
+                  <Text style={[styles.downloadText, styles.downloadTextOutline]}>
+                    {downloadBusy ? "Generating PDF…" : `Download full report · ${versionLabel}`}
                   </Text>
-                  {selected.score != null ? (
-                    <Text style={[styles.overallScorePct, { color: tone.text }]}>%</Text>
-                  ) : null}
-                </View>
-                <View style={[styles.pill, { marginTop: 12, alignSelf: "flex-start", backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
-                  <Text style={[styles.pillText, { color: tone.pillText }]}>{band.label}</Text>
-                </View>
+                </Pressable>
               </View>
+            </View>
+            {downloadError ? <Text style={styles.downloadError}>{downloadError}</Text> : null}
 
-              <Text style={styles.sectionTitle}>Score Breakdown</Text>
-              {hydrating && !(selected.breakdown || []).length ? (
-                <Text style={[styles.emptyText, { marginTop: 8 }]}>Loading score breakdown…</Text>
-              ) : null}
-              {(selected.breakdown || []).length > 0 &&
-              (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
-                <Text style={styles.breakdownNote}>
-                  Unit counts were not stored with this scan. Re-analyse the manuscript to generate the full
-                  scoring breakdown.
+            <View style={styles.overallCard}>
+              <Text style={styles.overallKicker}>Overall compliance score</Text>
+              <View style={styles.overallScoreLine}>
+                <Text style={[styles.overallScoreValue, { color: tone.text }]}>
+                  {formatScore(selected.score, 0)}
                 </Text>
-              ) : null}
-              <View style={styles.ringGrid}>
-                {(selected.breakdown || []).map((row) => (
-                  <CategoryRingCard
-                    key={row.section}
-                    section={row.section}
-                    score={row.score}
-                    status={row.status}
-                    unitsChecked={row.unitsChecked}
-                    unitsFailed={row.unitsFailed}
-                    issueCount={row.issueCount}
-                  />
+                {selected.score != null ? (
+                  <Text style={[styles.overallScorePct, { color: tone.text }]}>%</Text>
+                ) : null}
+              </View>
+              <View
+                style={[
+                  styles.pill,
+                  {
+                    marginTop: 12,
+                    alignSelf: "flex-start",
+                    backgroundColor: tone.pillBg,
+                    borderColor: tone.pillBorder,
+                  },
+                ]}
+              >
+                <Text style={[styles.pillText, { color: tone.pillText }]}>{band.label}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.sectionTitle}>Score Breakdown</Text>
+            {hydrating && !categoryCards.length ? (
+              <Text style={[styles.emptyText, { marginTop: 8 }]}>Loading score breakdown…</Text>
+            ) : null}
+            {categoryCards.length > 0 &&
+            categoryCards.every((row) => row.displayTotal == null && row.unitsChecked == null) ? (
+              <Text style={styles.breakdownNote}>
+                Unit counts were not stored with this scan. Re-analyse the manuscript to generate the full
+                scoring breakdown.
+              </Text>
+            ) : null}
+            <View style={styles.ringGrid}>
+              {categoryCards.map((item) => (
+                <CategoryRingCard
+                  key={item.metric || item.section}
+                  metric={item.metric || item.section}
+                  score={item.displayScore ?? item.score}
+                  status={item.status}
+                  displayTotal={item.displayTotal}
+                  displayNonCompliant={item.displayNonCompliant}
+                  displayIssueCount={item.displayIssueCount}
+                  displayScore={item.displayScore}
+                />
+              ))}
+            </View>
+            {!hydrating && !categoryCards.length ? (
+              <Text style={[styles.emptyText, { marginTop: 8 }]}>
+                No score breakdown recorded for this version.
+              </Text>
+            ) : null}
+
+            <Text style={[styles.sectionTitle, styles.issuesTitle]}>
+              Detected issues <Text style={styles.issuesCount}>({issues.length})</Text>
+            </Text>
+            <Text style={styles.issuesHint}>
+              Each card is one rule finding — expand locations to see every page/line hit.
+            </Text>
+
+            {hydrateError ? (
+              <Text style={[styles.emptyText, { marginTop: 12, color: colors.rose }]}>{hydrateError}</Text>
+            ) : null}
+
+            {hydrating && issues.length === 0 ? (
+              <Text style={[styles.emptyText, { marginTop: 12 }]}>Loading detected issues…</Text>
+            ) : issues.length === 0 ? (
+              <Text style={[styles.emptyText, { marginTop: 12 }]}>No issues recorded for this version.</Text>
+            ) : (
+              <View style={styles.issueList}>
+                {issues.map((issue, idx) => (
+                  <IssueCard key={`${issue.category}-${idx}`} issue={issue} />
                 ))}
               </View>
-              {!hydrating && !(selected.breakdown || []).length ? (
-                <Text style={[styles.emptyText, { marginTop: 8 }]}>
-                  No score breakdown recorded for this version.
-                </Text>
-              ) : null}
-
-              <Text style={[styles.sectionTitle, styles.issuesTitle]}>
-                Detected issues <Text style={styles.issuesCount}>({issues.length})</Text>
-              </Text>
-              <Text style={styles.issuesHint}>
-                Each card is one rule finding — expand locations to see every page/line hit.
-              </Text>
-
-              {hydrateError ? (
-                <Text style={[styles.emptyText, { marginTop: 12, color: colors.rose }]}>{hydrateError}</Text>
-              ) : null}
-
-              {hydrating && issues.length === 0 ? (
-                <Text style={[styles.emptyText, { marginTop: 12 }]}>Loading detected issues…</Text>
-              ) : issues.length === 0 ? (
-                <Text style={[styles.emptyText, { marginTop: 12 }]}>No issues recorded for this version.</Text>
-              ) : (
-                <View style={styles.issueList}>
-                  {issues.map((issue, idx) => (
-                    <IssueCard key={`${issue.category}-${idx}`} issue={issue} />
-                  ))}
-                </View>
-              )}
-
-            </>
-          )}
-        </ScrollView>
-        </View>
+            )}
+          </>
+        )}
+      </ScrollView>
 
         <ConfirmDialog
           open={Boolean(pendingDeleteId)}
@@ -596,16 +718,10 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
-  panes: {
-    flex: 1,
-    minHeight: 0,
-  },
   header: {
-    flexShrink: 0,
+    paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
-    paddingHorizontal: 24,
-    paddingVertical: 20,
   },
   kicker: {
     fontSize: 11,
@@ -622,26 +738,28 @@ const styles = StyleSheet.create({
     gap: 10,
     minWidth: 0,
   },
-  title: { maxWidth: "100%", fontSize: 22, fontWeight: "700", color: "#0F1729" },
-  subtitle: { fontSize: 14, color: colors.slate },
-  pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
-  pillText: { fontSize: 12, fontWeight: "700" },
+  title: { maxWidth: "100%", fontSize: 18, fontWeight: "700", color: "#0F1729" },
+  subtitle: { fontSize: 12, color: colors.slate },
+  pill: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  pillText: { fontSize: 11, fontWeight: "700" },
   pillNeutral: { borderColor: colors.border, backgroundColor: "#f8fafc" },
   pillNeutralText: { color: "#475569" },
-  aside: {
-    flexShrink: 0,
-    maxHeight: 256,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
+  versionBlock: {
+    marginTop: 18,
+    marginBottom: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#e8eef4",
     backgroundColor: "#F8FAFC",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
   },
   asideLabelRow: {
-    flexShrink: 0,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    marginBottom: 10,
   },
   asideLabel: {
     fontSize: 10,
@@ -650,68 +768,85 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     color: colors.slate,
   },
-  versionScroll: { flexGrow: 0, maxHeight: 180 },
-  versionList: { paddingHorizontal: 12, paddingBottom: 12, gap: 4 },
-  versionRow: { flexDirection: "row", alignItems: "center", gap: 4 },
-  versionBtn: {
-    flex: 1,
-    minWidth: 0,
+  versionPicker: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: "#0F1729",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  versionPickerPressed: { opacity: 0.92 },
+  versionPickerText: { flex: 1, minWidth: 0 },
+  versionPickerNum: { fontSize: 13, fontWeight: "700", color: colors.white },
+  versionPickerDate: { marginTop: 2, fontSize: 11, color: "#94a3b8" },
+  versionPickerScore: { marginTop: 4, fontSize: 11, fontWeight: "700" },
+  versionChevron: { padding: 2 },
+  versionDeleteBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(148,163,184,0.12)",
+  },
+  versionDeleteBtnPressed: { backgroundColor: "rgba(244,63,94,0.18)" },
+  versionMenu: {
+    marginTop: 8,
+    gap: 4,
+  },
+  versionOption: {
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  versionBtnActive: {
+  versionOptionActive: {
     backgroundColor: "#0F1729",
-    shadowColor: "#0f172a",
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+    borderColor: "#0F1729",
   },
-  versionBtnPressed: { backgroundColor: "#f1f5f9" },
+  versionOptionPressed: { backgroundColor: "#f1f5f9" },
   versionTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  versionNum: { fontSize: 12, fontWeight: "500", color: colors.muted },
+  versionOptionNum: { fontSize: 12, fontWeight: "600", color: colors.slate },
   versionMutedActive: { color: "#cbd5e1" },
-  versionDate: { marginTop: 2, fontSize: 11, color: colors.muted },
-  versionScore: { marginTop: 4, fontSize: 10, fontWeight: "600" },
-  versionDelete: { width: 28, height: 28, borderRadius: 8, alignItems: "center", justifyContent: "center" },
+  versionOptionDate: { marginTop: 2, fontSize: 11, color: colors.muted },
+  versionOptionScore: { marginTop: 4, fontSize: 10, fontWeight: "600" },
   freeNote: {
-    flexShrink: 0,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    marginTop: 10,
     fontSize: 10,
     lineHeight: 15,
     color: colors.slate,
   },
   body: { flex: 1, minHeight: 0 },
-  bodyContent: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 28 },
-  emptyText: { fontSize: 14, color: colors.muted },
+  bodyContent: { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 24 },
+  emptyText: { fontSize: 13, color: colors.muted },
   selectedRow: {
+    marginTop: 10,
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "flex-start",
     justifyContent: "space-between",
-    gap: 12,
+    gap: 10,
   },
   selectedLabel: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "700",
-    letterSpacing: 1.4,
+    letterSpacing: 1.2,
     textTransform: "uppercase",
     color: colors.muted,
   },
-  selectedMeta: { marginTop: 4, fontSize: 14, fontWeight: "700", color: colors.text },
-  footerActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 },
+  selectedMeta: { marginTop: 3, fontSize: 13, fontWeight: "700", color: colors.text },
+  footerActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 6 },
   overallCard: {
-    marginTop: 16,
-    borderRadius: 16,
+    marginTop: 12,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
-    padding: 20,
+    padding: 14,
     shadowColor: "#0F1729",
     shadowOpacity: 0.04,
     shadowRadius: 2,
@@ -719,18 +854,18 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   overallKicker: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "700",
-    letterSpacing: 1.6,
+    letterSpacing: 1.4,
     textTransform: "uppercase",
     color: colors.muted,
   },
-  overallScoreLine: { marginTop: 8, flexDirection: "row", alignItems: "flex-end", gap: 2 },
-  overallScoreValue: { fontSize: 48, fontWeight: "800", fontVariant: ["tabular-nums"], lineHeight: 52 },
-  overallScorePct: { fontSize: 24, fontWeight: "800", fontVariant: ["tabular-nums"], paddingBottom: 6 },
-  sectionTitle: { marginTop: 24, fontSize: 14, fontWeight: "700", color: "#0F1729" },
-  breakdown: { marginTop: 12, gap: 12 },
-  breakdownNote: { marginTop: 4, fontSize: 11, lineHeight: 16, color: "#64748b" },
+  overallScoreLine: { marginTop: 6, flexDirection: "row", alignItems: "flex-end", gap: 2 },
+  overallScoreValue: { fontSize: 36, fontWeight: "800", fontVariant: ["tabular-nums"], lineHeight: 40 },
+  overallScorePct: { fontSize: 18, fontWeight: "800", fontVariant: ["tabular-nums"], paddingBottom: 4 },
+  sectionTitle: { marginTop: 18, fontSize: 13, fontWeight: "700", color: "#0F1729" },
+  breakdown: { marginTop: 10, gap: 10 },
+  breakdownNote: { marginTop: 4, fontSize: 11, lineHeight: 15, color: "#64748b" },
   barMetaLine: { marginTop: 4, fontSize: 10, color: "#94a3b8" },
   barHead: { marginBottom: 4, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   barLabel: { fontSize: 12, fontWeight: "500", color: "#475569" },
@@ -757,13 +892,13 @@ const styles = StyleSheet.create({
   fixBox: {
     marginTop: 8,
     borderWidth: 1,
-    borderColor: "rgba(167,243,208,0.6)",
+    borderColor: colors.accent,
     borderRadius: 8,
-    backgroundColor: "rgba(255,255,255,0.7)",
+    backgroundColor: colors.white,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  fixText: { fontSize: 11, fontWeight: "500", lineHeight: 16, color: "#065f46" },
+  fixText: { fontSize: 11, fontWeight: "600", lineHeight: 16, color: colors.accentText },
   locWrap: { marginTop: 12 },
   locToggle: {
     fontSize: 11,
@@ -784,38 +919,61 @@ const styles = StyleSheet.create({
   chipText: { fontFamily: MONO, fontSize: 10, fontWeight: "600" },
   chipMore: { borderRadius: 6, backgroundColor: "rgba(255,255,255,0.6)", paddingHorizontal: 8, paddingVertical: 4 },
   chipMoreText: { fontSize: 10, fontWeight: "600" },
-  ringGrid: { marginTop: 12, gap: 10 },
-  ringCard: {
+  ringGrid: { marginTop: 10, gap: 8 },
+  // Match Scan Results category card styles so the ring + % sit identically.
+  catCard: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    borderRadius: 16,
+    gap: 10,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "#e2e8f0",
     backgroundColor: "#f4f6f8",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
   },
-  ringWrap: { width: 64, height: 64, alignItems: "center", justifyContent: "center" },
-  ringLabel: { ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" },
-  ringPct: { fontSize: 12, fontWeight: "800" },
-  ringTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b" },
-  ringDetail: { marginTop: 2, fontSize: 11, lineHeight: 15, color: colors.muted },
+  catRingWrap: {
+    width: 56,
+    height: 56,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  catRingCenter: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  catRingValue: {
+    fontSize: 10,
+    fontWeight: "800",
+    lineHeight: 12,
+    textAlign: "center",
+    includeFontPadding: false,
+    fontVariant: ["tabular-nums"],
+  },
+  catCopy: { flex: 1, minWidth: 0 },
+  catTitle: { fontSize: 13, fontWeight: "700", color: "#1e293b" },
+  catDetail: { marginTop: 2, fontSize: 10, lineHeight: 14, color: "#64748b" },
   downloadError: { marginTop: 8, marginBottom: 4, fontSize: 12, color: "#f43f5e" },
   downloadBtn: {
     alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    borderRadius: 12,
+    gap: 6,
+    borderRadius: 10,
     backgroundColor: "#172033",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   downloadBtnPressed: { backgroundColor: "#243049" },
   downloadBtnBusy: { opacity: 0.5 },
   downloadBtnOutline: { borderWidth: 1, borderColor: colors.border, backgroundColor: colors.white },
   downloadBtnOutlinePressed: { backgroundColor: "#f8fafc" },
-  downloadText: { fontSize: 12, fontWeight: "700", color: colors.white },
+  downloadText: { fontSize: 11, fontWeight: "700", color: colors.white },
   downloadTextOutline: { color: "#334155" },
 });

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useKeyboardScroll } from "./KeyboardScrollContext";
 import { colors } from "../../theme";
 
 /**
@@ -9,6 +10,7 @@ export default function TextField({
   label,
   value,
   onChangeText,
+  onFocus,
   onBlur,
   error,
   hint,
@@ -25,15 +27,22 @@ export default function TextField({
   const [visible, setVisible] = useState(false);
   const isPassword = secureTextEntry || showPasswordToggle;
   const hide = isPassword && !visible;
+  const inputRef = useRef(null);
+  const keyboardScroll = useKeyboardScroll();
 
   return (
     <View style={[styles.wrap, style]}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
       <View style={[styles.field, error ? styles.fieldError : null, disabled ? styles.fieldDisabled : null]}>
         <TextInput
+          ref={inputRef}
           style={styles.input}
           value={value}
           onChangeText={onChangeText}
+          onFocus={(e) => {
+            keyboardScroll?.ensureVisible?.(inputRef);
+            onFocus?.(e);
+          }}
           onBlur={onBlur}
           secureTextEntry={hide}
           editable={!disabled}

@@ -53,17 +53,37 @@ export default function AnalysisProgress({ progress, percent }) {
 }
 
 const styles = StyleSheet.create({
-  wrap: { width: "100%" },
-  metaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
+  wrap: { width: "100%", alignItems: "center" },
+  metaRow: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
   meta: { fontSize: 12, fontWeight: "600", color: "#64748b", fontVariant: ["tabular-nums"] },
   track: {
     marginTop: 8,
+    width: "100%",
     height: 12,
     borderRadius: 999,
     backgroundColor: "#f1f5f9",
     overflow: "hidden",
   },
   fill: { height: 12, borderRadius: 999, backgroundColor: "#16bfa8" },
-  step: { marginTop: 12, fontSize: 14, lineHeight: 21, color: "#475569", textAlign: "center" },
-  slow: { marginTop: 4, fontSize: 11, color: "#94a3b8", textAlign: "center" },
+  step: {
+    marginTop: 12,
+    width: "100%",
+    fontSize: 14,
+    lineHeight: 21,
+    color: "#475569",
+    textAlign: "center",
+  },
+  slow: {
+    marginTop: 4,
+    width: "100%",
+    fontSize: 11,
+    color: "#94a3b8",
+    textAlign: "center",
+  },
 });

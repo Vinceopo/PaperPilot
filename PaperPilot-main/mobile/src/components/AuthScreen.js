@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import ForgotPasswordScreen from "./auth/ForgotPasswordScreen";
+import LandingScreen from "./auth/LandingScreen";
 import LoginScreen from "./auth/LoginScreen";
 import PasswordChangedScreen from "./auth/PasswordChangedScreen";
 import RegisterScreen from "./auth/RegisterScreen";
@@ -12,12 +13,13 @@ import {
 import { colors } from "../theme";
 
 /**
- * Chooses between the login, register, password-reset, and password-done screens.
- * Each screen owns its own form state, so switching modes starts from a clean slate.
+ * Landing → login / register / password-reset / password-done.
+ * Form screens keep their own state; switching modes resets the form.
  *
  * @param {(profile: object) => void} [onRegistered]
+ * @param {"landing"|"login"|"register"|"forgot"} [initialMode] Prefer login after logout.
  */
-export default function AuthScreen({ onRegistered }) {
+export default function AuthScreen({ onRegistered, initialMode }) {
   const [mode, setMode] = useState("boot");
   const [notice, setNotice] = useState("");
   const [resetEmail, setResetEmail] = useState("");
@@ -26,12 +28,19 @@ export default function AuthScreen({ onRegistered }) {
     let cancelled = false;
     (async () => {
       const done = await hasPasswordChangedNotice();
-      if (!cancelled) setMode(done ? "passwordDone" : "login");
+      if (cancelled) return;
+      if (done) {
+        setMode("passwordDone");
+        return;
+      }
+      setMode(initialMode === "login" || initialMode === "register" || initialMode === "forgot" || initialMode === "landing"
+        ? initialMode
+        : "landing");
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [initialMode]);
 
   function go(next) {
     setNotice("");
@@ -55,6 +64,10 @@ export default function AuthScreen({ onRegistered }) {
         }}
       />
     );
+  }
+
+  if (mode === "landing") {
+    return <LandingScreen onGetStarted={() => go("register")} onSignIn={() => go("login")} />;
   }
 
   if (mode === "register") {

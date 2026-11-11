@@ -12,13 +12,13 @@ export default function PasswordChangedScreen({ onContinue }) {
       title="Password updated"
       subtitle="Your account is now signed out on every device."
     >
-      <View style={styles.card}>
+      <View style={styles.body}>
         <View style={styles.check}>
           <Text style={styles.checkMark}>✓</Text>
         </View>
-        <Text style={styles.headline}>Changing password is completed! Please login again</Text>
-        <Text style={styles.body}>
-          For your security, all active sessions have been ended. Sign in again with your email and new
+        <Text style={styles.headline}>Password change completed. Please sign in again.</Text>
+        <Text style={styles.copy}>
+          For your security, all active sessions have been ended. Sign in with your email and new
           password to continue.
         </Text>
         <Pressable
@@ -34,39 +34,28 @@ export default function PasswordChangedScreen({ onContinue }) {
 }
 
 const styles = StyleSheet.create({
-  card: {
-    marginTop: 28,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#d1fae5",
-    backgroundColor: colors.white,
-    paddingHorizontal: 24,
-    paddingVertical: 28,
+  body: {
+    marginTop: 18,
     alignItems: "center",
   },
   check: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#16bfa8",
-    shadowOpacity: 0.28,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
   },
-  checkMark: { fontSize: 24, fontWeight: "700", color: colors.white },
+  checkMark: { fontSize: 22, fontWeight: "700", color: colors.navy },
   headline: {
-    marginTop: 20,
+    marginTop: 16,
     fontSize: 16,
     fontWeight: "600",
     lineHeight: 24,
     color: colors.navy,
     textAlign: "center",
   },
-  body: {
+  copy: {
     marginTop: 8,
     fontSize: 14,
     lineHeight: 20,
@@ -74,15 +63,15 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   cta: {
-    marginTop: 28,
+    marginTop: 22,
     alignSelf: "stretch",
-    borderRadius: 12,
+    borderRadius: 999,
     backgroundColor: colors.accent,
     paddingVertical: 14,
     alignItems: "center",
-    minHeight: 48,
+    minHeight: 52,
     justifyContent: "center",
   },
   ctaPressed: { backgroundColor: colors.accentHover },
-  ctaText: { fontSize: 14, fontWeight: "600", color: colors.navy },
+  ctaText: { fontSize: 14, fontWeight: "700", color: colors.navy },
 });

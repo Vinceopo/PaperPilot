@@ -136,18 +136,13 @@ export default function LoginScreen({
     <Text style={styles.footer}>
       Don't have an account?{" "}
       <Text style={styles.footerLink} onPress={onGoToRegister}>
-        Create an account
+        Sign up
       </Text>
     </Text>
   );
 
   return (
-    <AuthShell
-      variant="login"
-      title="Welcome back"
-      subtitle="Sign in to continue reviewing manuscripts."
-      footer={footer}
-    >
+    <AuthShell variant="login" title="Login" footer={footer}>
       <View style={styles.form}>
         <FloatingLabelInput
           label="Email or Username"
@@ -192,7 +187,7 @@ export default function LoginScreen({
         {notice && !formError ? <Text style={styles.notice}>{notice}</Text> : null}
 
         <PrimaryButton
-          title={busy ? "Please wait…" : "Sign in to PaperPilot"}
+          title={busy ? "Please wait…" : "Login"}
           onPress={onSubmit}
           busy={busy}
           style={styles.submit}
@@ -203,7 +198,7 @@ export default function LoginScreen({
 }
 
 const styles = StyleSheet.create({
-  form: { marginTop: 20, gap: 14 },
+  form: { marginTop: 12, gap: 11 },
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -228,10 +223,10 @@ const styles = StyleSheet.create({
   notice: { fontSize: 14, lineHeight: 20, color: colors.accentText },
   submit: {
     height: 52,
-    borderRadius: 10,
+    borderRadius: 999,
     paddingVertical: 0,
     minHeight: 52,
   },
-  footer: { marginTop: 20, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
-  footerLink: { fontWeight: "600", color: colors.accent },
+  footer: { marginTop: 14, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
+  footerLink: { fontWeight: "700", color: colors.accent },
 });

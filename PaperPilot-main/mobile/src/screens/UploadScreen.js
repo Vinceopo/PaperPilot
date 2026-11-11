@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  BackHandler,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
-import { useRoute } from "@react-navigation/native";
+import { useFocusEffect, useRoute } from "@react-navigation/native";
 import * as DocumentPicker from "expo-document-picker";
 import { useAppData } from "../context/AppDataContext";
 import { decodeFilename, downloadSampleMechanics } from "../api";
@@ -25,6 +25,8 @@ import UpgradePrompt from "../components/ui/UpgradePrompt";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import SelectField from "../components/ui/SelectField";
 import FileTypeIcon from "../components/ui/FileTypeIcon";
+import KeyboardAwareScrollView from "../components/ui/KeyboardAwareScrollView";
+import FocusAwareTextInput from "../components/ui/FocusAwareTextInput";
 import FormatMechanicsFields from "../components/cockpit/FormatMechanicsFields";
 import DocumentPreview, { PreviewPanel, isPdfFile } from "../components/cockpit/DocumentPreview";
 import {
@@ -187,6 +189,7 @@ export default function UploadScreen({ navigation }) {
   const [nameError, setNameError] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [leaveAnalyzingOpen, setLeaveAnalyzingOpen] = useState(false);
   const scrollRef = useRef(null);
   const nameInputRef = useRef(null);
 
@@ -273,6 +276,21 @@ export default function UploadScreen({ navigation }) {
   ]);
 
   const showingUploadFace = scanFlow.step === "idle" || scanFlow.step === "fileSelected";
+
+  // Android hardware back during analyze should match the sidebar leave-confirm.
+  useFocusEffect(
+    useCallback(() => {
+      if (scanFlow.step !== "analyzing") {
+        setLeaveAnalyzingOpen(false);
+        return undefined;
+      }
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        setLeaveAnalyzingOpen(true);
+        return true;
+      });
+      return () => sub.remove();
+    }, [scanFlow.step])
+  );
 
   useEffect(() => {
     if (!showingUploadFace || uploadJourneySeen()) return;
@@ -771,6 +789,19 @@ export default function UploadScreen({ navigation }) {
           resultReady={Boolean(scanFlow.result)}
           onReveal={scanFlow.revealSummary}
         />
+        <ConfirmDialog
+          open={leaveAnalyzingOpen}
+          title="Leave while analyzing?"
+          message="Your document is still being checked. If you leave now, the analysis will stop and you will need to start it again from the beginning."
+          confirmLabel="Stop analyzing"
+          cancelLabel="Stay"
+          tone="danger"
+          onCancel={() => setLeaveAnalyzingOpen(false)}
+          onConfirm={() => {
+            setLeaveAnalyzingOpen(false);
+            handleBackToDashboard();
+          }}
+        />
       </AppShell>
     );
   }
@@ -793,12 +824,7 @@ export default function UploadScreen({ navigation }) {
 
   return (
     <AppShell active={activeNav}>
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled"
-        automaticallyAdjustKeyboardInsets
-      >
+      <KeyboardAwareScrollView ref={scrollRef} contentContainerStyle={styles.scroll} bounces={false}>
         <ConfirmDialog
           open={Boolean(error)}
           title="Something went wrong"
@@ -925,7 +951,7 @@ export default function UploadScreen({ navigation }) {
 
                         {selectedMechanics && editing ? (
                           <View style={styles.renameRow}>
-                            <TextInput
+                            <FocusAwareTextInput
                               style={styles.renameInput}
                               value={editName}
                               onChangeText={setEditName}
@@ -1327,7 +1353,7 @@ export default function UploadScreen({ navigation }) {
             )}
           </>
         )}
-      </ScrollView>
+      </KeyboardAwareScrollView>
 
       <UpgradePrompt
         message={upgradeMessage}

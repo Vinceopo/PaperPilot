@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -24,6 +23,8 @@ import AppShell from "../components/shell/AppShell";
 import OtpStep from "../components/auth/OtpStep";
 import BackToDashboardButton from "../components/ui/BackToDashboardButton";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import KeyboardAwareScrollView from "../components/ui/KeyboardAwareScrollView";
+import { useKeyboardScroll } from "../components/ui/KeyboardScrollContext";
 import { CameraIcon, EyeIcon, PadlockIcon, PencilIcon } from "../components/shell/icons";
 
 function digitsOnly(value, max = 11) {
@@ -114,6 +115,8 @@ function InfoRow({ label, value, badge, last }) {
 }
 
 function Field({ label, value, onChangeText, optional, placeholder, error, hint, maxLength, keyboardType, autoCapitalize }) {
+  const inputRef = useRef(null);
+  const keyboardScroll = useKeyboardScroll();
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>
@@ -121,8 +124,10 @@ function Field({ label, value, onChangeText, optional, placeholder, error, hint,
         {optional ? <Text style={styles.fieldOptional}> (optional)</Text> : null}
         </Text>
       <TextInput
+        ref={inputRef}
         value={value}
         onChangeText={onChangeText}
+        onFocus={() => keyboardScroll?.ensureVisible?.(inputRef)}
         placeholder={placeholder}
         placeholderTextColor={colors.muted}
         maxLength={maxLength}
@@ -138,13 +143,17 @@ function Field({ label, value, onChangeText, optional, placeholder, error, hint,
 }
 
 function PwField({ label, value, onChangeText, show, onToggle }) {
+  const inputRef = useRef(null);
+  const keyboardScroll = useKeyboardScroll();
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <View style={styles.pwWrap}>
         <TextInput
+          ref={inputRef}
           value={value}
           onChangeText={onChangeText}
+          onFocus={() => keyboardScroll?.ensureVisible?.(inputRef)}
           secureTextEntry={!show}
           autoCapitalize="none"
           autoCorrect={false}
@@ -740,14 +749,9 @@ export default function AccountScreen({ navigation }) {
 
   return (
     <AppShell active="account" breadcrumb="Dashboard / Settings" title="Account Settings">
-      <ScrollView
-        style={styles.root}
-        contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled"
-        automaticallyAdjustKeyboardInsets
-      >
+      <KeyboardAwareScrollView style={styles.root} contentContainerStyle={styles.scroll} bounces={false}>
         {renderBody()}
-      </ScrollView>
+      </KeyboardAwareScrollView>
     </AppShell>
   );
 }

@@ -69,7 +69,7 @@ const styles = StyleSheet.create({
   start: { alignItems: "flex-start" },
   word: { marginTop: 8, fontSize: 23, fontWeight: "700", lineHeight: 26, letterSpacing: 1.4 },
   wordLight: { color: "#225b5f" },
-  wordDark: { color: "#e6faf5" },
+  wordDark: { color: "#ffffff" },
   tagline: { marginTop: 6 },
   taglineText: {
     fontSize: 8,
