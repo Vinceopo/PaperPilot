@@ -3,6 +3,7 @@ import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../
 import { auth, db, firebaseReady } from "../../firebase.js";
 import { registerWithEmail, saveUserProfile, signInWithEmail } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
+import AuthFeatureCard from "./AuthFeatureCard.jsx";
 import AuthShell from "./AuthShell.jsx";
 import OtpStep from "./OtpStep.jsx";
 import TermsModal from "./TermsModal.jsx";
@@ -175,14 +176,12 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
 
   if (step === "otp") {
     return (
-      <AuthShell
-        variant="register"
-        slideDir="left"
-        panelKey="register-otp"
+      <AuthFeatureCard
+        mode="page"
+        icon="shield"
         title="Verify your email"
         subtitle="Your account becomes active once the code is confirmed."
         footer={loginFooter}
-        compact
       >
         <OtpStep
           email={values.email.trim()}
@@ -194,7 +193,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
           onBack={() => setStep("form")}
           backLabel="Use a different email"
         />
-      </AuthShell>
+      </AuthFeatureCard>
     );
   }
 

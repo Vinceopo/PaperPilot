@@ -5,15 +5,15 @@ import { auth } from "../../firebase.js";
 import { markPasswordChanged } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
 import { maskEmail } from "../../lib/maskEmail.js";
-import AuthShell from "./AuthShell.jsx";
+import AuthFeatureCard from "./AuthFeatureCard.jsx";
 import OtpStep from "./OtpStep.jsx";
 import { passwordChecks, confirmPasswordError, emailError, passwordError } from "./validation.js";
 
 /**
  * Email -> 6-digit code -> new password -> back to login.
- * `onDone` is called with a confirmation message for the login screen.
+ * Uses the same navy-header card as Confirm email / Account Created.
  */
-export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGoToLogin, onDone }) {
+export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, onDone }) {
   const [step, setStep] = useState("email");
   const [email, setEmail] = useState(initialEmail);
   const [emailErr, setEmailErr] = useState("");
@@ -40,7 +40,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
     <p className="mt-5 text-center text-sm leading-5">
       <button
         type="button"
-        className="font-semibold text-accent hover:text-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-sm"
+        className="rounded-sm font-semibold text-[#16bfa8] transition hover:text-[#12ae99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8]/40"
         onClick={onGoToLogin}
       >
         Back to sign in
@@ -127,10 +127,9 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
 
   if (step === "otp") {
     return (
-      <AuthShell
-        variant="forgot"
-        slideDir="left"
-        panelKey="forgot-otp"
+      <AuthFeatureCard
+        mode="page"
+        icon="shield"
         title="Check your email"
         subtitle="Enter the 6-digit code to confirm it is really you."
         footer={backToLogin}
@@ -145,22 +144,21 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
           onBack={() => setStep("email")}
           backLabel="Use a different email"
         />
-      </AuthShell>
+      </AuthFeatureCard>
     );
   }
 
   if (step === "password") {
     const checks = passwordChecks(password);
     return (
-      <AuthShell
-        variant="forgot"
-        slideDir="left"
-        panelKey="forgot-password"
+      <AuthFeatureCard
+        mode="page"
+        icon="lock"
         title="Set a new password"
         subtitle={`Choose a new password for ${maskEmail(email.trim())}.`}
         footer={backToLogin}
       >
-        <form className="mt-5 flex flex-col gap-3.5" onSubmit={onSetPassword} noValidate>
+        <form className="flex flex-col gap-3.5" onSubmit={onSetPassword} noValidate>
           <div>
             <FloatingLabelInput
               id="reset-password"
@@ -184,7 +182,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
             {password && !passwordErrors.password ? (
               <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
                 {checks.map((check) => (
-                  <li key={check.label} className={`text-[12.5px] ${check.met ? "text-accent" : "text-slate-400"}`}>
+                  <li key={check.label} className={`text-[12.5px] ${check.met ? "text-[#16bfa8]" : "text-slate-400"}`}>
                     {check.met ? "✓" : "○"} {check.label}
                   </li>
                 ))}
@@ -223,25 +221,24 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
           <button
             type="submit"
             disabled={busy}
-            className="mt-0.5 flex h-[52px] w-full items-center justify-center rounded-[10px] bg-accent text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
+            className="mt-1 flex h-[48px] w-full items-center justify-center rounded-xl bg-[#16bfa8] text-sm font-bold text-white shadow-[0_8px_20px_rgba(22,191,168,0.28)] transition hover:bg-[#12ae99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8] focus-visible:ring-offset-2 disabled:opacity-60"
           >
             {busy ? "Updating…" : "Update password"}
           </button>
         </form>
-      </AuthShell>
+      </AuthFeatureCard>
     );
   }
 
   return (
-    <AuthShell
-      variant="forgot"
-      slideDir={slideDir}
-      panelKey="forgot-email"
+    <AuthFeatureCard
+      mode="page"
+      icon="mail"
       title="Reset your password"
       subtitle="We will email you a 6-digit code to confirm your address."
       footer={backToLogin}
     >
-      <form className="mt-5 flex flex-col gap-3.5" onSubmit={onRequestCode} noValidate>
+      <form className="flex flex-col gap-3.5" onSubmit={onRequestCode} noValidate>
         <FloatingLabelInput
           id="forgot-email"
           label="Email"
@@ -267,7 +264,7 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
         <button
           type="submit"
           disabled={busy || cooldownLeft > 0}
-          className="mt-0.5 flex h-[52px] w-full items-center justify-center rounded-[10px] bg-accent text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
+          className="mt-1 flex h-[48px] w-full items-center justify-center rounded-xl bg-[#16bfa8] text-sm font-bold text-white shadow-[0_8px_20px_rgba(22,191,168,0.28)] transition hover:bg-[#12ae99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8] focus-visible:ring-offset-2 disabled:opacity-60"
         >
           {busy
             ? "Sending code…"
@@ -276,6 +273,6 @@ export default function ForgotPasswordScreen({ slideDir, initialEmail = "", onGo
               : "Send verification code"}
         </button>
       </form>
-    </AuthShell>
+    </AuthFeatureCard>
   );
 }
