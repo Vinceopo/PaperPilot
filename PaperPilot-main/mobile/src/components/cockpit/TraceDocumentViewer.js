@@ -29,13 +29,54 @@ function kindOf(name, url) {
   return link ? "pdf" : "";
 }
 
+function bytesToBase64(bytes) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i];
+    const b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    const triplet = (a << 16) | (b << 8) | c;
+    out += chars[(triplet >> 18) & 63];
+    out += chars[(triplet >> 12) & 63];
+    out += i + 1 < bytes.length ? chars[(triplet >> 6) & 63] : "=";
+    out += i + 2 < bytes.length ? chars[triplet & 63] : "=";
+  }
+  return out;
+}
+
+async function base64FromLocalUri(uri) {
+  if (!uri) return "";
+  try {
+    const fromFile = await new File(uri).base64();
+    if (fromFile) return fromFile;
+  } catch {
+    // Some picker URIs fail with File; fetch works for the same cache copy.
+  }
+  try {
+    const res = await fetch(uri);
+    const buffer = await res.arrayBuffer();
+    return bytesToBase64(new Uint8Array(buffer));
+  } catch {
+    return "";
+  }
+}
+
 async function readDocumentBase64({ file, url, name }) {
-  if (file?.uri) return new File(file.uri).base64();
-  if (!url) return "";
-  const safe = String(name || "document").replace(/[^\w.-]+/g, "_");
-  const target = new File(Paths.cache, `trace-${safe}`);
-  const downloaded = await File.downloadFileAsync(url, target, { idempotent: true });
-  return downloaded.base64();
+  // Prefer remote download when available — same reliable path as Issue Tracing.
+  if (url) {
+    try {
+      const safe = String(name || "document").replace(/[^\w.-]+/g, "_");
+      const target = new File(Paths.cache, `trace-${safe}`);
+      const downloaded = await File.downloadFileAsync(url, target, { idempotent: true });
+      const remote = await downloaded.base64();
+      if (remote) return remote;
+    } catch {
+      // Fall through to local file when the download path fails.
+    }
+  }
+  if (file?.uri) return base64FromLocalUri(file.uri);
+  return "";
 }
 
 function marginSide(text, extras = {}) {
@@ -185,7 +226,7 @@ export default function TraceDocumentViewer({
   documentLoading = false,
   emptyLabel,
 }) {
-  const kind = kindOf(file?.name || documentName, file ? "" : documentUrl);
+  const kind = kindOf(file?.name || documentName, documentUrl);
   const canRender = Boolean(kind && (file?.uri || documentUrl));
   const [failed, setFailed] = useState(!canRender);
   const [ready, setReady] = useState(false);
@@ -195,7 +236,8 @@ export default function TraceDocumentViewer({
   useEffect(() => {
     setFailed(!canRender);
     setReady(false);
-  }, [canRender, file?.uri, documentUrl]);
+    sendingRef.current = false;
+  }, [canRender, file?.uri, documentUrl, kind]);
 
   // Retrace when the highlight changes or the same issue is re-selected (new scroll token).
   const scrollToken = scrollTarget?.token;
@@ -243,7 +285,9 @@ export default function TraceDocumentViewer({
     }
   }
 
-  if (documentLoading) {
+  // Only block on fetch when nothing can render yet. Otherwise the WebView's
+  // own status spinner handles opening — stacking both looked like two loaders.
+  if (documentLoading && !canRender) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={colors.accent} />
@@ -265,26 +309,31 @@ export default function TraceDocumentViewer({
     );
   }
 
+  // Loading spinner lives only inside the WebView HTML (#status). A second RN
+  // overlay stacked with it showed two animations on the full-results preview.
   return (
-    <WebView
-      ref={webRef}
-      source={{ html: TRACE_VIEWER_HTML, baseUrl: "https://paperpilot.local/" }}
-      originWhitelist={["*"]}
-      onMessage={onMessage}
-      onError={() => setFailed(true)}
-      onContentProcessDidTerminate={() => webRef.current?.reload()}
-      javaScriptEnabled
-      domStorageEnabled
-      scrollEnabled={false}
-      bounces={false}
-      nestedScrollEnabled
-      style={styles.web}
-      containerStyle={styles.web}
-    />
+    <View style={styles.webHost}>
+      <WebView
+        ref={webRef}
+        source={{ html: TRACE_VIEWER_HTML, baseUrl: "https://paperpilot.local/" }}
+        originWhitelist={["*"]}
+        onMessage={onMessage}
+        onError={() => setFailed(true)}
+        onContentProcessDidTerminate={() => webRef.current?.reload()}
+        javaScriptEnabled
+        domStorageEnabled
+        scrollEnabled={false}
+        bounces={false}
+        nestedScrollEnabled
+        style={styles.web}
+        containerStyle={styles.web}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  webHost: { flex: 1, backgroundColor: "#e8ecf1" },
   web: { flex: 1, backgroundColor: "#e8ecf1" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 20 },
   muted: { fontSize: 12, color: colors.muted, textAlign: "center" },

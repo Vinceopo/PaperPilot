@@ -1,7 +1,17 @@
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { colors } from "../../theme";
 import DocumentLoader from "../ui/DocumentLoader";
 import TraceDocumentViewer from "./TraceDocumentViewer";
+
+/** Fallback when a screen cannot read window size. */
+export const DOCUMENT_PREVIEW_HEIGHT = 400;
+
+/** Scale the document pane to the phone height so it stays usable on small and tall screens. */
+export function useDocumentPreviewHeight() {
+  const { height } = useWindowDimensions();
+  const scaled = Math.round(height * 0.42);
+  return Math.max(240, Math.min(480, scaled || DOCUMENT_PREVIEW_HEIGHT));
+}
 
 function fileKind(file) {
   const name = String(file?.name || file?.uri || "").toLowerCase();
@@ -25,21 +35,55 @@ function namedFile(file) {
 }
 
 /**
- * Original PDF/DOCX rendered page by page (pdf.js / docx-preview), the same paged,
- * orientation-aware preview as the web upload step. Falls back to extracted text pages.
+ * Same PDF/DOCX display as Issue Tracing & XAI (TraceDocumentViewer / pdf.js / docx-preview),
+ * without highlights, issues, or XAI — display only.
+ *
+ * Prefer the public cloudinary/document URL when available (same reliable path Issue Tracing
+ * uses). Local picker URIs are only used while that URL is still preparing.
  */
-export default function DocumentPreview({ file, preview, emptyLabel = "No preview available yet." }) {
+export default function DocumentPreview({
+  file,
+  preview,
+  documentUrl = "",
+  documentName = "",
+  documentLoading = false,
+  emptyLabel = "No preview available yet.",
+}) {
   const local = namedFile(file);
+  const remoteUrl = String(documentUrl || preview?.cloudinary_url || preview?.public_url || "").trim();
+  const useRemote = Boolean(remoteUrl);
+  const viewerFile = useRemote ? null : local;
+  const viewerKey = useRemote
+    ? `remote:${remoteUrl}`
+    : local?.uri
+      ? `local:${local.uri}`
+      : "empty";
+
   return (
     <TraceDocumentViewer
-      key={local?.uri || preview?.cloudinary_url || "empty"}
-      file={local}
-      documentUrl={local ? "" : preview?.cloudinary_url || ""}
-      documentName={local?.name || preview?.filename || ""}
+      key={viewerKey}
+      file={viewerFile}
+      documentUrl={useRemote ? remoteUrl : ""}
+      documentName={local?.name || documentName || preview?.filename || ""}
+      documentLoading={documentLoading}
       preview={preview}
       pageCount={preview?.page_count}
       emptyLabel={emptyLabel}
     />
+  );
+}
+
+/**
+ * Display frame matching Issue Tracing’s document pane (gray pad + rounded viewport).
+ * No findings / XAI — only the manuscript view.
+ */
+export function DocumentDisplayFrame({ height, children, style }) {
+  const responsiveHeight = useDocumentPreviewHeight();
+  const frameHeight = height ?? responsiveHeight;
+  return (
+    <View style={[styles.displayWrap, style]}>
+      <View style={[styles.displayFrame, { height: frameHeight }]}>{children}</View>
+    </View>
   );
 }
 
@@ -51,9 +95,11 @@ export function PreviewPanel({
   overlayTitle,
   overlayBody,
   footer,
-  height = 460,
+  height,
   children,
 }) {
+  const responsiveHeight = useDocumentPreviewHeight();
+  const frameHeight = height ?? responsiveHeight;
   return (
     <View style={styles.panel}>
       <View style={styles.panelHead}>
@@ -62,20 +108,22 @@ export function PreviewPanel({
           <Text style={[styles.panelStatus, statusTone === "accent" && styles.panelStatusAccent]}>{status}</Text>
         ) : null}
       </View>
-      <View style={[styles.panelBody, { height }]} pointerEvents={overlayTitle ? "box-none" : "auto"}>
-        <View
-          style={overlayTitle ? styles.previewLocked : styles.previewFill}
-          pointerEvents={overlayTitle ? "none" : "auto"}
-        >
-          {children}
-        </View>
-        {overlayTitle ? (
-          <View style={styles.overlay} pointerEvents="auto">
-            <DocumentLoader size={112} />
-            <Text style={styles.overlayTitle}>{overlayTitle}</Text>
-            {overlayBody ? <Text style={styles.overlayBody}>{overlayBody}</Text> : null}
+      <View style={styles.panelBody} pointerEvents={overlayTitle ? "box-none" : "auto"}>
+        <DocumentDisplayFrame height={frameHeight}>
+          <View
+            style={overlayTitle ? styles.previewLocked : styles.previewFill}
+            pointerEvents={overlayTitle ? "none" : "auto"}
+          >
+            {children}
           </View>
-        ) : null}
+          {overlayTitle ? (
+            <View style={styles.overlay} pointerEvents="auto">
+              <DocumentLoader size={112} />
+              <Text style={styles.overlayTitle}>{overlayTitle}</Text>
+              {overlayBody ? <Text style={styles.overlayBody}>{overlayBody}</Text> : null}
+            </View>
+          ) : null}
+        </DocumentDisplayFrame>
       </View>
       {footer ? <Text style={styles.panelFooter}>{footer}</Text> : null}
     </View>
@@ -86,10 +134,10 @@ const styles = StyleSheet.create({
   panel: {
     marginTop: 12,
     overflow: "hidden",
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: "#e8ecf1",
+    backgroundColor: colors.white,
   },
   panelHead: {
     flexDirection: "row",
@@ -97,7 +145,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 8,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(226,232,240,0.8)",
+    borderBottomColor: "#f1f5f9",
     backgroundColor: colors.pageBg,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -111,7 +159,17 @@ const styles = StyleSheet.create({
   },
   panelStatus: { flexShrink: 1, fontSize: 10, fontWeight: "600", color: colors.muted, textAlign: "right" },
   panelStatusAccent: { color: "#0d9488" },
-  panelBody: { position: "relative", overflow: "hidden" },
+  panelBody: { position: "relative" },
+  displayWrap: {
+    backgroundColor: "#e8ecf1",
+    padding: 12,
+  },
+  displayFrame: {
+    position: "relative",
+    overflow: "hidden",
+    borderRadius: 12,
+    backgroundColor: "#e8ecf1",
+  },
   previewFill: { flex: 1 },
   previewLocked: { flex: 1, overflow: "hidden" },
   overlay: {
@@ -127,7 +185,7 @@ const styles = StyleSheet.create({
   overlayBody: { maxWidth: 256, fontSize: 11, lineHeight: 17, color: colors.slate, textAlign: "center" },
   panelFooter: {
     borderTopWidth: 1,
-    borderTopColor: "rgba(226,232,240,0.8)",
+    borderTopColor: "#f1f5f9",
     backgroundColor: colors.pageBg,
     paddingHorizontal: 16,
     paddingVertical: 8,

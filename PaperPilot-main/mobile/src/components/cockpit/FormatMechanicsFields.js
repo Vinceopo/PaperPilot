@@ -269,9 +269,6 @@ export default function FormatMechanicsFields({
               disabled={disabled}
             />
           </Field>
-          <Field label="Substance" hint="Paper weight">
-            {input("paperSubstance", { keyboardType: "decimal-pad" })}
-          </Field>
           <Field label="Spacing" hint="Pick a choice or type your own, e.g. 1.5 or Double">
             <ComboInput
               disabled={disabled}
@@ -516,10 +513,6 @@ export default function FormatMechanicsFields({
               />
             </Field>
           </View>
-        </Section>
-
-        <Section title="Page breaks">
-          <Field label="Page break rules">{input("pageBreaks", { multiline: true })}</Field>
         </Section>
 
         <Section title="Layout for tables">

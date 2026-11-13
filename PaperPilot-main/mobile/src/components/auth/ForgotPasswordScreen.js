@@ -11,12 +11,12 @@ import {
 import { colors } from "../../theme";
 import PrimaryButton from "../ui/PrimaryButton";
 import TextField from "../ui/TextField";
-import AuthShell from "./AuthShell";
+import AuthFeatureCard from "./AuthFeatureCard";
 import OtpStep from "./OtpStep";
 
 /**
  * Email → 6-digit code → new password → password-changed confirmation.
- * `onDone` is called after a successful reset (parent shows PasswordChangedScreen).
+ * Uses the same navy-header card as web Forgot Password / OTP.
  */
 export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, onDone }) {
   const [step, setStep] = useState("email");
@@ -122,8 +122,9 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
 
   if (step === "otp") {
     return (
-      <AuthShell
-        variant="forgot"
+      <AuthFeatureCard
+        mode="page"
+        icon="shield"
         title="Check your email"
         subtitle="Enter the 6-digit code to confirm it is really you."
         footer={backToLogin}
@@ -138,15 +139,16 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
           onBack={() => setStep("email")}
           backLabel="Use a different email"
         />
-      </AuthShell>
+      </AuthFeatureCard>
     );
   }
 
   if (step === "password") {
     const checks = passwordChecks(password);
     return (
-      <AuthShell
-        variant="forgot"
+      <AuthFeatureCard
+        mode="page"
+        icon="lock"
         title="Set a new password"
         subtitle={`Choose a new password for ${maskEmail(email.trim())}.`}
         footer={backToLogin}
@@ -212,13 +214,14 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
             style={styles.submit}
           />
         </View>
-      </AuthShell>
+      </AuthFeatureCard>
     );
   }
 
   return (
-    <AuthShell
-      variant="forgot"
+    <AuthFeatureCard
+      mode="page"
+      icon="mail"
       title="Reset your password"
       subtitle="We will email you a 6-digit code to confirm your address."
       footer={backToLogin}
@@ -249,22 +252,22 @@ export default function ForgotPasswordScreen({ initialEmail = "", onGoToLogin, o
           style={styles.submit}
         />
       </View>
-    </AuthShell>
+    </AuthFeatureCard>
   );
 }
 
 const styles = StyleSheet.create({
-  form: { marginTop: 12, gap: 11 },
+  form: { gap: 14 },
   checks: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
   check: { fontSize: 12.5, lineHeight: 16, color: colors.muted },
-  checkMet: { color: colors.accentText },
+  checkMet: { color: colors.accent },
   error: { fontSize: 14, lineHeight: 20, color: colors.rose },
   submit: {
     height: 52,
-    borderRadius: 14,
+    borderRadius: 12,
     paddingVertical: 0,
     minHeight: 52,
   },
-  footer: { marginTop: 14, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
+  footer: { marginTop: 18, textAlign: "center", fontSize: 14, lineHeight: 20, color: colors.slate },
   footerLink: { fontWeight: "700", color: colors.accent },
 });

@@ -8,6 +8,7 @@ import { registerWithEmail, saveUserProfile, signInWithEmail } from "../../servi
 import { colors } from "../../theme";
 import FloatingLabelInput from "../ui/FloatingLabelInput";
 import PrimaryButton from "../ui/PrimaryButton";
+import AuthFeatureCard from "./AuthFeatureCard";
 import AuthShell from "./AuthShell";
 import OtpStep from "./OtpStep";
 import TermsModal from "./TermsModal";
@@ -157,8 +158,9 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
 
   if (step === "otp") {
     return (
-      <AuthShell
-        variant="register"
+      <AuthFeatureCard
+        mode="page"
+        icon="shield"
         title="Verify your email"
         subtitle="Your account becomes active once the code is confirmed."
         footer={loginFooter}
@@ -173,7 +175,7 @@ export default function RegisterScreen({ onGoToLogin, onRegistered }) {
           onBack={() => setStep("form")}
           backLabel="Use a different email"
         />
-      </AuthShell>
+      </AuthFeatureCard>
     );
   }
 
@@ -326,6 +328,6 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     minHeight: 44,
   },
-  footer: { marginTop: 8, textAlign: "center", fontSize: 13, lineHeight: 18, color: colors.slate },
+  footer: { marginTop: 16, textAlign: "center", fontSize: 13, lineHeight: 18, color: colors.slate },
   footerLink: { fontWeight: "700", color: colors.accent },
 });

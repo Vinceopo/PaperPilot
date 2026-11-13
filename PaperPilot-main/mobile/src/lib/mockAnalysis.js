@@ -1,12 +1,12 @@
 /**
  * Document analysis + PDF report helpers (parity with web).
  * analyzeDocument calls the compliance API with optional progress polling.
- * downloadReport builds the same PDF as web and opens the native share sheet.
+ * downloadReport builds the same PDF as web and saves it to the device.
  */
 
 import * as FileSystem from "expo-file-system/legacy";
-import * as Sharing from "expo-sharing";
 import { runComplianceScan, uploadManuscriptVersion } from "../api";
+import { saveFileToDevice } from "./saveFile";
 import { isServerId, mapComplianceScanToResult } from "./scanMapper";
 import { scanNeedsPolling, waitForScanResult } from "./scanPoll";
 import {
@@ -99,8 +99,8 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
 }
 
 /**
- * Generates the same PDF report as web and opens the share sheet so the user
- * can save it on-device (Android/iOS have no browser download).
+ * Generates the same PDF report as web and saves it to the device
+ * (Android folder picker / iOS app Documents — no share sheet).
  */
 export async function downloadReport(result, opts = {}) {
   const { jsPDF } = await import("jspdf");
@@ -504,28 +504,26 @@ export async function downloadReport(result, opts = {}) {
 
   const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
   if (!dir) {
-    throw new Error("This device cannot save files for sharing.");
+    throw new Error("This device cannot save downloaded files.");
   }
   const uri = `${dir}${filename}`;
   await FileSystem.writeAsStringAsync(uri, base64, {
     encoding: FileSystem.EncodingType.Base64,
   });
 
-  if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(uri, {
-      mimeType: "application/pdf",
-      dialogTitle: "Save PaperPilot report",
-      UTI: "com.adobe.pdf",
-    });
-  } else {
-    throw new Error("Sharing is not available on this device. The report was generated but could not be saved.");
-  }
+  const saved = await saveFileToDevice({
+    uri,
+    filename,
+    mimeType: "application/pdf",
+  });
 
   return {
-    shared: true,
+    shared: false,
+    downloaded: true,
+    method: saved.method,
     filename,
     versionNumber,
     title: documentTitle,
-    summary: `PDF report ready: ${filename}`,
+    summary: `PDF report downloaded: ${filename}`,
   };
 }

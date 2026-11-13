@@ -190,7 +190,9 @@ export function useScanFlow({
     try {
       return await downloadReportFn(result, { versionNumber });
     } catch (err) {
-      setDownloadError(err?.message || "The report could not be downloaded. Try again in a moment.");
+      if (err?.code !== "cancelled") {
+        setDownloadError(err?.message || "The report could not be downloaded. Try again in a moment.");
+      }
       return null;
     } finally {
       setDownloadBusy(false);

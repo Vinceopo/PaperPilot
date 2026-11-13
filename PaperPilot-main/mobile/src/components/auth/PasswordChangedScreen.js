@@ -1,14 +1,15 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
-import AuthShell from "./AuthShell";
+import AuthFeatureCard from "./AuthFeatureCard";
 
 /**
  * Shown after a password change or reset, before the login form.
  */
 export default function PasswordChangedScreen({ onContinue }) {
   return (
-    <AuthShell
-      variant="passwordChanged"
+    <AuthFeatureCard
+      mode="page"
+      icon="check"
       title="Password updated"
       subtitle="Your account is now signed out on every device."
     >
@@ -16,10 +17,10 @@ export default function PasswordChangedScreen({ onContinue }) {
         <View style={styles.check}>
           <Text style={styles.checkMark}>✓</Text>
         </View>
-        <Text style={styles.headline}>Password change completed. Please sign in again.</Text>
+        <Text style={styles.headline}>Changing password is completed! Please login again</Text>
         <Text style={styles.copy}>
-          For your security, all active sessions have been ended. Sign in with your email and new
-          password to continue.
+          For your security, all active sessions have been ended. Sign in again with your email and
+          new password to continue.
         </Text>
         <Pressable
           onPress={onContinue}
@@ -29,13 +30,12 @@ export default function PasswordChangedScreen({ onContinue }) {
           <Text style={styles.ctaText}>Continue to sign in</Text>
         </Pressable>
       </View>
-    </AuthShell>
+    </AuthFeatureCard>
   );
 }
 
 const styles = StyleSheet.create({
   body: {
-    marginTop: 18,
     alignItems: "center",
   },
   check: {
@@ -45,14 +45,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
+    shadowColor: "#16bfa8",
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
-  checkMark: { fontSize: 22, fontWeight: "700", color: colors.navy },
+  checkMark: { fontSize: 20, fontWeight: "700", color: colors.white },
   headline: {
-    marginTop: 16,
+    marginTop: 20,
     fontSize: 16,
     fontWeight: "600",
     lineHeight: 24,
-    color: colors.navy,
+    color: "#1e293b",
     textAlign: "center",
   },
   copy: {
@@ -63,15 +68,20 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   cta: {
-    marginTop: 22,
+    marginTop: 28,
     alignSelf: "stretch",
-    borderRadius: 999,
+    borderRadius: 12,
     backgroundColor: colors.accent,
     paddingVertical: 14,
     alignItems: "center",
-    minHeight: 52,
+    minHeight: 48,
     justifyContent: "center",
+    shadowColor: "#16bfa8",
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
   ctaPressed: { backgroundColor: colors.accentHover },
-  ctaText: { fontSize: 14, fontWeight: "700", color: colors.navy },
+  ctaText: { fontSize: 14, fontWeight: "700", color: colors.white },
 });

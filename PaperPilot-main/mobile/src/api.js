@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
-import * as Sharing from "expo-sharing";
 import { auth } from "./firebase";
+import { saveFileToDevice } from "./lib/saveFile";
 
 const extra = Constants.expoConfig?.extra || {};
 const API = resolveApiUrl(extra.apiUrl || "http://127.0.0.1:8000");
@@ -419,7 +419,7 @@ function bytesToBase64(bytes) {
   return out;
 }
 
-/** Download sample Format Mechanics DOCX with PK/ZIP validation, then share/save. */
+/** Download sample Format Mechanics DOCX with PK/ZIP validation, then save to device. */
 export async function downloadSampleMechanics() {
   const user = auth?.currentUser;
   if (!user) throw new ApiError("Sign in to use the compliance checker.", 401);
@@ -447,26 +447,21 @@ export async function downloadSampleMechanics() {
     }
     const dir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
     if (!dir) {
-      throw new ApiError("This device cannot save files for sharing.", 500);
+      throw new ApiError("This device cannot save downloaded files.", 500);
     }
     const filename = "Sample_Format_Mechanics.docx";
     const uri = `${dir}${filename}`;
     await FileSystem.writeAsStringAsync(uri, bytesToBase64(bytes), {
       encoding: FileSystem.EncodingType.Base64,
     });
-    if (!(await Sharing.isAvailableAsync())) {
-      throw new ApiError(
-        "Sharing is not available on this device. The sample was downloaded but could not be saved.",
-        500
-      );
-    }
-    await Sharing.shareAsync(uri, {
+    await saveFileToDevice({
+      uri,
+      filename,
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      dialogTitle: "Save sample format mechanics",
-      UTI: "org.openxmlformats.wordprocessingml.document",
     });
     return true;
   } catch (err) {
+    if (err?.code === "cancelled") throw err;
     throw networkError(err);
   }
 }

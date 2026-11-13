@@ -391,9 +391,10 @@ export default function ManuscriptDetailModal({
         : versionToScanResult(manuscript, selected);
       if (!payload) throw new Error("This version’s report could not be loaded. Check your connection, then try again.");
       const report = await downloadReport(payload, { versionNumber: selected.versionNumber });
-      if (report?.shared) return;
+      if (report?.downloaded || report?.shared) return;
       if (report?.summary) Alert.alert("Analysis report", report.summary);
     } catch (err) {
+      if (err?.code === "cancelled") return;
       setDownloadError(err?.message || "The report could not be downloaded. Try again in a moment.");
     } finally {
       setDownloadBusy(false);

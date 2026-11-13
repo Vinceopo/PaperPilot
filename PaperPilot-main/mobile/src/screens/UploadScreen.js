@@ -322,6 +322,10 @@ export default function UploadScreen({ navigation }) {
       await downloadSampleMechanics();
       setMechSuccess("Sample format mechanics downloaded. Upload it here whenever you’re ready.");
     } catch (err) {
+      if (err?.code === "cancelled") {
+        setMechError("");
+        return;
+      }
       setMechError(err?.message || "Could not download the sample format guide.");
     } finally {
       setSampleBusy(false);
@@ -1200,6 +1204,9 @@ export default function UploadScreen({ navigation }) {
                     <DocumentPreview
                       file={msFile}
                       preview={preview}
+                      documentUrl={preview?.cloudinary_url || ""}
+                      documentName={msFile?.name || preview?.filename || ""}
+                      documentLoading={msPreparing && !preview?.cloudinary_url}
                       emptyLabel="No manuscript preview available yet."
                     />
                   </PreviewPanel>

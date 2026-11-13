@@ -9,12 +9,12 @@ import { colors } from "../../theme";
 import { categoryForIssue, normalizeDetectedIssues } from "./IssuesDetectedPanel";
 import { normalizeIssueLocation } from "../../lib/scanMapper";
 import { isApproximateTracing } from "../../lib/documentPreviewLocate";
+import { DocumentDisplayFrame, useDocumentPreviewHeight } from "./DocumentPreview";
 import TraceDocumentViewer from "./TraceDocumentViewer";
 import SelectField from "../ui/SelectField";
 
 /** Findings rendered per "Show more" step; thousands at once would stall the phone. */
 const RENDER_STEP = 40;
-const PREVIEW_HEIGHT = 400;
 const EMPTY_CHECKS = [];
 
 const SEVERITY = {
@@ -90,6 +90,7 @@ export default function IssueTracingSection({
   documentLoading = false,
   onFocusPreview = null,
 }) {
+  const previewHeight = useDocumentPreviewHeight();
   const [activeIssueId, setActiveIssueId] = useState(null);
   const [scrollTarget, setScrollTarget] = useState(null);
   const [highlight, setHighlight] = useState(null);
@@ -268,31 +269,32 @@ export default function IssueTracingSection({
 
   return (
     <View style={styles.card}>
-      <View style={styles.previewWrap}>
-        {hasPreview ? (
-          <View style={styles.previewFrame}>
-            <TraceDocumentViewer
-              key={file?.uri || result?.cloudinaryUrl || "preview"}
-              file={file}
-              documentLoading={documentLoading}
-              documentUrl={result?.cloudinaryUrl || ""}
-              documentName={result?.documentName || file?.name || ""}
-              preview={result?.documentPreview}
-              pageCount={pageCount}
-              formatChecks={formatChecks}
-              scrollTarget={scrollTarget}
-              highlight={highlight}
-              emptyLabel="Preview unavailable for this version."
-            />
-          </View>
-        ) : (
+      {hasPreview ? (
+        <DocumentDisplayFrame height={previewHeight} style={styles.previewBorder}>
+          {/* Same TraceDocumentViewer as upload manuscript preview; highlight only when an issue is selected. */}
+          <TraceDocumentViewer
+            key={file?.uri || result?.cloudinaryUrl || "preview"}
+            file={file}
+            documentLoading={documentLoading}
+            documentUrl={result?.cloudinaryUrl || ""}
+            documentName={result?.documentName || file?.name || ""}
+            preview={result?.documentPreview}
+            pageCount={pageCount}
+            formatChecks={formatChecks}
+            scrollTarget={scrollTarget}
+            highlight={highlight}
+            emptyLabel="Preview unavailable for this version."
+          />
+        </DocumentDisplayFrame>
+      ) : (
+        <DocumentDisplayFrame height={previewHeight} style={styles.previewBorder}>
           <View style={styles.previewEmpty}>
             <Text style={styles.previewEmptyText}>
               Document preview will appear when the manuscript file or document URL is available.
             </Text>
           </View>
-        )}
-      </View>
+        </DocumentDisplayFrame>
+      )}
 
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Issue tracing & XAI</Text>
@@ -451,20 +453,12 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
-  previewWrap: {
-    backgroundColor: "#e8ecf1",
-    padding: 12,
+  previewBorder: {
     borderBottomWidth: 1,
     borderBottomColor: "#f1f5f9",
   },
-  previewFrame: {
-    height: PREVIEW_HEIGHT,
-    overflow: "hidden",
-    borderRadius: 12,
-    backgroundColor: "#e8ecf1",
-  },
   previewEmpty: {
-    minHeight: 256,
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 12,

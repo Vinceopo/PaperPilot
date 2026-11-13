@@ -88,6 +88,7 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
   const notificationsOpen = Boolean(notificationsAnchor);
   const panelWidth = Math.min(384, screenWidth - 24);
   const panelTop = notificationsAnchor?.top ?? insets.top + 60;
+  const bellFrame = notificationsAnchor?.bell;
   const listMaxHeight = Math.max(
     160,
     Math.min(512, screenHeight * 0.7, screenHeight - panelTop - insets.bottom - 150)
@@ -98,13 +99,18 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
       setNotificationsAnchor(null);
       return;
     }
-    const fallback = { top: insets.top + 60 };
+    const fallback = { top: insets.top + 60, bell: null };
     if (!bellRef.current?.measureInWindow) {
       setNotificationsAnchor(fallback);
       return;
     }
     bellRef.current.measureInWindow((x, y, w, h) => {
-      setNotificationsAnchor(Number.isFinite(y) && h ? { top: y + h + 8 } : fallback);
+      const valid = Number.isFinite(y) && Number.isFinite(x) && w > 0 && h > 0;
+      setNotificationsAnchor(
+        valid
+          ? { top: y + h + 8, bell: { x, y, width: w, height: h } }
+          : fallback
+      );
     });
   }
 
@@ -186,7 +192,7 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
           onPress={() => setNotificationsAnchor(null)}
           accessibilityLabel="Close notifications"
         />
-        <View style={[styles.popover, { top: panelTop, width: panelWidth }]}>
+        <View style={[styles.popover, { top: panelTop, width: panelWidth }]} pointerEvents="box-none">
           <NotificationsPanel
             items={notifications}
             unread={notificationUnread}
@@ -196,6 +202,32 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
             maxListHeight={listMaxHeight}
           />
         </View>
+        {bellFrame ? (
+          <Pressable
+            style={[
+              styles.bellBtn,
+              styles.bellBtnOpen,
+              styles.bellBtnOverlay,
+              {
+                left: bellFrame.x,
+                top: bellFrame.y,
+                width: bellFrame.width,
+                height: bellFrame.height,
+              },
+            ]}
+            onPress={toggleNotifications}
+            accessibilityState={{ expanded: true }}
+            accessibilityLabel="Close notifications"
+            hitSlop={4}
+          >
+            <BellIcon size={20} color="#d97706" />
+            {notificationUnread > 0 ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{unreadLabel}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+        ) : null}
       </Modal>
 
       <Sidebar
@@ -300,6 +332,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   bellBtnOpen: { backgroundColor: "#fef3c7" },
+  bellBtnOverlay: {
+    position: "absolute",
+    zIndex: 20,
+    elevation: 20,
+  },
   popover: {
     position: "absolute",
     right: 12,

@@ -356,7 +356,16 @@ export default function SubscriptionScreen({ navigation }) {
       active="account"
       breadcrumb="Settings / Subscription"
       title={showManage ? "Manage Subscription" : "Upgrade your plan"}
-      onBack={() => navigation.goBack()}
+      onBack={() => {
+        if (isPremium && checkoutOpen) {
+          viewTouchedRef.current = true;
+          setCheckoutOpen(false);
+          setError("");
+          setSuccess("");
+          return;
+        }
+        navigation.goBack();
+      }}
       backLabel="Back"
     >
       <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
@@ -366,19 +375,6 @@ export default function SubscriptionScreen({ navigation }) {
               ? "View status, renewal date, and billing history."
               : "Secure checkout powered by PayMongo (Card, GCash, Maya, and more)."}
           </Text>
-          {isPremium && checkoutOpen ? (
-            <Pressable
-              onPress={() => {
-                viewTouchedRef.current = true;
-                setCheckoutOpen(false);
-                setError("");
-                setSuccess("");
-              }}
-              style={({ pressed }) => [styles.toggleViewBtn, pressed && styles.toggleViewBtnPressed]}
-            >
-              <Text style={styles.toggleViewText}>View current plan</Text>
-            </Pressable>
-          ) : null}
         </View>
 
         <ConfirmDialog
@@ -720,16 +716,6 @@ const styles = StyleSheet.create({
   scroll: { padding: 16, paddingBottom: 40 },
   introRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16 },
   intro: { flex: 1, fontSize: 14, lineHeight: 20, color: colors.slate },
-  toggleViewBtn: {
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  toggleViewBtnPressed: { backgroundColor: "#f8fafc" },
-  toggleViewText: { fontSize: 12, fontWeight: "600", color: "#334155" },
   errorBox: {
     marginBottom: 16,
     borderRadius: 12,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -6,6 +6,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
@@ -14,12 +15,13 @@ import { useAppData } from "../context/AppDataContext";
 import { auth } from "../firebase";
 import { getProfile, otpBypassToken, resetPasswordWithOtp, sendOtp, updateUserProfile } from "../api";
 import { markPasswordChanged, signOutUser } from "../services/auth";
-import { emailsMatch } from "../lib/maskEmail";
+import { emailsMatch, maskEmail } from "../lib/maskEmail";
 import { loadNotifications, pushNotification, saveNotifications } from "../lib/notifications";
 import { emailError, nameError, phoneError, usernameError } from "../lib/validation";
 import { isPaidTier, planName } from "../lib/plans";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
+import AuthFeatureCard from "../components/auth/AuthFeatureCard";
 import OtpStep from "../components/auth/OtpStep";
 import BackToDashboardButton from "../components/ui/BackToDashboardButton";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
@@ -71,13 +73,16 @@ async function pickProfilePhoto() {
   return `data:image/jpeg;base64,${saved.base64}`;
 }
 
-function Avatar({ photoURL, first, last }) {
+function Avatar({ photoURL, first, last, size = 72 }) {
+  const radius = size / 2;
   return (
-    <View style={styles.avatar}>
+    <View style={[styles.avatar, { width: size, height: size, borderRadius: radius }]}>
       {photoURL ? (
         <Image source={{ uri: photoURL }} style={styles.avatarImage} accessibilityLabel="Profile photo" />
       ) : (
-        <Text style={styles.avatarInitials}>{initials(first, last)}</Text>
+        <Text style={[styles.avatarInitials, { fontSize: Math.round(size * 0.33) }]}>
+          {initials(first, last)}
+        </Text>
       )}
     </View>
   );
@@ -94,13 +99,15 @@ function PlanBadge({ tier }) {
   );
 }
 
-function InfoRow({ label, value, badge, last }) {
+function InfoRow({ label, value, badge, last, compact = false }) {
   return (
-    <View style={[styles.infoRow, last && styles.infoRowLast]}>
+    <View style={[styles.infoRow, compact && styles.infoRowCompact, last && styles.infoRowLast]}>
       <Text style={styles.infoLabel}>{label}</Text>
       <View style={styles.infoValueRow}>
         {value ? (
-          <Text style={styles.infoValue}>{value}</Text>
+          <Text style={styles.infoValue} numberOfLines={compact ? 2 : 3}>
+            {value}
+          </Text>
         ) : (
           <Text style={[styles.infoValue, styles.infoEmpty]}>Not provided</Text>
         )}
@@ -178,6 +185,18 @@ function BackLink({ onPress, label = "Back to account" }) {
 
 export default function AccountScreen({ navigation }) {
   const { user, tier } = useAppData();
+  const { height: windowHeight } = useWindowDimensions();
+  const compact = windowHeight < 740;
+  const layout = useMemo(
+    () => ({
+      avatarSize: compact ? 56 : 72,
+      leftPadV: compact ? 12 : 18,
+      rightPadV: compact ? 10 : 14,
+      infoPadV: compact ? 6 : 8,
+      titleSize: compact ? 16 : 18,
+    }),
+    [compact]
+  );
   const [view, setView] = useState("summary"); // summary | edit | pwEmail | pwOtp | pwNew
 
   const [loading, setLoading] = useState(true);
@@ -513,13 +532,13 @@ export default function AccountScreen({ navigation }) {
       };
       return (
         <>
-          <BackLink onPress={back} />
-          <View style={styles.formCard}>
-            <Text style={styles.formTitle}>Confirm your email</Text>
-            <Text style={styles.formSubtitle}>
-              Enter the email you use to sign in. We will send a 6-digit code there.
-            </Text>
-            <View style={styles.formFields}>
+          <AuthFeatureCard
+            mode="card"
+            icon="mail"
+            title="Confirm your email"
+            subtitle="Enter the email you use to sign in. We will send a 6-digit verification code there before you can set a new password."
+          >
+            <View style={styles.confirmFields}>
               <Field
                 label="Email address"
                 value={confirmEmail}
@@ -537,18 +556,26 @@ export default function AccountScreen({ navigation }) {
 
             {sendOtpError ? <Text style={styles.errorText}>{sendOtpError}</Text> : null}
 
-            <Pressable
-              onPress={handleConfirmChangePasswordEmail}
-              disabled={sendingOtp || !confirmEmail.trim()}
-              style={({ pressed }) => [
-                styles.setPwBtn,
-                pressed && styles.saveBtnPressed,
-                (sendingOtp || !confirmEmail.trim()) && styles.btnDisabled,
-              ]}
-            >
-              <Text style={styles.saveText}>{sendingOtp ? "Sending code…" : "Send verification code"}</Text>
-            </Pressable>
-          </View>
+            <View style={styles.confirmActions}>
+              <Pressable
+                onPress={back}
+                style={({ pressed }) => [styles.cancelBtn, pressed && styles.cancelBtnPressed]}
+              >
+                <Text style={styles.cancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={handleConfirmChangePasswordEmail}
+                disabled={sendingOtp || !confirmEmail.trim()}
+                style={({ pressed }) => [
+                  styles.confirmSendBtn,
+                  pressed && styles.saveBtnPressed,
+                  (sendingOtp || !confirmEmail.trim()) && styles.btnDisabled,
+                ]}
+              >
+                <Text style={styles.saveText}>{sendingOtp ? "Sending code…" : "Send verification code"}</Text>
+              </Pressable>
+            </View>
+          </AuthFeatureCard>
 
           <ConfirmDialog
             open={emailMismatchOpen}
@@ -653,18 +680,30 @@ export default function AccountScreen({ navigation }) {
       );
     }
 
+    const masked = email ? maskEmail(email) : "";
+
     return (
-      <View style={styles.panels}>
-        <View style={styles.leftPanel}>
+      <View style={[styles.panels, compact && styles.panelsCompact]}>
+        <View style={[styles.leftPanel, { paddingTop: layout.leftPadV, paddingBottom: layout.leftPadV }]}>
           <View style={styles.avatarWrap}>
-            <Avatar photoURL={photoURL} first={form.firstName} last={form.lastName} />
+            <Avatar
+              photoURL={photoURL}
+              first={form.firstName}
+              last={form.lastName}
+              size={layout.avatarSize}
+            />
             {emailVerified ? (
               <View style={styles.avatarCheck}>
                 <Text style={styles.avatarCheckText}>✓</Text>
               </View>
             ) : null}
           </View>
-          <Text style={styles.fullName}>{fullName}</Text>
+          <Text style={[styles.fullName, compact && styles.fullNameCompact]} numberOfLines={2}>
+            {fullName}
+          </Text>
+          <Text style={styles.maskedEmail} numberOfLines={2}>
+            {masked || "No email"}
+          </Text>
           <View style={styles.planBadgeWrap}>
             <PlanBadge tier={tier} />
           </View>
@@ -674,6 +713,7 @@ export default function AccountScreen({ navigation }) {
             disabled={photoUploading}
             style={({ pressed }) => [
               styles.photoBtn,
+              compact && styles.photoBtnCompact,
               pressed && styles.photoBtnPressed,
               photoUploading && styles.photoBtnBusy,
             ]}
@@ -693,26 +733,40 @@ export default function AccountScreen({ navigation }) {
           {photoError ? <Text style={styles.photoError}>{photoError}</Text> : null}
         </View>
 
-        <View style={styles.rightPanel}>
-          <Text style={styles.detailsTitle}>Account details</Text>
-          <Text style={styles.detailsSubtitle}>
-            Your account information is shown below. Use the buttons to make changes.
-          </Text>
+        <View
+          style={[
+            styles.rightPanel,
+            {
+              paddingTop: layout.rightPadV,
+              paddingBottom: layout.rightPadV,
+            },
+          ]}
+        >
+          <Text style={[styles.detailsTitle, { fontSize: layout.titleSize }]}>Account details</Text>
+          <Text style={styles.detailsSubtitle}>Review your information and manage security settings.</Text>
 
           <View style={styles.infoCard}>
-            <InfoRow label="Email address" value={email} badge={emailVerified} />
-            {canEditUsername ? <InfoRow label="Username" value={form.username} /> : null}
-            <InfoRow label="Mobile number" value={form.contactNumber} last />
+            <InfoRow label="Email address" value={masked} badge={emailVerified} compact={compact} />
+            <InfoRow label="Full name" value={fullName === "-" ? "" : fullName} compact={compact} />
+            {canEditUsername ? (
+              <InfoRow label="Username" value={form.username} compact={compact} />
+            ) : null}
+            <InfoRow label="Mobile number" value={form.contactNumber} compact={compact} />
+            <InfoRow label="Plan" value={planName(tier)} last compact={compact} />
           </View>
 
-          <View style={styles.actions}>
-      <Pressable
-        onPress={() => {
+          <View style={[styles.actions, compact && styles.actionsCompact]}>
+            <Pressable
+              onPress={() => {
                 setSaveError("");
                 setSaveSuccess(false);
                 setView("edit");
               }}
-              style={({ pressed }) => [styles.editBtn, pressed && styles.editBtnPressed]}
+              style={({ pressed }) => [
+                styles.editBtn,
+                compact && styles.actionBtnCompact,
+                pressed && styles.editBtnPressed,
+              ]}
             >
               <PencilIcon size={16} />
               <Text style={styles.editText}>Edit profile</Text>
@@ -720,7 +774,11 @@ export default function AccountScreen({ navigation }) {
 
             <Pressable
               onPress={handleStartChangePassword}
-              style={({ pressed }) => [styles.pwBtn, pressed && styles.saveBtnPressed]}
+              style={({ pressed }) => [
+                styles.pwBtn,
+                compact && styles.actionBtnCompact,
+                pressed && styles.saveBtnPressed,
+              ]}
             >
               <PadlockIcon size={16} />
               <Text style={styles.pwBtnText}>
@@ -729,16 +787,13 @@ export default function AccountScreen({ navigation }) {
             </Pressable>
           </View>
 
-          {isGoogleAccount ? (
-            <Text style={styles.googleNote}>
-              You sign in with Google. Setting a password is optional and only needed if you also want email login - no
-              username is required.
-            </Text>
-          ) : null}
-
           <Pressable
             onPress={() => navigation.navigate("Subscription")}
-            style={({ pressed }) => [styles.manageBtn, pressed && styles.manageBtnPressed]}
+            style={({ pressed }) => [
+              styles.manageBtn,
+              compact && styles.actionBtnCompact,
+              pressed && styles.manageBtnPressed,
+            ]}
           >
             <Text style={styles.manageText}>Manage subscription</Text>
           </Pressable>
@@ -747,9 +802,17 @@ export default function AccountScreen({ navigation }) {
     );
   }
 
+  const isCenteredFlow = view === "pwEmail" || view === "pwOtp" || view === "pwNew";
+
   return (
     <AppShell active="account" breadcrumb="Dashboard / Settings" title="Account Settings">
-      <KeyboardAwareScrollView style={styles.root} contentContainerStyle={styles.scroll} bounces={false}>
+      <KeyboardAwareScrollView
+        style={styles.root}
+        contentContainerStyle={
+          isCenteredFlow ? styles.centeredScroll : view === "edit" ? styles.scroll : styles.summaryScroll
+        }
+        bounces={false}
+      >
         {renderBody()}
       </KeyboardAwareScrollView>
     </AppShell>
@@ -767,7 +830,19 @@ const cardShadow = {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.pageBg },
   scroll: { padding: 16, paddingBottom: 40 },
-  loadingWrap: { minHeight: 256, alignItems: "center", justifyContent: "center" },
+  summaryScroll: {
+    flexGrow: 1,
+    padding: 12,
+    paddingBottom: 28,
+  },
+  centeredScroll: {
+    flexGrow: 1,
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 88,
+  },
+  loadingWrap: { minHeight: 220, alignItems: "center", justifyContent: "center" },
   loadingText: { fontSize: 14, color: colors.muted },
   panels: {
     overflow: "hidden",
@@ -777,39 +852,53 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     ...cardShadow,
   },
+  panelsCompact: { borderRadius: 14 },
   leftPanel: {
     alignItems: "center",
     backgroundColor: "#101a30",
-    paddingHorizontal: 32,
-    paddingVertical: 36,
+    paddingHorizontal: 20,
   },
   avatarWrap: { position: "relative" },
   avatar: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
     overflow: "hidden",
     backgroundColor: "#1a3a5c",
     alignItems: "center",
     justifyContent: "center",
   },
   avatarImage: { width: "100%", height: "100%" },
-  avatarInitials: { fontSize: 30, fontWeight: "700", color: colors.accent },
+  avatarInitials: { fontWeight: "700", color: colors.accent },
   avatarCheck: {
     position: "absolute",
-    right: 4,
-    bottom: 4,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    right: 2,
+    bottom: 2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     borderWidth: 2,
     borderColor: "#101a30",
     backgroundColor: "#10b981",
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarCheckText: { fontSize: 10, fontWeight: "700", color: colors.white },
-  fullName: { marginTop: 16, fontSize: 16, fontWeight: "700", lineHeight: 21, color: colors.white, textAlign: "center" },
+  avatarCheckText: { fontSize: 9, fontWeight: "700", color: colors.white },
+  fullName: {
+    marginTop: 10,
+    fontSize: 15,
+    fontWeight: "700",
+    lineHeight: 20,
+    color: colors.white,
+    textAlign: "center",
+    paddingHorizontal: 8,
+  },
+  fullNameCompact: { marginTop: 8, fontSize: 14, lineHeight: 18 },
+  maskedEmail: {
+    marginTop: 4,
+    maxWidth: "92%",
+    fontSize: 12,
+    lineHeight: 16,
+    color: "#94a3b8",
+    textAlign: "center",
+  },
   planBadgeWrap: { marginTop: 8 },
   planBadge: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4 },
   planBadgePremium: { backgroundColor: "rgba(22,191,168,0.2)" },
@@ -818,7 +907,7 @@ const styles = StyleSheet.create({
   planBadgeTextPremium: { color: colors.accent },
   planBadgeTextFree: { color: "#cbd5e1" },
   photoBtn: {
-    marginTop: 32,
+    marginTop: 12,
     alignSelf: "stretch",
     flexDirection: "row",
     alignItems: "center",
@@ -828,39 +917,45 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#475569",
     backgroundColor: "#1a2943",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
   },
+  photoBtnCompact: { marginTop: 10, paddingVertical: 8 },
   photoBtnPressed: { backgroundColor: "#1f3252" },
   photoBtnBusy: { opacity: 0.6 },
   photoBtnText: { fontSize: 12, fontWeight: "600", color: "#e2e8f0" },
-  photoError: { marginTop: 8, fontSize: 11, color: "#fb7185", textAlign: "center" },
-  rightPanel: { backgroundColor: colors.white, paddingHorizontal: 20, paddingVertical: 28 },
-  detailsTitle: { fontSize: 20, fontWeight: "700", color: "#1e293b" },
-  detailsSubtitle: { marginTop: 2, fontSize: 12, lineHeight: 17, color: colors.muted },
+  photoError: { marginTop: 6, fontSize: 11, color: "#fb7185", textAlign: "center" },
+  rightPanel: {
+    backgroundColor: colors.white,
+    paddingHorizontal: 16,
+  },
+  detailsTitle: { fontWeight: "700", color: "#1e293b" },
+  detailsSubtitle: { marginTop: 2, fontSize: 12, lineHeight: 16, color: colors.muted },
   infoCard: {
-    marginTop: 24,
+    marginTop: 10,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "#f1f5f9",
     backgroundColor: "#f8f9fb",
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
   },
-  infoRow: { borderBottomWidth: 1, borderBottomColor: "#f1f5f9", paddingVertical: 14 },
+  infoRow: { borderBottomWidth: 1, borderBottomColor: "#f1f5f9", paddingVertical: 8 },
+  infoRowCompact: { paddingVertical: 6 },
   infoRowLast: { borderBottomWidth: 0 },
   infoLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "600",
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
     textTransform: "uppercase",
     color: colors.muted,
   },
-  infoValueRow: { marginTop: 6, flexDirection: "row", alignItems: "center", gap: 10 },
-  infoValue: { flex: 1, fontSize: 14, color: "#334155" },
-  infoEmpty: { fontStyle: "italic", color: colors.muted },
-  verifiedBadge: { borderRadius: 999, backgroundColor: "#d1fae5", paddingHorizontal: 10, paddingVertical: 2 },
+  infoValueRow: { marginTop: 3, flexDirection: "row", alignItems: "center", gap: 8 },
+  infoValue: { flex: 1, fontSize: 13, fontWeight: "500", color: "#334155" },
+  infoEmpty: { fontStyle: "italic", fontWeight: "400", color: colors.muted },
+  verifiedBadge: { borderRadius: 999, backgroundColor: "#d1fae5", paddingHorizontal: 8, paddingVertical: 2 },
   verifiedText: { fontSize: 10, fontWeight: "600", color: "#047857" },
-  actions: { marginTop: 28, gap: 12 },
+  actions: { marginTop: 12, gap: 8 },
+  actionsCompact: { marginTop: 10, gap: 6 },
   editBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -870,12 +965,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     ...cardShadow,
   },
+  actionBtnCompact: { paddingVertical: 9 },
   editBtnPressed: { backgroundColor: "#f8fafc" },
-  editText: { fontSize: 14, fontWeight: "600", color: "#334155" },
+  editText: { fontSize: 13, fontWeight: "600", color: "#334155" },
   pwBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -883,26 +979,25 @@ const styles = StyleSheet.create({
     gap: 8,
     borderRadius: 12,
     backgroundColor: colors.accent,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     ...cardShadow,
   },
   pwBtnBusy: { opacity: 0.5 },
-  pwBtnText: { fontSize: 14, fontWeight: "700", color: colors.white },
-  googleNote: { marginTop: 12, fontSize: 11, lineHeight: 17, color: colors.muted },
+  pwBtnText: { fontSize: 13, fontWeight: "700", color: colors.white },
   manageBtn: {
-    marginTop: 12,
+    marginTop: 8,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: "#f8f9fb",
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
   },
   manageBtnPressed: { backgroundColor: "#f1f5f9" },
-  manageText: { fontSize: 14, fontWeight: "600", color: "#334155" },
+  manageText: { fontSize: 13, fontWeight: "600", color: "#334155" },
   errorText: { marginTop: 12, fontSize: 12, color: "#f43f5e" },
   successText: { marginTop: 12, fontSize: 12, fontWeight: "600", color: "#059669" },
   backLink: { marginBottom: 16 },
@@ -917,6 +1012,21 @@ const styles = StyleSheet.create({
   formTitle: { fontSize: 18, fontWeight: "700", color: "#1e293b" },
   formSubtitle: { marginTop: 2, fontSize: 12, lineHeight: 17, color: colors.muted },
   formFields: { marginTop: 24, gap: 16 },
+  confirmFields: { gap: 12 },
+  confirmActions: {
+    marginTop: 20,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  confirmSendBtn: {
+    flex: 1,
+    borderRadius: 12,
+    backgroundColor: colors.accent,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    ...cardShadow,
+  },
   field: {},
   fieldLabel: { marginBottom: 6, fontSize: 12, fontWeight: "600", color: "#475569" },
   fieldOptional: { fontWeight: "400", color: colors.muted },
@@ -960,7 +1070,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.white,
     paddingHorizontal: 24,
-    paddingVertical: 10,
+    paddingVertical: 12,
   },
   cancelBtnPressed: { backgroundColor: "#f8fafc" },
   cancelText: { fontSize: 12, fontWeight: "600", color: "#475569" },

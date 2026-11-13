@@ -332,8 +332,8 @@ function ScanResultBody({ navigation }) {
   const versionLabel = `v${scanFlow.versionNumber || 1}.0`;
   async function onDownload() {
     const report = await scanFlow.downloadReport();
-    if (report?.shared) {
-      // Share sheet already presented the PDF (same report as web).
+    if (report?.downloaded || report?.shared) {
+      // File already saved to the device (same report as web).
       return;
     }
     if (scanFlow.downloadError) {
