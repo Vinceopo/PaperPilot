@@ -684,9 +684,8 @@ export const TRACE_VIEWER_HTML = `<!DOCTYPE html>
   #docx-layer { position: absolute; top: 0; left: 0; width: 0; height: 0; }
   .pp-issue-box { position: absolute; z-index: 5; pointer-events: none; border-radius: 3px; background: var(--pp-hit-bg); box-shadow: inset 0 0 0 2px var(--pp-hit-edge); mix-blend-mode: multiply; }
   .pp-issue-margin { position: absolute; z-index: 4; pointer-events: none; background: var(--pp-hit-bg); box-shadow: inset 0 0 0 2px var(--pp-hit-edge); }
-  #status { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #64748b; font-size: 12px; }
-  .spin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid rgba(22, 191, 168, 0.25); border-top-color: #16bfa8; animation: spin 0.9s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  /* Status is toggled from JS; RN shows DocumentLoader — no circle spinner here. */
+  #status { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: none; }
 </style>
 <script src="${JSZIP}"></script>
 <script src="${DOCX_PREVIEW}"></script>
@@ -700,7 +699,7 @@ export const TRACE_VIEWER_HTML = `<!DOCTYPE html>
       <div id="docx-layer"></div>
     </div>
   </div>
-  <div id="status"><div class="spin"></div><div>Opening original document…</div></div>
+  <div id="status"></div>
   <script>${SCRIPT}</script>
 </body>
 </html>`;

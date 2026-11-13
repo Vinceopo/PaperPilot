@@ -200,6 +200,7 @@ export default function UploadScreen({ navigation }) {
   const [msSuccess, setMsSuccess] = useState("");
   const [preview, setPreview] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [viewerReady, setViewerReady] = useState(false);
   const [titleOpen, setTitleOpen] = useState(false);
   const [titleMode, setTitleMode] = useState("new");
   const [existingId, setExistingId] = useState("");
@@ -220,10 +221,11 @@ export default function UploadScreen({ navigation }) {
 
   const mechanicsSelected = Boolean(selectedMechanicsId);
   const msUploading = Boolean(manuscriptBusy || (confirmBusy && uploadWizardStep === 2));
-  const msPreparing = Boolean(previewBusy && msFile && !msUploading);
-  const msPanelBusy = manuscriptBusy || previewBusy || confirmBusy;
-  const canPickManuscript = mechanicsSelected && !msPanelBusy;
   const showMsPreview = Boolean(msFile) && !validateManuscriptFile(msFile, maxBytes);
+  // Keep "Opening manuscript preview…" until the WebView has painted (avoids loader blink).
+  const msOpeningPreview = Boolean(showMsPreview && !msUploading && !viewerReady);
+  const msPanelBusy = manuscriptBusy || previewBusy || confirmBusy || msOpeningPreview;
+  const canPickManuscript = mechanicsSelected && !manuscriptBusy && !previewBusy && !confirmBusy;
   const mechanicsOptions = mechanics.map((item) => ({
     value: item.id,
     label: item.name || item.source_filename,
@@ -240,12 +242,17 @@ export default function UploadScreen({ navigation }) {
     setMsFile(null);
     setPreview(null);
     setPreviewBusy(false);
+    setViewerReady(false);
     setMsError("");
     setMsSuccess("");
     setMsTitle("");
     setTitleOpen(false);
     setTitleError("");
   }, [uploadCancelKey]);
+
+  useEffect(() => {
+    setViewerReady(false);
+  }, [msFile?.uri]);
 
   // Keep Format Fields in sync with the selected saved mechanics.
   useEffect(() => {
@@ -611,6 +618,7 @@ export default function UploadScreen({ navigation }) {
     setMsFile(null);
     setPreview(null);
     setPreviewBusy(false);
+    setViewerReady(false);
     setMsError("");
     setMsSuccess("");
     setRejection({ kind, name: file.name, size: file.size, scope: "manuscript" });
@@ -630,6 +638,7 @@ export default function UploadScreen({ navigation }) {
       rejectManuscript(file, issue);
       return;
     }
+    setViewerReady(false);
     setMsFile(file);
     setMsError("");
     setMsSuccess("");
@@ -663,6 +672,7 @@ export default function UploadScreen({ navigation }) {
   }
 
   function queueUpload(pending) {
+    const reuseUrl = String(pending.cloudinaryUrl || preview?.cloudinary_url || "").trim();
     setConfirm({
       title: pending.manuscriptId ? "Upload new version?" : "Upload manuscript?",
       message: `Save “${pending.file?.name}” as “${pending.title}” on the server? File Details opens only after the upload finishes.`,
@@ -672,6 +682,8 @@ export default function UploadScreen({ navigation }) {
           file: pending.file,
           title: pending.title,
           manuscriptId: pending.manuscriptId || undefined,
+          // Reuse the preview S3 upload so saving a version does not upload the file twice.
+          cloudinaryUrl: reuseUrl || undefined,
         });
         if (ok) {
           setMsFile(null);
@@ -695,7 +707,12 @@ export default function UploadScreen({ navigation }) {
     setTitleError("");
     setMsError("");
     setTitleOpen(false);
-    queueUpload({ file: msFile, title: selected.title, manuscriptId: selected.id });
+    queueUpload({
+      file: msFile,
+      title: selected.title,
+      manuscriptId: selected.id,
+      cloudinaryUrl: preview?.cloudinary_url,
+    });
   }
 
   function submitTitle() {
@@ -724,7 +741,12 @@ export default function UploadScreen({ navigation }) {
     setTitleOpen(false);
     setManuscriptId("");
     selectUploadTarget("");
-    queueUpload({ file: msFile, title: resolvedTitle, manuscriptId: "" });
+    queueUpload({
+      file: msFile,
+      title: resolvedTitle,
+      manuscriptId: "",
+      cloudinaryUrl: preview?.cloudinary_url,
+    });
   }
 
   function requestManuscriptUpload() {
@@ -1156,7 +1178,7 @@ export default function UploadScreen({ navigation }) {
                   </Text>
                   <Text style={styles.dropSub}>
                     {msFile
-                      ? msPreparing
+                      ? msOpeningPreview
                         ? `${formatFileSize(msFile.size)} · Preparing document preview below…`
                         : msUploading
                           ? `${formatFileSize(msFile.size)} · Uploading — see progress below`
@@ -1174,41 +1196,47 @@ export default function UploadScreen({ navigation }) {
                     status={
                       msUploading
                         ? "Uploading…"
-                        : msPreparing
+                        : msOpeningPreview
                           ? "Preparing…"
                           : preview?.page_count && isPdfFile(msFile)
                             ? `${preview.page_count} page${preview.page_count === 1 ? "" : "s"} · scroll to read`
                             : "Original document · scroll to read"
                     }
-                    statusTone={msUploading || msPreparing ? "accent" : "muted"}
+                    statusTone={msUploading || msOpeningPreview ? "accent" : "muted"}
                     overlayTitle={
                       msUploading
                         ? "Uploading manuscript…"
-                        : msPreparing
+                        : msOpeningPreview
                           ? "Opening manuscript preview…"
                           : ""
                     }
                     overlayBody={
                       msUploading
                         ? "Please wait while your academic document is saved. The upload button unlocks when this finishes."
-                        : "Please wait while your academic document is prepared for display."
+                        : msOpeningPreview
+                          ? "Please wait while your academic document is prepared for display."
+                          : ""
                     }
                     footer={
                       msUploading
                         ? "Uploading in progress — stay on this page until it completes."
-                        : msPreparing
+                        : msOpeningPreview
                           ? "Preparing live preview of your academic document…"
                           : "Live preview of your uploaded manuscript — scroll to see pages below."
                     }
                   >
-                    <DocumentPreview
-                      file={msFile}
-                      preview={preview}
-                      documentUrl={preview?.cloudinary_url || ""}
-                      documentName={msFile?.name || preview?.filename || ""}
-                      documentLoading={msPreparing && !preview?.cloudinary_url}
-                      emptyLabel="No manuscript preview available yet."
-                    />
+                    {/* Load under the same overlay so DocumentLoader never restarts after prepare. */}
+                    {!msUploading ? (
+                      <DocumentPreview
+                        file={msFile}
+                        preview={preview}
+                        documentUrl={preview?.cloudinary_url || ""}
+                        documentName={msFile?.name || preview?.filename || ""}
+                        suppressLoader
+                        onReady={() => setViewerReady(true)}
+                        emptyLabel="No manuscript preview available yet."
+                      />
+                    ) : null}
                   </PreviewPanel>
                 ) : null}
 
@@ -1229,12 +1257,13 @@ export default function UploadScreen({ navigation }) {
                     title={
                       msUploading
                         ? "Uploading…"
-                        : msPreparing
+                        : msOpeningPreview
                           ? "Preparing preview…"
                           : "Upload manuscript"
                     }
                     onPress={requestManuscriptUpload}
-                    busy={msUploading || msPreparing}
+                    busy={msUploading || msOpeningPreview}
+                    showBusySpinner={false}
                     disabled={!mechanicsSelected || !msFile || msPanelBusy}
                     style={{ flex: 1 }}
                   />

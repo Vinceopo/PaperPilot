@@ -38,8 +38,8 @@ function namedFile(file) {
  * Same PDF/DOCX display as Issue Tracing & XAI (TraceDocumentViewer / pdf.js / docx-preview),
  * without highlights, issues, or XAI — display only.
  *
- * Prefer the public cloudinary/document URL when available (same reliable path Issue Tracing
- * uses). Local picker URIs are only used while that URL is still preparing.
+ * Prefer the local picker file when present so the viewer mounts once (switching to a remote
+ * URL remounted a second, clipped-then-full preview). Remote URL is used when there is no local file.
  */
 export default function DocumentPreview({
   file,
@@ -47,16 +47,21 @@ export default function DocumentPreview({
   documentUrl = "",
   documentName = "",
   documentLoading = false,
+  suppressLoader = false,
+  onReady,
   emptyLabel = "No preview available yet.",
 }) {
   const local = namedFile(file);
   const remoteUrl = String(documentUrl || preview?.cloudinary_url || preview?.public_url || "").trim();
-  const useRemote = Boolean(remoteUrl);
-  const viewerFile = useRemote ? null : local;
-  const viewerKey = useRemote
-    ? `remote:${remoteUrl}`
-    : local?.uri
-      ? `local:${local.uri}`
+  // Stick with the local file for the whole preview session — remounting on remote URL
+  // caused a half-height first paint then a second full preview.
+  const useLocal = Boolean(local?.uri);
+  const useRemote = !useLocal && Boolean(remoteUrl);
+  const viewerFile = useLocal ? local : null;
+  const viewerKey = useLocal
+    ? `local:${local.uri}`
+    : useRemote
+      ? `remote:${remoteUrl}`
       : "empty";
 
   return (
@@ -66,6 +71,8 @@ export default function DocumentPreview({
       documentUrl={useRemote ? remoteUrl : ""}
       documentName={local?.name || documentName || preview?.filename || ""}
       documentLoading={documentLoading}
+      suppressLoader={suppressLoader}
+      onReady={onReady}
       preview={preview}
       pageCount={preview?.page_count}
       emptyLabel={emptyLabel}
@@ -180,6 +187,8 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: "rgba(232, 236, 241, 0.92)",
     paddingHorizontal: 24,
+    // Slight lift so the loader block reads as visually centered in the frame.
+    paddingBottom: 40,
   },
   overlayTitle: { fontSize: 14, fontWeight: "700", color: "#1e293b", textAlign: "center" },
   overlayBody: { maxWidth: 256, fontSize: 11, lineHeight: 17, color: colors.slate, textAlign: "center" },

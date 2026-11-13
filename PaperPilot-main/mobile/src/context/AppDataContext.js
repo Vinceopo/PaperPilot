@@ -875,7 +875,7 @@ export function AppDataProvider({ children }) {
     return true;
   }
 
-  async function onManuscriptUpload({ file, title, manuscriptId }) {
+  async function onManuscriptUpload({ file, title, manuscriptId, cloudinaryUrl }) {
     setError("");
 
     const resolvedTitle = (title || file.name.replace(/\.(pdf|docx)$/i, "")).trim();
@@ -918,15 +918,20 @@ export function AppDataProvider({ children }) {
       return fromApi?.id || "";
     };
 
+    const uploadOpts = {
+      file,
+      title: resolvedTitle,
+      mechanicsId: selectedMechanicsId,
+      cloudinaryUrl: cloudinaryUrl || undefined,
+    };
+
     try {
       let apiManuscriptId = resolveApiManuscriptId();
       let created;
       try {
         created = await uploadManuscriptVersion({
-          file,
-          title: resolvedTitle,
+          ...uploadOpts,
           manuscriptId: apiManuscriptId || undefined,
-          mechanicsId: selectedMechanicsId,
         });
       } catch (firstErr) {
         const missingParent =
@@ -936,11 +941,7 @@ export function AppDataProvider({ children }) {
         const isConflict =
           firstErr?.status === 409 || /already exists/i.test(firstErr?.message || "");
         if (missingParent) {
-          created = await uploadManuscriptVersion({
-            file,
-            title: resolvedTitle,
-            mechanicsId: selectedMechanicsId,
-          });
+          created = await uploadManuscriptVersion(uploadOpts);
         } else if (isConflict && manuscriptId) {
           const fromApi = await listManuscripts().catch(() => null);
           const apiList = itemsFrom(fromApi, "manuscripts");
@@ -950,10 +951,8 @@ export function AppDataProvider({ children }) {
           );
           if (!matched?.id) throw firstErr;
           created = await uploadManuscriptVersion({
-            file,
-            title: resolvedTitle,
+            ...uploadOpts,
             manuscriptId: matched.id,
-            mechanicsId: selectedMechanicsId,
           });
         } else {
           throw firstErr;
@@ -996,13 +995,17 @@ export function AppDataProvider({ children }) {
           return next;
         });
       }
-      const data = await listManuscripts();
-      if (uploadSessionRef.current !== sessionId) return false;
-      setManuscripts(itemsFrom(data, "manuscripts"));
       setManuscriptReady(true);
       advanceUploadWizard(3);
       setFileDetailsNotice("Manuscript uploaded completely and ready to scan.");
       appendNotifications(notificationFromUpload(resolvedTitle, version.version_number || nextVersionNumber));
+      // Refresh the library list in the background so the upload UI can unlock immediately.
+      void listManuscripts()
+        .then((data) => {
+          if (uploadSessionRef.current !== sessionId) return;
+          setManuscripts(itemsFrom(data, "manuscripts"));
+        })
+        .catch(() => {});
       return true;
     } catch (err) {
       if (uploadSessionRef.current !== sessionId) return false;

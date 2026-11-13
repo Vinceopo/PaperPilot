@@ -13,6 +13,9 @@ import Sidebar from "./Sidebar";
 import NotificationsPanel from "./NotificationsPanel";
 import { BellIcon, MenuIcon } from "./icons";
 
+/** Extra gap below the bell so the panel sits under the icon. */
+const NOTIF_PANEL_GAP = 14;
+
 /**
  * Dashboard chrome shared by the main screens: the header (menu toggle, plan
  * summary, notifications) and the slide-in sidebar.
@@ -87,30 +90,31 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
   const showHeading = Boolean(title);
   const notificationsOpen = Boolean(notificationsAnchor);
   const panelWidth = Math.min(384, screenWidth - 24);
-  const panelTop = notificationsAnchor?.top ?? insets.top + 60;
+  const panelTop = notificationsAnchor?.top ?? insets.top + 60 + NOTIF_PANEL_GAP;
   const bellFrame = notificationsAnchor?.bell;
   const listMaxHeight = Math.max(
     160,
     Math.min(512, screenHeight * 0.7, screenHeight - panelTop - insets.bottom - 150)
   );
 
+  function closeNotifications() {
+    setNotificationsAnchor(null);
+  }
+
   function toggleNotifications() {
     if (notificationsOpen) {
-      setNotificationsAnchor(null);
+      closeNotifications();
       return;
     }
-    const fallback = { top: insets.top + 60, bell: null };
-    if (!bellRef.current?.measureInWindow) {
-      setNotificationsAnchor(fallback);
-      return;
-    }
-    bellRef.current.measureInWindow((x, y, w, h) => {
-      const valid = Number.isFinite(y) && Number.isFinite(x) && w > 0 && h > 0;
-      setNotificationsAnchor(
-        valid
-          ? { top: y + h + 8, bell: { x, y, width: w, height: h } }
-          : fallback
-      );
+    // Open immediately so a missed measureInWindow callback cannot block the panel.
+    const fallbackTop = insets.top + 60 + NOTIF_PANEL_GAP;
+    setNotificationsAnchor({ top: fallbackTop, bell: null });
+    bellRef.current?.measureInWindow?.((x, y, w, h) => {
+      if (!(Number.isFinite(y) && Number.isFinite(x) && w > 0 && h > 0)) return;
+      setNotificationsAnchor({
+        top: y + h + NOTIF_PANEL_GAP,
+        bell: { x, y, width: w, height: h },
+      });
     });
   }
 
@@ -183,51 +187,52 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
       <Modal
         visible={notificationsOpen}
         transparent
-        statusBarTranslucent
         animationType="fade"
-        onRequestClose={() => setNotificationsAnchor(null)}
+        onRequestClose={closeNotifications}
       >
-        <Pressable
-          style={StyleSheet.absoluteFill}
-          onPress={() => setNotificationsAnchor(null)}
-          accessibilityLabel="Close notifications"
-        />
-        <View style={[styles.popover, { top: panelTop, width: panelWidth }]} pointerEvents="box-none">
-          <NotificationsPanel
-            items={notifications}
-            unread={notificationUnread}
-            onMarkAllRead={markNotificationsAllRead}
-            onMarkRead={markNotificationRead}
-            onDelete={deleteNotification}
-            maxListHeight={listMaxHeight}
-          />
-        </View>
-        {bellFrame ? (
+        <View style={styles.notificationsModal} pointerEvents="box-none">
           <Pressable
-            style={[
-              styles.bellBtn,
-              styles.bellBtnOpen,
-              styles.bellBtnOverlay,
-              {
-                left: bellFrame.x,
-                top: bellFrame.y,
-                width: bellFrame.width,
-                height: bellFrame.height,
-              },
-            ]}
-            onPress={toggleNotifications}
-            accessibilityState={{ expanded: true }}
+            style={StyleSheet.absoluteFill}
+            onPress={closeNotifications}
             accessibilityLabel="Close notifications"
-            hitSlop={4}
-          >
-            <BellIcon size={20} color="#d97706" />
-            {notificationUnread > 0 ? (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unreadLabel}</Text>
-              </View>
-            ) : null}
-          </Pressable>
-        ) : null}
+          />
+          <View style={[styles.popover, { top: panelTop, width: panelWidth }]}>
+            <NotificationsPanel
+              items={notifications}
+              unread={notificationUnread}
+              onMarkAllRead={markNotificationsAllRead}
+              onMarkRead={markNotificationRead}
+              onDelete={deleteNotification}
+              maxListHeight={listMaxHeight}
+            />
+          </View>
+          {bellFrame ? (
+            <Pressable
+              style={[
+                styles.bellBtn,
+                styles.bellBtnOpen,
+                styles.bellBtnModal,
+                {
+                  left: bellFrame.x,
+                  top: bellFrame.y,
+                  width: bellFrame.width,
+                  height: bellFrame.height,
+                },
+              ]}
+              onPress={closeNotifications}
+              accessibilityState={{ expanded: true }}
+              accessibilityLabel="Close notifications"
+              hitSlop={4}
+            >
+              <BellIcon size={20} color="#d97706" />
+              {notificationUnread > 0 ? (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unreadLabel}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          ) : null}
+        </View>
       </Modal>
 
       <Sidebar
@@ -332,10 +337,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   bellBtnOpen: { backgroundColor: "#fef3c7" },
-  bellBtnOverlay: {
+  bellBtnModal: {
     position: "absolute",
-    zIndex: 20,
-    elevation: 20,
+    zIndex: 40,
+  },
+  notificationsModal: {
+    flex: 1,
   },
   popover: {
     position: "absolute",

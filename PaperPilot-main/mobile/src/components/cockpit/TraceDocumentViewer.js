@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { File, Paths } from "expo-file-system";
 import { colors } from "../../theme";
 import { buildDocumentPages, lineMatchesHighlight } from "../../lib/documentPages";
+import DocumentLoader from "../ui/DocumentLoader";
 import { TRACE_VIEWER_HTML } from "./traceViewerHtml";
 
 /** Base64 slice size; a multiple of 4 so every chunk decodes on its own. */
@@ -224,6 +225,9 @@ export default function TraceDocumentViewer({
   highlight,
   scrollTarget = null,
   documentLoading = false,
+  /** When true, parent shows the loading UI — avoid a second DocumentLoader blink. */
+  suppressLoader = false,
+  onReady,
   emptyLabel,
 }) {
   const kind = kindOf(file?.name || documentName, documentUrl);
@@ -232,12 +236,22 @@ export default function TraceDocumentViewer({
   const [ready, setReady] = useState(false);
   const webRef = useRef(null);
   const sendingRef = useRef(false);
+  const onReadyRef = useRef(onReady);
+  onReadyRef.current = onReady;
 
   useEffect(() => {
     setFailed(!canRender);
     setReady(false);
     sendingRef.current = false;
   }, [canRender, file?.uri, documentUrl, kind]);
+
+  useEffect(() => {
+    if (ready) onReadyRef.current?.();
+  }, [ready]);
+
+  useEffect(() => {
+    if (failed) onReadyRef.current?.();
+  }, [failed]);
 
   // Retrace when the highlight changes or the same issue is re-selected (new scroll token).
   const scrollToken = scrollTarget?.token;
@@ -285,13 +299,12 @@ export default function TraceDocumentViewer({
     }
   }
 
-  // Only block on fetch when nothing can render yet. Otherwise the WebView's
-  // own status spinner handles opening — stacking both looked like two loaders.
+  // Wait for a source with our default document loader (no circle spinners).
   if (documentLoading && !canRender) {
+    if (suppressLoader) return <View style={styles.webHost} />;
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={colors.accent} />
-        <Text style={[styles.muted, { marginTop: 10 }]}>Loading document…</Text>
+        <DocumentLoader size={112} />
       </View>
     );
   }
@@ -309,8 +322,7 @@ export default function TraceDocumentViewer({
     );
   }
 
-  // Loading spinner lives only inside the WebView HTML (#status). A second RN
-  // overlay stacked with it showed two animations on the full-results preview.
+  // Parent can keep a single "Opening manuscript preview…" overlay until onReady.
   return (
     <View style={styles.webHost}>
       <WebView
@@ -325,9 +337,14 @@ export default function TraceDocumentViewer({
         scrollEnabled={false}
         bounces={false}
         nestedScrollEnabled
-        style={styles.web}
+        style={[styles.web, !ready && styles.webHidden]}
         containerStyle={styles.web}
       />
+      {!ready && !suppressLoader ? (
+        <View style={styles.loaderOverlay} pointerEvents="none">
+          <DocumentLoader size={112} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -335,6 +352,13 @@ export default function TraceDocumentViewer({
 const styles = StyleSheet.create({
   webHost: { flex: 1, backgroundColor: "#e8ecf1" },
   web: { flex: 1, backgroundColor: "#e8ecf1" },
+  webHidden: { opacity: 0 },
+  loaderOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#e8ecf1",
+  },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 20 },
   muted: { fontSize: 12, color: colors.muted, textAlign: "center" },
   textContent: { padding: 12, gap: 16 },

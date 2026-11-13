@@ -553,7 +553,13 @@ export function previewManuscript({ uri, name, mimeType }) {
   return postUploadedDocument("/manuscripts/preview", { uri, name, mimeType }, "manuscript.pdf");
 }
 
-export async function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
+export async function uploadManuscriptVersion({
+  file,
+  mechanicsId,
+  title,
+  manuscriptId,
+  cloudinaryUrl,
+}) {
   const uri = typeof file === "string" ? file : file?.uri;
   const mimeType = typeof file === "object" ? file?.type || file?.mimeType : undefined;
   const name = typeof file === "object" ? file?.name : undefined;
@@ -561,7 +567,11 @@ export async function uploadManuscriptVersion({ file, mechanicsId, title, manusc
   if (!trimmedTitle) throw new ApiError("A manuscript title is required.", 400);
   if (!mechanicsId) throw new ApiError("Select a format mechanics document first.", 400);
 
-  const uploaded = await uploadToS3({ uri, name, mimeType });
+  const existingUrl = String(cloudinaryUrl || "").trim();
+  // Preview already uploaded this file — reuse that URL so new versions are not double-uploaded.
+  const uploaded = existingUrl
+    ? { url: existingUrl }
+    : await uploadToS3({ uri, name, mimeType });
   // Same id on every retry, so a save whose reply was lost is not stored twice.
   const clientRequestId = newRequestId();
   const created = await withRetry(() =>

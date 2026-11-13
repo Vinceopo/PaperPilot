@@ -6,6 +6,8 @@ export default function PrimaryButton({
   onPress,
   disabled = false,
   busy = false,
+  /** When false, keep the label while busy (avoids stacking circle spinners with DocumentLoader). */
+  showBusySpinner = true,
   style,
 }) {
   const isDisabled = disabled || busy;
@@ -17,7 +19,7 @@ export default function PrimaryButton({
       activeOpacity={0.85}
       accessibilityRole="button"
     >
-      {busy ? (
+      {busy && showBusySpinner ? (
         <ActivityIndicator color={colors.navy} />
       ) : (
         <Text style={styles.label}>{title}</Text>
