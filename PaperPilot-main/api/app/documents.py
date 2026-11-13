@@ -2439,7 +2439,6 @@ _SAMPLE_SECTIONS = (
         (
             ("Size", "8.5 x 11"),
             ("Orientation", "Portrait"),
-            ("Substance", "20"),
             ("Spacing", "Double"),
             ("Word spacing", "One space between words and after periods"),
             ("Indention", "0.5 inch"),
@@ -2474,7 +2473,6 @@ _SAMPLE_SECTIONS = (
             ("Chapter starts", "CHAPTER I, CHAPTER II…; Chapter 1, Chapter 2…"),
         ),
     ),
-    ("Page Breaks", "Only to start each new chapter and the reference list"),
     (
         "Table Layout",
         "Table number in bold, with the title in italic title case on the next line, both placed above it",

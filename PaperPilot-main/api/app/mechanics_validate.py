@@ -35,12 +35,6 @@ MECHANICS_SCHEMA: tuple[dict[str, Any], ...] = (
                 "example": "Portrait",
                 "rule": ("paper", "orientation"),
             },
-            {
-                "id": "substance",
-                "label": "Substance",
-                "example": "20",
-                "rule": ("paper", "substance"),
-            },
             {"id": "spacing", "label": "Spacing", "example": "Double", "rule": ("spacing",)},
             {
                 "id": "word_spacing",
@@ -142,14 +136,6 @@ MECHANICS_SCHEMA: tuple[dict[str, Any], ...] = (
                 "rule": ("pagination", "chapter_markers"),
             },
         ),
-    },
-    {
-        "id": "page_breaks",
-        "title": "Page Breaks",
-        "fields": (),
-        "free_text": True,
-        "example": "Only to start each new chapter and the reference list",
-        "rule": ("page_break_requirements",),
     },
     {
         "id": "table_layout",
