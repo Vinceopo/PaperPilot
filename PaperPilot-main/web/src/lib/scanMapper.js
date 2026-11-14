@@ -186,10 +186,16 @@ function categoryRows(scan) {
       const score =
         numberOrNull(cat.score?.value ?? cat.score) ??
         numberOrNull(section.formatting_score);
+      const status = cat.status || section.status || null;
+      const applicable =
+        cat.applicable == null && section.applicable == null
+          ? status !== "not_applicable"
+          : Boolean(cat.applicable ?? section.applicable);
       return {
         metric: name,
         score,
-        status: cat.status || section.status || null,
+        status,
+        applicable,
         unitsChecked,
         unitsPassed,
         unitsFailed,
@@ -208,10 +214,14 @@ function categoryRows(scan) {
     .filter((section) => section && (section.section || section.section_name))
     .map((section) => {
       const unitsChecked = sectionUnitField(section, "units_checked");
+      const status = section.status || null;
+      const applicable =
+        section.applicable == null ? status !== "not_applicable" : Boolean(section.applicable);
       return {
         metric: section.section || section.section_name,
         score: numberOrNull(section.formatting_score),
-        status: section.status || null,
+        status,
+        applicable,
         unitsChecked,
         unitsPassed: sectionUnitField(section, "units_passed"),
         unitsFailed: sectionUnitField(section, "units_failed"),
@@ -333,6 +343,7 @@ export function mapComplianceScanToResult(scan, meta = {}) {
     college: meta.college || "",
     scannedAt: scan?.created_at || new Date().toISOString(),
     citationStyle: meta.citationStyle || "APA",
+    mechanicsName: meta.mechanicsName || "",
     overallScore,
     overallCategories: Array.isArray(scoring?.overall?.categories) ? scoring.overall.categories : null,
     rightPct,

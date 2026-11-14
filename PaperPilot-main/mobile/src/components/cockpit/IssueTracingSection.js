@@ -89,6 +89,8 @@ export default function IssueTracingSection({
   file = null,
   documentLoading = false,
   onFocusPreview = null,
+  /** When set, Issues count matches Non-Compliant Units on the results header. */
+  issuesTotal = null,
 }) {
   const previewHeight = useDocumentPreviewHeight();
   const [activeIssueId, setActiveIssueId] = useState(null);
@@ -249,19 +251,23 @@ export default function IssueTracingSection({
     file || documentLoading || result?.cloudinaryUrl || result?.documentPreview
   );
   const showingFiltered = categoryFilter !== "all";
+  const totalIssues =
+    issuesTotal != null && Number.isFinite(Number(issuesTotal))
+      ? Math.max(0, Math.round(Number(issuesTotal)))
+      : enrichedEntries.length;
   const issueCountLabel = showingFiltered
-    ? `${filteredEntries.length} of ${enrichedEntries.length} issue${enrichedEntries.length === 1 ? "" : "s"}`
-    : `${enrichedEntries.length} issue${enrichedEntries.length === 1 ? "" : "s"}`;
+    ? `${filteredEntries.length} of ${totalIssues} issue${totalIssues === 1 ? "" : "s"}`
+    : `${totalIssues} issue${totalIssues === 1 ? "" : "s"}`;
 
   const selectOptions = useMemo(
     () => [
-      { value: "all", label: `All categories (${enrichedEntries.length})` },
+      { value: "all", label: `All categories (${totalIssues})` },
       ...categoryOptions.map((name) => ({
         value: name,
         label: `${name} (${categoryCounts[name] || 0})`,
       })),
     ],
-    [categoryOptions, categoryCounts, enrichedEntries.length]
+    [categoryOptions, categoryCounts, totalIssues]
   );
 
   const visibleEntries = filteredEntries.slice(0, limit);

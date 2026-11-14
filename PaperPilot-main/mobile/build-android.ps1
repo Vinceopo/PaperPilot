@@ -753,9 +753,26 @@ console.log(out.join("\n"));
     $SdkManager = Install-AndroidCmdlineTools $Sdk
   }
 
+  # Android 37+ ships as platforms;android-37.0 (etc.), not platforms;android-37.
+  function Resolve-PlatformPkg([string]$SdkRoot, [string]$ApiLevel) {
+    $candidates = @(
+      "platforms;android-$ApiLevel",
+      "platforms;android-$ApiLevel.0",
+      "platforms;android-$ApiLevel.1",
+      "platforms;android-$ApiLevel.2"
+    )
+    foreach ($c in $candidates) {
+      if (Test-Path (Get-SdkPkgDir $SdkRoot $c)) { return $c }
+    }
+    # Prefer dotted id when installing a missing API 37+ platform.
+    if ([int]$ApiLevel -ge 37) { return "platforms;android-$ApiLevel.0" }
+    return "platforms;android-$ApiLevel"
+  }
+
+  $PlatformPkg = Resolve-PlatformPkg $Sdk $CompileSdk
   $RequiredPkgs = @(
     "platform-tools",
-    "platforms;android-$CompileSdk",
+    $PlatformPkg,
     "build-tools;$BuildTools",
     "ndk;$NdkVersion",
     "cmake;$DefaultCmake"
@@ -766,6 +783,13 @@ console.log(out.join("\n"));
     if (-not (Test-Path (Get-SdkPkgDir $Sdk $pkg))) {
       $MissingPkgs += $pkg
     }
+  }
+  # Gradle still looks up platforms/android-<N> for compileSdk N.
+  $legacyPlatformDir = Join-Path $Sdk "platforms\android-$CompileSdk"
+  $resolvedPlatformDir = Get-SdkPkgDir $Sdk $PlatformPkg
+  if ((Test-Path $resolvedPlatformDir) -and -not (Test-Path $legacyPlatformDir) -and ($resolvedPlatformDir -ne $legacyPlatformDir)) {
+    Info "Linking platforms\android-$CompileSdk -> $(Split-Path $resolvedPlatformDir -Leaf) for Gradle compileSdk"
+    cmd /c mklink /J "$legacyPlatformDir" "$resolvedPlatformDir" | Out-Null
   }
   $HasLicense = Test-Path (Join-Path $Sdk "licenses\android-sdk-license")
 

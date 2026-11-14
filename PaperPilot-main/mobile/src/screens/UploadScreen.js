@@ -223,8 +223,10 @@ export default function UploadScreen({ navigation }) {
   const msUploading = Boolean(manuscriptBusy || (confirmBusy && uploadWizardStep === 2));
   const showMsPreview = Boolean(msFile) && !validateManuscriptFile(msFile, maxBytes);
   // Keep "Opening manuscript preview…" until the WebView has painted (avoids loader blink).
+  // Upload unlocks with that same moment — do not also wait on the background preview API
+  // (previewBusy), or the button stays locked after the animation already finished.
   const msOpeningPreview = Boolean(showMsPreview && !msUploading && !viewerReady);
-  const msPanelBusy = manuscriptBusy || previewBusy || confirmBusy || msOpeningPreview;
+  const msPanelBusy = manuscriptBusy || confirmBusy || msOpeningPreview;
   const canPickManuscript = mechanicsSelected && !manuscriptBusy && !previewBusy && !confirmBusy;
   const mechanicsOptions = mechanics.map((item) => ({
     value: item.id,
@@ -1343,6 +1345,45 @@ export default function UploadScreen({ navigation }) {
                   </Text>
                 </View>
 
+                <View
+                  style={styles.scoringCriteria}
+                  accessibilityRole="summary"
+                  accessibilityLabel="Compliance Scoring Criteria"
+                >
+                  <Text style={styles.scoringCriteriaTitle}>Compliance Scoring Criteria</Text>
+                  <Text style={styles.scoringCriteriaIntro}>
+                    PaperPilot maps your overall compliance score into one of these standings after
+                    analysis:
+                  </Text>
+                  <View style={styles.scoringCriteriaRow}>
+                    <Text style={[styles.scoringCriteriaBand, { color: "#047857" }]}>
+                      Good standing
+                    </Text>
+                    <Text style={[styles.scoringCriteriaRange, { color: "#059669" }]}>80–100</Text>
+                    <Text style={styles.scoringCriteriaCopy}>
+                      — Strong format compliance with only minor issues, if any.
+                    </Text>
+                  </View>
+                  <View style={styles.scoringCriteriaRow}>
+                    <Text style={[styles.scoringCriteriaBand, { color: "#b45309" }]}>
+                      Needs revision
+                    </Text>
+                    <Text style={[styles.scoringCriteriaRange, { color: "#d97706" }]}>50–79</Text>
+                    <Text style={styles.scoringCriteriaCopy}>
+                      — Several issues need attention before submission.
+                    </Text>
+                  </View>
+                  <View style={styles.scoringCriteriaRow}>
+                    <Text style={[styles.scoringCriteriaBand, { color: "#be123c" }]}>
+                      Requires fix
+                    </Text>
+                    <Text style={[styles.scoringCriteriaRange, { color: "#e11d48" }]}>0–49</Text>
+                    <Text style={styles.scoringCriteriaCopy}>
+                      — Critical format problems that should be fixed first.
+                    </Text>
+                  </View>
+                </View>
+
                 {currentVersion ? (
                   <View style={{ marginTop: 10 }}>
                     <Text style={styles.fileGroupLabel}>Version label</Text>
@@ -1913,6 +1954,32 @@ const styles = StyleSheet.create({
     borderBottomColor: "#f1f5f9",
   },
   fileGroupLabel: { marginBottom: 8, fontSize: 12, fontWeight: "600", color: "#475569" },
+  scoringCriteria: {
+    marginTop: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#bae6fd",
+    backgroundColor: "rgba(240, 249, 255, 0.9)",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  scoringCriteriaTitle: { fontSize: 13, fontWeight: "700", color: "#0c4a6e" },
+  scoringCriteriaIntro: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 17,
+    color: "rgba(12, 74, 110, 0.85)",
+  },
+  scoringCriteriaRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "baseline",
+    gap: 6,
+  },
+  scoringCriteriaBand: { fontSize: 12, fontWeight: "700" },
+  scoringCriteriaRange: { fontSize: 11, fontWeight: "600" },
+  scoringCriteriaCopy: { flexShrink: 1, fontSize: 12, lineHeight: 16, color: "#475569" },
   fileMeta: { marginTop: 2, fontSize: 11, color: colors.muted },
   versionText: { fontSize: 12, fontWeight: "500", color: colors.muted },
   savedHint: { marginTop: 12, fontSize: 11, lineHeight: 17, color: colors.muted },

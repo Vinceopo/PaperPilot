@@ -112,6 +112,7 @@ function CategoryRingCard({
 /** Build the same category card rows used on the full results screen. */
 function buildCategoryCards(manuscript, version) {
   const result = versionToScanResult(manuscript, version) || {};
+  // resolveCategoryUnitDisplays already drops IGNORE / not_applicable categories.
   const breakdown = Array.isArray(result.scoreBreakdown) ? result.scoreBreakdown : [];
   const categoryDisplays = resolveCategoryUnitDisplays(breakdown);
   const tracedEntries = normalizeDetectedIssues(

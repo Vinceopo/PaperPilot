@@ -260,6 +260,7 @@ function versionPartsFromResult(scanResult) {
       section: b.metric || b.section || "Section",
       score: b.score == null ? null : Number(b.score),
       status: b.status || null,
+      applicable: b.applicable,
       unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
       unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
       unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),
@@ -440,6 +441,7 @@ export function versionToScanResult(manuscript, version) {
       documentTitle: version.scanResult.documentTitle || manuscript?.title || "Untitled",
       campus: version.scanResult.campus || manuscript?.institution,
       citationStyle: version.scanResult.citationStyle || manuscript?.citationStyle,
+      mechanicsName: version.scanResult.mechanicsName || manuscript?.mechanicsName || "",
       versionNumber: version.versionNumber,
     };
   }
@@ -450,6 +452,7 @@ export function versionToScanResult(manuscript, version) {
     documentTitle: manuscript?.title || "Untitled",
     campus: manuscript?.institution || "—",
     citationStyle: manuscript?.citationStyle || "APA",
+    mechanicsName: manuscript?.mechanicsName || "",
     scannedAt: version.scannedAt || version.scannedDate,
     overallScore: version.score,
     versionNumber: version.versionNumber,
@@ -457,6 +460,7 @@ export function versionToScanResult(manuscript, version) {
       metric: b.section,
       score: b.score == null ? null : Number(b.score),
       status: b.status || null,
+      applicable: b.applicable,
       unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
       unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
       unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),

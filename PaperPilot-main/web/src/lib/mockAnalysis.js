@@ -75,6 +75,7 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
     documentId: manuscriptId,
     documentTitle: title,
     citationStyle: opts.citationStyle || "APA",
+    mechanicsName: opts.mechanicsName || "",
     pageCount: opts.pageCount,
     mechanicsId,
     cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || uploadedUrl || "",
@@ -104,6 +105,7 @@ export async function downloadReport(result, opts = {}) {
     college,
     scannedAt,
     citationStyle = "APA",
+    mechanicsName = "",
     overallScore = null,
     rightPct,
     wrongPct,
@@ -254,7 +256,7 @@ export async function downloadReport(result, opts = {}) {
   doc.roundedRect(ML, Y, CW, 22, 2, 2, "FD");
   const metaCols = [
     ["DOCUMENT", documentTitle],
-    ["CITATION STYLE", `${citationStyle} · ${versionLabel}`],
+    ["FORMAT MECHANICS", `${mechanicsName || citationStyle || "—"} · ${versionLabel}`],
     ["SCANNED", scannedDate],
     ["GENERATED", generatedDate],
   ];

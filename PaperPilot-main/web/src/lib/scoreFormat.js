@@ -101,6 +101,22 @@ function issuesFromScore(total, score) {
 }
 
 /**
+ * True when this category was configured and enabled in Format Mechanics
+ * (not IGNORE / not_applicable). Score Breakdown should only list these.
+ */
+export function isActiveScoreCategory(row = {}) {
+  if (row?.applicable === false) return false;
+  const status = String(row?.status || "").trim().toLowerCase();
+  if (status === "not_applicable") return false;
+  return true;
+}
+
+/** Keep only categories with configured, enabled formatting rules. */
+export function filterActiveScoreCategories(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter(isActiveScoreCategory);
+}
+
+/**
  * Per-category display counts from the backend unit fields.
  * Ring % is (total − issues) / total × 100 using the same issue count shown
  * on the card (Issue Tracing occurrences when available), e.g. 16 of 24 → 33.33%.
@@ -109,7 +125,7 @@ function issuesFromScore(total, score) {
  * from the header Total Units). Missing counts stay null → N/A on the card.
  */
 export function resolveCategoryUnitDisplays(rows = []) {
-  const list = Array.isArray(rows) ? rows : [];
+  const list = filterActiveScoreCategories(rows);
 
   return list.map((row) => {
     let { total, compliant, nonCompliant } = resolveUnitCounts(rowUnitFields(row));
@@ -205,6 +221,28 @@ export function reconcileDisplayedUnits(overall = {}, categoryDisplays = []) {
     total: fromOverall.total,
     compliant: fromOverall.compliant,
     nonCompliant: fromOverall.nonCompliant,
+  };
+}
+
+/**
+ * Align header Non-Compliant with the Issues total so both show the same count.
+ * Compliant stays Total − min(issues, Total) so the bar still adds to 100%.
+ */
+export function alignNonCompliantWithIssues(unitCounts = {}, issuesFound) {
+  const total = hasValue(unitCounts.total) ? Math.max(0, Math.round(Number(unitCounts.total))) : null;
+  const issues = hasValue(issuesFound) ? Math.max(0, Math.round(Number(issuesFound))) : null;
+  if (issues == null) {
+    return {
+      total,
+      compliant: unitCounts.compliant ?? null,
+      nonCompliant: unitCounts.nonCompliant ?? null,
+    };
+  }
+  return {
+    total,
+    nonCompliant: issues,
+    compliant:
+      total != null ? Math.max(0, total - Math.min(total, issues)) : unitCounts.compliant ?? null,
   };
 }
 

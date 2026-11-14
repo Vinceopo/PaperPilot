@@ -9,6 +9,7 @@ import ConfirmDialog from "../ConfirmDialog.jsx";
 import { scoreBand } from "../../lib/scoreBand.js";
 import {
   CATEGORY_STATUS_LABEL,
+  filterActiveScoreCategories,
   formatCount,
   formatPct,
   formatScore,
@@ -412,7 +413,7 @@ export default function ManuscriptDetailModal({
                   </p>
                 ) : null}
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {(selected.breakdown || []).map((row) => (
+                  {filterActiveScoreCategories(selected.breakdown || []).map((row) => (
                     <CategoryRingCard
                       key={row.section}
                       section={row.section}

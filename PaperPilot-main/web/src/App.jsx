@@ -429,6 +429,7 @@ export default function App() {
       manuscriptId,
       versionId,
       citationStyle,
+      mechanicsName: profile?.name || profile?.source_filename || profile?.filename || "",
       pageCount: version?.page_count,
       versionNumber: version?.version_number,
       cloudinaryUrl: version?.cloudinary_url || version?.cloudinaryUrl || "",
@@ -967,6 +968,7 @@ export default function App() {
         documentId: manuscript?.id,
         documentTitle: manuscript?.title,
         citationStyle: manuscript?.citationStyle,
+        mechanicsName: version.scanResult?.mechanicsName || manuscript?.mechanicsName || "",
         versionId: version.versionId || version.scanResult?.versionId,
         documentName: version.scanResult?.documentName,
         cloudinaryUrl: version.scanResult?.cloudinaryUrl,
@@ -2009,6 +2011,41 @@ export default function App() {
                       )}
                     </div>
                   </div>
+                </div>
+
+                <div
+                  className="mt-6 rounded-xl border border-sky-200 bg-sky-50/80 px-5 py-4"
+                  role="note"
+                  aria-label="Compliance Scoring Criteria"
+                >
+                  <p className="text-sm font-bold text-sky-950">Compliance Scoring Criteria</p>
+                  <p className="mt-1 text-sm leading-relaxed text-sky-900/80">
+                    PaperPilot maps your overall compliance score into one of these standings after
+                    analysis:
+                  </p>
+                  <ul className="mt-3 space-y-2.5 text-sm">
+                    <li className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="font-bold text-emerald-700">Good standing</span>
+                      <span className="text-xs font-semibold text-emerald-700/80">80–100</span>
+                      <span className="text-slate-600">
+                        — Strong format compliance with only minor issues, if any.
+                      </span>
+                    </li>
+                    <li className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="font-bold text-amber-700">Needs revision</span>
+                      <span className="text-xs font-semibold text-amber-700/80">50–79</span>
+                      <span className="text-slate-600">
+                        — Several issues need attention before submission.
+                      </span>
+                    </li>
+                    <li className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <span className="font-bold text-rose-700">Requires fix</span>
+                      <span className="text-xs font-semibold text-rose-700/80">0–49</span>
+                      <span className="text-slate-600">
+                        — Critical format problems that should be fixed first.
+                      </span>
+                    </li>
+                  </ul>
                 </div>
 
                 {/* Version label (only when a real API version exists) */}

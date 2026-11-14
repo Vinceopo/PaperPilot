@@ -9,6 +9,7 @@ import { categoryForIssue, normalizeDetectedIssues } from "./IssuesDetectedPanel
 import { PaperPilotMark } from "../PaperPilotLogo.jsx";
 import {
   CATEGORY_STATUS_LABEL,
+  alignNonCompliantWithIssues,
   formatCategoryIssuesDetail,
   formatCount,
   compliancePercentFromUnits,
@@ -168,6 +169,7 @@ export default function ScanResultsScreen({
     college,
     scannedAt,
     citationStyle = "APA",
+    mechanicsName = "",
     overallScore = null,
     rightPct,
     wrongPct,
@@ -179,9 +181,11 @@ export default function ScanResultsScreen({
     scoringConsistency = null,
   } = result;
 
+  // Active Format Mechanics categories only (IGNORE / not_applicable hidden).
   const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
   // Same expansion as Issue Tracing — cards, rings, and header all use these counts.
   const tracedEntries = normalizeDetectedIssues(formatChecks, result.pageCount || 0).entries;
+  const issuesFound = tracedEntries.length;
   const tracedByCategory = {};
   tracedEntries.forEach((entry) => {
     const key = entry.category || categoryForIssue(entry) || "Other";
@@ -213,21 +217,23 @@ export default function ScanResultsScreen({
     };
   });
 
-  // Header totals = sum of category cards so they always match what the user adds up.
+  // Non-Compliant Units = Issues total so the two counts never disagree.
   const {
     total: totalUnits,
     compliant: compliantUnits,
     nonCompliant: nonCompliantUnits,
-  } = reconcileDisplayedUnits(
-    { unitsChecked, unitsPassed, unitsFailed },
-    categoryCards,
+  } = alignNonCompliantWithIssues(
+    reconcileDisplayedUnits({ unitsChecked, unitsPassed, unitsFailed }, categoryCards),
+    issuesFound,
   );
+  const formatMechanicsLabel = String(mechanicsName || "").trim() || citationStyle || "—";
   // Bar shares only — percent numbers are not shown in the public results UI.
+  // Cap issues at Total so Compliant + Non-Compliant bar shares still add to 100%.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
       ? [
           compliancePercentFromUnits(totalUnits, nonCompliantUnits),
-          (Number(nonCompliantUnits) / Number(totalUnits)) * 100,
+          (Math.min(Number(totalUnits), Number(nonCompliantUnits)) / Number(totalUnits)) * 100,
         ]
       : [rightPct, wrongPct];
   const [shownCompliant, shownNonCompliant] = roundSharesToTotal(fromOverallUnits, 2);
@@ -308,10 +314,10 @@ export default function ScanResultsScreen({
           </div>
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
-              Citation style
+              Format Mechanics
             </p>
             <p className="mt-1 text-sm font-bold text-slate-900">
-              {citationStyle} · {versionLabel}
+              {formatMechanicsLabel} · {versionLabel}
             </p>
           </div>
           <div>
@@ -428,6 +434,7 @@ export default function ScanResultsScreen({
         result={result}
         file={file}
         documentLoading={documentLoading}
+        issuesTotal={nonCompliantUnits}
       />
     </div>
   );

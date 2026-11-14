@@ -77,6 +77,8 @@ export default function IssueTracingSection({
   result,
   file = null,
   documentLoading = false,
+  /** When set, Issues count matches Non-Compliant Units on the results header. */
+  issuesTotal = null,
 }) {
   const [activeIssueId, setActiveIssueId] = useState(null);
   const [scrollTarget, setScrollTarget] = useState(null);
@@ -229,9 +231,13 @@ export default function IssueTracingSection({
     file || documentLoading || result?.cloudinaryUrl || result?.documentPreview
   );
   const showingFiltered = categoryFilter !== "all";
+  const totalIssues =
+    issuesTotal != null && Number.isFinite(Number(issuesTotal))
+      ? Math.max(0, Math.round(Number(issuesTotal)))
+      : enrichedEntries.length;
   const issueCountLabel = showingFiltered
-    ? `${filteredEntries.length} of ${enrichedEntries.length} issue${enrichedEntries.length === 1 ? "" : "s"}`
-    : `${enrichedEntries.length} issue${enrichedEntries.length === 1 ? "" : "s"}`;
+    ? `${filteredEntries.length} of ${totalIssues} issue${totalIssues === 1 ? "" : "s"}`
+    : `${totalIssues} issue${totalIssues === 1 ? "" : "s"}`;
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -307,7 +313,7 @@ export default function IssueTracingSection({
                 className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[12px] font-semibold text-slate-700 shadow-sm outline-none transition focus:border-[#16bfa8] focus:ring-2 focus:ring-[#16bfa8]/25"
                 aria-label="Filter by category"
               >
-                <option value="all">All categories ({enrichedEntries.length})</option>
+                <option value="all">All categories ({totalIssues})</option>
                 {categoryOptions.map((name) => {
                   const count = categoryCounts[name] || 0;
                   return (

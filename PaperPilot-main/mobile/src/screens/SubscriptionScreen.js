@@ -366,7 +366,7 @@ export default function SubscriptionScreen({ navigation }) {
         }
         navigation.goBack();
       }}
-      backLabel="Back"
+      backLabel={isPremium && checkoutOpen ? "Back" : "Back to Account details"}
     >
       <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
         <View style={styles.introRow}>

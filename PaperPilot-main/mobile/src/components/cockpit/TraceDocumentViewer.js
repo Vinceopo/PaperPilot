@@ -20,6 +20,28 @@ function hitPaint(severity) {
   return HIT[String(severity || "").toLowerCase()] || HIT.minor;
 }
 
+/**
+ * Center the document loader in the preview pane, then lift ~10% of the pane
+ * height so it reads as visually centered in the display division.
+ */
+function CenteredDocumentLoader({ size = 112, style }) {
+  const [paneH, setPaneH] = useState(0);
+  const lift = paneH > 0 ? -Math.round(paneH * 0.1) : 0;
+  return (
+    <View
+      style={[styles.loaderPane, style]}
+      onLayout={(e) => {
+        const next = Math.round(e.nativeEvent.layout.height || 0);
+        if (next > 0 && next !== paneH) setPaneH(next);
+      }}
+    >
+      <View style={lift ? { transform: [{ translateY: lift }] } : null}>
+        <DocumentLoader size={size} />
+      </View>
+    </View>
+  );
+}
+
 function kindOf(name, url) {
   const value = String(name || "").toLowerCase();
   if (value.endsWith(".pdf")) return "pdf";
@@ -302,11 +324,7 @@ export default function TraceDocumentViewer({
   // Wait for a source with our default document loader (no circle spinners).
   if (documentLoading && !canRender) {
     if (suppressLoader) return <View style={styles.webHost} />;
-    return (
-      <View style={styles.center}>
-        <DocumentLoader size={112} />
-      </View>
-    );
+    return <CenteredDocumentLoader />;
   }
 
   if (failed) {
@@ -341,9 +359,7 @@ export default function TraceDocumentViewer({
         containerStyle={styles.web}
       />
       {!ready && !suppressLoader ? (
-        <View style={styles.loaderOverlay} pointerEvents="none">
-          <DocumentLoader size={112} />
-        </View>
+        <CenteredDocumentLoader style={styles.loaderOverlay} />
       ) : null}
     </View>
   );
@@ -353,11 +369,16 @@ const styles = StyleSheet.create({
   webHost: { flex: 1, backgroundColor: "#e8ecf1" },
   web: { flex: 1, backgroundColor: "#e8ecf1" },
   webHidden: { opacity: 0 },
-  loaderOverlay: {
-    ...StyleSheet.absoluteFillObject,
+  loaderPane: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#e8ecf1",
+    paddingHorizontal: 20,
+  },
+  loaderOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
   },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 20 },
   muted: { fontSize: 12, color: colors.muted, textAlign: "center" },
