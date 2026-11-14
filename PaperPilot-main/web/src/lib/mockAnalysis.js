@@ -312,8 +312,8 @@ export async function downloadReport(result, opts = {}) {
   doc.setDrawColor(226, 232, 240);
   doc.roundedRect(ML, Y, CW, 22, 2, 2, "FD");
   const metaCols = [
-    ["DOCUMENT", documentTitle],
-    ["FORMAT MECHANICS", `${formatLabel} · ${versionLabel}`],
+    ["DOCUMENT", `${documentTitle} · ${versionLabel}`],
+    ["FORMAT MECHANICS", formatLabel],
     ["SCANNED", scannedDate],
     ["GENERATED", generatedDate],
   ];

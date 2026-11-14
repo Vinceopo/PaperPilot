@@ -285,8 +285,12 @@ export default function ScanResultsScreen({
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Document</p>
-            <p className="mt-1 truncate text-sm font-bold text-slate-900" title={documentTitle}>
+            <p
+              className="mt-1 truncate text-sm font-bold text-slate-900"
+              title={`${documentTitle} · ${versionLabel}`}
+            >
               {documentTitle}
+              <span className="ml-1.5 font-semibold text-slate-500">{versionLabel}</span>
             </p>
             {(campus || college) && (
               <p className="mt-0.5 truncate text-xs text-slate-500">
@@ -299,7 +303,7 @@ export default function ScanResultsScreen({
               Format mechanics
             </p>
             <p className="mt-1 truncate text-sm font-bold text-slate-900" title={formatLabel}>
-              {formatLabel} · {versionLabel}
+              {formatLabel}
             </p>
           </div>
           <div>
