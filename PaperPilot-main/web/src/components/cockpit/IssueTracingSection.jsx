@@ -1,5 +1,5 @@
 /**
- * Issue Tracing + XAI — document preview with clickable findings.
+ * Issue Tracing + XAI - document preview with clickable findings.
  * Reuses ReferenceTracing highlight/scroll logic and IssuesDetectedPanel issue data.
  */
 
@@ -8,6 +8,12 @@ import DocumentPagePreview from "./DocumentPagePreview.jsx";
 import { categoryForIssue, normalizeDetectedIssues } from "./IssuesDetectedPanel.jsx";
 import { normalizeIssueLocation } from "../../lib/scanMapper.js";
 import { isApproximateTracing } from "../../lib/documentPreviewLocate.js";
+import {
+  filterIssuesByActiveRules,
+  formatCount,
+  hasValue,
+  plural,
+} from "../../lib/scoreFormat.js";
 
 const SEVERITY = {
   minor: {
@@ -47,7 +53,14 @@ const CATEGORY_ORDER = [
 
 function formatLocation(entry) {
   const parts = [];
-  if (entry.page != null) parts.push(`Page ${entry.page}`);
+  const printed = String(entry.printed_page_label || entry.printedPageLabel || "").trim();
+  if (printed && entry.page != null && String(printed) !== String(entry.page)) {
+    parts.push(`Page ${printed} (sheet ${entry.page})`);
+  } else if (printed) {
+    parts.push(`Page ${printed}`);
+  } else if (entry.page != null) {
+    parts.push(`Page ${entry.page}`);
+  }
   if (entry.line != null) parts.push(`Line ${entry.line}`);
   return parts.length ? parts.join(", ") : "Document";
 }
@@ -64,7 +77,7 @@ function distinctText(primary, secondary) {
   return b;
 }
 
-/** One concise XAI block per issue — no repeated finding / why / fix copy. */
+/** One concise XAI block per issue - no repeated finding / why / fix copy. */
 function consolidateXai(entry) {
   const finding = String(entry.finding || "").trim() || "Formatting discrepancy detected";
   const why = distinctText(finding, entry.explanation);
@@ -77,8 +90,7 @@ export default function IssueTracingSection({
   result,
   file = null,
   documentLoading = false,
-  /** When set, Issues count matches Non-Compliant Units on the results header. */
-  issuesTotal = null,
+  issueTotal = null,
 }) {
   const [activeIssueId, setActiveIssueId] = useState(null);
   const [scrollTarget, setScrollTarget] = useState(null);
@@ -95,14 +107,15 @@ export default function IssueTracingSection({
     [formatChecks, pageCount]
   );
 
-  const enrichedEntries = useMemo(
-    () =>
-      entries.map((entry) => ({
-        ...entry,
-        category: entry.category || categoryForIssue(entry),
-      })),
-    [entries]
-  );
+  const enrichedEntries = useMemo(() => {
+    const mapped = entries.map((entry) => ({
+      ...entry,
+      category: entry.category || categoryForIssue(entry),
+      printed_page_label: entry.printed_page_label || entry.location?.printed_page_label,
+      printedPageLabel: entry.printedPageLabel || entry.location?.printedPageLabel,
+    }));
+    return filterIssuesByActiveRules(mapped, result?.mechanicsRules);
+  }, [entries, result?.mechanicsRules]);
 
   const categoryCounts = useMemo(() => {
     const c = {};
@@ -150,7 +163,7 @@ export default function IssueTracingSection({
         }
       }
       for (const check of formatChecks) {
-        // Match the same rule — do not reuse another category's highlight at the same page/line.
+        // Match the same rule - do not reuse another category's highlight at the same page/line.
         if (entry.issue_type && check.issue_type && entry.issue_type !== check.issue_type) continue;
         if (entry.section && check.section && entry.section !== check.section) continue;
         for (const loc of check.locations || []) {
@@ -193,7 +206,7 @@ export default function IssueTracingSection({
         // Keep finding text as a locate hint when excerpt is missing.
         excerpt: loc.excerpt || entry.excerpt || "",
       };
-      // Pagination: never paint body line 1 / chapter text — header/footer chip only.
+      // Pagination: never paint body line 1 / chapter text - header/footer chip only.
       if (String(marked.section || "").toLowerCase() === "pagination") {
         marked.line = null;
         marked.excerpt = "";
@@ -212,7 +225,7 @@ export default function IssueTracingSection({
     [resolveLocation]
   );
 
-  // Do not auto-jump to the first issue — wait until the user clicks/traces one.
+  // Do not auto-jump to the first issue - wait until the user clicks/traces one.
   useEffect(() => {
     if (!filteredEntries.length) {
       setActiveIssueId(null);
@@ -231,27 +244,28 @@ export default function IssueTracingSection({
     file || documentLoading || result?.cloudinaryUrl || result?.documentPreview
   );
   const showingFiltered = categoryFilter !== "all";
-  const totalIssues =
-    issuesTotal != null && Number.isFinite(Number(issuesTotal))
-      ? Math.max(0, Math.round(Number(issuesTotal)))
-      : enrichedEntries.length;
+  // Keep the Issues headline aligned with Non-Compliant Units on the compliance summary.
+  const displayIssueTotal = hasValue(issueTotal)
+    ? Math.max(0, Math.round(Number(issueTotal)))
+    : enrichedEntries.length;
   const issueCountLabel = showingFiltered
-    ? `${filteredEntries.length} of ${totalIssues} issue${totalIssues === 1 ? "" : "s"}`
-    : `${totalIssues} issue${totalIssues === 1 ? "" : "s"}`;
+    ? `${formatCount(filteredEntries.length)} in ${categoryFilter} · ${formatCount(displayIssueTotal)} ${plural(displayIssueTotal, "issue")} total`
+    : `${formatCount(displayIssueTotal)} ${plural(displayIssueTotal, "issue")}`;
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 bg-[#f8fffd] px-5 py-3">
         <h3 className="text-sm font-bold text-slate-800">Issue tracing &amp; XAI</h3>
         <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
-          Select an issue to highlight it in the manuscript. Filter by category to narrow the list.
+          Select a finding to highlight it in the manuscript. The issue total matches Non-Compliant
+          Units above. Filter by category to narrow the list.
           {hiddenLocations > 0
-            ? ` ${hiddenLocations} additional matching locations are counted in the totals.`
+            ? ` ${formatCount(hiddenLocations)} additional matching locations are available in the list.`
             : ""}
         </p>
         {approximateTrace ? (
           <p className="mt-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-900">
-            Approximate locations — this Word file was scanned without exact page breaks. Highlights
+            Approximate locations - this Word file was scanned without exact page breaks. Highlights
             may be off by a page. For precise tracing, upload a PDF of the same manuscript (or
             open/save the DOCX in Word so rendered page breaks are stored).
           </p>
@@ -313,12 +327,14 @@ export default function IssueTracingSection({
                 className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[12px] font-semibold text-slate-700 shadow-sm outline-none transition focus:border-[#16bfa8] focus:ring-2 focus:ring-[#16bfa8]/25"
                 aria-label="Filter by category"
               >
-                <option value="all">All categories ({totalIssues})</option>
+                <option value="all">
+                  All categories ({formatCount(displayIssueTotal)})
+                </option>
                 {categoryOptions.map((name) => {
                   const count = categoryCounts[name] || 0;
                   return (
                     <option key={name} value={name}>
-                      {name} ({count})
+                      {name} ({formatCount(count)})
                     </option>
                   );
                 })}

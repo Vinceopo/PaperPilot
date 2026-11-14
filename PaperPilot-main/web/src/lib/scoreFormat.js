@@ -4,17 +4,184 @@ export function hasValue(value) {
   return value != null && Number.isFinite(Number(value));
 }
 
+/** Score Breakdown categories (matches backend BREAKDOWN_ORDER). */
+export const SCORE_BREAKDOWN_ORDER = [
+  "Fonts",
+  "Margins",
+  "Indentation",
+  "Spacing",
+  "Alignment",
+  "Pagination",
+  "Citations",
+];
+
+/**
+ * True when a mechanics field is blank / IGNORE / NA (no rule to enforce).
+ * Mirrors api/app/mechanics_options._rule_unset for client-side filtering.
+ */
+export function isMechanicsRuleUnset(value) {
+  if (value == null) return true;
+  if (typeof value === "boolean") return false;
+  if (typeof value === "number") return false;
+  if (Array.isArray(value)) {
+    return !value.length || value.every((item) => isMechanicsRuleUnset(item));
+  }
+  if (typeof value === "object") {
+    const entries = Object.values(value);
+    return !entries.length || entries.every((item) => isMechanicsRuleUnset(item));
+  }
+  const text = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  return (
+    !text ||
+    text === "ignore" ||
+    text === "na" ||
+    text === "n/a" ||
+    text === "n.a." ||
+    text === "n.a" ||
+    text === "not checked" ||
+    text === "not check" ||
+    text === "none" ||
+    text === "-" ||
+    text === "—"
+  );
+}
+
+/**
+ * Which Score Breakdown categories have at least one configured (non-IGNORE) rule
+ * in the selected Format Mechanics profile.
+ */
+export function activeScoreCategoriesFromRules(rules) {
+  const active = new Set();
+  if (!rules || typeof rules !== "object") return active;
+
+  const font = rules.font && typeof rules.font === "object" ? rules.font : {};
+  const families = Array.isArray(font.families) ? font.families : [];
+  const sizes = Array.isArray(font.sizes_points) ? font.sizes_points : [];
+  const headingSizes = Object.keys(font).some(
+    (key) => /^heading\d+_size$/i.test(key) && !isMechanicsRuleUnset(font[key]),
+  );
+  const headingStyles =
+    font.heading_styles &&
+    typeof font.heading_styles === "object" &&
+    Object.values(font.heading_styles).some((style) => !isMechanicsRuleUnset(style));
+  const color = String(font.color || "").trim();
+  const hasColor =
+    color &&
+    !isMechanicsRuleUnset(color) &&
+    !/^(na|n\/a|n\.a\.?|none|not checked|-|—)$/i.test(color);
+  if (
+    !isMechanicsRuleUnset(font.type) ||
+    families.some((family) => !isMechanicsRuleUnset(family)) ||
+    font.body_size != null ||
+    sizes.some((size) => size != null && !isMechanicsRuleUnset(size)) ||
+    headingSizes ||
+    headingStyles ||
+    hasColor
+  ) {
+    active.add("Fonts");
+  }
+
+  const margins =
+    rules.margins_inches && typeof rules.margins_inches === "object" ? rules.margins_inches : {};
+  const hasMargins = ["top", "bottom", "left", "right"].some(
+    (side) => margins[side] != null && !isMechanicsRuleUnset(margins[side]),
+  );
+  const paper = rules.paper && typeof rules.paper === "object" ? rules.paper : {};
+  const hasPaperSize =
+    !isMechanicsRuleUnset(paper.size) ||
+    (rules.paper_size && !isMechanicsRuleUnset(rules.paper_size));
+  if (hasMargins || hasPaperSize || !isMechanicsRuleUnset(paper.orientation)) {
+    active.add("Margins");
+  }
+
+  if (
+    (rules.first_line_indent_inches != null &&
+      !isMechanicsRuleUnset(rules.first_line_indent_inches)) ||
+    !isMechanicsRuleUnset(rules.indention)
+  ) {
+    active.add("Indentation");
+  }
+
+  const spacings = Array.isArray(rules.line_spacings) ? rules.line_spacings : [];
+  if (
+    (rules.line_spacing != null && !isMechanicsRuleUnset(rules.line_spacing)) ||
+    !isMechanicsRuleUnset(rules.spacing) ||
+    spacings.some((value) => value != null && !isMechanicsRuleUnset(value)) ||
+    !isMechanicsRuleUnset(rules.word_spacing)
+  ) {
+    active.add("Spacing");
+  }
+
+  if (!isMechanicsRuleUnset(rules.alignment)) {
+    active.add("Alignment");
+  }
+
+  const pagination =
+    rules.pagination && typeof rules.pagination === "object" ? rules.pagination : {};
+  const paginationReqs = Array.isArray(rules.pagination_requirements)
+    ? rules.pagination_requirements
+    : [];
+  if (
+    Object.values(pagination).some((value) => !isMechanicsRuleUnset(value)) ||
+    paginationReqs.some((value) => !isMechanicsRuleUnset(value))
+  ) {
+    active.add("Pagination");
+  }
+
+  if (!isMechanicsRuleUnset(rules.citation_style)) {
+    active.add("Citations");
+  }
+
+  return active;
+}
+
+/**
+ * Keep only Score Breakdown rows whose category has configured/enabled rules.
+ * When `rules` is null/undefined (legacy scans), rows stay as returned by the API.
+ */
+export function filterScoreBreakdownByRules(scoreBreakdown = [], rules) {
+  const list = Array.isArray(scoreBreakdown) ? scoreBreakdown : [];
+  if (rules == null) return list;
+  const active = activeScoreCategoriesFromRules(rules);
+  if (!active.size) return [];
+  return list.filter((row) => {
+    const name = String(row?.metric || row?.section || "").trim();
+    if (!active.has(name)) return false;
+    // Hide IGNORE / not_applicable only. Unreliable stays visible (notice, no ring).
+    const status = String(row?.status || "").toLowerCase();
+    if (status === "not_applicable") return false;
+    return true;
+  });
+}
+
+/** Drop issue cards for categories that have no configured/enabled rule. */
+export function filterIssuesByActiveRules(issues = [], rules) {
+  const list = Array.isArray(issues) ? issues : [];
+  if (rules == null) return list;
+  const active = activeScoreCategoriesFromRules(rules);
+  if (!active.size) return [];
+  return list.filter((issue) => {
+    const section = String(issue?.section || issue?.category || "").trim();
+    if (!section) return true;
+    const known = [...active].find((name) => name.toLowerCase() === section.toLowerCase());
+    return Boolean(known);
+  });
+}
+
 /** Percentage for display, or an em dash when the backend had no denominator. */
 export function formatPct(value, digits = 1) {
-  if (!hasValue(value)) return "—";
+  if (!hasValue(value)) return "-";
   const factor = 10 ** digits;
   return `${Math.round(Number(value) * factor) / factor}%`;
 }
 
 /**
- * Compliance % from the same counts shown in the UI:
- * (total − nonCompliant) / total × 100.
- * Example: 66 issues on 218 units → (218 − 66) / 218 → 69.72.
+ * Compliance % from unit counts (not issue findings):
+ * (unitsChecked − unitsFailed) / unitsChecked × 100.
+ * Example: 66 failed units on 218 checked → (218 − 66) / 218 → 69.72.
  */
 export function compliancePercentFromUnits(total, nonCompliant) {
   if (!hasValue(total) || Number(total) <= 0) return null;
@@ -26,7 +193,7 @@ export function compliancePercentFromUnits(total, nonCompliant) {
 }
 
 export function formatScore(value, digits = 1) {
-  if (!hasValue(value)) return "—";
+  if (!hasValue(value)) return "-";
   const factor = 10 ** digits;
   return String(Math.round(Number(value) * factor) / factor);
 }
@@ -59,7 +226,7 @@ export function roundSharesToTotal(values, digits = 1) {
 }
 
 export function formatCount(value) {
-  return hasValue(value) ? Number(value).toLocaleString("en-US") : "—";
+  return hasValue(value) ? Number(value).toLocaleString("en-US") : "-";
 }
 
 /**
@@ -101,31 +268,16 @@ function issuesFromScore(total, score) {
 }
 
 /**
- * True when this category was configured and enabled in Format Mechanics
- * (not IGNORE / not_applicable). Score Breakdown should only list these.
- */
-export function isActiveScoreCategory(row = {}) {
-  if (row?.applicable === false) return false;
-  const status = String(row?.status || "").trim().toLowerCase();
-  if (status === "not_applicable") return false;
-  return true;
-}
-
-/** Keep only categories with configured, enabled formatting rules. */
-export function filterActiveScoreCategories(rows = []) {
-  return (Array.isArray(rows) ? rows : []).filter(isActiveScoreCategory);
-}
-
-/**
  * Per-category display counts from the backend unit fields.
- * Ring % is (total − issues) / total × 100 using the same issue count shown
- * on the card (Issue Tracing occurrences when available), e.g. 16 of 24 → 33.33%.
+ * Ring % uses failed units: (total − unitsFailed) / total × 100.
+ * Displayed issue counts follow non-compliant units so the Issues headline
+ * matches the compliance summary.
  *
  * Never invent unit totals from score alone (that made category sums diverge
  * from the header Total Units). Missing counts stay null → N/A on the card.
  */
 export function resolveCategoryUnitDisplays(rows = []) {
-  const list = filterActiveScoreCategories(rows);
+  const list = Array.isArray(rows) ? rows : [];
 
   return list.map((row) => {
     let { total, compliant, nonCompliant } = resolveUnitCounts(rowUnitFields(row));
@@ -152,24 +304,17 @@ export function resolveCategoryUnitDisplays(rows = []) {
       compliant = total - nonCompliant;
     }
 
-    // Prefer Issue Tracing occurrence counts so "issues found" and ring % use one formula:
-    // (total − issues) / total. Cap issues at total so the arithmetic stays valid.
+    // Findings are informational only — never drive the ring % / unit totals.
     const occurrenceIssues = hasValue(row.issueCount)
       ? Math.max(0, Math.round(Number(row.issueCount)))
       : null;
     const displayIssueCount = occurrenceIssues != null ? occurrenceIssues : nonCompliant;
-    const failedForScore =
-      total != null && hasValue(displayIssueCount)
-        ? Math.min(total, Math.max(0, Number(displayIssueCount)))
-        : nonCompliant;
-    const compliantForScore =
-      total != null && failedForScore != null ? total - failedForScore : compliant;
-    const displayScore = compliancePercentFromUnits(total, failedForScore);
+    const displayScore = compliancePercentFromUnits(total, nonCompliant);
     return {
       ...row,
       displayTotal: total,
-      displayCompliant: compliantForScore,
-      displayNonCompliant: failedForScore,
+      displayCompliant: compliant,
+      displayNonCompliant: nonCompliant,
       displayIssueCount,
       displayScore: displayScore != null ? displayScore : hasValue(row.score) ? Number(row.score) : null,
     };
@@ -225,29 +370,8 @@ export function reconcileDisplayedUnits(overall = {}, categoryDisplays = []) {
 }
 
 /**
- * Align header Non-Compliant with the Issues total so both show the same count.
- * Compliant stays Total − min(issues, Total) so the bar still adds to 100%.
- */
-export function alignNonCompliantWithIssues(unitCounts = {}, issuesFound) {
-  const total = hasValue(unitCounts.total) ? Math.max(0, Math.round(Number(unitCounts.total))) : null;
-  const issues = hasValue(issuesFound) ? Math.max(0, Math.round(Number(issuesFound))) : null;
-  if (issues == null) {
-    return {
-      total,
-      compliant: unitCounts.compliant ?? null,
-      nonCompliant: unitCounts.nonCompliant ?? null,
-    };
-  }
-  return {
-    total,
-    nonCompliant: issues,
-    compliant:
-      total != null ? Math.max(0, total - Math.min(total, issues)) : unitCounts.compliant ?? null,
-  };
-}
-
-/**
- * Category card subtitle. Ring % is (total − min(issueCount, total)) / total from these same figures.
+ * Category card subtitle for findings vs units checked.
+ * Prefer passing non-compliant units as issueCount so totals stay consistent.
  */
 export function formatCategoryIssuesDetail(issueCount, total) {
   if (!hasValue(total)) return null;
@@ -261,6 +385,8 @@ export function plural(count, word, pluralWord = `${word}s`) {
 }
 
 export const CATEGORY_STATUS_LABEL = {
+  could_not_check_reliably: "Could not check reliably",
+
   not_evaluated: "Not evaluated",
   not_applicable: "Not applicable",
 };

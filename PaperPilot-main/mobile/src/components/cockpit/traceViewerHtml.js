@@ -251,7 +251,8 @@ const SCRIPT = String.raw`
     var pageEl = spec.el;
     var pageHeight = pageEl.clientHeight;
     clearMarks();
-    if (isMarginTarget(t) || (isPaginationTarget(t) && !(t.bbox && isFinite(Number(t.bbox.y))))) {
+    // Pagination always uses the header/footer chip - never a body line pin.
+    if (isMarginTarget(t) || isPaginationTarget(t)) {
       var side = isMarginTarget(t)
         ? (marginSide(t.finding, t) || pageRegion(t))
         : pageRegion(t);
@@ -260,10 +261,25 @@ const SCRIPT = String.raw`
       return;
     }
     var bbox = t.bbox;
+    var indentIssue = isIndentationIssue(t);
     pdfLineYs(spec).then(function (ys) {
       var line = Number(t.line) || 0;
       var rounded = line ? Math.round(line) : 0;
       var bboxY = bbox && isFinite(Number(bbox.y)) ? Number(bbox.y) * pageHeight : null;
+      // Indentation: paint only from the stored measurement bbox (paragraph anchor).
+      if (indentIssue) {
+        clearMarks();
+        if (!(bbox && isFinite(Number(bbox.y)))) return;
+        var indentH = Math.max(0.012, Number(bbox.h) || 0.025);
+        paintBox(pageEl, {
+          top: Number(bbox.y) * 100 + "%",
+          left: Number(bbox.x) * 100 + "%",
+          width: Math.max(0.02, Number(bbox.w) || 0.84) * 100 + "%",
+          height: indentH * 100 + "%"
+        }, t.severity);
+        scrollMarkIntoView(elementTopIn(pageEl, Number(bbox.y) * pageHeight), indentH * pageHeight);
+        return;
+      }
       // When pdf.js clustered fewer rows than the scanner line, prefer bbox over clamp-to-last.
       var pastEnd = rounded > 0 && ys.length && rounded > ys.length && bboxY != null;
       var lineY = !pastEnd && line && ys.length
@@ -328,13 +344,20 @@ const SCRIPT = String.raw`
     }
     return { text: text, map: map };
   }
-  function excerptNeedles(excerpt) {
+  function isIndentationIssue(target) {
+    var type = String((target && (target.issue_type || target.issueType)) || "").toLowerCase();
+    var section = String((target && target.section) || "").toLowerCase();
+    return type === "first_line_indent" || section === "indentation";
+  }
+  function excerptNeedles(excerpt, opts) {
+    var paragraphStart = !!(opts && opts.paragraphStart);
     var full = normalizeNeedle(excerpt);
     if (full.length < 2) return [];
     var needles = [full];
     if (full.length > 48) {
       needles.push(full.slice(0, 40).trim());
-      needles.push(full.slice(-40).trim());
+      // Tail needles pull indent highlights onto the last sentence - skip for paragraph starts.
+      if (!paragraphStart) needles.push(full.slice(-40).trim());
     }
     if (full.length >= 12) {
       var words = full.split(" ").filter(Boolean);
@@ -434,7 +457,8 @@ const SCRIPT = String.raw`
     if (rect.width < 2 || rect.height < 2) return [];
     return [contentBox(rect)];
   }
-  function lineCountBox(section, line) {
+  function lineCountBox(section, line, opts) {
+    var paragraphStart = !!(opts && opts.paragraphStart);
     var blocks = readDocxBlocks(section);
     if (!blocks.length) return null;
     var hit = visualLineTarget(blocks, line || 1);
@@ -456,9 +480,23 @@ const SCRIPT = String.raw`
     var rect = block.el.getBoundingClientRect();
     var scale = block.el.offsetHeight ? rect.height / block.el.offsetHeight : 1;
     var base = contentBox(rect);
-    var delta = index === hit.index ? hit.delta : 0;
+    // Indent / paragraph-start issues must stay on the first visual line, never mid/last.
+    var delta = paragraphStart ? 0 : (index === hit.index ? hit.delta : 0);
     var top = base.top + Math.max(0, delta) * scale;
     var height = Math.max(12, Math.min(block.lineHeight * scale, base.height || block.lineHeight * scale));
+    var client = Array.prototype.filter.call(block.el.getClientRects ? block.el.getClientRects() : [], function (r) {
+      return r.width > 1 && r.height > 1;
+    });
+    if (client.length) {
+      var ink = mergeLineRects(Array.prototype.map.call(client, contentBox));
+      if (ink.length) {
+        var lineIndex = paragraphStart
+          ? 0
+          : Math.min(ink.length - 1, Math.max(0, Math.round(Math.max(0, delta) / Math.max(1, block.lineHeight))));
+        var chosen = ink[lineIndex] || ink[0];
+        return { rects: [chosen], top: chosen.top, height: chosen.height };
+      }
+    }
     return { rects: [{ top: top, left: base.left, width: Math.max(base.width, 24), height: height }], top: top, height: height };
   }
   function textRangesIn(section, needle) {
@@ -510,13 +548,18 @@ const SCRIPT = String.raw`
       return Math.abs(Number(rects[0].top) - target) <= Math.abs(Number(best[0].top) - target) ? rects : best;
     });
   }
-  function locateDocxBox(sections, pageNumber, line, excerpt) {
+  function locateDocxBox(sections, pageNumber, line, excerpt, opts) {
+    var paragraphStart = !!(opts && opts.paragraphStart);
     var reported = sections[pageNumber - 1];
-    var estimate = reported ? lineCountBox(reported, line) : null;
-    var needles = excerptNeedles(excerpt);
+    var estimate = reported ? lineCountBox(reported, line, { paragraphStart: paragraphStart }) : null;
+    var needles = excerptNeedles(excerpt, { paragraphStart: paragraphStart });
     var hasLine = line != null && line !== "" && isFinite(Number(line));
     function pack(rects) {
       if (!rects || !rects.length) return null;
+      if (paragraphStart) {
+        var first = rects[0];
+        return { rects: [first], top: first.top, height: first.height };
+      }
       var last = rects[rects.length - 1];
       return { rects: rects, top: rects[0].top, height: last.top + last.height - rects[0].top };
     }
@@ -539,11 +582,13 @@ const SCRIPT = String.raw`
       var pool = reportedHits.length ? reportedHits : allCandidates;
       var maxLen = Math.max.apply(null, pool.map(function (item) { return item.needleLen; }));
       var bestNeedle = pool.filter(function (item) { return item.needleLen === maxLen; });
-      var best = hasLine && estimate
+      var best = hasLine && estimate && !paragraphStart
         ? pickBestRects(bestNeedle.map(function (item) { return item.rects; }), estimate.top)
         : bestNeedle[0].rects;
       var boxed = pack(best);
       if (boxed) {
+        // Indent: keep the start-of-paragraph excerpt even when the line estimate drifted.
+        if (paragraphStart) return boxed;
         if (hasLine && estimate && Math.abs(boxed.top - estimate.top) > Math.max(28, estimate.height * 2)) {
           return estimate;
         }
@@ -597,7 +642,9 @@ const SCRIPT = String.raw`
     if (!isFinite(wanted) || wanted < 1 || !sections.length) return null;
     if (wanted <= sections.length) return wanted;
     // Scanner page beyond preview sheets - locate via excerpt, never clamp onto last page.
-    var needles = excerptNeedles(t.excerpt || t.finding || "");
+    var needles = excerptNeedles(t.excerpt || t.finding || "", {
+      paragraphStart: isIndentationIssue(t)
+    });
     var best = null;
     for (var i = 0; i < sections.length; i += 1) {
       var text = normalizeNeedle(sections[i].innerText || "");
@@ -617,7 +664,8 @@ const SCRIPT = String.raw`
     if (t.page == null || t.page === "") return;
     var pageNumber = resolveDocxPageNumber(sections, t);
     if (!pageNumber) return;
-    if (isMarginTarget(t) || (isPaginationTarget(t) && !t.bbox && !t.excerpt)) {
+    // Pagination always uses the header/footer chip - never body text.
+    if (isMarginTarget(t) || isPaginationTarget(t)) {
       var pageEl = sections[pageNumber - 1];
       var side = isMarginTarget(t)
         ? (marginSide(t.finding, t) || pageRegion(t))
@@ -626,7 +674,8 @@ const SCRIPT = String.raw`
       scrollToPageRegion(pageEl, side);
       return;
     }
-    var box = locateDocxBox(sections, pageNumber, t.line, t.excerpt);
+    var paragraphStart = isIndentationIssue(t);
+    var box = locateDocxBox(sections, pageNumber, t.line, t.excerpt, { paragraphStart: paragraphStart });
     if (!box) return;
     box.rects.forEach(function (r) {
       paintBox(docxLayer, {

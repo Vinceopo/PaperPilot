@@ -17,6 +17,7 @@ import {
   excerptNeedles,
   fitPageScale,
   hitPaint,
+  isIndentationIssue,
   isMarginTarget,
   onePageHeight,
   marginRegion,
@@ -107,7 +108,7 @@ function splitOversizedSection(wrapper, page) {
 /**
  * Revised DOCX files often lose Word's lastRenderedPageBreak markers, so docx-preview
  * emits one (or a few) tall sections. Split every oversized section into letter pages
- * so issue page N maps to preview section N — never clamp page 12 onto page 2.
+ * so issue page N maps to preview section N - never clamp page 12 onto page 2.
  */
 function paginateOversizedDocxSection(host) {
   const wrapper = host?.querySelector(".docx-wrapper");
@@ -134,7 +135,7 @@ function targetFrom(scrollTarget, highlight) {
   const pagination = String(section).toLowerCase() === "pagination";
   return {
     page: merged.page ?? null,
-    // Pagination is page-level — never pin to body line 1 (that over-highlights).
+    // Pagination is page-level - never pin to body line 1 (that over-highlights).
     line: pagination ? null : merged.line ?? null,
     bbox: pagination ? null : merged.bbox || null,
     excerpt: pagination ? "" : String(merged.excerpt || "").trim(),
@@ -199,7 +200,7 @@ function paintMarginHit(pageEl, side, severity, align = "") {
   band.style.setProperty("--pp-hit-edge", paint.edge);
   const style = edgeBandStyle(side, align);
   if (!style) {
-    // Unknown side — outline only, never flood the whole page.
+    // Unknown side - outline only, never flood the whole page.
     band.style.inset = "0";
     band.style.background = "transparent";
     band.style.boxShadow = `inset 0 0 0 4px ${paint.edge}`;
@@ -277,17 +278,27 @@ function blobUrlForPdfFile(file) {
   if (!file) return "";
   const cached = pdfBlobUrlCache.get(file);
   if (cached) return cached;
-  const blob =
-    file.type === "application/pdf" ? file : new Blob([file], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
+  // Use the File/Blob as-is — wrapping in a new Blob can break pdf.js on some browsers.
+  const url = URL.createObjectURL(file);
   pdfBlobUrlCache.set(file, url);
   return url;
+}
+
+/** Prefer raw bytes for the paged canvas viewer (avoids Chrome’s native PDF iframe). */
+async function pdfSourceFromFile(file) {
+  if (!file) return null;
+  try {
+    const buffer = await file.arrayBuffer();
+    return new Uint8Array(buffer);
+  } catch {
+    return blobUrlForPdfFile(file);
+  }
 }
 
 function PdfFrame({ src, page, frameHeight = 0 }) {
   const iframeRef = useRef(null);
   const base = String(src || "").split("#")[0];
-  // Stable src — changing #page= reloads the entire embedded PDF in most browsers.
+  // Stable src - changing #page= reloads the entire embedded PDF in most browsers.
   const iframeSrc = `${base}#toolbar=1&navpanes=0&scrollbar=1`;
   const height = frameHeight > 40 ? frameHeight : undefined;
 
@@ -327,11 +338,50 @@ function PdfFrame({ src, page, frameHeight = 0 }) {
 }
 
 function PdfFilePreview({ file, scrollTarget, highlight, paged }) {
-  const [url, setUrl] = useState(() => blobUrlForPdfFile(file));
+  const [url, setUrl] = useState(() => (paged ? "" : blobUrlForPdfFile(file)));
+  const [pagedSource, setPagedSource] = useState(null);
 
   useEffect(() => {
-    setUrl(blobUrlForPdfFile(file));
-  }, [file]);
+    let cancelled = false;
+    if (!file) {
+      setUrl("");
+      setPagedSource(null);
+      return undefined;
+    }
+    if (!paged) {
+      setPagedSource(null);
+      setUrl(blobUrlForPdfFile(file));
+      return undefined;
+    }
+    // Paged mode must use pdf.js canvases — never the browser PDF iframe/toolbar.
+    setUrl("");
+    setPagedSource(null);
+    void pdfSourceFromFile(file).then((source) => {
+      if (!cancelled) setPagedSource(source);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [file, paged]);
+
+  if (paged) {
+    if (!pagedSource) {
+      return (
+        <div className="flex h-48 items-center justify-center gap-2 text-xs text-slate-500">
+          <Spinner className="h-4 w-4 text-[#16bfa8]" />
+          Opening original PDF…
+        </div>
+      );
+    }
+    return (
+      <PdfPagedPreview
+        source={pagedSource}
+        scrollTarget={scrollTarget}
+        highlight={highlight}
+        allowNativeFallback={false}
+      />
+    );
+  }
 
   if (!url) {
     return (
@@ -342,20 +392,10 @@ function PdfFilePreview({ file, scrollTarget, highlight, paged }) {
     );
   }
 
-  if (paged) {
-    return (
-      <PdfPagedPreview
-        source={url}
-        scrollTarget={scrollTarget}
-        highlight={highlight}
-      />
-    );
-  }
-
   return <PdfFrame src={url} page={scrollTarget?.page ?? highlight?.page} />;
 }
 
-function PdfPagedPreview({ source, scrollTarget, highlight }) {
+function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback = true }) {
   const scrollerRef = useRef(null);
   const pdfRef = useRef(null);
   const lineYsRef = useRef(new Map());
@@ -408,13 +448,18 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
             })
           );
           const viewport = page.getViewport({ scale });
-          const text = await page.getTextContent();
-          const ys = [];
-          for (const item of text.items || []) {
-            if (!item?.str || !String(item.str).trim()) continue;
-            const [, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-            const fontHeight = Math.hypot(item.transform[2], item.transform[3]) * viewport.scale;
-            ys.push(vy - fontHeight);
+          // Text metrics power issue highlights; tolerate failures so preview still opens.
+          let ys = [];
+          try {
+            const text = await page.getTextContent();
+            for (const item of text.items || []) {
+              if (!item?.str || !String(item.str).trim()) continue;
+              const [, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+              const fontHeight = Math.hypot(item.transform[2], item.transform[3]) * viewport.scale;
+              ys.push(vy - fontHeight);
+            }
+          } catch {
+            ys = [];
           }
           lineYsRef.current.set(
             pageNumber,
@@ -426,11 +471,21 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
             height: viewport.height,
             scale,
           });
+          // Show page 1 immediately (one-page-tall frame like Issue Tracing), then append.
+          if (pageNumber === 1) {
+            setPages([...specs]);
+            setFrameHeight(Math.round(viewport.height));
+            setLinesReady(1);
+            setBusy(false);
+          } else if (pageNumber === pdf.numPages || pageNumber % 8 === 0) {
+            setPages([...specs]);
+            setLinesReady((n) => n + 1);
+          }
         }
         if (!specs.length || cancelled) return;
         setPages(specs);
-        setFrameHeight(Math.round(specs[0].height));
-        setLinesReady(1);
+        setFrameHeight((height) => height || Math.round(specs[0].height));
+        setLinesReady((n) => n + 1);
         setBusy(false);
       } catch {
         if (!cancelled) {
@@ -453,12 +508,18 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
     const pdf = pdfRef.current;
     if (!pdf || !pages.length) return undefined;
     let cancelled = false;
+    let paintToken = 0;
 
     async function paint() {
+      // Background tabs often leave alpha:false canvases black after pdf.js render.
+      // Wait until the tab is visible, then paint (and re-paint on return).
+      if (document.visibilityState === "hidden") return;
+      const token = ++paintToken;
       for (const spec of pages) {
-        if (cancelled) return;
+        if (cancelled || token !== paintToken) return;
+        if (document.visibilityState === "hidden") return;
         const page = await pdf.getPage(spec.pageNumber);
-        if (cancelled) return;
+        if (cancelled || token !== paintToken) return;
         const viewport = page.getViewport({ scale: spec.scale });
         const canvas = scrollerRef.current?.querySelector(
           `canvas[data-canvas="${spec.pageNumber}"]`
@@ -476,14 +537,20 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
         try {
           await task.promise;
         } catch {
-          if (cancelled) return;
+          if (cancelled || token !== paintToken) return;
         }
       }
     }
 
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void paint();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     void paint();
     return () => {
       cancelled = true;
+      paintToken += 1;
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [pages]);
 
@@ -495,7 +562,7 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
     if (target.page == null) return;
     const wanted = Math.round(Number(target.page));
     if (!Number.isFinite(wanted) || wanted < 1) return;
-    // Prefer the exact scanner page — do not clamp a high page onto the last sheet.
+    // Prefer the exact scanner page - do not clamp a high page onto the last sheet.
     let pageNumber = wanted;
     let pageEl = scroller.querySelector(`[data-page="${pageNumber}"]`);
     if (!pageEl && pages.length) {
@@ -509,13 +576,18 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
     const pageHeight = pageEl.clientHeight;
     const bboxY =
       bbox && Number.isFinite(Number(bbox.y)) ? Number(bbox.y) * pageHeight : null;
-    // Line number wins over a shared/coarse bbox so lines 13/14/15 stay distinct.
-    const y = resolvePdfMarkY({
-      line: target.line,
-      ys,
-      bboxY,
-      pageHeight,
-    });
+    const indentIssue = isIndentationIssue(target);
+    // Indentation: paint only from the stored measurement bbox (paragraph anchor).
+    // Line number is display-only and must not recompute the highlight.
+    const y = indentIssue && bboxY != null
+      ? bboxY
+      : resolvePdfMarkY({
+          line: target.line,
+          ys,
+          bboxY,
+          pageHeight,
+          preferBbox: false,
+        });
     if (isMarginTarget(target) || shouldUsePaginationEdge(target)) {
       const side = isMarginTarget(target) ? resolveEdgeSide(target) : pageRegion(target);
       const align = shouldUsePaginationEdge(target) ? pageAlign(target) : "";
@@ -531,33 +603,51 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
     }
     const lineIdx = Number(target.line);
     const usedLine =
+      !indentIssue &&
       Number.isFinite(lineIdx) &&
       lineIdx >= 1 &&
       ys[Math.min(ys.length, Math.max(1, Math.round(lineIdx))) - 1] != null &&
       Math.abs(y - Number(ys[Math.min(ys.length, Math.max(1, Math.round(lineIdx))) - 1])) < 1;
+    const hasInkBox =
+      bbox &&
+      Number.isFinite(Number(bbox.x)) &&
+      Number.isFinite(Number(bbox.w)) &&
+      Number(bbox.w) > 0.015;
     let markHeight;
-    if (bbox && Number.isFinite(Number(bbox.y)) && !usedLine) {
-      markHeight = Math.max(0.012, Number(bbox.h) || 0.025) * pageHeight;
+    if (hasInkBox) {
+      const boxH = Math.max(0.012, Number(bbox.h) || 0.022);
+      markHeight = boxH * pageHeight;
       setMark({
         page: pageNumber,
         kind: "box",
         severity: target.severity,
-        top: `${Number(bbox.y) * 100}%`,
+        top: indentIssue
+          ? `${Number(bbox.y) * 100}%`
+          : usedLine
+            ? `${y}px`
+            : `${Number(bbox.y) * 100}%`,
         left: `${Number(bbox.x) * 100}%`,
-        width: `${Math.max(0.02, Number(bbox.w) || 0.84) * 100}%`,
-        height: `${Math.max(0.012, Number(bbox.h) || 0.025) * 100}%`,
+        width: `${Math.max(0.02, Number(bbox.w)) * 100}%`,
+        height: `${boxH * 100}%`,
       });
+    } else if (indentIssue) {
+      // Indent without bbox: do not invent a line-based mark.
+      setMark(null);
+      return;
     } else {
-      const row = Math.min(ys.length, Math.max(1, Math.round(Number(target.line) || 1))) - 1;
-      const next = ys[row + 1];
-      markHeight = next != null && next > y ? Math.max(14, next - y) : Math.max(18, pageHeight * 0.03);
+      markHeight = Math.max(16, Math.min(28, pageHeight * 0.028));
+      const excerptLen = String(target.excerpt || "").trim().length;
+      const widthPct = excerptLen
+        ? Math.max(28, Math.min(68, 18 + excerptLen * 0.9))
+        : 56;
+      const leftPct = Math.max(8, (100 - widthPct) / 2);
       setMark({
         page: pageNumber,
         kind: "box",
         severity: target.severity,
         top: `${y}px`,
-        left: "8%",
-        width: "84%",
+        left: `${leftPct}%`,
+        width: `${widthPct}%`,
         height: `${markHeight}px`,
       });
     }
@@ -565,9 +655,17 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
   }, [scrollTarget, highlight, pages, linesReady, frameHeight]);
 
   if (error) {
+    // Manuscript preview must stay on the tracing-style canvas view — never Chrome’s PDF toolbar.
+    if (!allowNativeFallback || typeof source !== "string" || !source) {
+      return (
+        <p className="rounded-lg bg-white px-4 py-3 text-xs text-rose-500 shadow-sm">
+          Could not open the PDF page preview. Try selecting the file again.
+        </p>
+      );
+    }
     return (
       <PdfFrame
-        src={typeof source === "string" ? source : ""}
+        src={source}
         page={scrollTarget?.page ?? highlight?.page}
         frameHeight={frameHeight || Math.round((scrollerRef.current?.clientWidth || 640) * (11 / 8.5))}
       />
@@ -577,8 +675,8 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
   return (
     <div
       ref={scrollerRef}
-      className="pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain"
-      style={{ height: frameHeight || "70vh" }}
+      className="pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg bg-[#e8ecf1]"
+      style={{ height: frameHeight > 40 ? frameHeight : "min(70vh, 36rem)" }}
     >
       {busy && !pages.length ? (
         <div className="flex h-48 items-center justify-center gap-2 text-xs text-slate-500">
@@ -606,13 +704,34 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
 function waitForWidth(element) {
   return new Promise((resolve) => {
     let frames = 0;
+    let settled = false;
+    let timer = 0;
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        frames = 0;
+        requestAnimationFrame(check);
+      }
+    };
+    const finish = (width) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      resolve(width > 40 ? width : 640);
+    };
     const check = () => {
+      if (settled) return;
+      // Hidden tabs throttle rAF and may report 0 width - wait until visible.
+      if (document.visibilityState === "hidden") return;
       frames += 1;
       const width = element?.clientWidth || 0;
-      if (width > 40 || frames > 30) resolve(width > 40 ? width : 640);
+      if (width > 40 || frames > 30) finish(width);
       else requestAnimationFrame(check);
     };
-    check();
+    document.addEventListener("visibilitychange", onVisibility);
+    if (document.visibilityState === "visible") requestAnimationFrame(check);
+    // Safety: never hang forever if the tab stays hidden.
+    timer = window.setTimeout(() => finish(element?.clientWidth || 0), 120000);
   });
 }
 
@@ -621,7 +740,7 @@ function docxBody(section) {
 }
 
 function readDocxBlocks(section) {
-  // Include headings/lists — scanner line counts cover those blocks, not only <p>.
+  // Include headings/lists - scanner line counts cover those blocks, not only <p>.
   return [...docxBody(section).querySelectorAll("p, h1, h2, h3, h4, h5, h6, li")].map((el) => {
     const style = getComputedStyle(el);
     const fontSize = parseFloat(style.fontSize) || 16;
@@ -687,7 +806,7 @@ function textRangesIn(section, needle) {
         }
         return [nodes[0].node, 0];
       };
-      // Collect every occurrence — adjacent issues often share a short needle.
+      // Collect every occurrence - adjacent issues often share a short needle.
       let searchFrom = 0;
       while (searchFrom < text.length) {
         const index = text.indexOf(needle, searchFrom);
@@ -706,7 +825,7 @@ function textRangesIn(section, needle) {
   return ranges;
 }
 
-function lineCountBox(section, line, scroller) {
+function lineCountBox(section, line, scroller, { paragraphStart = false } = {}) {
   const blocks = readDocxBlocks(section);
   if (!blocks.length) return null;
   const hit = visualLineTarget(blocks, line || 1);
@@ -735,9 +854,35 @@ function lineCountBox(section, line, scroller) {
   const rect = block.el.getBoundingClientRect();
   const scale = block.el.offsetHeight ? rect.height / block.el.offsetHeight : 1;
   const base = contentBox(scroller, rect);
-  const delta = index === hit.index ? hit.delta : 0;
+  // Indent / paragraph-start issues must stay on the first visual line, never mid/last.
+  const delta = paragraphStart ? 0 : index === hit.index ? hit.delta : 0;
   const top = base.top + Math.max(0, delta) * scale;
   const height = Math.max(12, Math.min(block.lineHeight * scale, base.height || block.lineHeight * scale));
+  // Soft-wrapped paragraphs expose one client rect per visual line - paint that
+  // ink box instead of the full paragraph width (avoids blank right/side space).
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(block.el);
+    const ink = [...range.getClientRects()]
+      .filter((box) => box.width > 2 && box.height > 2)
+      .map((box) => contentBox(scroller, box));
+    if (ink.length) {
+      const lineIndex = paragraphStart
+        ? 0
+        : Math.min(
+            ink.length - 1,
+            Math.max(0, Math.round(Math.max(0, delta) / Math.max(1, block.lineHeight)))
+          );
+      const chosen = ink[lineIndex] || ink[0];
+      return {
+        rects: [{ top: chosen.top, left: chosen.left, width: Math.max(chosen.width, 24), height: Math.max(12, chosen.height) }],
+        top: chosen.top,
+        height: Math.max(12, chosen.height),
+      };
+    }
+  } catch {
+    /* fall through to paragraph band */
+  }
   return { rects: [{ top, left: base.left, width: Math.max(base.width, 24), height }], top, height };
 }
 
@@ -745,15 +890,27 @@ function lineCountBox(section, line, scroller) {
  * Where an issue really sits in the rendered Word pages.
  * When a scanner line is present, that line always disambiguates excerpt hits
  * so issues on lines 13 / 14 / 15 never collapse onto one highlight.
+ * Indentation is paragraph-start only - keep the first-line excerpt, never snap to mid/last.
  */
-function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRadius = 2 } = {}) {
+function locateDocxBox(
+  sections,
+  pageNumber,
+  line,
+  excerpt,
+  scroller,
+  { searchRadius = 2, paragraphStart = false } = {}
+) {
   const reported = sections[pageNumber - 1];
-  const estimate = reported ? lineCountBox(reported, line, scroller) : null;
-  const needles = excerptNeedles(excerpt);
+  const estimate = reported ? lineCountBox(reported, line, scroller, { paragraphStart }) : null;
+  const needles = excerptNeedles(excerpt, { paragraphStart });
   const hasLine = line != null && line !== "" && Number.isFinite(Number(line));
 
   const pack = (rects) => {
     if (!rects?.length) return null;
+    if (paragraphStart) {
+      const first = rects[0];
+      return { rects: [first], top: first.top, height: first.height };
+    }
     const last = rects[rects.length - 1];
     return { rects, top: rects[0].top, height: last.top + last.height - rects[0].top };
   };
@@ -793,7 +950,7 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRa
     const maxLen = Math.max(...pool.map((item) => item.needleLen));
     const bestNeedle = pool.filter((item) => item.needleLen === maxLen);
     const best =
-      hasLine && estimate
+      hasLine && estimate && !paragraphStart
         ? pickBestRects(
             bestNeedle.map((item) => item.rects),
             estimate.top
@@ -801,6 +958,8 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRa
         : bestNeedle[0].rects;
     const boxed = pack(best);
     if (boxed) {
+      // Indent: keep the start-of-paragraph excerpt even when the line estimate drifted.
+      if (paragraphStart) return boxed;
       // Line pin wins when excerpt still lands far from the estimated line.
       if (hasLine && estimate && Math.abs(boxed.top - estimate.top) > Math.max(28, estimate.height * 2)) {
         return estimate;
@@ -812,14 +971,14 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRa
 }
 
 /** Always leave a visible mark on the target page when line/excerpt locate fails. */
-function fallbackDocxBox(pageEl, line, scroller) {
+function fallbackDocxBox(pageEl, line, scroller, { paragraphStart = false } = {}) {
   if (!pageEl) return null;
-  const byLine = lineCountBox(pageEl, line, scroller);
+  const byLine = lineCountBox(pageEl, line, scroller, { paragraphStart });
   if (byLine) return byLine;
   const body = docxBody(pageEl);
   const rect = body.getBoundingClientRect();
   const base = contentBox(scroller, rect);
-  // Thin band near the top of the page body — never flood the whole sheet.
+  // Thin band near the top of the page body - never flood the whole sheet.
   const height = Math.max(18, Math.min(36, base.height * 0.04 || 24));
   return {
     rects: [{ top: base.top + 8, left: base.left, width: Math.max(base.width, 24), height }],
@@ -978,10 +1137,12 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint =
 
     const searchRadius =
       sections.length < Math.max(8, Number(pageCountHint) || 0) * 0.7 ? sections.length : 3;
+    const paragraphStart = isIndentationIssue(target);
     const box =
       locateDocxBox(sections, pageNumber, target.line, target.excerpt || target.finding, scroller, {
         searchRadius,
-      }) || fallbackDocxBox(pageEl, target.line, scroller);
+        paragraphStart,
+      }) || fallbackDocxBox(pageEl, target.line, scroller, { paragraphStart });
     if (!box) return;
     paintBoxes(scroller, box.rects, target.severity);
     if (paged) {
@@ -1060,7 +1221,7 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
   const marginTrace = isMarginTarget(traced);
   const paginationBand = shouldUsePaginationEdge(traced);
   const previewPageNums = pages.map((page, index) => pageNumberFromIndex(page.pageIndex, index));
-  // Exact page only — never paint page-99 issues onto page 2.
+  // Exact page only - never paint page-99 issues onto page 2.
   const tracedPage =
     traced.page != null && previewPageNums.includes(Number(traced.page))
       ? Number(traced.page)
@@ -1239,6 +1400,7 @@ export default function DocumentPagePreview({
           source={safeDocumentUrl}
           scrollTarget={scrollTarget}
           highlight={highlight}
+          allowNativeFallback={false}
         />
       );
     }

@@ -35,6 +35,12 @@ MECHANICS_SCHEMA: tuple[dict[str, Any], ...] = (
                 "example": "Portrait",
                 "rule": ("paper", "orientation"),
             },
+            {
+                "id": "substance",
+                "label": "Substance",
+                "example": "20",
+                "rule": ("paper", "substance"),
+            },
             {"id": "spacing", "label": "Spacing", "example": "Double", "rule": ("spacing",)},
             {
                 "id": "word_spacing",
@@ -46,7 +52,9 @@ MECHANICS_SCHEMA: tuple[dict[str, Any], ...] = (
                 "id": "indention",
                 "label": "Indention",
                 "example": "0.5 inch",
+                # Clear both the display string and the numeric scan field.
                 "rule": ("indention",),
+                "also_clear": (("first_line_indent_inches",), ("indent_type",), ("indent_tolerance_inches",)),
             },
             {"id": "alignment", "label": "Alignment", "example": "Left", "rule": ("alignment",)},
             {
@@ -138,6 +146,14 @@ MECHANICS_SCHEMA: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "page_breaks",
+        "title": "Page Breaks",
+        "fields": (),
+        "free_text": True,
+        "example": "Only to start each new chapter and the reference list",
+        "rule": ("page_break_requirements",),
+    },
+    {
         "id": "table_layout",
         "title": "Table Layout",
         "fields": (),
@@ -183,7 +199,7 @@ _FORBIDDEN_PLACEHOLDERS = frozenset(
         "not applicable",
         "none",
         "-",
-        "—",
+        "-",
     }
 )
 
@@ -270,7 +286,7 @@ def _inline_title_value_re(alias: str) -> re.Pattern[str]:
     cached = _INLINE_TITLE_VALUE_RE_CACHE.get(alias)
     if cached:
         return cached
-    pattern = re.compile(rf"^{re.escape(alias)}(?:\s*[:\-—–].*)?$", re.I)
+    pattern = re.compile(rf"^{re.escape(alias)}(?:\s*[:\-\u2014\u2013].*)?$", re.I)
     _INLINE_TITLE_VALUE_RE_CACHE[alias] = pattern
     return pattern
 
@@ -297,7 +313,7 @@ def _heading_matches_title(text: str, title: str) -> bool:
 
 
 def _field_is_optional(category: str, field_id: str) -> bool:
-    """Heading sizes/styles are optional — Format Fields only require them when added."""
+    """Heading sizes/styles are optional - Format Fields only require them when added."""
     if category == "font" and field_id in {"heading1_size", "heading2_size"}:
         return True
     if category == "heading_styles" and field_id in {"heading1_style", "heading2_style"}:
@@ -628,7 +644,7 @@ def apply_ignored_fields_to_rules(
     """Return a copy of rules with IGNORE / empty Format Fields removed.
 
     Empty heading rows (font:heading1_size, heading_styles:…) must not remain as
-    active scan rules — nothing set means that check is skipped.
+    active scan rules - nothing set means that check is skipped.
     """
     import copy
 
@@ -653,9 +669,13 @@ def apply_ignored_fields_to_rules(
         )
         if match:
             _pop_rule_path(out, tuple(match["rule"]))
+            for extra in match.get("also_clear") or ():
+                _pop_rule_path(out, tuple(extra))
             continue
         # Category-level ignore: drop every field under that category.
         if not field:
             for item in section.get("fields") or ():
                 _pop_rule_path(out, tuple(item["rule"]))
+                for extra in item.get("also_clear") or ():
+                    _pop_rule_path(out, tuple(extra))
     return out

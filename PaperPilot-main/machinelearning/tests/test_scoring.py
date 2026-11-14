@@ -151,10 +151,12 @@ class ScoringFormulaTests(ScoringAssertions):
         self.assertEqual(fonts["units_failed"], 4)
         self.assertEqual(fonts["issue_occurrences"], 7)
         self.assertEqual(scoring["issues"]["total_occurrences"], 9)
-        self.assertEqual(scoring["issues"]["occurrences_without_units"], 2)
+        # Citations is a scored breakdown category (marker-line units), so these
+        # occurrences are no longer counted as "without units".
+        self.assertEqual(scoring["issues"]["occurrences_without_units"], 0)
         rows = {row["category"]: row for row in scoring["issues"]["by_category"]}
         self.assertAlmostEqual(rows["Fonts"]["share"]["value"], 7 / 9 * 100, places=12)
-        self.assertFalse(rows["Citations"]["has_units"])
+        self.assertTrue(rows["Citations"]["has_units"])
         self.assertAlmostEqual(payload["severity_pct"]["critical"], 7 / 9 * 100, places=12)
         self.assertEqual(scoring["issues"]["by_severity"]["critical"]["issue_types"], 2)
         self.assertTrue(scoring["consistency"]["ok"])
@@ -235,8 +237,9 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
         self.assertEqual(result["wrong_pct"], 0.0)
         self.assertEqual(result["overall_score"], 100.0)
         statuses = {c["category"]: c["status"] for c in result["scoring"]["categories"]}
-        # RULES has no pagination section, so Pagination has no rule to pass.
+        # RULES has no pagination / citation_style, so those categories stay not applicable.
         self.assertEqual(statuses.pop("Pagination"), "not_applicable")
+        self.assertEqual(statuses.pop("Citations"), "not_applicable")
         self.assertTrue(all(status == "pass" for status in statuses.values()))
         self.assertTrue(all(row["wrong_pct"] is None for row in result["category_wrong_pct"]))
 
@@ -286,7 +289,11 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
     def test_14_multiple_pages(self):
         result = self.scan([para(i, lines=6) for i in range(30)])
         self.assertGreater(result["page_count"], 1)
-        self.assertEqual(by_category(result)["Margins"]["units_checked"], 4 * result["page_count"])
+        margins_checked = by_category(result)["Margins"]["units_checked"]
+        # Four sides per measured page; title-like / empty pages may be skipped.
+        self.assertGreaterEqual(margins_checked, 4)
+        self.assertEqual(margins_checked % 4, 0)
+        self.assertLessEqual(margins_checked, 4 * result["page_count"])
 
     def test_15_multiple_sections(self):
         paragraphs = []

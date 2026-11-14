@@ -113,6 +113,7 @@ export function useScanFlow({
         versionId: target.versionId,
         citationStyle: target.citationStyle,
         mechanicsName: target.mechanicsName,
+        mechanicsRules: target.mechanicsRules,
         pageCount: target.pageCount,
         cloudinaryUrl: target.cloudinaryUrl,
         documentPreview: target.documentPreview,

@@ -44,6 +44,7 @@ function formatDate(iso) {
 
 function formatMeta(row) {
   const parts = [];
+  if (row.institution && row.institution !== "-") parts.push(row.institution);
   if (row.citationStyle) parts.push(row.citationStyle);
   if (row.versionCount > 0) {
     parts.push(

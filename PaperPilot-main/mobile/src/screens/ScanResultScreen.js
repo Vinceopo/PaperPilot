@@ -19,6 +19,8 @@ import {
   CATEGORY_STATUS_LABEL,
   alignNonCompliantWithIssues,
   compliancePercentFromUnits,
+  filterIssuesByActiveRules,
+  filterScoreBreakdownByRules,
   formatCategoryIssuesDetail,
   formatCount,
   formatPct,
@@ -243,6 +245,7 @@ function ScanResultBody({ navigation }) {
     rightPct,
     wrongPct,
     scoreBreakdown = [],
+    mechanicsRules = null,
     formatChecks = [],
     pageCount = 0,
     unitsChecked,
@@ -250,40 +253,24 @@ function ScanResultBody({ navigation }) {
     unitsFailed,
     scoringConsistency = null,
   } = result;
-  // Active Format Mechanics categories only (IGNORE / not_applicable hidden).
-  const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
-  // Same expansion as Issue Tracing — cards, rings, and header all use these counts.
-  const tracedEntries = normalizeDetectedIssues(formatChecks, pageCount || 0).entries;
+  // Same as live web: only categories with configured Format Mechanics rules.
+  const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
+  const categoryDisplays = resolveCategoryUnitDisplays(activeBreakdown);
+  // Issue counts follow failed units (not raw location pins) so Captions noise cannot inflate cards.
+  const categoryCards = categoryDisplays.map((row) => ({
+    ...row,
+    displayIssueCount: hasValue(row.displayNonCompliant)
+      ? row.displayNonCompliant
+      : row.displayIssueCount,
+  }));
+  const tracedEntries = filterIssuesByActiveRules(
+    normalizeDetectedIssues(formatChecks, pageCount || 0).entries.map((entry) => ({
+      ...entry,
+      category: entry.category || categoryForIssue(entry),
+    })),
+    mechanicsRules,
+  );
   const issuesFound = tracedEntries.length;
-  const tracedByCategory = {};
-  tracedEntries.forEach((entry) => {
-    const key = entry.category || categoryForIssue(entry) || "Other";
-    tracedByCategory[key] = (tracedByCategory[key] || 0) + 1;
-  });
-  const categoryCards = categoryDisplays.map((row) => {
-    const name = String(row.metric || row.section || "").trim();
-    const traced = name ? tracedByCategory[name] : null;
-    const displayIssueCount = hasValue(traced)
-      ? traced
-      : hasValue(row.displayIssueCount)
-        ? row.displayIssueCount
-        : row.displayNonCompliant;
-    const total = row.displayTotal;
-    const displayNonCompliant = hasValue(total) && hasValue(displayIssueCount)
-      ? Math.min(Math.max(0, Number(total)), Math.max(0, Number(displayIssueCount)))
-      : row.displayNonCompliant;
-    const displayCompliant = hasValue(total) && hasValue(displayNonCompliant)
-      ? Math.max(0, Number(total) - Number(displayNonCompliant))
-      : row.displayCompliant;
-    const displayScore = compliancePercentFromUnits(total, displayNonCompliant);
-    return {
-      ...row,
-      displayIssueCount,
-      displayNonCompliant,
-      displayCompliant,
-      displayScore: displayScore != null ? displayScore : row.displayScore,
-    };
-  });
   // Non-Compliant Units = Issues total so the two counts never disagree.
   const {
     total: totalUnits,
@@ -398,8 +385,13 @@ function ScanResultBody({ navigation }) {
         <View style={styles.metaRow}>
           <View style={styles.metaCell}>
             <Text style={styles.metaKey}>Document</Text>
-            <Text style={styles.metaValue} numberOfLines={1}>
+            <Text
+              style={styles.metaValue}
+              numberOfLines={1}
+              accessibilityLabel={`${documentTitle} ${versionLabel}`}
+            >
               {documentTitle}
+              <Text style={styles.metaVersion}> {versionLabel}</Text>
             </Text>
             {placeLine ? (
               <Text style={styles.metaSub} numberOfLines={1}>
@@ -410,7 +402,7 @@ function ScanResultBody({ navigation }) {
           <View style={styles.metaCell}>
             <Text style={styles.metaKey}>Format Mechanics</Text>
             <Text style={styles.metaValue} numberOfLines={1}>
-              {formatMechanicsLabel} · {versionLabel}
+              {formatMechanicsLabel}
             </Text>
           </View>
         </View>
@@ -657,6 +649,7 @@ const styles = StyleSheet.create({
     color: "#94a3b8",
   },
   metaValue: { marginTop: 3, fontSize: 13, fontWeight: "700", color: "#0f172a" },
+  metaVersion: { fontSize: 13, fontWeight: "600", color: "#64748b" },
   metaSub: { marginTop: 1, fontSize: 11, color: colors.slate },
   overallScoreLine: { flexDirection: "row", alignItems: "flex-end", gap: 2 },
   overallScoreValue: {

@@ -90,6 +90,8 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
     documentTitle: title,
     citationStyle: opts.citationStyle || "APA",
     mechanicsName: opts.mechanicsName || "",
+    mechanicsRules:
+      opts.mechanicsRules && typeof opts.mechanicsRules === "object" ? opts.mechanicsRules : null,
     pageCount: opts.pageCount,
     mechanicsId,
     cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || uploadedUrl || "",
@@ -256,8 +258,8 @@ export async function downloadReport(result, opts = {}) {
   doc.setDrawColor(226, 232, 240);
   doc.roundedRect(ML, Y, CW, 22, 2, 2, "FD");
   const metaCols = [
-    ["DOCUMENT", documentTitle],
-    ["FORMAT MECHANICS", `${mechanicsName || citationStyle || "—"} · ${versionLabel}`],
+    ["DOCUMENT", `${documentTitle} · ${versionLabel}`],
+    ["FORMAT MECHANICS", mechanicsName || citationStyle || "—"],
     ["SCANNED", scannedDate],
     ["GENERATED", generatedDate],
   ];

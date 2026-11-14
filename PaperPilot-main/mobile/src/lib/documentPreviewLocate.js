@@ -168,14 +168,22 @@ export function normalizedIndex(raw) {
   return { text, map };
 }
 
+/** First-line indent findings always belong at the paragraph start. */
+export function isIndentationIssue(target = {}) {
+  const type = String(target.issue_type || target.issueType || "").toLowerCase();
+  const section = String(target.section || "").toLowerCase();
+  return type === "first_line_indent" || section === "indentation";
+}
+
 /** Search strings to try, longest first. Short titles (e.g. "By:") still locate. */
-export function excerptNeedles(excerpt) {
+export function excerptNeedles(excerpt, { paragraphStart = false } = {}) {
   const full = normalizeNeedle(excerpt);
   if (full.length < 2) return [];
   const needles = [full];
   if (full.length > 48) {
     needles.push(full.slice(0, 40).trim());
-    needles.push(full.slice(-40).trim());
+    // Tail needles pull indent highlights onto the last sentence - skip for paragraph starts.
+    if (!paragraphStart) needles.push(full.slice(-40).trim());
   }
   if (full.length >= 12) {
     const words = full.split(" ").filter(Boolean);
@@ -236,13 +244,21 @@ export function resolveDocxHighlight({
  * When the preview measured fewer rows than the scanner line (pdf.js vs PyMuPDF
  * cluster mismatch), prefer bbox instead of clamping onto the last row.
  */
-export function resolvePdfMarkY({ line, ys = [], bboxY = null, pageHeight = 0 } = {}) {
+export function resolvePdfMarkY({
+  line,
+  ys = [],
+  bboxY = null,
+  pageHeight = 0,
+  /** Indent scanner bbox is the first-line ink box - keep it over a drifted line row. */
+  preferBbox = false,
+} = {}) {
   const rows = Array.isArray(ys) ? ys : [];
   const lineNum = Number(line);
   const hasLine = Number.isFinite(lineNum) && lineNum >= 1;
   const rounded = hasLine ? Math.round(lineNum) : null;
   // Number(null) === 0, so treat null/"" as missing - not a real bbox.
   const hasBbox = bboxY != null && bboxY !== "" && Number.isFinite(Number(bboxY));
+  if (preferBbox && hasBbox) return Number(bboxY);
   if (hasLine && rows.length && rounded > rows.length && hasBbox) {
     return Number(bboxY);
   }

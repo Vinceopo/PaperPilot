@@ -8,6 +8,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { colors } from "../../theme";
 import { categoryForIssue, normalizeDetectedIssues } from "./IssuesDetectedPanel";
 import { normalizeIssueLocation } from "../../lib/scanMapper";
+import { filterIssuesByActiveRules } from "../../lib/scoreFormat";
 import { isApproximateTracing } from "../../lib/documentPreviewLocate";
 import { DocumentDisplayFrame, useDocumentPreviewHeight } from "./DocumentPreview";
 import TraceDocumentViewer from "./TraceDocumentViewer";
@@ -109,14 +110,15 @@ export default function IssueTracingSection({
     [formatChecks, pageCount]
   );
 
-  const enrichedEntries = useMemo(
-    () =>
-      entries.map((entry) => ({
-        ...entry,
-        category: entry.category || categoryForIssue(entry),
-      })),
-    [entries]
-  );
+  const enrichedEntries = useMemo(() => {
+    const mapped = entries.map((entry) => ({
+      ...entry,
+      category: entry.category || categoryForIssue(entry),
+    }));
+    // Match live web: hide findings for categories with no active Format Mechanics rule
+    // (Captions are not a scored category, so they drop out here).
+    return filterIssuesByActiveRules(mapped, result?.mechanicsRules);
+  }, [entries, result?.mechanicsRules]);
 
   const categoryCounts = useMemo(() => {
     const c = {};

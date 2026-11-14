@@ -21,6 +21,7 @@ from app.mechanics_options import (
     FONT_SIZE_KEYS,
     MAX_HEADING_LEVELS,
     CHAPTER_FIRST_HIDDEN,
+    PAGE_NO_NUMBERS,
     PRELIM_ROMAN,
     TITLE_HIDDEN_COUNTED,
     WORD_SPACING_TWO,
@@ -37,6 +38,7 @@ from app.mechanics_options import (
     normalize_pagination_rules,
     page_number_only,
     page_position_parts,
+    pagination_omits_all_numbers,
     rule_unset,
 )
 
@@ -776,6 +778,12 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
     formats = _paragraph_formats(paragraph)
     run_sizes = [run["size"] for run in runs if run.get("size") and str(run.get("text") or "").strip()]
     first_line, left_indent, right_indent = _docx_indents(paragraph, formats)
+    list_item = False
+    try:
+        p_pr = paragraph._p.pPr
+        list_item = bool(p_pr is not None and p_pr.numPr is not None)
+    except Exception:
+        list_item = False
     record = {
         "paragraph_index": paragraph_index,
         "source": source,
@@ -784,6 +792,7 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
         "lines": lines,
         "runs": runs,
         "has_drawing": _docx_has_drawing(paragraph),
+        "list_item": list_item,
         "formatting": {
             "line_spacing": _docx_line_spacing(paragraph, formats, run_sizes[0] if run_sizes else None),
             "alignment": _docx_alignment(paragraph, formats),
@@ -969,7 +978,7 @@ def _clip_value(value: str, stop_words: tuple[str, ...]) -> str:
 
 
 def _looks_like_layout_rule(value: str) -> bool:
-    """True when text is about table/figure captions or titles — not incidental mentions."""
+    """True when text is about table/figure captions or titles - not incidental mentions."""
     return bool(
         re.search(
             r"(?i)\b(?:caption|title|heading|label|number(?:ed|ing)?|above|below|under|"
@@ -1002,7 +1011,7 @@ def _value_after_label(flat: str, labels: tuple[str, ...], stop_words: tuple[str
     stop_alt = _stop_pattern(stop_words)
     match = re.search(
         rf"(?i)\b(?:{label_alt})\b(?:\s*[)\].-]*)?\s*"
-        rf"(?:[:：=\-–]|is|are|of|should be|must be)?\s*"
+        rf"(?:[:：=\-\u2013]|is|are|of|should be|must be)?\s*"
         rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})|$)",
         flat,
     )
@@ -1022,7 +1031,7 @@ def _line_value(text: str, labels: tuple[str, ...]) -> str:
     contain words like 'page' or 'bottom' that stop the flattened label search."""
     lines = [line.strip(" \t•●▪◦*-") for line in (text or "").replace("\r", "\n").split("\n")]
     label_alt = "|".join(re.escape(label) for label in labels)
-    pattern = re.compile(rf"^(?:{label_alt})\s*(?:[:：=–]|\t)\s*(.*)$", re.I)
+    pattern = re.compile(rf"^(?:{label_alt})\s*(?:[:：=\u2013]|\t)\s*(.*)$", re.I)
     alone = re.compile(rf"^(?:{label_alt})\s*[:：]?$", re.I)
     for index, line in enumerate(lines):
         match = pattern.match(line)
@@ -1044,7 +1053,7 @@ def _parse_paper_size(value: str) -> dict:
     text = (value or "").strip()
     if not text:
         return {}
-    # "8 1/2 x 11" / "8½ x 11" — normalize before digit×digit matching (avoids "2 x 11").
+    # "8 1/2 x 11" / "8½ x 11" - normalize before digit×digit matching (avoids "2 x 11").
     text = re.sub(
         r"\b(\d+)\s+(\d+)\s*/\s*(\d+)\b",
         lambda match: str(int(match.group(1)) + int(match.group(2)) / int(match.group(3))),
@@ -1053,7 +1062,7 @@ def _parse_paper_size(value: str) -> dict:
     text = re.sub(r"\b(\d+)\s*½\b", lambda match: str(int(match.group(1)) + 0.5), text)
     upper = text.upper()
     out: dict = {}
-    # Require a dimension pair (8.5 x 14) — bare "14." from outline numbering is not Legal size.
+    # Require a dimension pair (8.5 x 14) - bare "14." from outline numbering is not Legal size.
     if re.search(r"\bLEGAL\b", upper) or re.search(
         r"8\.5\s*(?:inches?|in|[\"″])?\s*[x×by]\s*14\b", upper
     ):
@@ -1212,7 +1221,7 @@ def _parse_inches(value: str) -> float | None:
 
 MARGIN_SIDES = ("top", "bottom", "left", "right", "gutter", "header", "footer")
 _MARGIN_SIDE_ALT = "|".join(MARGIN_SIDES)
-# "1.5 inch" / '1"' / '1.00”' — unit required so "page 1 on the left" is not a margin.
+# "1.5 inch" / '1"' / '1.00”' - unit required so "page 1 on the left" is not a margin.
 _MEASURE_WITH_UNIT = (
     r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)"
     rf"(?:\s*|-)(?:{_INCH_OR_LENGTH_UNIT})"
@@ -1274,7 +1283,7 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
     side_list = rf"(?:{_MARGIN_SIDE_ALT})(?:\s*(?:,|and|&|/)\s*(?:the\s+)?(?:{_MARGIN_SIDE_ALT}))+"
     listed = re.compile(
         rf"\b({side_list})\b\s*\)?\s*(?:margins?\s*)?"
-        rf"(?::|=|-|–|—|should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
+        rf"(?::|=|-|\u2013|\u2014|should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
         rf"(?:set\s+(?:to|at)\s+)?({_MEASURE_AFTER_SIDE_LIST})",
         re.I,
     )
@@ -1311,7 +1320,7 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
     for side in MARGIN_SIDES:
         if side in margins:
             continue
-        # Prefer "Top: 1" labels — incidental "Top" in intro prose must not win.
+        # Prefer "Top: 1" labels - incidental "Top" in intro prose must not win.
         colon = re.search(rf"\b{side}\s*:\s*({MEASURE_PATTERN})", flat, re.I)
         amount = parse_length_inches(colon.group(1)) if colon else None
         if amount is None:
@@ -1476,12 +1485,12 @@ def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
     manuscript_msg = (
         "This file looks like a manuscript, not a format mechanics guide. "
         "Upload your institution’s formatting guidelines (margins, fonts, headings, pagination), "
-        "then upload the manuscript in Step 3 — Upload & Analyze."
+        "then upload the manuscript in Step 3 - Upload & Analyze."
     )
     sparse_msg = (
         "No format mechanics rules were found in this document. "
         "Upload a format guide that lists requirements such as margins, font, spacing, "
-        "or heading sizes — not the manuscript itself."
+        "or heading sizes - not the manuscript itself."
     )
 
     # Sample / school guides that already match our labeled schema.
@@ -1493,7 +1502,7 @@ def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
     if rule_count >= 3 and guide_hits >= 2:
         return
 
-    # Long thesis/paper bodies — deny unless the guide signals are strong.
+    # Long thesis/paper bodies - deny unless the guide signals are strong.
     if manuscript_hits >= 2 and words >= 400 and (guide_hits < 2 or rule_count < 3):
         raise DocumentError(manuscript_msg)
     if words >= 1200 and manuscript_hits >= 1 and guide_hits < 3:
@@ -1520,7 +1529,7 @@ def derive_mechanics_rules(text: str) -> dict:
     if not flat:
         return rules
 
-    # Do not use bare "Table"/"Figure"/"Page" here — they chop mid-sentence
+    # Do not use bare "Table"/"Figure"/"Page" here - they chop mid-sentence
     # ("above the table", "Do page break only…"). Prefer section titles + outline letters.
     stop = (
         "Size", "Orientation", "Substance", "Spacing", "Indention", "Indentation",
@@ -1574,15 +1583,21 @@ def derive_mechanics_rules(text: str) -> dict:
         flat, ("Spacing", "Line spacing", "Line space", "Lines spacing"), stop
     )
     spacing_val = _parse_spacing(spacing_raw) if spacing_raw else None
-    if spacing_val is None:
-        spacing_match = re.search(
-            r"\b(single|double|one(?:[\s-]and[\s-]a[\s-]half)|1(?:\.0)?|1\.5|2(?:\.0)?)"
-            r"(?:[\s-]+line)?[\s-]+spac(?:e|ed|ing)\b",
-            flat,
-            re.I,
-        )
-        if spacing_match:
-            spacing_val = _parse_spacing(spacing_match.group(0))
+    spacing_matches = re.findall(
+        r"\b(single|double|one(?:[\s-]and[\s-]a[\s-]half)|1(?:\.0)?|1\.5|2(?:\.0)?)"
+        r"(?:[\s-]+line)?[\s-]+spac(?:e|ed|ing)\b",
+        flat,
+        re.I,
+    )
+    spacing_options: list[float] = []
+    for token in spacing_matches:
+        parsed = _parse_spacing(token)
+        if parsed is not None and parsed not in spacing_options:
+            spacing_options.append(parsed)
+    if spacing_val is None and spacing_options:
+        spacing_val = spacing_options[0]
+    if spacing_val is not None and spacing_val not in spacing_options:
+        spacing_options.insert(0, spacing_val)
     if spacing_val is not None:
         rules["line_spacing"] = spacing_val
         rules["spacing"] = str(spacing_val).rstrip("0").rstrip(".") if isinstance(spacing_val, float) else str(spacing_val)
@@ -1592,13 +1607,18 @@ def derive_mechanics_rules(text: str) -> dict:
             rules["spacing"] = "1.5"
         elif spacing_val == 2.0:
             rules["spacing"] = "2"
+    if len(spacing_options) > 1:
+        rules["line_spacings"] = spacing_options
 
     indent_raw = _value_after_label(
         flat,
         ("Indention", "Indentation", "First-line indent", "First line indent", "Paragraph indent"),
         stop,
     )
-    indent_val = _parse_inches(indent_raw) if indent_raw else None
+    # Indentation only: never invent a default (bare "tab" / unclear → omit → IGNORE).
+    from app.indent_check import _parse_indent_inches as _parse_indent_rule_inches
+
+    indent_val = _parse_indent_rule_inches(indent_raw) if indent_raw else None
     if indent_val is None:
         # Label then measure: "first-line indent: 0.5 inch"
         indent_match = re.search(
@@ -1608,7 +1628,7 @@ def derive_mechanics_rules(text: str) -> dict:
             re.I,
         )
         if indent_match:
-            indent_val = parse_length_inches(indent_match.group(1))
+            indent_val = _parse_indent_rule_inches(indent_match.group(1))
         if indent_val is None:
             # Measure then label (same sentence as spacing): "0.5 inch first-line indent"
             measure_then = re.search(
@@ -1617,21 +1637,31 @@ def derive_mechanics_rules(text: str) -> dict:
                 flat,
             )
             if measure_then:
-                indent_val = parse_length_inches(measure_then.group(1))
-        if indent_val is None and re.search(
-            r"(?i)(?:0\.5|½|1\s*/\s*2)\s*(?:[\"″]|inches?|in\b)?\s*TAB"
-            r"|\bTAB\b[^.]{0,40}?(?:0\.5|½|1\s*/\s*2)"
-            r"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{0,40}?(?:0\.5|½|1\s*/\s*2)",
-            flat,
-        ):
-            indent_val = 0.5
-        elif indent_val is None and re.search(
-            r"\bone\s+tab\b|\bindent(?:ation|ion)?\s*(?:of|:)?\s*one\s+tab\b", flat, re.I
-        ):
-            indent_val = 0.5
+                indent_val = _parse_indent_rule_inches(measure_then.group(1))
+        # "0.5 inch TAB" / "TAB = 0.5 inch" — only when a measure is stated beside TAB.
+        if indent_val is None:
+            tab_with_measure = re.search(
+                rf"(?i)(?:({MEASURE_PATTERN})\s*TAB)"
+                rf"|\bTAB\b[^.]{{0,40}}?({MEASURE_PATTERN})"
+                rf"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{{0,40}}?({MEASURE_PATTERN})",
+                flat,
+            )
+            if tab_with_measure:
+                for group in tab_with_measure.groups():
+                    if group:
+                        indent_val = _parse_indent_rule_inches(group)
+                        if indent_val is not None:
+                            break
+        # Bare "one tab" / "indent of one tab" with no equivalent → leave unset (IGNORE).
     if indent_val is not None:
         rules["first_line_indent_inches"] = indent_val
         rules["indention"] = f"{indent_val} inch" if indent_val != 1 else "1 inch"
+    if re.search(r"(?i)\bhanging\s+indent", flat):
+        rules["indent_type"] = "hanging"
+    elif re.search(r"(?i)\bright\s+indent", flat):
+        rules["indent_type"] = "right"
+    elif re.search(r"(?i)\bleft\s+indent\b", flat) and not re.search(r"(?i)first[\s-]?line", flat):
+        rules["indent_type"] = "left"
 
     margins = _extract_margins(flat, stop)
     if margins:
@@ -1712,7 +1742,7 @@ def derive_mechanics_rules(text: str) -> dict:
         "Body text",
     )
 
-    # "Heading 3 and contents: 11" — one sentence assigns the SAME pt to Heading 3
+    # "Heading 3 and contents: 11" - one sentence assigns the SAME pt to Heading 3
     # and body/contents; they remain separate rules that share the value.
     combined_heading_body = re.finditer(
         r"(?i)\bheading\s*(\d)\s+and\s+(?:contents?|body)(?:\s*(?:text|content))?(?:\s*size)?\s*[:：=]?\s*"
@@ -1728,7 +1758,7 @@ def derive_mechanics_rules(text: str) -> dict:
             combined_sizes["body_size"] = number
 
     # Same sentence, DIFFERENT values: "Heading 1 size: 16 pt and body size: 11 pt"
-    # (each label keeps its own field — do not let one capture swallow the other).
+    # (each label keeps its own field - do not let one capture swallow the other).
     paired_heading_body = re.finditer(
         r"(?i)\bheading\s*(\d)(?:\s*size)?\s*[:：=]?\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
         r".{0,40}?\b(?:and|&|,)?\s*"
@@ -1760,7 +1790,7 @@ def derive_mechanics_rules(text: str) -> dict:
         if 1 <= level <= MAX_HEADING_LEVELS and 6 <= heading_pt <= 72:
             combined_sizes.setdefault(f"heading{level}_size", heading_pt)
 
-    # Heading sizes only when the guide ties Heading N to a size/pt — never from a
+    # Heading sizes only when the guide ties Heading N to a size/pt - never from a
     # bare mention of "Heading 1" next to unrelated numbers (margins, word counts).
     size_sources: list[tuple[str, str, tuple[str, ...]]] = []
     for level in range(1, MAX_HEADING_LEVELS + 1):
@@ -1787,7 +1817,7 @@ def derive_mechanics_rules(text: str) -> dict:
     def _explicit_pt(raw: str | None) -> float | None:
         """Point size only when the guide states pt/points, or the value is bare like '16'.
 
-        Never treat '40 mm', '30 words', or '40 characters' as a font size — that invented
+        Never treat '40 mm', '30 words', or '40 characters' as a font size - that invented
         phantom heading1_size values (30.0 / 40.0) from unrelated guide numbers.
         """
         text = str(raw or "").strip()
@@ -1803,7 +1833,7 @@ def derive_mechanics_rules(text: str) -> dict:
         if size_labeled:
             number = float(size_labeled.group(1))
             return number if 6 <= number <= 72 else None
-        # "Heading 1: 16" / "16" — number alone, no other words/units.
+        # "Heading 1: 16" / "16" - number alone, no other words/units.
         if re.fullmatch(r"\d{1,2}(?:\.\d+)?", text):
             number = float(text)
             return number if 6 <= number <= 72 else None
@@ -1832,7 +1862,7 @@ def derive_mechanics_rules(text: str) -> dict:
         return number if 6 <= number <= 72 else None
 
     def _contents_body_pt() -> float | None:
-        """Bare Content/Contents: 11 — not 'Table of Contents'."""
+        """Bare Content/Contents: 11 - not 'Table of Contents'."""
         match = re.search(
             r"(?i)(?<!of )\bcontents?\b(?:\s*size)?\s*[:：=]\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
             flat,
@@ -1868,11 +1898,11 @@ def derive_mechanics_rules(text: str) -> dict:
             value = _nearby_pt(labels)
         if value is not None:
             font[key] = value
-            # sizes_points is body fallback only — do not dump headingN sizes into it.
+            # sizes_points is body fallback only - do not dump headingN sizes into it.
             if key in {"body_size", "heading3_content_size"}:
                 sizes = sorted(set([*sizes, value]))
                 font["sizes_points"] = sizes
-    # Shared "Heading N and contents: 11" — apply both rules (same value, separate fields).
+    # Shared "Heading N and contents: 11" - apply both rules (same value, separate fields).
     for key, value in combined_sizes.items():
         font[key] = value
         if key == "body_size":
@@ -1885,51 +1915,125 @@ def derive_mechanics_rules(text: str) -> dict:
             sizes = sorted(set([*sizes, contents_pt]))
             font["sizes_points"] = sizes
     if "body_size" not in font:
-        # "Font Type and Size: … 12" / "Font size: 12" / "typeface size 12".
-        typeface_size = re.search(
+        # Many guides state a manuscript-wide typeface size and later a different
+        # title/cover size. Collect candidates and prefer body/typeface wording
+        # over title-only "Font size N" so any school guide works — not one template.
+        candidates: list[tuple[int, int, float]] = []  # (score, -start, pt)
+
+        def _local_context(start: int, end: int) -> tuple[str, str]:
+            # Prefer what the size is describing (before). After stays in-clause only
+            # so a later title/cover rule cannot poison an earlier body size.
+            before = flat[max(0, start - 120) : start]
+            rest = flat[end : min(len(flat), end + 80)]
+            stop = re.search(r"[.;\n]", rest)
+            after = rest[: stop.start()] if stop else rest[:40]
+            return before, after
+
+        def _is_title_or_heading_exception(before: str, after: str) -> bool:
+            # Reject sizes that clearly describe title/cover text only.
+            clause = f"{before[-90:]}{after}"
+            return bool(
+                re.search(
+                    r"(?i)\b(?:"
+                    r"title\s+page|cover\s+page|chapter\s+title|section\s+title|"
+                    r"thesis\s+title|dissertation\s+title|"
+                    r"uppercase\s+letters|all\s+caps|"
+                    r"bold\s+style|boldface"
+                    r")\b",
+                    clause,
+                )
+            )
+
+        def _add_candidate(start: int, end: int, value: float | None, base: int) -> None:
+            if value is None or not (6 <= float(value) <= 72):
+                return
+            before, after = _local_context(start, end)
+            if _is_title_or_heading_exception(before, after):
+                return
+            window = f"{before}{after}"
+            score = base
+            if re.search(
+                r"(?i)\b(?:throughout|entire\s+manuscript|whole\s+manuscript|must\s+be\s+used)\b",
+                window,
+            ):
+                score += 4
+            if re.search(
+                r"(?i)\b(?:typeface|font\s*(?:family|type)|body(?:\s*text)?|main\s+text|manuscript\s+text)\b",
+                window,
+            ):
+                score += 3
+            if re.search(
+                r"(?i)\b(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica)\b",
+                window,
+            ):
+                score += 2
+            # Earlier manuscript rules beat later exceptions when scores tie.
+            candidates.append((score, -start, float(value)))
+
+        for match in re.finditer(
+            r"\b(?:typeface|font(?:\s*(?:family|type))?|type)\b(.{0,40}?)\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+            re.I,
+        ):
+            if re.search(r"(?i)\bheading\b", match.group(1) or ""):
+                continue
+            _add_candidate(match.start(), match.end(), float(match.group(2)), base=5)
+
+        for match in re.finditer(
             r"\bfont\s*(?:type\s*)?(?:and|&|/)\s*size\b\s*:?\s*[^.\d]{0,60}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
-            r"|\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b"
             r"|\b(?:typeface|font\s*(?:family|type)|type)\s+size\b\s*(?:=|:)?\s*(\d{1,2}(?:\.\d+)?)\b",
             flat,
             re.I,
-        )
-        number = None
-        if typeface_size:
-            number = float(next(group for group in typeface_size.groups() if group))
-        else:
-            # Prose: "… font, size 12 …" — allow a short gap, but never across "Heading N".
-            spanned = re.search(
-                r"\b(?:typeface|font(?:\s*(?:family|type))?|type)\b(.{0,40}?)\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
-                flat,
-                re.I,
-            )
-            if spanned and not re.search(r"(?i)\bheading\b", spanned.group(1) or ""):
-                number = float(spanned.group(2))
-        # Institutional prose: "Times New Roman, font 12" / "Font style … font 12".
-        if number is None:
-            prose_font = re.search(
-                r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica|"
-                r"font\s*style|typeface)\b[^.]{0,80}?\bfont\s+(\d{1,2})\b"
-                r"|\bfont\s+style\b[^.]{0,100}?\b(\d{1,2})\b(?!\s*(?:inch|mm|cm|heading))",
-                flat,
-            )
-            if prose_font and not re.search(
+        ):
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=4)
+
+        for match in re.finditer(
+            r"\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+            re.I,
+        ):
+            _add_candidate(match.start(), match.end(), float(match.group(1)), base=1)
+
+        for match in re.finditer(
+            r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica|"
+            r"font\s*style|typeface)\b[^.]{0,80}?\bfont\s+(\d{1,2})\b"
+            r"|\bfont\s+style\b[^.]{0,100}?\b(\d{1,2})\b(?!\s*(?:inch|mm|cm|heading))",
+            flat,
+        ):
+            if re.search(
                 r"(?i)\bheading\b.{0,30}\bfont\s+\d",
-                flat[
-                    max(0, (prose_font.start() - 40)) : prose_font.end() + 10
-                ],
+                flat[max(0, match.start() - 40) : match.end() + 10],
             ):
-                number = float(next(group for group in prose_font.groups() if group))
-        if number is not None and 6 <= number <= 72:
+                continue
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=3)
+
+        # "Calibri, size 12" / "main text … size 12" without the word "font" before size.
+        for match in re.finditer(
+            r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica)\b"
+            r".{0,40}?\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b"
+            r"|\b(?:main\s+text|body(?:\s*text)?|manuscript(?:\s*text)?)\b"
+            r".{0,80}?\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+        ):
+            if re.search(r"(?i)\bheading\b", match.group(0) or ""):
+                continue
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=4)
+
+        if candidates:
+            candidates.sort(reverse=True)
+            number = candidates[0][2]
             font["body_size"] = number
             sizes = sorted(set([*sizes, number]))
             font["sizes_points"] = sizes
     if "body_size" in font:
         font["heading3_content_size"] = font["body_size"]
-        # Keep sizes_points body-only — never leave heading pt values in the bag.
+        # Keep sizes_points body-only - never leave heading pt values in the bag.
         font["sizes_points"] = [float(font["body_size"])]
     font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
-    # Only store color when the guide names it — never invent Black/Automatic.
+    # Only store color when the guide names it - never invent Black/Automatic.
     if font_color:
         if re.search(r"black|automatic", font_color, re.I):
             font["color"] = "Black/Automatic"
@@ -1940,13 +2044,25 @@ def derive_mechanics_rules(text: str) -> dict:
 
     pagination: dict = {}
     position = _line_value(text, ("Page number position", "Pagination position", "Page numbers", "Page number"))
-    if not all(page_position_parts(position)):
+    # Prefer the Position line; only infer from whole-guide phrasing that clearly means
+    # the manuscript has no numbers at all (not "no page number on the title page").
+    if pagination_omits_all_numbers(position) or re.search(
+        r"(?i)\b(?:page\s+numbers?\s+not\s+required|"
+        r"do\s+not\s+(?:use|include|put|require)\s+page\s+numbers?|"
+        r"unnumbered\s+(?:manuscript|document|paper|thesis)|"
+        r"entire\s+(?:manuscript|document|paper).{0,40}no\s+page\s+numbers?|"
+        r"no\s+page\s+numbers?\s+(?:throughout|anywhere|at\s+all))\b",
+        flat,
+    ):
+        position = PAGE_NO_NUMBERS
+    elif not all(page_position_parts(position)):
         found = re.search(r"\b(?:top|bottom|upper|lower)[\s-]+(?:left|right|cent(?:er|re))\b", flat, re.I)
         position = found.group(0) if found else position
     if position.strip():
         pagination["position"] = canonical_page_position(position)[:120]
-        if page_number_only(position) or page_number_only(
-            _line_value(text, ("Pagination", "Page numbering", "Page numbers"))
+        if not pagination_omits_all_numbers(pagination["position"]) and (
+            page_number_only(position)
+            or page_number_only(_line_value(text, ("Pagination", "Page numbering", "Page numbers")))
         ):
             pagination["number_only"] = True
     first_page = _line_value(text, ("First page of each chapter", "First page of a chapter", "Chapter first page"))
@@ -1971,7 +2087,7 @@ def derive_mechanics_rules(text: str) -> dict:
         title_page = TITLE_HIDDEN_COUNTED
     if title_page:
         pagination["title_page"] = title_page
-    # Only set preliminary / body numbering when those lines exist in the guide —
+    # Only set preliminary / body numbering when those lines exist in the guide  - 
     # do not infer them from unrelated wording (avoids false pagination style checks).
     preliminary_raw = _line_value(text, ("Preliminary pages", "Preliminary page numbers", "Front matter"))
     if not preliminary_raw:
@@ -2219,7 +2335,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
             continue
         if 6 <= number <= 72:
             font_out[key] = number
-            # sizes_points is a body-size fallback only — do not merge headingN_size into it,
+            # sizes_points is a body-size fallback only - do not merge headingN_size into it,
             # or Heading 1 can be judged against Heading 2/3 sizes the user never set for H1.
             if key in {"body_size", "heading3_content_size"}:
                 if isinstance(sizes, list):
@@ -2231,7 +2347,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         font_out["heading3_content_size"] = font_out["body_size"]
     elif "heading3_content_size" in font_out:
         # Drop a stale combined value that only echoes a heading level size (H1→body leak).
-        # Keep distinct values — legacy payloads still use this key as the body size.
+        # Keep distinct values - legacy payloads still use this key as the body size.
         combined = font_out["heading3_content_size"]
         level_sizes = {
             font_out[key]
@@ -2270,7 +2386,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
                 if number not in seen:
                     seen.add(number)
                     unique.append(number)
-            # Drop values that only exist as headingN_size — those are not body rules.
+            # Drop values that only exist as headingN_size - those are not body rules.
             body_fallback = [number for number in unique if number not in heading_size_values]
             if body_fallback:
                 font_out["sizes_points"] = body_fallback[:8]
@@ -2319,7 +2435,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["paper_size"] = paper_size_out
 
     # The text the user typed ("Double", "1/2 inch", "1.27 cm") is the source of truth over a pre-parsed number.
-    # Blank / NA fields are dropped — unset mechanics must not become enforceable rules.
+    # Blank / NA fields are dropped - unset mechanics must not become enforceable rules.
     spacing_text = str(raw.get("spacing") or "").strip()
     if rule_unset(spacing_text):
         spacing_text = ""
@@ -2331,17 +2447,34 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     if spacing is not None:
         rules["line_spacing"] = spacing
         rules.setdefault("spacing", f"{spacing:g}")
+    spacing_options: list[float] = []
+    for raw_spacing in list(raw.get("line_spacings") or []) + ([spacing] if spacing is not None else []):
+        parsed = parse_line_spacing(raw_spacing)
+        if parsed is not None and parsed not in spacing_options:
+            spacing_options.append(parsed)
+    if len(spacing_options) > 1:
+        rules["line_spacings"] = spacing_options
 
     indention = str(raw.get("indention") or "").strip()
     if rule_unset(indention):
         indention = ""
     if indention:
         rules["indention"] = indention[:120]
-    indent = parse_length_inches(indention) if indention else None
-    if indent is None:
-        indent = parse_length_inches(raw.get("first_line_indent_inches"))
+    # Indentation only: bare "tab" without a stated equivalent must not become 0.5.
+    from app.indent_check import _parse_indent_inches as _parse_indent_rule_inches
+
+    indent = _parse_indent_rule_inches(indention) if indention else None
+    if indent is None and not rule_unset(raw.get("first_line_indent_inches")):
+        indent = _parse_indent_rule_inches(raw.get("first_line_indent_inches"))
     if indent is not None and indent <= 2:
         rules["first_line_indent_inches"] = indent
+    indent_type = str(raw.get("indent_type") or raw.get("indentation_type") or "").strip().lower()
+    if indent_type in {"first_line", "hanging", "left", "right", "none"}:
+        rules["indent_type"] = indent_type
+    if not rule_unset(raw.get("indent_tolerance_inches")):
+        tol = _parse_indent_rule_inches(raw.get("indent_tolerance_inches"))
+        if tol is not None:
+            rules["indent_tolerance_inches"] = tol
 
     alignment_raw = raw.get("alignment") or raw.get("text_alignment")
     alignment = None if rule_unset(alignment_raw) else parse_alignment(alignment_raw)
@@ -2439,6 +2572,7 @@ _SAMPLE_SECTIONS = (
         (
             ("Size", "8.5 x 11"),
             ("Orientation", "Portrait"),
+            ("Substance", "20"),
             ("Spacing", "Double"),
             ("Word spacing", "One space between words and after periods"),
             ("Indention", "0.5 inch"),
@@ -2473,6 +2607,7 @@ _SAMPLE_SECTIONS = (
             ("Chapter starts", "CHAPTER I, CHAPTER II…; Chapter 1, Chapter 2…"),
         ),
     ),
+    ("Page Breaks", "Only to start each new chapter and the reference list"),
     (
         "Table Layout",
         "Table number in bold, with the title in italic title case on the next line, both placed above it",
@@ -2514,7 +2649,7 @@ def build_sample_mechanics_docx() -> bytes:
     _apply_sample_run_font(
         intro.add_run(
             "Keep every section and field label (for example Margins and Top). "
-            "Put a real value next to each label, or type IGNORE to skip that check — "
+            "Put a real value next to each label, or type IGNORE to skip that check - "
             "do not use N/A and do not delete labels. Upload this guide, review Format Fields, then save."
         )
     )

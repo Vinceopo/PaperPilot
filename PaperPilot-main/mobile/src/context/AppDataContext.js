@@ -248,6 +248,8 @@ export function AppDataProvider({ children }) {
       versionId,
       citationStyle,
       mechanicsName: profile?.name || profile?.source_filename || profile?.filename || "",
+      mechanicsRules:
+        profile?.rules && typeof profile.rules === "object" ? profile.rules : null,
       pageCount: version?.page_count,
       versionNumber: version?.version_number,
       cloudinaryUrl: version?.cloudinary_url || "",
@@ -812,12 +814,25 @@ export function AppDataProvider({ children }) {
     );
   }
 
+  function resolveMechanicsRules(scanResult) {
+    const fromResult =
+      scanResult?.mechanicsRules && typeof scanResult.mechanicsRules === "object"
+        ? scanResult.mechanicsRules
+        : null;
+    if (fromResult) return fromResult;
+    const mechanicsId = selectedMechanicsIdRef.current || scanResult?.mechanicsId;
+    const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
+    return profile?.rules && typeof profile.rules === "object" ? profile.rules : null;
+  }
+
   // Stored versions can be trimmed or server-only; fetch the full scan when opened.
   async function resolveSavedResult(manuscript, version) {
     if (!version) return null;
     const scanId = versionScanId(version);
     if ((version.scanResult && !version.trimmed) || !isServerId(scanId)) {
-      return versionToScanResult(manuscript, version);
+      const saved = versionToScanResult(manuscript, version);
+      if (!saved) return null;
+      return { ...saved, mechanicsRules: resolveMechanicsRules(saved) };
     }
     try {
       const scan = await getComplianceScan(scanId);
@@ -826,6 +841,7 @@ export function AppDataProvider({ children }) {
         documentTitle: manuscript?.title,
         citationStyle: manuscript?.citationStyle,
         mechanicsName: version.scanResult?.mechanicsName || manuscript?.mechanicsName || "",
+        mechanicsRules: resolveMechanicsRules(version.scanResult),
         versionId: version.versionId || version.scanResult?.versionId,
         documentName: version.scanResult?.documentName,
         cloudinaryUrl: version.scanResult?.cloudinaryUrl,
@@ -836,9 +852,13 @@ export function AppDataProvider({ children }) {
       void saveScannedManuscripts(next, user?.uid);
       const updated = next.find((m) => m.id === manuscript.id);
       const updatedVersion = updated?.versions?.find((v) => v.id === version.id);
-      return versionToScanResult(updated || manuscript, updatedVersion || version);
+      const saved = versionToScanResult(updated || manuscript, updatedVersion || version);
+      if (!saved) return null;
+      return { ...saved, mechanicsRules: resolveMechanicsRules(saved) };
     } catch {
-      return versionToScanResult(manuscript, version);
+      const saved = versionToScanResult(manuscript, version);
+      if (!saved) return null;
+      return { ...saved, mechanicsRules: resolveMechanicsRules(saved) };
     }
   }
 

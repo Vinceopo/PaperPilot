@@ -127,15 +127,36 @@ export function normalizeIssueLocation(loc = {}) {
   const pageAlignRaw = String(loc.page_align || loc.pageAlign || "").trim().toLowerCase();
   const section = String(loc.section || loc.category || "").trim();
   const pagination = section.toLowerCase() === "pagination";
+  const printedPageLabel = String(loc.printed_page_label || loc.printedPageLabel || "").trim();
+  const paragraphId = String(loc.paragraph_id || loc.paragraphId || "").trim();
+  const measuredX0 = loc.measured_x0 ?? loc.measuredX0;
+  const baselineX0 = loc.baseline_x0 ?? loc.baselineX0;
+  const measuredIndent = loc.measured_indent_in ?? loc.measuredIndentIn;
+  const expectedIndent = loc.expected_indent_in ?? loc.expectedIndentIn;
+  const ruleSnapshot = loc.rule_snapshot || loc.ruleSnapshot || null;
+  const highlightFrom = String(loc.highlight_from || loc.highlightFrom || "").trim();
+
   return {
     page,
-    // Pagination is a header/footer finding — drop leaked body line pins.
+    // Pagination is a header/footer finding - drop leaked body line pins.
     line: pagination ? null : line,
     section,
     bbox: pagination ? null : bbox,
     excerpt: pagination ? "" : String(loc.excerpt || loc.text || "").trim(),
     pageWidth: pageWidth != null ? Number(pageWidth) : null,
     pageHeight: pageHeight != null ? Number(pageHeight) : null,
+    ...(printedPageLabel ? { printed_page_label: printedPageLabel, printedPageLabel } : {}),
+    ...(paragraphId ? { paragraph_id: paragraphId, paragraphId } : {}),
+    ...(measuredX0 != null && measuredX0 !== "" ? { measured_x0: Number(measuredX0), measuredX0: Number(measuredX0) } : {}),
+    ...(baselineX0 != null && baselineX0 !== "" ? { baseline_x0: Number(baselineX0), baselineX0: Number(baselineX0) } : {}),
+    ...(measuredIndent != null && measuredIndent !== ""
+      ? { measured_indent_in: Number(measuredIndent), measuredIndentIn: Number(measuredIndent) }
+      : {}),
+    ...(expectedIndent != null && expectedIndent !== ""
+      ? { expected_indent_in: Number(expectedIndent), expectedIndentIn: Number(expectedIndent) }
+      : {}),
+    ...(ruleSnapshot ? { rule_snapshot: ruleSnapshot, ruleSnapshot } : {}),
+    ...(highlightFrom ? { highlight_from: highlightFrom, highlightFrom } : {}),
     ...(summary ? { summary } : {}),
     ...(explanation ? { explanation } : {}),
     ...(recommendation ? { recommendation } : {}),
@@ -205,6 +226,7 @@ function categoryRows(scan) {
           numberOrNull(section.issue_count) ??
           0,
         failedShare: numberOrNull(cat.failed_share?.value ?? cat.failedShare),
+        notice: cat.notice || section.notice || null,
         measured: (unitsChecked ?? 0) > 0 || score != null,
       };
     });
@@ -345,6 +367,8 @@ export function mapComplianceScanToResult(scan, meta = {}) {
     scannedAt: scan?.created_at || new Date().toISOString(),
     citationStyle: meta.citationStyle || "APA",
     mechanicsName: meta.mechanicsName || "",
+    mechanicsRules:
+      meta.mechanicsRules && typeof meta.mechanicsRules === "object" ? meta.mechanicsRules : null,
     overallScore,
     overallCategories: Array.isArray(scoring?.overall?.categories) ? scoring.overall.categories : null,
     rightPct,

@@ -4,6 +4,173 @@ export function hasValue(value) {
   return value != null && Number.isFinite(Number(value));
 }
 
+/** Score Breakdown categories (matches backend BREAKDOWN_ORDER / live web). */
+export const SCORE_BREAKDOWN_ORDER = [
+  "Fonts",
+  "Margins",
+  "Indentation",
+  "Spacing",
+  "Alignment",
+  "Pagination",
+  "Citations",
+];
+
+/**
+ * True when a mechanics field is blank / IGNORE / NA (no rule to enforce).
+ * Mirrors api/app/mechanics_options._rule_unset for client-side filtering.
+ */
+export function isMechanicsRuleUnset(value) {
+  if (value == null) return true;
+  if (typeof value === "boolean") return false;
+  if (typeof value === "number") return false;
+  if (Array.isArray(value)) {
+    return !value.length || value.every((item) => isMechanicsRuleUnset(item));
+  }
+  if (typeof value === "object") {
+    const entries = Object.values(value);
+    return !entries.length || entries.every((item) => isMechanicsRuleUnset(item));
+  }
+  const text = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  return (
+    !text ||
+    text === "ignore" ||
+    text === "na" ||
+    text === "n/a" ||
+    text === "n.a." ||
+    text === "n.a" ||
+    text === "not checked" ||
+    text === "not check" ||
+    text === "none" ||
+    text === "-" ||
+    text === "—"
+  );
+}
+
+/**
+ * Which Score Breakdown categories have at least one configured (non-IGNORE) rule
+ * in the selected Format Mechanics profile.
+ * Captions are not a scored breakdown category on web, so they stay out of this set.
+ */
+export function activeScoreCategoriesFromRules(rules) {
+  const active = new Set();
+  if (!rules || typeof rules !== "object") return active;
+
+  const font = rules.font && typeof rules.font === "object" ? rules.font : {};
+  const families = Array.isArray(font.families) ? font.families : [];
+  const sizes = Array.isArray(font.sizes_points) ? font.sizes_points : [];
+  const headingSizes = Object.keys(font).some(
+    (key) => /^heading\d+_size$/i.test(key) && !isMechanicsRuleUnset(font[key]),
+  );
+  const headingStyles =
+    font.heading_styles &&
+    typeof font.heading_styles === "object" &&
+    Object.values(font.heading_styles).some((style) => !isMechanicsRuleUnset(style));
+  const color = String(font.color || "").trim();
+  const hasColor =
+    color &&
+    !isMechanicsRuleUnset(color) &&
+    !/^(na|n\/a|n\.a\.?|none|not checked|-|—)$/i.test(color);
+  if (
+    !isMechanicsRuleUnset(font.type) ||
+    families.some((family) => !isMechanicsRuleUnset(family)) ||
+    font.body_size != null ||
+    sizes.some((size) => size != null && !isMechanicsRuleUnset(size)) ||
+    headingSizes ||
+    headingStyles ||
+    hasColor
+  ) {
+    active.add("Fonts");
+  }
+
+  const margins =
+    rules.margins_inches && typeof rules.margins_inches === "object" ? rules.margins_inches : {};
+  const hasMargins = ["top", "bottom", "left", "right"].some(
+    (side) => margins[side] != null && !isMechanicsRuleUnset(margins[side]),
+  );
+  const paper = rules.paper && typeof rules.paper === "object" ? rules.paper : {};
+  const hasPaperSize =
+    !isMechanicsRuleUnset(paper.size) ||
+    (rules.paper_size && !isMechanicsRuleUnset(rules.paper_size));
+  if (hasMargins || hasPaperSize || !isMechanicsRuleUnset(paper.orientation)) {
+    active.add("Margins");
+  }
+
+  if (
+    (rules.first_line_indent_inches != null &&
+      !isMechanicsRuleUnset(rules.first_line_indent_inches)) ||
+    !isMechanicsRuleUnset(rules.indention)
+  ) {
+    active.add("Indentation");
+  }
+
+  const spacings = Array.isArray(rules.line_spacings) ? rules.line_spacings : [];
+  if (
+    (rules.line_spacing != null && !isMechanicsRuleUnset(rules.line_spacing)) ||
+    !isMechanicsRuleUnset(rules.spacing) ||
+    spacings.some((value) => value != null && !isMechanicsRuleUnset(value)) ||
+    !isMechanicsRuleUnset(rules.word_spacing)
+  ) {
+    active.add("Spacing");
+  }
+
+  if (!isMechanicsRuleUnset(rules.alignment)) {
+    active.add("Alignment");
+  }
+
+  const pagination =
+    rules.pagination && typeof rules.pagination === "object" ? rules.pagination : {};
+  const paginationReqs = Array.isArray(rules.pagination_requirements)
+    ? rules.pagination_requirements
+    : [];
+  if (
+    Object.values(pagination).some((value) => !isMechanicsRuleUnset(value)) ||
+    paginationReqs.some((value) => !isMechanicsRuleUnset(value))
+  ) {
+    active.add("Pagination");
+  }
+
+  if (!isMechanicsRuleUnset(rules.citation_style)) {
+    active.add("Citations");
+  }
+
+  return active;
+}
+
+/**
+ * Keep only Score Breakdown rows whose category has configured/enabled rules.
+ * When `rules` is null/undefined (legacy scans), rows stay as returned by the API.
+ */
+export function filterScoreBreakdownByRules(scoreBreakdown = [], rules) {
+  const list = Array.isArray(scoreBreakdown) ? scoreBreakdown : [];
+  if (rules == null) return list;
+  const active = activeScoreCategoriesFromRules(rules);
+  if (!active.size) return [];
+  return list.filter((row) => {
+    const name = String(row?.metric || row?.section || "").trim();
+    if (!active.has(name)) return false;
+    const status = String(row?.status || "").toLowerCase();
+    if (status === "not_applicable") return false;
+    return true;
+  });
+}
+
+/** Drop issue cards for categories that have no configured/enabled rule. */
+export function filterIssuesByActiveRules(issues = [], rules) {
+  const list = Array.isArray(issues) ? issues : [];
+  if (rules == null) return list;
+  const active = activeScoreCategoriesFromRules(rules);
+  if (!active.size) return [];
+  return list.filter((issue) => {
+    const section = String(issue?.section || issue?.category || "").trim();
+    if (!section) return true;
+    const known = [...active].find((name) => name.toLowerCase() === section.toLowerCase());
+    return Boolean(known);
+  });
+}
+
 /** Percentage for display, or an em dash when the backend had no denominator. */
 export function formatPct(value, digits = 1) {
   if (!hasValue(value)) return "-";
