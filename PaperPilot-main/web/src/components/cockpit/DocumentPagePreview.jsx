@@ -576,15 +576,18 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     const pageHeight = pageEl.clientHeight;
     const bboxY =
       bbox && Number.isFinite(Number(bbox.y)) ? Number(bbox.y) * pageHeight : null;
-    // Line number wins over a shared/coarse bbox so lines 13/14/15 stay distinct.
     const indentIssue = isIndentationIssue(target);
-    const y = resolvePdfMarkY({
-      line: target.line,
-      ys,
-      bboxY,
-      pageHeight,
-      preferBbox: indentIssue,
-    });
+    // Indentation: paint only from the stored measurement bbox (paragraph anchor).
+    // Line number is display-only and must not recompute the highlight.
+    const y = indentIssue && bboxY != null
+      ? bboxY
+      : resolvePdfMarkY({
+          line: target.line,
+          ys,
+          bboxY,
+          pageHeight,
+          preferBbox: false,
+        });
     if (isMarginTarget(target) || shouldUsePaginationEdge(target)) {
       const side = isMarginTarget(target) ? resolveEdgeSide(target) : pageRegion(target);
       const align = shouldUsePaginationEdge(target) ? pageAlign(target) : "";
@@ -600,12 +603,11 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     }
     const lineIdx = Number(target.line);
     const usedLine =
+      !indentIssue &&
       Number.isFinite(lineIdx) &&
       lineIdx >= 1 &&
       ys[Math.min(ys.length, Math.max(1, Math.round(lineIdx))) - 1] != null &&
       Math.abs(y - Number(ys[Math.min(ys.length, Math.max(1, Math.round(lineIdx))) - 1])) < 1;
-    // Prefer scanner bbox ink when present. Line pin only moves the vertical
-    // anchor - never stretch to the next row or flood 84% of the page width.
     const hasInkBox =
       bbox &&
       Number.isFinite(Number(bbox.x)) &&
@@ -619,15 +621,20 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
         page: pageNumber,
         kind: "box",
         severity: target.severity,
-        // Indent: always use the resolved Y (bbox-preferred). Other issues keep line/bbox mix.
-        top: indentIssue || usedLine ? `${y}px` : `${Number(bbox.y) * 100}%`,
+        top: indentIssue
+          ? `${Number(bbox.y) * 100}%`
+          : usedLine
+            ? `${y}px`
+            : `${Number(bbox.y) * 100}%`,
         left: `${Number(bbox.x) * 100}%`,
         width: `${Math.max(0.02, Number(bbox.w)) * 100}%`,
         height: `${boxH * 100}%`,
       });
+    } else if (indentIssue) {
+      // Indent without bbox: do not invent a line-based mark.
+      setMark(null);
+      return;
     } else {
-      // One glyph-tall band - not the full gap to the next text row (that paints blank space).
-      // Without a bbox, estimate width from the excerpt instead of flooding 84% of the page.
       markHeight = Math.max(16, Math.min(28, pageHeight * 0.028));
       const excerptLen = String(target.excerpt || "").trim().length;
       const widthPct = excerptLen

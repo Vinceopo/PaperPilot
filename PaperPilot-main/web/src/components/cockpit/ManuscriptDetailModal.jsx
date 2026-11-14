@@ -9,6 +9,7 @@ import ConfirmDialog from "../ConfirmDialog.jsx";
 import { scoreBand } from "../../lib/scoreBand.js";
 import {
   CATEGORY_STATUS_LABEL,
+  filterScoreBreakdownByRules,
   formatCount,
   formatPct,
   formatScore,
@@ -258,6 +259,24 @@ export default function ManuscriptDetailModal({
   const issues = [...(selected?.issues || [])].sort(
     (a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9)
   );
+  const mechanicsRules =
+    selected?.scanResult?.mechanicsRules ||
+    selected?.mechanicsRules ||
+    null;
+  const breakdownRows = filterScoreBreakdownByRules(
+    selected?.breakdown || [],
+    mechanicsRules,
+  ).map((row) => ({
+    ...row,
+    section: row.section || row.metric,
+  }));
+  const formatLabel =
+    String(
+      selected?.scanResult?.formatMechanicsName ||
+        manuscript.formatMechanicsName ||
+        manuscript.citationStyle ||
+        "",
+    ).trim() || "";
 
   return (
     <div className="flex h-[calc(100dvh-7.5rem)] max-h-[calc(100dvh-7.5rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,41,0.05)]">
@@ -268,7 +287,7 @@ export default function ManuscriptDetailModal({
             {manuscript.title}
           </h2>
           <p className="shrink-0 text-sm text-slate-500">
-            {[manuscript.institution, manuscript.citationStyle]
+            {[manuscript.institution, formatLabel]
               .map((part) => String(part || "").trim())
               .filter((part) => part && part !== "-" && part !== "—")
               .join(" · ") || "—"}
@@ -403,20 +422,20 @@ export default function ManuscriptDetailModal({
 
               <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,41,0.04)]">
                 <h3 className="text-lg font-bold text-slate-900">Score Breakdown</h3>
-                {hydrating && !(selected.breakdown || []).length ? (
+                {hydrating && !breakdownRows.length ? (
                   <div className="mt-4 flex items-center gap-2 text-sm text-slate-500">
                     <Spinner className="h-4 w-4 text-[#16bfa8]" />
                     Loading score breakdown…
                   </div>
                 ) : null}
-                {(selected.breakdown || []).length > 0 &&
-                (selected.breakdown || []).every((row) => row.unitsChecked == null) ? (
+                {breakdownRows.length > 0 &&
+                breakdownRows.every((row) => row.unitsChecked == null) ? (
                   <p className="mt-1 text-sm text-slate-500">
                     Unit counts were not stored with this scan. Re-analyse the manuscript to generate the full scoring breakdown.
                   </p>
                 ) : null}
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {(selected.breakdown || []).map((row) => (
+                  {breakdownRows.map((row) => (
                     <CategoryRingCard
                       key={row.section}
                       section={row.section}
@@ -424,11 +443,13 @@ export default function ManuscriptDetailModal({
                       status={row.status}
                       unitsChecked={row.unitsChecked}
                       unitsFailed={row.unitsFailed}
-                      issueCount={row.issueCount}
+                      issueCount={
+                        hasValue(row.unitsFailed) ? row.unitsFailed : row.issueCount
+                      }
                     />
                   ))}
                 </div>
-                {!hydrating && !(selected.breakdown || []).length ? (
+                {!hydrating && !breakdownRows.length ? (
                   <p className="mt-3 text-sm text-slate-400">No score breakdown recorded for this version.</p>
                 ) : null}
               </section>

@@ -8,13 +8,14 @@ import { isServerId, mapComplianceScanToResult } from "./scanMapper.js";
 import { fetchScanWithProgress } from "./scanPoll.js";
 import {
   CATEGORY_STATUS_LABEL,
+  filterScoreBreakdownByRules,
   formatCategoryIssuesDetail,
   formatCount,
   formatPct,
   formatScore,
   hasValue,
+  reconcileDisplayedUnits,
   resolveCategoryUnitDisplays,
-  resolveUnitCounts,
 } from "./scoreFormat.js";
 import { APP_TIME_ZONE } from "./timeZone.js";
 
@@ -77,6 +78,9 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
     documentId: manuscriptId,
     documentTitle: title,
     citationStyle: opts.citationStyle || "APA",
+    formatMechanicsName: opts.formatMechanicsName || "",
+    mechanicsRules:
+      opts.mechanicsRules && typeof opts.mechanicsRules === "object" ? opts.mechanicsRules : null,
     pageCount: opts.pageCount,
     mechanicsId,
     cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || uploadedUrl || "",
@@ -105,11 +109,13 @@ export async function downloadReport(result, opts = {}) {
     campus,
     college,
     scannedAt,
-    citationStyle = "APA",
+    formatMechanicsName = "",
+    citationStyle = "",
     overallScore = null,
     rightPct,
     wrongPct,
     scoreBreakdown = [],
+    mechanicsRules = null,
     formatChecks = [],
     unitsChecked,
     unitsPassed,
@@ -118,7 +124,25 @@ export async function downloadReport(result, opts = {}) {
 
   const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
   const versionLabel = `v${versionNumber}.0`;
-  const scoreValue = hasValue(overallScore) ? Number(overallScore) : null;
+  const formatLabel =
+    String(formatMechanicsName || "").trim() ||
+    String(citationStyle || "").trim() ||
+    "Format mechanics";
+  const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
+  const categoryCards = resolveCategoryUnitDisplays(activeBreakdown).map((row) => ({
+    ...row,
+    displayIssueCount: hasValue(row.displayNonCompliant)
+      ? row.displayNonCompliant
+      : row.displayIssueCount,
+  }));
+  const evaluatedCards = categoryCards.filter(
+    (row) => hasValue(row.displayTotal) && Number(row.displayTotal) > 0 && hasValue(row.displayScore),
+  );
+  const scoreValue = evaluatedCards.length
+    ? evaluatedCards.reduce((sum, row) => sum + Number(row.displayScore), 0) / evaluatedCards.length
+    : hasValue(overallScore)
+      ? Number(overallScore)
+      : null;
 
   // ── Derived stats ─────────────────────────────────────────────────────────
   const issueRows = formatChecks.filter((c) => c && c.result !== "PASS");
@@ -127,7 +151,10 @@ export async function downloadReport(result, opts = {}) {
     total: totalUnits,
     compliant: compliantUnits,
     nonCompliant: nonCompliantUnits,
-  } = resolveUnitCounts({ unitsChecked, unitsPassed, unitsFailed });
+  } = reconcileDisplayedUnits(
+    { unitsChecked, unitsPassed, unitsFailed },
+    categoryCards,
+  );
 
   async function loadBrandLogo() {
     try {
@@ -286,7 +313,7 @@ export async function downloadReport(result, opts = {}) {
   doc.roundedRect(ML, Y, CW, 22, 2, 2, "FD");
   const metaCols = [
     ["DOCUMENT", documentTitle],
-    ["CITATION STYLE", `${citationStyle} · ${versionLabel}`],
+    ["FORMAT MECHANICS", `${formatLabel} · ${versionLabel}`],
     ["SCANNED", scannedDate],
     ["GENERATED", generatedDate],
   ];
@@ -377,7 +404,6 @@ export async function downloadReport(result, opts = {}) {
   // ══════════════════════════════════════════════════════════════════════════
   // SECTION: SCORE BREAKDOWN (oval rings — same layout language as full results)
   // ══════════════════════════════════════════════════════════════════════════
-  const categoryCards = resolveCategoryUnitDisplays(scoreBreakdown);
   if (categoryCards.length) {
     const cols = 3;
     const gap = 3.5;
@@ -450,7 +476,9 @@ export async function downloadReport(result, opts = {}) {
   doc.text("Format Checks", ML, Y);
   doc.setFontSize(7.5).setFont("helvetica", "normal").setTextColor(...SLATE);
   doc.text(
-    `${issueTypes} issue type${issueTypes === 1 ? "" : "s"} found`,
+    hasValue(nonCompliantUnits)
+      ? `${formatCount(nonCompliantUnits)} issue${Number(nonCompliantUnits) === 1 ? "" : "s"} found (matches non-compliant units)`
+      : `${issueTypes} issue type${issueTypes === 1 ? "" : "s"} found`,
     ML, Y + 5
   );
   Y += 10;

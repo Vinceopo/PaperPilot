@@ -187,9 +187,14 @@ class IssueCollector:
         loc["summary"] = summary
         loc["explanation"] = explanation
         loc["recommendation"] = recommendation
-        # Same violation once: issue_type (bucket) + page + line + section + excerpt.
+        # Same violation once. Prefer paragraph_id when present (indentation).
         excerpt_key = " ".join(str(loc.get("excerpt") or "").split())[:80].lower()
-        key = (loc.get("page"), loc.get("line"), loc.get("section"), excerpt_key)
+        paragraph_id = loc.get("paragraph_id")
+        key = (
+            ("paragraph", paragraph_id, loc.get("section"))
+            if paragraph_id
+            else (loc.get("page"), loc.get("line"), loc.get("section"), excerpt_key)
+        )
         if key in item["_seen"]:
             return
         item["_seen"].add(key)
@@ -221,7 +226,11 @@ class CategoryStats:
         self.failed = 0
         # False until a check finds a rule for this category in the mechanics file.
         # Blank/IGNORE rules still set applicable and pass eligible units (see _pass_all).
+        # Indentation IGNORE leaves applicable False and checked 0 (hidden from score).
         self.applicable = False
+        # Set by indentation when the PDF cannot be checked reliably.
+        self.unreliable = False
+        self.notice: str | None = None
 
     def observe(self, ok: bool) -> None:
         self.checked += 1
@@ -2219,14 +2228,25 @@ def _is_indent_eligible_paragraph(paragraph: list[dict]) -> bool:
 
 
 def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
-    expected = rules.get("first_line_indent_inches")
-    # 0 is a valid indent rule; blank / IGNORE pass eligible paragraph starts.
-    if expected is None or rule_unset(expected):
-        n = sum(1 for paragraph in _prose_paragraphs(units) if _is_indent_eligible_paragraph(paragraph))
-        _pass_all(stats, n)
+    """Indentation check. PDF manuscripts use indent_check (forked splitter).
+
+    DOCX manuscript plumbing is left unchanged for non-PDF units. Shared helpers
+    ``_starts_paragraph`` / ``_prose_paragraphs`` / ``_pdf_text_columns`` are not used.
+    """
+    from app.indent_check import check_pdf_indentation, resolve_indent_rule, _is_pdf_units
+
+    rule = resolve_indent_rule(rules)
+    # IGNORE / missing / unclear: 0 units, 0 issues, leave applicable False.
+    if rule is None:
         return
+
+    if _is_pdf_units(units):
+        check_pdf_indentation(units, rules, stats, collector, unit_location_fn=_unit_location)
+        return
+
+    # --- Legacy DOCX path (unchanged measurement via paragraph formatting) ---
+    expected = float(rule["value_in"])
     stats.applicable = True
-    expected = float(expected)
     body_left = _docx_body_left_indent(units)
     glossary_section = _definition_of_terms_line_keys(units)
     for paragraph in _prose_paragraphs(units):
@@ -2238,7 +2258,6 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
         actual = _measured_indent(unit, body_left)
         if actual is None:
             continue
-        # Far-right starts are almost always table cells / multi-column text, not body indent.
         if actual > max(1.25, expected + 0.75):
             continue
         ok = abs(actual - expected) <= 0.12

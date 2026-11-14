@@ -5,17 +5,16 @@
  */
 
 import IssueTracingSection from "./IssueTracingSection.jsx";
-import { categoryForIssue, normalizeDetectedIssues } from "./IssuesDetectedPanel.jsx";
 import { PaperPilotMark } from "../PaperPilotLogo.jsx";
 import {
   CATEGORY_STATUS_LABEL,
+  filterScoreBreakdownByRules,
   formatCategoryIssuesDetail,
   formatCount,
   compliancePercentFromUnits,
   formatPct,
   formatScore,
   hasValue,
-  plural,
   reconcileDisplayedUnits,
   resolveCategoryUnitDisplays,
   roundSharesToTotal,
@@ -91,17 +90,23 @@ function CategoryScoreCard({
   displayNonCompliant,
   displayIssueCount,
   displayScore,
+  notice,
 }) {
-  // Ring % follows failed units; issue findings are subtitle-only (may exceed units).
-  const fromUnits = compliancePercentFromUnits(displayTotal, displayNonCompliant);
+  const unreliable = String(status || "").toLowerCase() === "could_not_check_reliably";
+  // Ring % and issue subtitle both follow failed / non-compliant units.
+  const fromUnits = unreliable
+    ? null
+    : compliancePercentFromUnits(displayTotal, displayNonCompliant);
   const pct =
     fromUnits != null
       ? fromUnits
-      : hasValue(displayScore)
-        ? Number(displayScore)
-        : hasValue(score)
-          ? Number(score)
-          : null;
+      : unreliable
+        ? null
+        : hasValue(displayScore)
+          ? Number(displayScore)
+          : hasValue(score)
+            ? Number(score)
+            : null;
   const evaluated = hasValue(pct);
   const safe = evaluated ? Math.max(0, Math.min(100, Number(pct))) : 0;
   const name = String(metric || "Category").trim() || "Category";
@@ -110,9 +115,11 @@ function CategoryScoreCard({
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
   const findingCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
-  const detail = formatCategoryIssuesDetail(findingCount, displayTotal)
-    || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
-    || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
+  const detail = unreliable
+    ? String(notice || CATEGORY_STATUS_LABEL.could_not_check_reliably)
+    : formatCategoryIssuesDetail(findingCount, displayTotal)
+      || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
+      || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-[#f4f6f8] px-3.5 py-3">
@@ -167,39 +174,28 @@ export default function ScanResultsScreen({
     campus,
     college,
     scannedAt,
-    citationStyle = "APA",
+    formatMechanicsName = "",
+    citationStyle = "",
     overallScore = null,
     rightPct,
     wrongPct,
     scoreBreakdown = [],
-    formatChecks = [],
+    mechanicsRules = null,
     unitsChecked,
     unitsPassed,
     unitsFailed,
     scoringConsistency = null,
   } = result;
 
-  const categoryDisplays = resolveCategoryUnitDisplays(scoreBreakdown);
-  // Tracing expands locations into findings for the subtitle only — never override unit %.
-  const tracedEntries = normalizeDetectedIssues(formatChecks, result.pageCount || 0).entries;
-  const tracedByCategory = {};
-  tracedEntries.forEach((entry) => {
-    const key = entry.category || categoryForIssue(entry) || "Other";
-    tracedByCategory[key] = (tracedByCategory[key] || 0) + 1;
-  });
-  const categoryCards = categoryDisplays.map((row) => {
-    const name = String(row.metric || row.section || "").trim();
-    const traced = name ? tracedByCategory[name] : null;
-    const displayIssueCount = hasValue(traced)
-      ? traced
-      : hasValue(row.displayIssueCount)
-        ? row.displayIssueCount
-        : row.displayNonCompliant;
-    return {
-      ...row,
-      displayIssueCount,
-    };
-  });
+  const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
+  const categoryDisplays = resolveCategoryUnitDisplays(activeBreakdown);
+  // Issues total must match non-compliant units (one failed unit = one issue in the summary).
+  const categoryCards = categoryDisplays.map((row) => ({
+    ...row,
+    displayIssueCount: hasValue(row.displayNonCompliant)
+      ? row.displayNonCompliant
+      : row.displayIssueCount,
+  }));
 
   // Header totals = sum of category cards so they always match what the user adds up.
   const {
@@ -210,6 +206,10 @@ export default function ScanResultsScreen({
     { unitsChecked, unitsPassed, unitsFailed },
     categoryCards,
   );
+  const formatLabel =
+    String(formatMechanicsName || "").trim() ||
+    String(citationStyle || "").trim() ||
+    "Format mechanics";
   // Bar shares only - percent numbers are not shown in the public results UI.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
@@ -296,10 +296,10 @@ export default function ScanResultsScreen({
           </div>
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
-              Citation style
+              Format mechanics
             </p>
-            <p className="mt-1 text-sm font-bold text-slate-900">
-              {citationStyle} · {versionLabel}
+            <p className="mt-1 truncate text-sm font-bold text-slate-900" title={formatLabel}>
+              {formatLabel} · {versionLabel}
             </p>
           </div>
           <div>
@@ -407,6 +407,7 @@ export default function ScanResultsScreen({
               displayNonCompliant={item.displayNonCompliant}
               displayIssueCount={item.displayIssueCount}
               displayScore={item.displayScore}
+              notice={item.notice}
             />
           ))}
         </div>
@@ -416,6 +417,7 @@ export default function ScanResultsScreen({
         result={result}
         file={file}
         documentLoading={documentLoading}
+        issueTotal={nonCompliantUnits}
       />
     </div>
   );

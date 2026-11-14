@@ -1615,7 +1615,10 @@ def derive_mechanics_rules(text: str) -> dict:
         ("Indention", "Indentation", "First-line indent", "First line indent", "Paragraph indent"),
         stop,
     )
-    indent_val = _parse_inches(indent_raw) if indent_raw else None
+    # Indentation only: never invent a default (bare "tab" / unclear → omit → IGNORE).
+    from app.indent_check import _parse_indent_inches as _parse_indent_rule_inches
+
+    indent_val = _parse_indent_rule_inches(indent_raw) if indent_raw else None
     if indent_val is None:
         # Label then measure: "first-line indent: 0.5 inch"
         indent_match = re.search(
@@ -1625,7 +1628,7 @@ def derive_mechanics_rules(text: str) -> dict:
             re.I,
         )
         if indent_match:
-            indent_val = parse_length_inches(indent_match.group(1))
+            indent_val = _parse_indent_rule_inches(indent_match.group(1))
         if indent_val is None:
             # Measure then label (same sentence as spacing): "0.5 inch first-line indent"
             measure_then = re.search(
@@ -1634,21 +1637,31 @@ def derive_mechanics_rules(text: str) -> dict:
                 flat,
             )
             if measure_then:
-                indent_val = parse_length_inches(measure_then.group(1))
-        if indent_val is None and re.search(
-            r"(?i)(?:0\.5|½|1\s*/\s*2)\s*(?:[\"″]|inches?|in\b)?\s*TAB"
-            r"|\bTAB\b[^.]{0,40}?(?:0\.5|½|1\s*/\s*2)"
-            r"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{0,40}?(?:0\.5|½|1\s*/\s*2)",
-            flat,
-        ):
-            indent_val = 0.5
-        elif indent_val is None and re.search(
-            r"\bone\s+tab\b|\bindent(?:ation|ion)?\s*(?:of|:)?\s*one\s+tab\b", flat, re.I
-        ):
-            indent_val = 0.5
+                indent_val = _parse_indent_rule_inches(measure_then.group(1))
+        # "0.5 inch TAB" / "TAB = 0.5 inch" — only when a measure is stated beside TAB.
+        if indent_val is None:
+            tab_with_measure = re.search(
+                rf"(?i)(?:({MEASURE_PATTERN})\s*TAB)"
+                rf"|\bTAB\b[^.]{{0,40}}?({MEASURE_PATTERN})"
+                rf"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{{0,40}}?({MEASURE_PATTERN})",
+                flat,
+            )
+            if tab_with_measure:
+                for group in tab_with_measure.groups():
+                    if group:
+                        indent_val = _parse_indent_rule_inches(group)
+                        if indent_val is not None:
+                            break
+        # Bare "one tab" / "indent of one tab" with no equivalent → leave unset (IGNORE).
     if indent_val is not None:
         rules["first_line_indent_inches"] = indent_val
         rules["indention"] = f"{indent_val} inch" if indent_val != 1 else "1 inch"
+    if re.search(r"(?i)\bhanging\s+indent", flat):
+        rules["indent_type"] = "hanging"
+    elif re.search(r"(?i)\bright\s+indent", flat):
+        rules["indent_type"] = "right"
+    elif re.search(r"(?i)\bleft\s+indent\b", flat) and not re.search(r"(?i)first[\s-]?line", flat):
+        rules["indent_type"] = "left"
 
     margins = _extract_margins(flat, stop)
     if margins:
@@ -2447,11 +2460,21 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         indention = ""
     if indention:
         rules["indention"] = indention[:120]
-    indent = parse_length_inches(indention) if indention else None
-    if indent is None:
-        indent = parse_length_inches(raw.get("first_line_indent_inches"))
+    # Indentation only: bare "tab" without a stated equivalent must not become 0.5.
+    from app.indent_check import _parse_indent_inches as _parse_indent_rule_inches
+
+    indent = _parse_indent_rule_inches(indention) if indention else None
+    if indent is None and not rule_unset(raw.get("first_line_indent_inches")):
+        indent = _parse_indent_rule_inches(raw.get("first_line_indent_inches"))
     if indent is not None and indent <= 2:
         rules["first_line_indent_inches"] = indent
+    indent_type = str(raw.get("indent_type") or raw.get("indentation_type") or "").strip().lower()
+    if indent_type in {"first_line", "hanging", "left", "right", "none"}:
+        rules["indent_type"] = indent_type
+    if not rule_unset(raw.get("indent_tolerance_inches")):
+        tol = _parse_indent_rule_inches(raw.get("indent_tolerance_inches"))
+        if tol is not None:
+            rules["indent_tolerance_inches"] = tol
 
     alignment_raw = raw.get("alignment") or raw.get("text_alignment")
     alignment = None if rule_unset(alignment_raw) else parse_alignment(alignment_raw)

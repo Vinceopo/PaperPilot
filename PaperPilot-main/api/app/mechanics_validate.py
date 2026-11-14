@@ -52,7 +52,9 @@ MECHANICS_SCHEMA: tuple[dict[str, Any], ...] = (
                 "id": "indention",
                 "label": "Indention",
                 "example": "0.5 inch",
+                # Clear both the display string and the numeric scan field.
                 "rule": ("indention",),
+                "also_clear": (("first_line_indent_inches",), ("indent_type",), ("indent_tolerance_inches",)),
             },
             {"id": "alignment", "label": "Alignment", "example": "Left", "rule": ("alignment",)},
             {
@@ -667,9 +669,13 @@ def apply_ignored_fields_to_rules(
         )
         if match:
             _pop_rule_path(out, tuple(match["rule"]))
+            for extra in match.get("also_clear") or ():
+                _pop_rule_path(out, tuple(extra))
             continue
         # Category-level ignore: drop every field under that category.
         if not field:
             for item in section.get("fields") or ():
                 _pop_rule_path(out, tuple(item["rule"]))
+                for extra in item.get("also_clear") or ():
+                    _pop_rule_path(out, tuple(extra))
     return out

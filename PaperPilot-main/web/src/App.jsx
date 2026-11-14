@@ -503,6 +503,9 @@ export default function App() {
       manuscriptId,
       versionId,
       citationStyle,
+      formatMechanicsName: String(profile?.name || "").trim(),
+      mechanicsRules:
+        profile?.rules && typeof profile.rules === "object" ? profile.rules : null,
       pageCount: version?.page_count,
       versionNumber: version?.version_number,
       cloudinaryUrl: version?.cloudinary_url || version?.cloudinaryUrl || "",
@@ -1176,19 +1179,60 @@ export default function App() {
     void loadDashboard({ silent: true });
   }, [signedIn, activePage, loadDashboard]);
 
+  function enrichScanResultMeta(result, manuscript, version) {
+    if (!result || typeof result !== "object") return result;
+    const mechanicsId = result.mechanicsId || version?.scanResult?.mechanicsId || "";
+    const profile = mechanicsId
+      ? mechanicsRef.current.find((item) => item.id === mechanicsId)
+      : null;
+    const formatMechanicsName =
+      String(result.formatMechanicsName || "").trim() ||
+      String(version?.scanResult?.formatMechanicsName || "").trim() ||
+      String(manuscript?.formatMechanicsName || "").trim() ||
+      String(profile?.name || "").trim();
+    const mechanicsRules =
+      (result.mechanicsRules && typeof result.mechanicsRules === "object"
+        ? result.mechanicsRules
+        : null) ||
+      (version?.scanResult?.mechanicsRules &&
+      typeof version.scanResult.mechanicsRules === "object"
+        ? version.scanResult.mechanicsRules
+        : null) ||
+      (profile?.rules && typeof profile.rules === "object" ? profile.rules : null);
+    return {
+      ...result,
+      formatMechanicsName,
+      mechanicsRules,
+      mechanicsId: mechanicsId || result.mechanicsId,
+    };
+  }
+
   // Stored versions can be trimmed / server summaries only; fetch the full scan when opened.
   async function resolveSavedResult(manuscript, version) {
     if (!version) return null;
     const scanId = versionScanId(version);
     if ((version.scanResult && !version.trimmed) || !isServerId(scanId)) {
-      return versionToScanResult(manuscript, version);
+      return enrichScanResultMeta(versionToScanResult(manuscript, version), manuscript, version);
     }
     try {
       const scan = await getComplianceScan(scanId);
+      const mechanicsId = scan?.mechanics_id || version.scanResult?.mechanicsId || "";
+      const profile = mechanicsId
+        ? mechanicsRef.current.find((item) => item.id === mechanicsId)
+        : null;
       const full = mapComplianceScanToResult(scan, {
         documentId: manuscript?.id,
         documentTitle: manuscript?.title,
         citationStyle: manuscript?.citationStyle,
+        formatMechanicsName:
+          version.scanResult?.formatMechanicsName ||
+          manuscript?.formatMechanicsName ||
+          profile?.name ||
+          "",
+        mechanicsRules:
+          version.scanResult?.mechanicsRules ||
+          (profile?.rules && typeof profile.rules === "object" ? profile.rules : null),
+        mechanicsId,
         versionId: version.versionId || version.scanResult?.versionId,
         documentName: version.scanResult?.documentName,
         cloudinaryUrl: version.scanResult?.cloudinaryUrl,
@@ -1199,7 +1243,11 @@ export default function App() {
       saveScannedManuscripts(next, user?.uid);
       const updated = next.find((m) => m.id === manuscript.id);
       const updatedVersion = updated?.versions?.find((v) => v.id === version.id);
-      return versionToScanResult(updated || manuscript, updatedVersion || version);
+      return enrichScanResultMeta(
+        versionToScanResult(updated || manuscript, updatedVersion || version),
+        updated || manuscript,
+        updatedVersion || version,
+      );
     } catch (err) {
       setError(
         err?.message

@@ -400,6 +400,8 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
       title: title || existing.title,
       institution: scanResult.campus || existing.institution || "-",
       citationStyle: scanResult.citationStyle || existing.citationStyle || "APA",
+      formatMechanicsName:
+        scanResult.formatMechanicsName || existing.formatMechanicsName || "",
       versions: [version, ...(existing.versions || [])],
     };
   } else {
@@ -408,6 +410,7 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
       title,
       institution: scanResult.campus || scanResult.college || "-",
       citationStyle: scanResult.citationStyle || "APA",
+      formatMechanicsName: scanResult.formatMechanicsName || "",
       createdThisMonth: true,
       versions: [version],
     });
@@ -443,6 +446,9 @@ export function versionToScanResult(manuscript, version) {
       documentTitle: version.scanResult.documentTitle || manuscript?.title || "Untitled",
       campus: version.scanResult.campus || manuscript?.institution,
       citationStyle: version.scanResult.citationStyle || manuscript?.citationStyle,
+      formatMechanicsName:
+        version.scanResult.formatMechanicsName || manuscript?.formatMechanicsName || "",
+      mechanicsRules: version.scanResult.mechanicsRules || null,
       versionNumber: version.versionNumber,
     };
   }
@@ -453,6 +459,8 @@ export function versionToScanResult(manuscript, version) {
     documentTitle: manuscript?.title || "Untitled",
     campus: manuscript?.institution || "-",
     citationStyle: manuscript?.citationStyle || "APA",
+    formatMechanicsName: manuscript?.formatMechanicsName || "",
+    mechanicsRules: null,
     scannedAt: version.scannedAt || version.scannedDate,
     overallScore: version.score,
     versionNumber: version.versionNumber,

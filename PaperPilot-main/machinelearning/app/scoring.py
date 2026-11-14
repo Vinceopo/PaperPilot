@@ -2,7 +2,7 @@
 
 This module is the single source of truth for every number shown on the results screen.
 It is kept byte-identical in ``machinelearning/app/scoring.py`` and ``api/app/scoring.py``
-(a test enforces this). No machine learning runs here — only counting and division.
+(a test enforces this). No machine learning runs here - only counting and division.
 
 Vocabulary
 ----------
@@ -37,6 +37,7 @@ STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
 STATUS_NOT_EVALUATED = "not_evaluated"
 STATUS_NOT_APPLICABLE = "not_applicable"
+STATUS_UNRELIABLE = "could_not_check_reliably"
 
 _EPSILON = 1e-9
 
@@ -74,6 +75,22 @@ def _normalized_severity(issue: dict) -> str:
 
 
 def _category_entry(name: str, stats, occurrences: int, issue_types: list[str], total_failed: int) -> dict:
+    if bool(getattr(stats, "unreliable", False)):
+        return {
+            "category": name,
+            "status": STATUS_UNRELIABLE,
+            "applicable": True,
+            "units_checked": 0,
+            "units_passed": 0,
+            "units_failed": 0,
+            "score": pct_metric(0, 0, f"{name} units that passed / {name} units checked"),
+            "failed_share": pct_metric(
+                0, total_failed, f"{name} failed units / failed units in all categories"
+            ),
+            "issue_occurrences": 0,
+            "issue_types": [],
+            "notice": getattr(stats, "notice", None) or "Could not check reliably",
+        }
     checked = int(getattr(stats, "checked", 0) or 0)
     failed = int(getattr(stats, "failed", 0) or 0)
     passed = checked - failed
@@ -95,6 +112,7 @@ def _category_entry(name: str, stats, occurrences: int, issue_types: list[str], 
         ),
         "issue_occurrences": occurrences,
         "issue_types": issue_types,
+        "notice": getattr(stats, "notice", None),
     }
 
 
@@ -133,7 +151,12 @@ def build_scoring_payload(stats: dict, issues: list[dict]) -> dict:
         for name in BREAKDOWN_ORDER
     ]
 
-    evaluated = [item for item in categories if item["units_checked"] > 0]
+    # Unreliable categories contribute 0 units and are excluded from the overall mean.
+    evaluated = [
+        item
+        for item in categories
+        if item["units_checked"] > 0 and item["status"] != STATUS_UNRELIABLE
+    ]
     overall_value = (
         sum(item["score"]["value"] for item in evaluated) / len(evaluated) if evaluated else None
     )
@@ -227,6 +250,7 @@ def build_sections(scoring: dict) -> list[dict]:
             "units_failed": item["units_failed"],
             "issue_count": item["issue_occurrences"],
             "issues": item["issue_types"],
+            "notice": item.get("notice"),
         }
         for item in scoring["categories"]
     ]
@@ -260,7 +284,11 @@ def validate_scoring(scoring: dict) -> dict:
             errors.append(f"{name}: checked != passed + failed")
         _check_metric(errors, f"{name} score", item["score"])
         _check_metric(errors, f"{name} failed share", item["failed_share"])
-        if item["units_checked"] == 0 and item["status"] not in {STATUS_NOT_EVALUATED, STATUS_NOT_APPLICABLE}:
+        if item["units_checked"] == 0 and item["status"] not in {
+            STATUS_NOT_EVALUATED,
+            STATUS_NOT_APPLICABLE,
+            STATUS_UNRELIABLE,
+        }:
             errors.append(f"{name}: no units checked but status is {item['status']}")
 
     _check_metric(errors, "passed_pct", scoring["passed_pct"])

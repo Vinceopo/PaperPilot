@@ -12,7 +12,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
 from docx.oxml.table import CT_Tbl
 from docx.oxml.text.paragraph import CT_P
-from docx.shared import Length
+from docx.shared import Inches, Length, Pt, RGBColor
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
@@ -20,10 +20,25 @@ from docx.text.run import Run
 from app.mechanics_options import (
     FONT_SIZE_KEYS,
     MAX_HEADING_LEVELS,
+    CHAPTER_FIRST_HIDDEN,
+    PAGE_NO_NUMBERS,
+    PRELIM_ROMAN,
+    TITLE_HIDDEN_COUNTED,
+    WORD_SPACING_TWO,
+    canonical_body_numbering,
+    canonical_chapter_first_page,
+    canonical_chapter_markers,
     canonical_landscape_pages,
+    canonical_page_position,
+    canonical_preliminary_style,
+    canonical_title_page,
     canonical_word_spacing,
+    heading_style_from_text,
     normalize_heading_styles,
     normalize_pagination_rules,
+    page_number_only,
+    page_position_parts,
+    pagination_omits_all_numbers,
     rule_unset,
 )
 
@@ -39,10 +54,9 @@ def validate_document(filename: str, data: bytes, max_bytes: int) -> str:
     if not data:
         raise DocumentError("The uploaded file is empty.")
     if len(data) > max_bytes:
-        mb = max(1, round(max_bytes / (1024 * 1024)))
-        raise DocumentError(
-            f"The uploaded file exceeds the {mb} MB limit for your plan."
-        )
+        mb = max_bytes / (1024 * 1024)
+        label = f"{int(mb)}" if float(mb).is_integer() else f"{mb:g}"
+        raise DocumentError(f"The uploaded file exceeds the {label} MB limit for your plan.")
     if suffix == ".pdf":
         if not data[:1024].lstrip().startswith(b"%PDF-"):
             raise DocumentError("The file extension is .pdf but its signature is not a PDF.")
@@ -161,6 +175,10 @@ PAGE_FIELD_RE = re.compile(r"(?<![A-Z])PAGE(?![A-Z])")
 
 
 def _has_page_field(element) -> bool:
+    # Word sometimes splits "PAGE" across adjacent instrText runs ("P"+"AGE").
+    joined = "".join(instr.text or "" for instr in element.iter(qn("w:instrText")))
+    if PAGE_FIELD_RE.search(joined):
+        return True
     for instr in element.iter(qn("w:instrText")):
         if PAGE_FIELD_RE.search(instr.text or ""):
             return True
@@ -215,9 +233,21 @@ def _anchor_alignment(field_el, section) -> str | None:
 
 
 def _page_field_elements(element):
-    for instr in element.iter(qn("w:instrText")):
-        if PAGE_FIELD_RE.search(instr.text or ""):
-            yield instr
+    joined = "".join(instr.text or "" for instr in element.iter(qn("w:instrText")))
+    if PAGE_FIELD_RE.search(joined):
+        # Prefer the first instrText that looks like part of PAGE, else the first run.
+        for instr in element.iter(qn("w:instrText")):
+            if PAGE_FIELD_RE.search(instr.text or "") or "PAGE" in (instr.text or "").upper():
+                yield instr
+                break
+        else:
+            first = next(element.iter(qn("w:instrText")), None)
+            if first is not None:
+                yield first
+    else:
+        for instr in element.iter(qn("w:instrText")):
+            if PAGE_FIELD_RE.search(instr.text or ""):
+                yield instr
     for fld in element.iter(qn("w:fldSimple")):
         if PAGE_FIELD_RE.search(fld.get(qn("w:instr")) or ""):
             yield fld
@@ -242,9 +272,29 @@ def _page_field_placement(header, footer, section) -> dict | None:
     return None
 
 
+def _section_header_footer_parts(section) -> list[tuple]:
+    """Default, first-page, and even-page header/footer pairs when Word exposes them."""
+    parts = [(section.header, section.footer)]
+    try:
+        if section.different_first_page_header_footer:
+            parts.append((section.first_page_header, section.first_page_footer))
+    except Exception:
+        pass
+    try:
+        # Odd/even page numbering often puts PAGE only on the even-page story.
+        parts.append((section.even_page_header, section.even_page_footer))
+    except Exception:
+        pass
+    return parts
+
+
 def _page_number_setup(section) -> dict | None:
     """Where and how Word prints the page number for this section (header/footer PAGE field)."""
-    placement = _page_field_placement(section.header, section.footer, section)
+    placement = None
+    for header, footer in _section_header_footer_parts(section):
+        placement = _page_field_placement(header, footer, section)
+        if placement is not None:
+            break
     try:
         different_first = bool(section.different_first_page_header_footer)
     except Exception:
@@ -889,9 +939,196 @@ def _parse_docx(data: bytes) -> dict:
     }
 
 
+def _flatten_mechanics_text(text: str) -> str:
+    """Collapse PDF/DOCX layout noise so label:value patterns can be matched."""
+    cleaned = (text or "").replace("\r", "\n")
+    cleaned = cleaned.replace("\u00a0", " ").replace("\u200b", "")
+    # Join hyphenated line-breaks: "Times New-\nRoman" -> "Times NewRoman" then fix later
+    cleaned = re.sub(r"-\s*\n\s*", "", cleaned)
+    # Treat newlines / bullets as spaces so "Size\n:\n8.5 x 11" becomes searchable.
+    cleaned = re.sub(r"[\n\t|•●▪◦]+", " ", cleaned)
+    cleaned = re.sub(r"\s*([:：])\s*", r" : ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _stop_pattern(stop_words: tuple[str, ...]) -> str:
+    """Outline markers like 'h.' must not require a word-boundary after the period."""
+    parts: list[str] = []
+    for word in stop_words:
+        esc = re.escape(word)
+        if word.endswith("."):
+            parts.append(esc)
+        else:
+            parts.append(rf"{esc}\b")
+    return "|".join(parts)
+
+
+def _clip_value(value: str, stop_words: tuple[str, ...]) -> str:
+    text = (value or "").strip(" \t-:;,.|/\\")
+    if not text:
+        return ""
+    # Stop at the next outline/label boundary when the capture ran long.
+    pattern = rf"(?i)\s+(?:{_stop_pattern(stop_words)})"
+    parts = re.split(pattern, text, maxsplit=1)
+    text = parts[0].strip(" \t-:;,.|/\\")
+    # Numbered sentence guides: "…period. 6. Case Styles" / "…chapter. 13. Tables"
+    parts = re.split(r"\s+\d{1,2}\.\s+(?=[A-Z])", text, maxsplit=1)
+    return parts[0].strip(" \t-:;,.|/\\")[:300]
+
+
+def _looks_like_layout_rule(value: str) -> bool:
+    """True when text is about table/figure captions or titles - not incidental mentions."""
+    return bool(
+        re.search(
+            r"(?i)\b(?:caption|title|heading|label|number(?:ed|ing)?|above|below|under|"
+            r"left[\s-]?align|right[\s-]?align|cent(?:er|re)|italic|bold|consecutive)\b",
+            value or "",
+        )
+    )
+
+
+def _prose_layout_sentence(flat: str, kind: str) -> str:
+    """Pull a caption/title sentence for tables or figures from prose guides."""
+    word = "tables?" if kind == "table" else "figures?"
+    match = re.search(
+        rf"(?i)((?:{word})\b[^.!?\n]{{0,40}}(?:caption|title|heading|number)[^.!?\n]{{5,200}}"
+        rf"|(?:(?:caption|title)\b[^.!?\n]{{0,80}}{word})[^.!?\n]{{0,120}})[.!?]?",
+        flat,
+    )
+    if not match:
+        return ""
+    value = _clip_value(match.group(1), (
+        "Size", "Orientation", "Spacing", "Margins", "Font", "Pagination", "Citation",
+        "Heading", "Alignment", "Layout for Tables", "Layout for Figures",
+        "a.", "b.", "c.", "d.", "e.", "f.", "g.", "h.", "i.", "j.",
+    ))
+    return value if _looks_like_layout_rule(value) else ""
+
+
+def _value_after_label(flat: str, labels: tuple[str, ...], stop_words: tuple[str, ...]) -> str:
+    label_alt = "|".join(re.escape(label) for label in labels)
+    stop_alt = _stop_pattern(stop_words)
+    match = re.search(
+        rf"(?i)\b(?:{label_alt})\b(?:\s*[)\].-]*)?\s*"
+        rf"(?:[:：=\-\u2013]|is|are|of|should be|must be)?\s*"
+        rf"(.+?)(?=\s{{2,}}|\s+(?:{stop_alt})|$)",
+        flat,
+    )
+    if not match:
+        # Looser window: label then value within ~60 chars.
+        match = re.search(
+            rf"(?i)\b(?:{label_alt})\b.{{0,12}}?([A-Za-z0-9][A-Za-z0-9 .\"″'/\-]{{0,80}})",
+            flat,
+        )
+    if not match:
+        return ""
+    return _clip_value(match.group(1), stop_words)
+
+
+def _line_value(text: str, labels: tuple[str, ...]) -> str:
+    """'Label: value' on one line (or the label alone with the value on the next line), so values may
+    contain words like 'page' or 'bottom' that stop the flattened label search."""
+    lines = [line.strip(" \t•●▪◦*-") for line in (text or "").replace("\r", "\n").split("\n")]
+    label_alt = "|".join(re.escape(label) for label in labels)
+    pattern = re.compile(rf"^(?:{label_alt})\s*(?:[:：=\u2013]|\t)\s*(.*)$", re.I)
+    alone = re.compile(rf"^(?:{label_alt})\s*[:：]?$", re.I)
+    for index, line in enumerate(lines):
+        match = pattern.match(line)
+        if match and match.group(1).strip(" :："):
+            return match.group(1).strip(" :：")[:200]
+        if match or alone.match(line):
+            following = next((item for item in lines[index + 1 :] if item.strip(" :：")), "").strip(" :：")
+            # Next outline heading is not this label's value.
+            if not following or alone.match(following) or re.match(r"^[a-k]\.\s", following, re.I):
+                return ""
+            # Layout / caption rules are often a full sentence; other label values stay short.
+            max_len = 300 if re.search(r"layout|caption|naming|title convention", line, re.I) else 120
+            if len(following) <= max_len:
+                return following
+    return ""
+
+
+def _parse_paper_size(value: str) -> dict:
+    text = (value or "").strip()
+    if not text:
+        return {}
+    # "8 1/2 x 11" / "8½ x 11" - normalize before digit×digit matching (avoids "2 x 11").
+    text = re.sub(
+        r"\b(\d+)\s+(\d+)\s*/\s*(\d+)\b",
+        lambda match: str(int(match.group(1)) + int(match.group(2)) / int(match.group(3))),
+        text,
+    )
+    text = re.sub(r"\b(\d+)\s*½\b", lambda match: str(int(match.group(1)) + 0.5), text)
+    upper = text.upper()
+    out: dict = {}
+    # Require a dimension pair (8.5 x 14) - bare "14." from outline numbering is not Legal size.
+    if re.search(r"\bLEGAL\b", upper) or re.search(
+        r"8\.5\s*(?:inches?|in|[\"″])?\s*[x×by]\s*14\b", upper
+    ):
+        out["name"] = "LEGAL"
+        out["label"] = "8.5 x 14"
+        out["width_inches"] = 8.5
+        out["height_inches"] = 14.0
+    elif re.search(r"\bA4\b", upper) or re.search(r"8\.27|210\s*[x×]\s*297", upper):
+        out["name"] = "A4"
+        out["label"] = "8.27 x 11.69"
+        out["width_inches"] = 8.27
+        out["height_inches"] = 11.69
+    elif (
+        re.search(r"\bLETTER\b", upper)
+        or re.search(r"\bSHORT\s*BOND\b", upper)
+        or re.search(r"8\.5\s*(?:inches?|in|[\"″])?\s*[x×by]\s*11\b", upper)
+        or (re.search(r"8\.5", upper) and re.search(r"\b11\b", upper)
+            and not re.search(r"8\.5\s*(?:inches?|in|[\"″])?\s*[x×by]\s*14\b", upper))
+    ):
+        out["name"] = "LETTER"
+        out["label"] = "8.5 x 11"
+        out["width_inches"] = 8.5
+        out["height_inches"] = 11.0
+    dims = re.search(
+        r"(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?\s*[x×by]\s*(\d+(?:\.\d+)?)\s*(?:inches?|in|″|\")?",
+        text,
+        re.I,
+    )
+    if dims and "width_inches" not in out:
+        width = float(dims.group(1))
+        height = float(dims.group(2))
+        # Ignore scrap matches like "2 x 11" from a broken fraction parse.
+        if width >= 5 and height >= 5:
+            out["width_inches"] = width
+            out["height_inches"] = height
+            out.setdefault("label", f"{dims.group(1)} x {dims.group(2)}")
+    elif out.get("label"):
+        pass
+    elif re.search(r"\b(?:A[3-5]|folio|executive|tabloid|bond)\b", text, re.I):
+        out["label"] = text[:80]
+    return out
+
+
 UNICODE_FRACTIONS = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125, "⅜": 0.375, "⅝": 0.625}
 WORD_NUMBERS = {"half": 0.5, "one": 1.0, "two": 2.0, "three": 3.0}
 UNIT_TO_INCHES = {"cm": 1 / 2.54, "mm": 1 / 25.4, "pt": 1 / 72, "point": 1 / 72, "points": 1 / 72}
+# PDF extractors often emit curly quotes / primes instead of ASCII " for inches.
+_INCH_MARK_CHARS = "\"“”″〞′’'"
+_INCH_OR_LENGTH_UNIT = rf"(?:inches|inch|in|cm|mm|pt|points?|[{re.escape(_INCH_MARK_CHARS)}]+)"
+# A measurement as written in a guide: "1.5", "1 ½", "1/2", "2.54 cm", "25mm", '1"'.
+MEASURE_PATTERN = (
+    r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)"
+    rf"\s*(?:{_INCH_OR_LENGTH_UNIT})?"
+)
+
+
+def _normalize_inch_marks(text: str) -> str:
+    """Turn PDF curly quotes / primes after a number into ASCII inch marks."""
+    if not text:
+        return text
+    # 1.00” / 1.00 '' / 1″ → 1.00"
+    return re.sub(
+        rf"(\d)\s*([{_INCH_MARK_CHARS}]{{1,2}})",
+        r'\1"',
+        str(text),
+    )
 
 
 def parse_length_inches(value) -> float | None:
@@ -974,9 +1211,1094 @@ def parse_alignment(value) -> str | None:
     return None
 
 
+def _parse_spacing(value: str) -> float | None:
+    return parse_line_spacing(value)
+
+
+def _parse_inches(value: str) -> float | None:
+    return parse_length_inches(value)
+
+
+MARGIN_SIDES = ("top", "bottom", "left", "right", "gutter", "header", "footer")
+_MARGIN_SIDE_ALT = "|".join(MARGIN_SIDES)
+# "1.5 inch" / '1"' / '1.00”' - unit required so "page 1 on the left" is not a margin.
+_MEASURE_WITH_UNIT = (
+    r"(?:\d+\s+\d+\s*/\s*\d+|\d*\s*[½¼¾⅓⅔⅛⅜⅝]|\d+\s*/\s*\d+|\d+(?:[.,]\d+)?)"
+    rf"(?:\s*|-)(?:{_INCH_OR_LENGTH_UNIT})"
+)
+# After a clear "Top, Right and Bottom:" label, PDFs sometimes drop the inch mark entirely.
+_MEASURE_AFTER_SIDE_LIST = (
+    rf"(?:{_MEASURE_WITH_UNIT}|"
+    r"(?:\d+(?:[.,]\d+)?)"
+    r"(?=\s*(?:$|[.;,)\]}]|to\b|for\b|and\b|left\b|right\b|top\b|bottom\b|gutter\b|header\b|footer\b)))"
+)
+
+
+def _sides_from_margin_phrase(phrase: str, already: dict[str, float]) -> list[str]:
+    """'the right, top and bottom' / 'all other sides' -> side names."""
+    text = (phrase or "").lower()
+    if re.search(r"\b(?:other|remaining|rest)\b", text):
+        return [side for side in ("top", "bottom", "left", "right") if side not in already]
+    if re.search(r"\b(?:all|every|each)\s+(?:sides?|margins?)\b", text):
+        return ["top", "bottom", "left", "right"]
+    return [side for side in MARGIN_SIDES if re.search(rf"\b{side}\b", text)]
+
+
+def _simple_margin_amount(value: str) -> float | None:
+    """Accept '1' or '1.5 inch', not '1 inch on the right' assigned to the wrong side."""
+    amount = parse_length_inches(value)
+    if amount is None:
+        return None
+    if re.search(rf"\b(?:{_MARGIN_SIDE_ALT})\b", value or "", re.I):
+        return None
+    return amount
+
+
+def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]:
+    """Labeled 'Top: 1' and prose '1.5 inch on the left, 1 inch on the right, top and bottom'."""
+    margins: dict[str, float] = {}
+    flat = _normalize_inch_marks(flat)
+    window_match = re.search(r"\bmargins?\b.{0,500}", flat, re.I)
+    window = window_match.group(0) if window_match else flat
+    # Sides may be listed just before the word "margins" ("Top and bottom margins: 1 inch").
+    lead_match = re.search(r".{0,120}\bmargins?\b.{0,500}", flat, re.I)
+    lead_window = lead_match.group(0) if lead_match else flat
+
+    # "All margins should be 1 inch" / "Margins on all sides: 1 inch".
+    all_sides = re.search(
+        rf"\ball\s+(?:four\s+|the\s+)?(?:page\s+)?margins?\b[^.]{{0,80}}?({_MEASURE_WITH_UNIT})"
+        rf"|\bmargins?\s+on\s+(?:all|every|each)\s+sides?\b[^.]{{0,40}}?({_MEASURE_WITH_UNIT})"
+        rf"|({_MEASURE_WITH_UNIT})\s+margins?\s+on\s+(?:all|every|each)\s+sides?\b",
+        lead_window,
+        re.I,
+    )
+    if all_sides:
+        amount = parse_length_inches(next(group for group in all_sides.groups() if group))
+        if amount is not None:
+            for side in ("top", "bottom", "left", "right"):
+                margins[side] = amount
+
+    # "Top, Right and Bottom: 1.00\"" / "(left, right, top and bottom) should be 1.5 inches".
+    # Also "Top, Right and Bottom: 1.00" when the PDF dropped the inch mark.
+    side_list = rf"(?:{_MARGIN_SIDE_ALT})(?:\s*(?:,|and|&|/)\s*(?:the\s+)?(?:{_MARGIN_SIDE_ALT}))+"
+    listed = re.compile(
+        rf"\b({side_list})\b\s*\)?\s*(?:margins?\s*)?"
+        rf"(?::|=|-|\u2013|\u2014|should\s+be|must\s+be|shall\s+be|are|is|of|at)?\s*"
+        rf"(?:set\s+(?:to|at)\s+)?({_MEASURE_AFTER_SIDE_LIST})",
+        re.I,
+    )
+    for match in listed.finditer(lead_window):
+        amount = parse_length_inches(match.group(2))
+        if amount is None:
+            continue
+        for side in re.findall(rf"\b(?:{_MARGIN_SIDE_ALT})\b", match.group(1), re.I):
+            margins[side.lower()] = amount
+
+    prose = re.compile(
+        rf"({_MEASURE_WITH_UNIT})\s*(?:on|for|at)\s+(?:the\s+)?(.*?)(?=(?:{_MEASURE_WITH_UNIT})\s*(?:on|for|at)\b|$)",
+        re.I,
+    )
+    for match in prose.finditer(window):
+        amount = parse_length_inches(match.group(1))
+        if amount is None:
+            continue
+        phrase = match.group(2)
+        if not re.search(rf"\b(?:{_MARGIN_SIDE_ALT}|sides?|margins?)\b", phrase, re.I):
+            continue
+        for side in _sides_from_margin_phrase(phrase, margins):
+            margins[side] = amount
+
+    before_side = re.compile(
+        rf"({_MEASURE_WITH_UNIT})\s+(?:on\s+(?:the\s+)?)?({_MARGIN_SIDE_ALT})\s+margins?\b",
+        re.I,
+    )
+    for match in before_side.finditer(window):
+        amount = parse_length_inches(match.group(1))
+        if amount is not None:
+            margins[match.group(2).lower()] = amount
+
+    for side in MARGIN_SIDES:
+        if side in margins:
+            continue
+        # Prefer "Top: 1" labels - incidental "Top" in intro prose must not win.
+        colon = re.search(rf"\b{side}\s*:\s*({MEASURE_PATTERN})", flat, re.I)
+        amount = parse_length_inches(colon.group(1)) if colon else None
+        if amount is None:
+            side_raw = _value_after_label(
+                flat,
+                (f"{side.capitalize()} margin", f"{side} margin", side.capitalize(), side),
+                stop_words,
+            )
+            amount = _simple_margin_amount(side_raw) if side_raw else None
+        if amount is None:
+            match = re.search(
+                rf"\b{side}\s+margins?\s*(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
+                flat,
+                re.I,
+            )
+            if match:
+                amount = parse_length_inches(match.group(1))
+        if amount is not None:
+            margins[side] = amount
+
+    # "... and all other margins 1 inch" fills only the sides not named yet.
+    others = re.search(
+        rf"\b(?:other|remaining)\s+(?:sides?|margins?)\b[^.]{{0,40}}?({_MEASURE_WITH_UNIT})",
+        lead_window,
+        re.I,
+    )
+    if others and margins:
+        amount = parse_length_inches(others.group(1))
+        if amount is not None:
+            for side in ("top", "bottom", "left", "right"):
+                margins.setdefault(side, amount)
+
+    if not any(side in margins for side in ("top", "bottom", "left", "right")):
+        uniform = re.search(
+            rf"\b({MEASURE_PATTERN})\s+(?:on\s+all\s+sides\s+)?margins?\b"
+            rf"|\bmargins?\s*(?:of|:|=)?\s*({MEASURE_PATTERN})\s*(?:on\s+all\s+sides)?",
+            flat,
+            re.I,
+        )
+        amount = parse_length_inches(next((group for group in uniform.groups() if group), "")) if uniform else None
+        if amount:
+            margins = {side: amount for side in ("top", "bottom", "left", "right")}
+    return margins
+
+
+KNOWN_FONTS = (
+    "Times New Roman",
+    "Arial Black",
+    "Arial Narrow",
+    "Arial",
+    "Book Antiqua",
+    "Bookman Old Style",
+    "Calibri",
+    "Cambria",
+    "Candara",
+    "Century Gothic",
+    "Century Schoolbook",
+    "Century",
+    "Comic Sans MS",
+    "Consolas",
+    "Constantia",
+    "Corbel",
+    "Courier New",
+    "Franklin Gothic Medium",
+    "Garamond",
+    "Georgia",
+    "Helvetica",
+    "Impact",
+    "Lucida Console",
+    "Lucida Sans Unicode",
+    "Microsoft Sans Serif",
+    "Palatino Linotype",
+    "Rockwell",
+    "Segoe UI",
+    "Tahoma",
+    "Trebuchet MS",
+    "Verdana",
+)
+
+
+def _font_families_in(text: str) -> list[str]:
+    """Font families named in the text, in the order they appear ('Times' means Times New Roman)."""
+    found: dict[str, int] = {}
+    for family in KNOWN_FONTS:
+        match = re.search(rf"\b{re.escape(family)}\b", text or "", re.I)
+        if match:
+            found[family] = match.start()
+    if "Times New Roman" not in found:
+        # Capitalized "Times" next to a font word or point size, so "three times" is ignored.
+        for match in re.finditer(r"\bTimes\b(?!\s+New\b)(?:\s+Roman\b)?", text or ""):
+            nearby = (text or "")[max(0, match.start() - 50) : match.end() + 50]
+            if re.search(r"\b(?:font|typeface|pt|points?)\b", nearby, re.I):
+                found["Times New Roman"] = match.start()
+                break
+    return sorted(found, key=found.get)
+
+
+MECHANICS_GUIDE_SIGNAL_RE = re.compile(
+    r"\b(?:"
+    r"margin(?:s)?|font\s*size|line\s*spacing|heading\s*[1-9]|page\s*number|"
+    r"paper\s*size|typeface|format\s*mechanics|indent(?:ion|ation)?|"
+    r"citation\s*style|times\s*new\s*roman|body\s*(?:text|font)\s*size|"
+    r"layout\s+for\s+(?:tables|figures)|pagination"
+    r")\b",
+    re.I,
+)
+MANUSCRIPT_SIGNAL_RE = re.compile(
+    r"\b(?:"
+    r"acknowledgements?|chapter\s+(?:\d+|[ivxlcdm]+)|table\s+of\s+contents|"
+    r"review\s+of\s+(?:related\s+)?literature|statement\s+of\s+the\s+problem|"
+    r"methodology|findings\s+and\s+discussion|scope\s+and\s+delimitation|"
+    r"significance\s+of\s+the\s+study|definition\s+of\s+terms|"
+    r"references|bibliography|appendi(?:x|ces)"
+    r")\b",
+    re.I,
+)
+
+
+def _mechanics_rule_count(rules: dict | None) -> int:
+    """How many concrete format fields were extracted (not nested containers alone)."""
+    if not isinstance(rules, dict):
+        return 0
+    count = 0
+    for key, value in rules.items():
+        if key == "font" and isinstance(value, dict):
+            count += sum(1 for item in value.values() if item not in (None, "", [], {}))
+        elif isinstance(value, dict):
+            count += sum(1 for item in value.values() if item not in (None, "", [], {}))
+        elif isinstance(value, list):
+            count += sum(1 for item in value if str(item).strip())
+        elif value not in (None, "", [], {}):
+            count += 1
+    return count
+
+
+def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
+    """Reject manuscript uploads in the format-mechanics extractor.
+
+    Raises DocumentError when the document looks like a thesis/paper rather than
+    an institutional format guide. School guides often omit our sample schema
+    titles (e.g. \"Margins (in inches)\"); scraped rules + format vocabulary are
+    enough to accept. Schema gaps are surfaced later via validation issues.
+    """
+    body = str(text or "")
+    words = len(body.split())
+    guide_hits = len(MECHANICS_GUIDE_SIGNAL_RE.findall(body[:20_000]))
+    manuscript_hits = len(MANUSCRIPT_SIGNAL_RE.findall(body[:12_000]))
+    rule_count = _mechanics_rule_count(rules)
+
+    # Schema categories (Margins, Paper, Font, …) present as labeled sections.
+    try:
+        from app.mechanics_validate import validate_mechanics_document
+
+        schema = validate_mechanics_document(body, rules=None)
+        missing_categories = sum(
+            1 for issue in schema.get("issues") or [] if issue.get("code") == "missing_category"
+        )
+    except Exception:
+        missing_categories = 9
+
+    categories_present = 9 - missing_categories
+    manuscript_msg = (
+        "This file looks like a manuscript, not a format mechanics guide. "
+        "Upload your institution’s formatting guidelines (margins, fonts, headings, pagination), "
+        "then upload the manuscript in Step 3 - Upload & Analyze."
+    )
+    sparse_msg = (
+        "No format mechanics rules were found in this document. "
+        "Upload a format guide that lists requirements such as margins, font, spacing, "
+        "or heading sizes - not the manuscript itself."
+    )
+
+    # Sample / school guides that already match our labeled schema.
+    if categories_present >= 3:
+        return
+
+    # Typical institutional outlines (Capstone, PLSU, Mapúa, …): extractable
+    # margin/font/spacing rules plus format vocabulary, even without our titles.
+    if rule_count >= 3 and guide_hits >= 2:
+        return
+
+    # Long thesis/paper bodies - deny unless the guide signals are strong.
+    if manuscript_hits >= 2 and words >= 400 and (guide_hits < 2 or rule_count < 3):
+        raise DocumentError(manuscript_msg)
+    if words >= 1200 and manuscript_hits >= 1 and guide_hits < 3:
+        raise DocumentError(manuscript_msg)
+
+    if guide_hits < 2 and rule_count < 2:
+        raise DocumentError(sparse_msg)
+
+    # Short outline-style guides with some format content.
+    if words < 800 and (guide_hits >= 2 or rule_count >= 2):
+        return
+
+    raise DocumentError(manuscript_msg)
+
+
+def derive_mechanics_rules(text: str) -> dict:
+    """Extract editable format rules from a mechanics guide's plain text.
+
+    Handles Capstone-style outlines where PDF extraction splits labels and values
+    onto separate lines (e.g. \"Size\\n:\\n8.5 x 11\").
+    """
+    flat = _flatten_mechanics_text(text)
+    rules: dict = {}
+    if not flat:
+        return rules
+
+    # Do not use bare "Table"/"Figure"/"Page" here - they chop mid-sentence
+    # ("above the table", "Do page break only…"). Prefer section titles + outline letters.
+    stop = (
+        "Size", "Orientation", "Substance", "Spacing", "Indention", "Indentation",
+        "Margins", "Margin", "Font", "Type", "Color", "Pagination", "Citation",
+        "Heading", "Top", "Bottom", "Left", "Right",
+        "Gutter", "Header", "Footer", "Paper", "Alignment", "Justification",
+        "Layout for Tables", "Layout for Figures", "Table layout", "Figure layout",
+        "a.", "b.", "c.", "d.", "e.", "f.", "g.", "h.", "i.", "j.", "k.",
+        "i.", "ii.", "iii.", "iv.", "v.", "vi.",
+    )
+
+    paper: dict = {}
+    size_raw = _value_after_label(flat, ("Size", "Paper size", "Page size"), stop)
+    size_info = _parse_paper_size(size_raw) if size_raw else {}
+    if not size_info:
+        # Global fallbacks when the guide never uses an explicit Size label.
+        size_info = _parse_paper_size(flat)
+    if size_info.get("label"):
+        paper["size"] = size_info["label"]
+    paper_size: dict = {}
+    if size_info.get("name"):
+        paper_size["name"] = size_info["name"]
+    if size_info.get("width_inches") and size_info.get("height_inches"):
+        paper_size["width_inches"] = size_info["width_inches"]
+        paper_size["height_inches"] = size_info["height_inches"]
+    if paper_size:
+        rules["paper_size"] = paper_size
+
+    orientation = _value_after_label(flat, ("Orientation", "Page orientation"), stop)
+    if orientation:
+        if re.search(r"landscape", orientation, re.I):
+            paper["orientation"] = "Landscape"
+        elif re.search(r"portrait", orientation, re.I):
+            paper["orientation"] = "Portrait"
+    elif re.search(r"\blandscape\b(?!\s+(?:pages?|orientation\s*:))", flat, re.I):
+        paper["orientation"] = "Landscape"
+    else:
+        paper["orientation"] = "Portrait"
+
+    substance = _value_after_label(
+        flat, ("Substance", "Paper substance", "Paper weight", "Basis weight", "gsm"), stop
+    )
+    if substance:
+        number = re.search(r"(\d+(?:\.\d+)?)", substance)
+        paper["substance"] = number.group(1) if number else substance[:40]
+
+    if paper:
+        rules["paper"] = paper
+
+    spacing_raw = _value_after_label(
+        flat, ("Spacing", "Line spacing", "Line space", "Lines spacing"), stop
+    )
+    spacing_val = _parse_spacing(spacing_raw) if spacing_raw else None
+    spacing_matches = re.findall(
+        r"\b(single|double|one(?:[\s-]and[\s-]a[\s-]half)|1(?:\.0)?|1\.5|2(?:\.0)?)"
+        r"(?:[\s-]+line)?[\s-]+spac(?:e|ed|ing)\b",
+        flat,
+        re.I,
+    )
+    spacing_options: list[float] = []
+    for token in spacing_matches:
+        parsed = _parse_spacing(token)
+        if parsed is not None and parsed not in spacing_options:
+            spacing_options.append(parsed)
+    if spacing_val is None and spacing_options:
+        spacing_val = spacing_options[0]
+    if spacing_val is not None and spacing_val not in spacing_options:
+        spacing_options.insert(0, spacing_val)
+    if spacing_val is not None:
+        rules["line_spacing"] = spacing_val
+        rules["spacing"] = str(spacing_val).rstrip("0").rstrip(".") if isinstance(spacing_val, float) else str(spacing_val)
+        if rules["spacing"] == "1":
+            rules["spacing"] = "1"
+        elif spacing_val == 1.5:
+            rules["spacing"] = "1.5"
+        elif spacing_val == 2.0:
+            rules["spacing"] = "2"
+    if len(spacing_options) > 1:
+        rules["line_spacings"] = spacing_options
+
+    indent_raw = _value_after_label(
+        flat,
+        ("Indention", "Indentation", "First-line indent", "First line indent", "Paragraph indent"),
+        stop,
+    )
+    # Indentation only: never invent a default (bare "tab" / unclear → omit → IGNORE).
+    from app.indent_check import _parse_indent_inches as _parse_indent_rule_inches
+
+    indent_val = _parse_indent_rule_inches(indent_raw) if indent_raw else None
+    if indent_val is None:
+        # Label then measure: "first-line indent: 0.5 inch"
+        indent_match = re.search(
+            r"\b(?:first(?:[\s-]line)?|paragraph)\s+indent(?:ation|ion)?\s*"
+            rf"(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
+            flat,
+            re.I,
+        )
+        if indent_match:
+            indent_val = _parse_indent_rule_inches(indent_match.group(1))
+        if indent_val is None:
+            # Measure then label (same sentence as spacing): "0.5 inch first-line indent"
+            measure_then = re.search(
+                rf"(?i)({MEASURE_PATTERN})\s+"
+                r"(?:(?:first[\s-]?line|paragraph)\s+)?indent(?:ation|ion)?\b",
+                flat,
+            )
+            if measure_then:
+                indent_val = _parse_indent_rule_inches(measure_then.group(1))
+        # "0.5 inch TAB" / "TAB = 0.5 inch" — only when a measure is stated beside TAB.
+        if indent_val is None:
+            tab_with_measure = re.search(
+                rf"(?i)(?:({MEASURE_PATTERN})\s*TAB)"
+                rf"|\bTAB\b[^.]{{0,40}}?({MEASURE_PATTERN})"
+                rf"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{{0,40}}?({MEASURE_PATTERN})",
+                flat,
+            )
+            if tab_with_measure:
+                for group in tab_with_measure.groups():
+                    if group:
+                        indent_val = _parse_indent_rule_inches(group)
+                        if indent_val is not None:
+                            break
+        # Bare "one tab" / "indent of one tab" with no equivalent → leave unset (IGNORE).
+    if indent_val is not None:
+        rules["first_line_indent_inches"] = indent_val
+        rules["indention"] = f"{indent_val} inch" if indent_val != 1 else "1 inch"
+    if re.search(r"(?i)\bhanging\s+indent", flat):
+        rules["indent_type"] = "hanging"
+    elif re.search(r"(?i)\bright\s+indent", flat):
+        rules["indent_type"] = "right"
+    elif re.search(r"(?i)\bleft\s+indent\b", flat) and not re.search(r"(?i)first[\s-]?line", flat):
+        rules["indent_type"] = "left"
+
+    margins = _extract_margins(flat, stop)
+    if margins:
+        rules["margins_inches"] = margins
+
+    alignment = parse_alignment(
+        _value_after_label(
+            flat, ("Text alignment", "Paragraph alignment", "Alignment", "Justification", "Align"), stop
+        )
+    )
+    # Prefer the manuscript body rule ("generally … Justified format") over alignment
+    # examples listed earlier in the same guide (Flush left / Center / Flush right).
+    if re.search(
+        r"(?i)(?:generally|manuscript|body\s+text|encoded)\b[^.]{0,80}\bjustified\b"
+        r"|\bjustified\s+format\b",
+        flat,
+    ):
+        alignment = "justify"
+    elif alignment is None:
+        phrase = re.search(
+            r"\b(?:fully\s+|full[\s-])?justified\b|\bflush[\s-]left\b|\bleft[\s-](?:aligned|justified)\b"
+            r"|\bragged[\s-]right\b",
+            flat,
+            re.I,
+        )
+        if phrase:
+            alignment = "justify" if re.search(r"justified", phrase.group(0), re.I) and not re.search(
+                r"left", phrase.group(0), re.I
+            ) else "left"
+    if alignment:
+        rules["alignment"] = alignment
+
+    fonts = _font_families_in(flat)
+    font_type = _value_after_label(flat, ("Font type", "Font", "Typeface", "Type"), stop)
+    if font_type:
+        mentioned = _font_families_in(font_type)
+        for family in reversed(mentioned):
+            if family in fonts:
+                fonts.remove(family)
+            fonts.insert(0, family)
+    sizes = sorted(
+        {
+            float(value)
+            for value in re.findall(r"\b(\d{1,2}(?:\.\d+)?)\s*(?:pt|point)s?\b", flat, re.I)
+            if 6 <= float(value) <= 72
+        }
+    )
+    def _heading_labels(level: int) -> tuple[str, ...]:
+        # "H4"-style short labels are too ambiguous past level 3.
+        short = (f"H{level}",) if level <= 3 else ()
+        return (f"Heading {level}", f"Heading{level}", *short)
+
+    # Body / Contents labels (Capstone outlines often use bare "Content: 11").
+    # Longer phrases first; bare Content/Contents handled via a dedicated regex so
+    # "Table of Contents" is not mistaken for body size.
+    body_labels = (
+        "Body text size",
+        "Body font size",
+        "Body content size",
+        "Body size",
+        "Contents Size",
+        "Contents size",
+        "Content Size",
+        "Content size",
+        "Text size",
+        "Main body",
+        "Main text",
+        "Body content",
+        "Body text",
+    )
+    # Stop heading values from swallowing the following Content/Contents line.
+    stop_with_content = stop + (
+        "Content",
+        "Contents",
+        "Body text size",
+        "Body size",
+        "Body content",
+        "Body text",
+    )
+
+    # "Heading 3 and contents: 11" - one sentence assigns the SAME pt to Heading 3
+    # and body/contents; they remain separate rules that share the value.
+    combined_heading_body = re.finditer(
+        r"(?i)\bheading\s*(\d)\s+and\s+(?:contents?|body)(?:\s*(?:text|content))?(?:\s*size)?\s*[:：=]?\s*"
+        r"(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+        flat,
+    )
+    combined_sizes: dict[str, float] = {}
+    for match in combined_heading_body:
+        level = int(match.group(1))
+        number = float(match.group(2))
+        if 1 <= level <= MAX_HEADING_LEVELS and 6 <= number <= 72:
+            combined_sizes[f"heading{level}_size"] = number
+            combined_sizes["body_size"] = number
+
+    # Same sentence, DIFFERENT values: "Heading 1 size: 16 pt and body size: 11 pt"
+    # (each label keeps its own field - do not let one capture swallow the other).
+    paired_heading_body = re.finditer(
+        r"(?i)\bheading\s*(\d)(?:\s*size)?\s*[:：=]?\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
+        r".{0,40}?\b(?:and|&|,)?\s*"
+        r"(?:body(?:\s*(?:text|content))?|contents?)(?:\s*size)?\s*[:：=]?\s*"
+        r"(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+        flat,
+    )
+    for match in paired_heading_body:
+        level = int(match.group(1))
+        heading_pt = float(match.group(2))
+        body_pt = float(match.group(3))
+        if 1 <= level <= MAX_HEADING_LEVELS and 6 <= heading_pt <= 72:
+            combined_sizes.setdefault(f"heading{level}_size", heading_pt)
+        if 6 <= body_pt <= 72:
+            combined_sizes.setdefault("body_size", body_pt)
+    paired_body_heading = re.finditer(
+        r"(?i)\b(?:body(?:\s*(?:text|content))?|contents?)(?:\s*size)?\s*[:：=]?\s*"
+        r"(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
+        r".{0,40}?\b(?:and|&|,)?\s*"
+        r"heading\s*(\d)(?:\s*size)?\s*[:：=]?\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+        flat,
+    )
+    for match in paired_body_heading:
+        body_pt = float(match.group(1))
+        level = int(match.group(2))
+        heading_pt = float(match.group(3))
+        if 6 <= body_pt <= 72:
+            combined_sizes.setdefault("body_size", body_pt)
+        if 1 <= level <= MAX_HEADING_LEVELS and 6 <= heading_pt <= 72:
+            combined_sizes.setdefault(f"heading{level}_size", heading_pt)
+
+    # Heading sizes only when the guide ties Heading N to a size/pt - never from a
+    # bare mention of "Heading 1" next to unrelated numbers (margins, word counts).
+    size_sources: list[tuple[str, str, tuple[str, ...]]] = []
+    for level in range(1, MAX_HEADING_LEVELS + 1):
+        labels = _heading_labels(level)
+        label_alt = "|".join(re.escape(label) for label in labels)
+        if not re.search(
+            # "Heading 1: 16" / "Heading 1 size …" / "… 16 pt … Heading 1"
+            rf"(?i)\b(?:{label_alt})\b\s*[:：=]\s*\d{{1,2}}"
+            rf"|\b(?:{label_alt})\b.{{0,80}}?(?:size|pt|points?)\b"
+            rf"|\b(?:size|pt|points?)\b.{{0,60}}?\b(?:{label_alt})\b",
+            flat,
+        ):
+            continue
+        size_sources.append(
+            (
+                _value_after_label(flat, labels, stop_with_content),
+                f"heading{level}_size",
+                labels,
+            )
+        )
+    body_raw = _value_after_label(flat, body_labels, stop)
+    size_sources.append((body_raw, "body_size", body_labels))
+
+    def _explicit_pt(raw: str | None) -> float | None:
+        """Point size only when the guide states pt/points, or the value is bare like '16'.
+
+        Never treat '40 mm', '30 words', or '40 characters' as a font size - that invented
+        phantom heading1_size values (30.0 / 40.0) from unrelated guide numbers.
+        """
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        # "16 pt", "16pt", "16-point", "16 points"
+        with_unit = re.search(r"(?i)(\d{1,2}(?:\.\d+)?)\s*-?\s*(?:pt|points?)\b", text)
+        if with_unit:
+            number = float(with_unit.group(1))
+            return number if 6 <= number <= 72 else None
+        # "size: 12" / "size 12" (label already consumed; value still says size)
+        size_labeled = re.search(r"(?i)\bsize\b\s*[:：=]?\s*(\d{1,2}(?:\.\d+)?)\b", text)
+        if size_labeled:
+            number = float(size_labeled.group(1))
+            return number if 6 <= number <= 72 else None
+        # "Heading 1: 16" / "16" - number alone, no other words/units.
+        if re.fullmatch(r"\d{1,2}(?:\.\d+)?", text):
+            number = float(text)
+            return number if 6 <= number <= 72 else None
+        # Clipped value may still start with the point size ("12 Font type…").
+        leading = re.match(r"^(\d{1,2}(?:\.\d+)?)\b(?!\s*(?:mm|cm|inch|inches|words?|characters?|%))", text, re.I)
+        if leading:
+            number = float(leading.group(1))
+            return number if 6 <= number <= 72 else None
+        return None
+
+    def _nearby_pt(labels: tuple[str, ...]) -> float | None:
+        """'Heading N … 16 pt' or 'Heading N: 16' / 'Heading N size: 16' (bare digits OK)."""
+        label_alt = "|".join(re.escape(label) for label in labels)
+        match = re.search(
+            rf"(?i)\b(?:{label_alt})\b.{{0,48}}?(\d{{1,2}}(?:\.\d+)?)\s*-?\s*(?:pt|points?)\b",
+            flat,
+        )
+        if not match:
+            match = re.search(
+                rf"(?i)\b(?:{label_alt})\b(?:\s*size)?\s*[:：=]\s*(\d{{1,2}}(?:\.\d+)?)\b",
+                flat,
+            )
+        if not match:
+            return None
+        number = float(match.group(1))
+        return number if 6 <= number <= 72 else None
+
+    def _contents_body_pt() -> float | None:
+        """Bare Content/Contents: 11 - not 'Table of Contents'."""
+        match = re.search(
+            r"(?i)(?<!of )\bcontents?\b(?:\s*size)?\s*[:：=]\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+            flat,
+        )
+        if not match:
+            # Label alone on one outline line, value on the next token.
+            match = re.search(
+                r"(?i)(?<!of )\bcontents?\b(?:\s*size)?\s+(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+                flat,
+            )
+        if not match:
+            # Prose in a multi-rule sentence: "body content uses 12 pt" / "body text is 11 pt".
+            match = re.search(
+                r"(?i)\b(?:body(?:\s*(?:text|content))?|(?<!of )contents?)\b(?:\s*size)?\s*"
+                r"(?:uses?|is|of|:|=|should\s+be|must\s+be|at)?\s*"
+                r"(\d{1,2}(?:\.\d+)?)\s*-?\s*(?:pt|points?)\b",
+                flat,
+            )
+        if not match:
+            return None
+        number = float(match.group(1))
+        return number if 6 <= number <= 72 else None
+
+    font: dict = {}
+    if fonts:
+        font["families"] = fonts
+        font["type"] = fonts[0]
+    if sizes:
+        font["sizes_points"] = sizes
+    for raw, key, labels in size_sources:
+        value = _explicit_pt(raw)
+        if value is None:
+            value = _nearby_pt(labels)
+        if value is not None:
+            font[key] = value
+            # sizes_points is body fallback only - do not dump headingN sizes into it.
+            if key in {"body_size", "heading3_content_size"}:
+                sizes = sorted(set([*sizes, value]))
+                font["sizes_points"] = sizes
+    # Shared "Heading N and contents: 11" - apply both rules (same value, separate fields).
+    for key, value in combined_sizes.items():
+        font[key] = value
+        if key == "body_size":
+            sizes = sorted(set([*sizes, value]))
+            font["sizes_points"] = sizes
+    if "body_size" not in font:
+        contents_pt = _contents_body_pt()
+        if contents_pt is not None:
+            font["body_size"] = contents_pt
+            sizes = sorted(set([*sizes, contents_pt]))
+            font["sizes_points"] = sizes
+    if "body_size" not in font:
+        # Many guides state a manuscript-wide typeface size and later a different
+        # title/cover size. Collect candidates and prefer body/typeface wording
+        # over title-only "Font size N" so any school guide works — not one template.
+        candidates: list[tuple[int, int, float]] = []  # (score, -start, pt)
+
+        def _local_context(start: int, end: int) -> tuple[str, str]:
+            # Prefer what the size is describing (before). After stays in-clause only
+            # so a later title/cover rule cannot poison an earlier body size.
+            before = flat[max(0, start - 120) : start]
+            rest = flat[end : min(len(flat), end + 80)]
+            stop = re.search(r"[.;\n]", rest)
+            after = rest[: stop.start()] if stop else rest[:40]
+            return before, after
+
+        def _is_title_or_heading_exception(before: str, after: str) -> bool:
+            # Reject sizes that clearly describe title/cover text only.
+            clause = f"{before[-90:]}{after}"
+            return bool(
+                re.search(
+                    r"(?i)\b(?:"
+                    r"title\s+page|cover\s+page|chapter\s+title|section\s+title|"
+                    r"thesis\s+title|dissertation\s+title|"
+                    r"uppercase\s+letters|all\s+caps|"
+                    r"bold\s+style|boldface"
+                    r")\b",
+                    clause,
+                )
+            )
+
+        def _add_candidate(start: int, end: int, value: float | None, base: int) -> None:
+            if value is None or not (6 <= float(value) <= 72):
+                return
+            before, after = _local_context(start, end)
+            if _is_title_or_heading_exception(before, after):
+                return
+            window = f"{before}{after}"
+            score = base
+            if re.search(
+                r"(?i)\b(?:throughout|entire\s+manuscript|whole\s+manuscript|must\s+be\s+used)\b",
+                window,
+            ):
+                score += 4
+            if re.search(
+                r"(?i)\b(?:typeface|font\s*(?:family|type)|body(?:\s*text)?|main\s+text|manuscript\s+text)\b",
+                window,
+            ):
+                score += 3
+            if re.search(
+                r"(?i)\b(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica)\b",
+                window,
+            ):
+                score += 2
+            # Earlier manuscript rules beat later exceptions when scores tie.
+            candidates.append((score, -start, float(value)))
+
+        for match in re.finditer(
+            r"\b(?:typeface|font(?:\s*(?:family|type))?|type)\b(.{0,40}?)\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+            re.I,
+        ):
+            if re.search(r"(?i)\bheading\b", match.group(1) or ""):
+                continue
+            _add_candidate(match.start(), match.end(), float(match.group(2)), base=5)
+
+        for match in re.finditer(
+            r"\bfont\s*(?:type\s*)?(?:and|&|/)\s*size\b\s*:?\s*[^.\d]{0,60}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
+            r"|\b(?:typeface|font\s*(?:family|type)|type)\s+size\b\s*(?:=|:)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+            re.I,
+        ):
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=4)
+
+        for match in re.finditer(
+            r"\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+            re.I,
+        ):
+            _add_candidate(match.start(), match.end(), float(match.group(1)), base=1)
+
+        for match in re.finditer(
+            r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica|"
+            r"font\s*style|typeface)\b[^.]{0,80}?\bfont\s+(\d{1,2})\b"
+            r"|\bfont\s+style\b[^.]{0,100}?\b(\d{1,2})\b(?!\s*(?:inch|mm|cm|heading))",
+            flat,
+        ):
+            if re.search(
+                r"(?i)\bheading\b.{0,30}\bfont\s+\d",
+                flat[max(0, match.start() - 40) : match.end() + 10],
+            ):
+                continue
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=3)
+
+        # "Calibri, size 12" / "main text … size 12" without the word "font" before size.
+        for match in re.finditer(
+            r"(?i)(?:times\s+new\s+roman|arial|calibri|garamond|georgia|helvetica)\b"
+            r".{0,40}?\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b"
+            r"|\b(?:main\s+text|body(?:\s*text)?|manuscript(?:\s*text)?)\b"
+            r".{0,80}?\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
+            flat,
+        ):
+            if re.search(r"(?i)\bheading\b", match.group(0) or ""):
+                continue
+            value = next((float(group) for group in match.groups() if group), None)
+            _add_candidate(match.start(), match.end(), value, base=4)
+
+        if candidates:
+            candidates.sort(reverse=True)
+            number = candidates[0][2]
+            font["body_size"] = number
+            sizes = sorted(set([*sizes, number]))
+            font["sizes_points"] = sizes
+    if "body_size" in font:
+        font["heading3_content_size"] = font["body_size"]
+        # Keep sizes_points body-only - never leave heading pt values in the bag.
+        font["sizes_points"] = [float(font["body_size"])]
+    font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
+    # Only store color when the guide names it - never invent Black/Automatic.
+    if font_color:
+        if re.search(r"black|automatic", font_color, re.I):
+            font["color"] = "Black/Automatic"
+        else:
+            font["color"] = font_color[:40]
+    if font:
+        rules["font"] = font
+
+    pagination: dict = {}
+    position = _line_value(text, ("Page number position", "Pagination position", "Page numbers", "Page number"))
+    # Prefer the Position line; only infer from whole-guide phrasing that clearly means
+    # the manuscript has no numbers at all (not "no page number on the title page").
+    if pagination_omits_all_numbers(position) or re.search(
+        r"(?i)\b(?:page\s+numbers?\s+not\s+required|"
+        r"do\s+not\s+(?:use|include|put|require)\s+page\s+numbers?|"
+        r"unnumbered\s+(?:manuscript|document|paper|thesis)|"
+        r"entire\s+(?:manuscript|document|paper).{0,40}no\s+page\s+numbers?|"
+        r"no\s+page\s+numbers?\s+(?:throughout|anywhere|at\s+all))\b",
+        flat,
+    ):
+        position = PAGE_NO_NUMBERS
+    elif not all(page_position_parts(position)):
+        found = re.search(r"\b(?:top|bottom|upper|lower)[\s-]+(?:left|right|cent(?:er|re))\b", flat, re.I)
+        position = found.group(0) if found else position
+    if position.strip():
+        pagination["position"] = canonical_page_position(position)[:120]
+        if not pagination_omits_all_numbers(pagination["position"]) and (
+            page_number_only(position)
+            or page_number_only(_line_value(text, ("Pagination", "Page numbering", "Page numbers")))
+        ):
+            pagination["number_only"] = True
+    first_page = _line_value(text, ("First page of each chapter", "First page of a chapter", "Chapter first page"))
+    if not first_page and re.search(
+        r"no\s+page\s+(?:number|shown|displayed|printed).*(?:chapter|first\s+page)"
+        r"|first\s+page.*(?:no|without|hide|hidden)\s+page"
+        r"|(?:chapter|every\s+chapter).*no\s+page",
+        flat,
+        re.I,
+    ):
+        first_page = CHAPTER_FIRST_HIDDEN
+    if first_page:
+        pagination["first_page_of_chapter"] = canonical_chapter_first_page(first_page)[:160]
+    title_page = canonical_title_page(
+        _line_value(text, ("Title page", "First page of the document", "Document first page"))
+    )
+    if not title_page and re.search(
+        r"(?i)\btitle\s+page\b.{0,60}(?:no|without|hide|hidden|omit)\s+page"
+        r"|(?:no|without|hide|hidden)\s+page\s+number.{0,40}\btitle\s+page\b",
+        flat,
+    ):
+        title_page = TITLE_HIDDEN_COUNTED
+    if title_page:
+        pagination["title_page"] = title_page
+    # Only set preliminary / body numbering when those lines exist in the guide  - 
+    # do not infer them from unrelated wording (avoids false pagination style checks).
+    preliminary_raw = _line_value(text, ("Preliminary pages", "Preliminary page numbers", "Front matter"))
+    if not preliminary_raw:
+        prelim_sent = re.search(
+            r"(?i)((?:preliminary|front\s+matter)\s+pages?\b[^.!?\n]{0,100}"
+            r"(?:roman|arabic)[^.!?\n]{0,40})",
+            flat,
+        )
+        preliminary_raw = prelim_sent.group(1) if prelim_sent else ""
+    preliminary = canonical_preliminary_style(preliminary_raw)
+    if not preliminary and re.search(
+        r"(?i)\bpreliminary\b.{0,80}\b(?:lowercase\s+)?roman\b"
+        r"|\bromann?\s+numeral.{0,40}\bpreliminary\b",
+        flat,
+    ):
+        preliminary = PRELIM_ROMAN
+    if preliminary:
+        pagination["preliminary_style"] = preliminary
+    body_numbering_raw = _line_value(
+        text, ("Body numbering", "Main body numbering", "Main text numbering", "Body pages")
+    )
+    if not body_numbering_raw:
+        body_sent = re.search(
+            r"(?i)((?:body|main\s+(?:text|body))\s+pages?\b[^.!?\n]{0,120}"
+            r"(?:restart|continuous|continu)[^.!?\n]{0,40})",
+            flat,
+        )
+        body_numbering_raw = body_sent.group(1) if body_sent else ""
+    body_numbering = canonical_body_numbering(body_numbering_raw)
+    if body_numbering:
+        pagination["body_numbering"] = body_numbering
+    markers = canonical_chapter_markers(
+        _line_value(text, ("Chapter starts", "Chapter start pages", "Chapter-like pages"))
+    )
+    if not markers and re.search(
+        r"(?i)\bchapter\s+number\b.{0,50}\b(?:hindu[\s-]?arabic|arabic)\b",
+        flat,
+    ):
+        markers = ["chapter_arabic"]
+    elif not markers and re.search(
+        r"(?i)\bchapter\s+number\b.{0,50}\bromann?\b",
+        flat,
+    ):
+        markers = ["chapter_roman"]
+    if markers:
+        pagination["chapter_markers"] = markers
+    if pagination:
+        rules["pagination"] = pagination
+        rules["pagination_requirements"] = [
+            value for key, value in pagination.items() if key in {"position", "first_page_of_chapter"}
+        ]
+
+    heading_styles = {}
+    for number in range(1, MAX_HEADING_LEVELS + 1):
+        style = heading_style_from_text(
+            _line_value(text, (f"Heading {number} style", f"Heading {number} format", f"Level {number} heading"))
+        )
+        if style:
+            heading_styles[f"heading{number}"] = style
+    # Prose guides (no "Heading 1 style:" labels): Chapter Number/Title + side headings
+    # are still separate rules even when they share bold/center values.
+    if "heading1" not in heading_styles and re.search(
+        r"(?i)\bchapter\s+(?:number|title)\b.{0,40}\b(?:written|title\s*case|uppercase|bold)",
+        flat,
+    ):
+        h1: dict = {}
+        if re.search(r"(?i)\bchapter\s+title\b.{0,60}\b(?:upper\s*case|uppercase|all\s*caps)\b", flat):
+            h1["case"] = "upper"
+        elif re.search(r"(?i)\bchapter\s+number\b.{0,60}\btitle\s*case\b", flat):
+            h1["case"] = "title"
+        if re.search(r"(?i)\b(?:both|chapter)\b[^.]{0,100}\bbold(?:face)?\b", flat):
+            h1["bold"] = True
+        if re.search(r"(?i)\b(?:both|chapter)\b[^.]{0,120}\bcent(?:er|re)(?:ed|ed)?\b", flat):
+            h1["alignment"] = "center"
+        if h1:
+            heading_styles["heading1"] = h1
+    if "heading2" not in heading_styles and re.search(
+        r"(?i)\bside\s+headings?\b[^.]{0,80}\b(?:flush|left)\b",
+        flat,
+    ):
+        heading_styles["heading2"] = {"alignment": "left"}
+    if heading_styles:
+        rules.setdefault("font", {})["heading_styles"] = heading_styles
+    font_rules = rules.get("font") or {}
+    defined_levels = [
+        number
+        for number in range(1, MAX_HEADING_LEVELS + 1)
+        if f"heading{number}_size" in font_rules or f"heading{number}" in heading_styles
+    ]
+    if defined_levels:
+        font_rules["heading_levels"] = max(defined_levels)
+
+    word_raw = _line_value(
+        text, ("Word spacing", "Spacing between words", "Spaces after periods", "Space after period")
+    ) or _value_after_label(
+        flat, ("Word spacing", "Word Spacing", "Spacing between words", "Spaces after periods"), stop
+    )
+    word_spacing = canonical_word_spacing(word_raw)
+    if not word_spacing and re.search(
+        r"(?i)\b(?:two|2)\s*(?:\(\s*2\s*\))?\s+spaces?\s+after\s+(?:each\s+|a\s+|an\s+)?"
+        r"(?:period|sentence|full\s+stop)",
+        flat,
+    ):
+        word_spacing = WORD_SPACING_TWO
+    elif not word_spacing and re.search(
+        r"(?i)\b(?:one|1)\s*(?:\(\s*1\s*\))?\s+space\s+after\s+(?:each\s+|a\s+|an\s+)?"
+        r"(?:period|sentence|full\s+stop)",
+        flat,
+    ):
+        word_spacing = canonical_word_spacing("one space after period")
+    if word_spacing:
+        rules["word_spacing"] = word_spacing
+
+    landscape = canonical_landscape_pages(_line_value(text, ("Landscape pages", "Landscape orientation")))
+    if landscape:
+        rules.setdefault("paper", {})["landscape_pages"] = landscape
+
+    page_breaks = _line_value(text, ("Page breaks", "Page break rules")) or _clip_value(
+        _value_after_label(flat, ("Page breaks", "Page break rules", "Page break"), stop), stop
+    )
+    # Reject truncated scraps like "Do" from "Do not …" cut by a stop word.
+    if page_breaks and (len(page_breaks) < 12 or len(page_breaks.split()) < 3):
+        page_breaks = ""
+    if not page_breaks:
+        sentence = re.search(
+            r"(?i)((?:insert\s+a\s+)?page\s+breaks?[^.!?\n]{10,220}[.!?]?"
+            r"|(?:do\s+not|only|never|always)[^.!?\n]{0,40}page\s+break[^.!?\n]{5,180}[.!?]?)",
+            flat,
+        )
+        if sentence:
+            page_breaks = _clip_value(sentence.group(1), stop)
+            if page_breaks and (len(page_breaks) < 12 or len(page_breaks.split()) < 3):
+                page_breaks = ""
+    if page_breaks:
+        rules["page_break_requirements"] = [page_breaks[:300]]
+    elif re.search(r"page break.*(?:new chapter|chapter)|(?:new chapter|chapter).*page break", flat, re.I):
+        rules["page_break_requirements"] = ["Only when starting a new chapter"]
+
+    def _section_value(long_labels: tuple[str, ...], word: str) -> str:
+        # Prefer explicit layout labels; never treat "including tables, figures" as a rule.
+        value = _line_value(text, long_labels) or _value_after_label(flat, long_labels, stop)
+        if value and not _looks_like_layout_rule(value):
+            value = ""
+        if not value:
+            colon = re.search(
+                rf"(?i)\b{word}s?\s*:\s*(.+?)(?=\s+(?:{_stop_pattern(stop)})|\s+\d{{1,2}}\.\s+[A-Za-z]|$)",
+                flat,
+            )
+            if colon:
+                value = _clip_value(colon.group(1), stop)
+                if value and not _looks_like_layout_rule(value):
+                    value = ""
+        if not value:
+            value = _prose_layout_sentence(flat, word.lower())
+        return value
+
+    # Guides often say "Layout for Tables" / "h. Layout for Tables" rather than "Table layout".
+    table_layout = _section_value(
+        (
+            "Layout for Tables",
+            "Layout for Table",
+            "Table layout",
+            "Table naming",
+            "Tables layout",
+            "Table caption",
+            "Table title",
+        ),
+        "Table",
+    )
+    if table_layout and len(table_layout) > 3:
+        rules["table_layout_requirements"] = [table_layout[:300]]
+
+    figure_layout = _section_value(
+        (
+            "Layout for Figures",
+            "Layout for Figure",
+            "Figure layout",
+            "Figure naming",
+            "Figures layout",
+            "Figure caption",
+            "Figure title",
+        ),
+        "Figure",
+    )
+    if figure_layout and len(figure_layout) > 3:
+        rules["figure_layout_requirements"] = [figure_layout[:300]]
+
+    citation = re.search(
+        r"\b(APA|MLA|IEEE)\b"
+        r"(?:\s*(?:7th|6th|style|format|citation|referencing))?",
+        flat,
+        re.I,
+    )
+    if citation:
+        rules["citation_style"] = citation.group(1).upper()
+    else:
+        citation_raw = _value_after_label(
+            flat, ("Citation format", "Citation style", "Citation", "Reference style"), stop
+        )
+        if citation_raw:
+            style = re.search(r"\b(APA|MLA|IEEE)\b", citation_raw, re.I)
+            if style:
+                rules["citation_style"] = style.group(1).upper()
+
+    from app.mechanics_ml import enrich_mechanics_rules
+
+    return enrich_mechanics_rules(text, rules)
+
+
 def normalize_mechanics_rules(raw: dict | None) -> dict:
     """Sanitize client-edited rules into the shape used by compliance checks."""
-    # NOTE: Guide extraction (derive_mechanics_rules) lives on the Vercel api/ gateway.
     if not isinstance(raw, dict):
         return {}
     rules: dict = {}
@@ -1013,7 +2335,8 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
             continue
         if 6 <= number <= 72:
             font_out[key] = number
-            # sizes_points is a body-size fallback only — do not merge headingN_size into it.
+            # sizes_points is a body-size fallback only - do not merge headingN_size into it,
+            # or Heading 1 can be judged against Heading 2/3 sizes the user never set for H1.
             if key in {"body_size", "heading3_content_size"}:
                 if isinstance(sizes, list):
                     sizes = [*list(sizes), number]
@@ -1024,7 +2347,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         font_out["heading3_content_size"] = font_out["body_size"]
     elif "heading3_content_size" in font_out:
         # Drop a stale combined value that only echoes a heading level size (H1→body leak).
-        # Keep distinct values — legacy payloads still use this key as the body size.
+        # Keep distinct values - legacy payloads still use this key as the body size.
         combined = font_out["heading3_content_size"]
         level_sizes = {
             font_out[key]
@@ -1045,6 +2368,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         if re.fullmatch(r"heading\d+_size", key)
     }
     if "body_size" in font_out:
+        # Body fallback list must not include heading sizes from older clients.
         font_out["sizes_points"] = [float(font_out["body_size"])]
     elif sizes:
         cleaned = []
@@ -1062,6 +2386,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
                 if number not in seen:
                     seen.add(number)
                     unique.append(number)
+            # Drop values that only exist as headingN_size - those are not body rules.
             body_fallback = [number for number in unique if number not in heading_size_values]
             if body_fallback:
                 font_out["sizes_points"] = body_fallback[:8]
@@ -1135,13 +2460,24 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         indention = ""
     if indention:
         rules["indention"] = indention[:120]
-    indent = parse_length_inches(indention) if indention else None
-    if indent is None:
-        indent = parse_length_inches(raw.get("first_line_indent_inches"))
+    # Indentation only: bare "tab" without a stated equivalent must not become 0.5.
+    from app.indent_check import _parse_indent_inches as _parse_indent_rule_inches
+
+    indent = _parse_indent_rule_inches(indention) if indention else None
+    if indent is None and not rule_unset(raw.get("first_line_indent_inches")):
+        indent = _parse_indent_rule_inches(raw.get("first_line_indent_inches"))
     if indent is not None and indent <= 2:
         rules["first_line_indent_inches"] = indent
+    indent_type = str(raw.get("indent_type") or raw.get("indentation_type") or "").strip().lower()
+    if indent_type in {"first_line", "hanging", "left", "right", "none"}:
+        rules["indent_type"] = indent_type
+    if not rule_unset(raw.get("indent_tolerance_inches")):
+        tol = _parse_indent_rule_inches(raw.get("indent_tolerance_inches"))
+        if tol is not None:
+            rules["indent_tolerance_inches"] = tol
 
-    alignment = parse_alignment(raw.get("alignment") or raw.get("text_alignment"))
+    alignment_raw = raw.get("alignment") or raw.get("text_alignment")
+    alignment = None if rule_unset(alignment_raw) else parse_alignment(alignment_raw)
     if alignment:
         rules["alignment"] = alignment
 
@@ -1189,3 +2525,148 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         rules["pagination_requirements"] = [value for value in pagination_out.values() if isinstance(value, str)]
 
     return rules
+
+
+_SAMPLE_FONT_NAME = "Times New Roman"
+_SAMPLE_FONT_SIZE = Pt(12)
+_SAMPLE_FONT_COLOR = RGBColor(0, 0, 0)
+
+
+def _apply_sample_run_font(run, *, bold: bool = False) -> None:
+    """Body text only: black, 12 pt. No heading styles or theme colors."""
+    run.bold = bold
+    run.italic = False
+    run.font.name = _SAMPLE_FONT_NAME
+    run.font.size = _SAMPLE_FONT_SIZE
+    run.font.color.rgb = _SAMPLE_FONT_COLOR
+    r_pr = run._element.get_or_add_rPr()
+    r_fonts = r_pr.get_or_add_rFonts()
+    for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+        r_fonts.set(qn(attr), _SAMPLE_FONT_NAME)
+
+
+_SAMPLE_VALUE_TAB = Inches(2.5)
+
+# APA 7th edition student-paper rules, with every Format Field filled.
+# Each section heading must be a word the extractor stops on (Paper, Margins, Font,
+# Pagination, Page, Table, Figure, Citation) so it never leaks into the value above it.
+# Free-text sections use their heading as the label and put the value on the next line.
+# Values must avoid stop words (Left, Right, Top, Page, Table, Figure, ...) except as
+# their first word, and Margins must come before "Alignment: Left" so the first "Left"
+# in the text is the left margin.
+_SAMPLE_SECTIONS = (
+    (
+        "Margins (in inches)",
+        (
+            ("Top", "1"),
+            ("Left", "1"),
+            ("Bottom", "1"),
+            ("Right", "1"),
+            ("Gutter", "0"),
+            ("Header", "0.5"),
+            ("Footer", "0.5"),
+        ),
+    ),
+    (
+        "Paper",
+        (
+            ("Size", "8.5 x 11"),
+            ("Orientation", "Portrait"),
+            ("Substance", "20"),
+            ("Spacing", "Double"),
+            ("Word spacing", "One space between words and after periods"),
+            ("Indention", "0.5 inch"),
+            ("Alignment", "Left"),
+            ("Landscape pages", "Allowed for tables and figures"),
+        ),
+    ),
+    (
+        "Font",
+        (
+            ("Heading 1 size", "12 pt"),
+            ("Heading 2 size", "12 pt"),
+            ("Body text size", "12 pt"),
+            ("Font type", "Times New Roman"),
+            ("Font color", "Black"),
+        ),
+    ),
+    (
+        "Heading Styles",
+        (
+            ("Heading 1 style", "Bold, Title Case, centered"),
+            ("Heading 2 style", "Bold, Title Case, flush left"),
+        ),
+    ),
+    (
+        "Pagination",
+        (
+            ("Page number position", "Top right"),
+            ("Title page", "Number shown"),
+            ("First page of each chapter", "Same position as other pages"),
+            ("Body numbering", "Arabic, continuous"),
+            ("Chapter starts", "CHAPTER I, CHAPTER II…; Chapter 1, Chapter 2…"),
+        ),
+    ),
+    ("Page Breaks", "Only to start each new chapter and the reference list"),
+    (
+        "Table Layout",
+        "Table number in bold, with the title in italic title case on the next line, both placed above it",
+    ),
+    (
+        "Figure Layout",
+        "Figure number in bold, with the title in italic title case on the next line, both placed above the image",
+    ),
+    ("Citation Format", (("Citation style", "APA 7th edition"),)),
+)
+
+
+def _add_sample_paragraph(doc, *, space_before: float = 0, space_after: float = 0, align=None):
+    paragraph = doc.add_paragraph()
+    paragraph.style = doc.styles["Normal"]
+    fmt = paragraph.paragraph_format
+    fmt.space_before = Pt(space_before)
+    fmt.space_after = Pt(space_after)
+    fmt.line_spacing = 1.15
+    fmt.first_line_indent = Inches(0)
+    fmt.left_indent = Inches(0)
+    if align is not None:
+        paragraph.alignment = align
+    return paragraph
+
+
+def build_sample_mechanics_docx() -> bytes:
+    """Downloadable guide whose text fills every Format Field, in black 12 pt type."""
+    doc = Document()
+    normal = doc.styles["Normal"]
+    normal.font.name = _SAMPLE_FONT_NAME
+    normal.font.size = _SAMPLE_FONT_SIZE
+    normal.font.color.rgb = _SAMPLE_FONT_COLOR
+    normal.font.bold = False
+
+    title = _add_sample_paragraph(doc, space_after=4, align=WD_ALIGN_PARAGRAPH.CENTER)
+    _apply_sample_run_font(title.add_run("Sample Format Mechanics"), bold=True)
+    intro = _add_sample_paragraph(doc, space_after=6, align=WD_ALIGN_PARAGRAPH.CENTER)
+    _apply_sample_run_font(
+        intro.add_run(
+            "Keep every section and field label (for example Margins and Top). "
+            "Put a real value next to each label, or type IGNORE to skip that check - "
+            "do not use N/A and do not delete labels. Upload this guide, review Format Fields, then save."
+        )
+    )
+
+    for heading, body in _SAMPLE_SECTIONS:
+        head = _add_sample_paragraph(doc, space_before=12, space_after=4)
+        head.paragraph_format.keep_with_next = True
+        _apply_sample_run_font(head.add_run(heading), bold=True)
+        if isinstance(body, str):
+            _apply_sample_run_font(_add_sample_paragraph(doc, space_after=2).add_run(body))
+            continue
+        for label, value in body:
+            row = _add_sample_paragraph(doc, space_after=2)
+            row.paragraph_format.tab_stops.add_tab_stop(_SAMPLE_VALUE_TAB)
+            _apply_sample_run_font(row.add_run(f"{label}:\t{value}"))
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+

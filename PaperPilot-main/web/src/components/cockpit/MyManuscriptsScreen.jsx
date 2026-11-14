@@ -41,7 +41,8 @@ function formatMeta(row) {
   const parts = [];
   const institution = String(row.institution || "").trim();
   if (institution && institution !== "-" && institution !== "—") parts.push(institution);
-  if (row.citationStyle) parts.push(row.citationStyle);
+  const formatName = String(row.formatMechanicsName || row.citationStyle || "").trim();
+  if (formatName) parts.push(formatName);
   if (row.versionCount > 0) {
     parts.push(
       `${row.versionCount} version${row.versionCount === 1 ? "" : "s"} (${row.latestVersionLabel})`
