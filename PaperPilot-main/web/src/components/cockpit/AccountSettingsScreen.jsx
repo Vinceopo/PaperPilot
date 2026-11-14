@@ -693,22 +693,6 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
             <PlanBadge tier={tier} />
           </div>
 
-          <div className="relative mt-7 w-full space-y-3 rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3.5 text-sm">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-slate-400">Sign-in</span>
-              <span className="font-semibold text-slate-200">
-                {isGoogleAccount ? "Google" : "Email"}
-                {hasPasswordProvider && isGoogleAccount ? " + password" : ""}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-slate-400">Email</span>
-              <span className={`font-semibold ${emailVerified ? "text-emerald-400" : "text-amber-300"}`}>
-                {emailVerified ? "Verified" : "Unverified"}
-              </span>
-            </div>
-          </div>
-
           <div className="relative mt-6 w-full">
             <input
               ref={photoInputRef}
@@ -754,16 +738,6 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
             {canEditUsername && <InfoRow label="Username" value={form.username} />}
             <InfoRow label="Mobile number" value={form.contactNumber} />
             <InfoRow label="Plan" value={planName(tier)} />
-            <InfoRow
-              label="Login method"
-              value={
-                isGoogleAccount
-                  ? hasPasswordProvider
-                    ? "Google + password"
-                    : "Google"
-                  : "Email & password"
-              }
-            />
           </div>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">

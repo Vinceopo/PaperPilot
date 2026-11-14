@@ -838,14 +838,16 @@ def _column_from_boxes(boxes: list[list[float]]) -> tuple[float, float] | None:
     lefts = [round(box[0]) for box in boxes]
     common = Counter(lefts).most_common(4)
     primary = float(common[0][0])
-    left = primary
-    for value, _count in common[1:]:
-        edge = float(value)
+    # Prefer the leftmost edge in the typical first-line indent band from the
+    # dominant cluster. Scan every distinct left (not only the top modes) so a
+    # rare wrap-line body edge still wins over a majority indent cluster.
+    body_candidates = [primary]
+    for edge in {float(value) for value in lefts}:
         gap = abs(edge - primary)
         # Typical first-line indent cluster sits 0.3–0.75" from the body edge.
         if 0.28 * PT_PER_INCH <= gap <= 0.85 * PT_PER_INCH:
-            left = min(primary, edge)
-            break
+            body_candidates.append(edge)
+    left = min(body_candidates)
     rights = sorted(box[2] for box in boxes)
     return left, float(rights[int(0.9 * (len(rights) - 1))])
 
@@ -2069,6 +2071,31 @@ LIST_ITEM_RE = re.compile(
     r")",
     re.I,
 )
+DEFINITION_OF_TERMS_HEADING_RE = re.compile(r"^definition\s+of\s+terms\b", re.I)
+# "PaperPilot. An AI..." / "Academic Documents. Scholarly materials..."
+GLOSSARY_TERM_ENTRY_RE = re.compile(
+    r"^(?P<term>[A-Z][A-Za-z0-9+/&'-]*(?:[ \u00a0-][A-Z][A-Za-z0-9+/&'-]*){0,7})"
+    r"\.\s+(?P<body>.+)$"
+)
+_GLOSSARY_TERM_ABBREVIATIONS = frozenset(
+    {
+        "dr",
+        "mr",
+        "mrs",
+        "ms",
+        "prof",
+        "fig",
+        "eq",
+        "vol",
+        "no",
+        "nos",
+        "vs",
+        "etc",
+        "approx",
+        "dept",
+        "univ",
+    }
+)
 
 
 def _is_list_like_paragraph(paragraph: list[dict]) -> bool:
@@ -2080,6 +2107,59 @@ def _is_list_like_paragraph(paragraph: list[dict]) -> bool:
         return True
     text = (unit.get("text") or "").strip()
     return bool(LIST_ITEM_RE.match(text))
+
+
+def _is_glossary_term_paragraph(paragraph: list[dict]) -> bool:
+    """Definition-of-terms entries (Term. Definition…) are not body first-line targets."""
+    if not paragraph:
+        return False
+    text = (paragraph[0].get("text") or "").strip()
+    match = GLOSSARY_TERM_ENTRY_RE.match(text)
+    if not match:
+        return False
+    term = (match.group("term") or "").strip()
+    body = (match.group("body") or "").strip()
+    if not term or not body:
+        return False
+    # Avoid "Dr. Smith…" / "Fig. 1…" style abbreviations.
+    if " " not in term and (len(term) < 4 or term.lower().rstrip(".") in _GLOSSARY_TERM_ABBREVIATIONS):
+        return False
+    # Require a real definition tail, not "Word. Short."
+    if len(body) < 35 or len(body.split()) < 6:
+        return False
+    if not body[0].isupper():
+        return False
+    return True
+
+
+def _has_hanging_indent(unit: dict) -> bool:
+    """Hanging indents put the first line on the body edge; not a missing 0.5" first-line."""
+    raw = (unit.get("formatting") or {}).get("first_line_indent_inches")
+    if raw is None:
+        return False
+    try:
+        return float(raw) < -0.05
+    except (TypeError, ValueError):
+        return False
+
+
+def _definition_of_terms_line_keys(units: list[dict]) -> set[tuple]:
+    """Body lines that fall under a Definition of Terms heading until the next heading."""
+    keys: set[tuple] = set()
+    in_section = False
+    for unit in units:
+        text = (unit.get("text") or "").strip()
+        role = unit.get("role") or "body"
+        is_heading = str(role).startswith("heading")
+        if text and (is_heading or DEFINITION_OF_TERMS_HEADING_RE.match(text)):
+            if DEFINITION_OF_TERMS_HEADING_RE.match(text):
+                in_section = True
+                continue
+            if in_section and is_heading:
+                in_section = False
+        if in_section and text and _is_prose_body(unit):
+            keys.add((unit.get("page_index"), unit.get("line_index")))
+    return keys
 
 
 def _is_alignment_eligible_line(unit: dict, paragraph: list[dict]) -> bool:
@@ -2101,7 +2181,11 @@ def _is_indent_eligible_paragraph(paragraph: list[dict]) -> bool:
     """
     if not paragraph or _is_list_like_paragraph(paragraph):
         return False
+    if _is_glossary_term_paragraph(paragraph):
+        return False
     unit = paragraph[0]
+    if _has_hanging_indent(unit):
+        return False
     if unit.get("soft_wrap_continuation"):
         return False
     if unit.get("table_row") or unit.get("source") == "table":
@@ -2127,10 +2211,13 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
     stats.applicable = True
     expected = float(expected)
     body_left = _docx_body_left_indent(units)
+    glossary_section = _definition_of_terms_line_keys(units)
     for paragraph in _prose_paragraphs(units):
         if not _is_indent_eligible_paragraph(paragraph):
             continue
         unit = paragraph[0]
+        if (unit.get("page_index"), unit.get("line_index")) in glossary_section:
+            continue
         actual = _measured_indent(unit, body_left)
         if actual is None:
             continue
@@ -2375,12 +2462,60 @@ def _is_table_like_unit(unit: dict) -> bool:
     return False
 
 
-def _section_starts(units: list[dict]) -> dict[int, str]:
-    """Pages whose first content line opens a chapter or chapter-like section.
+def _narrow_column_unit(unit: dict) -> bool:
+    """True when the line is much narrower than the page (typical wrapped table cell)."""
+    if not _has_box(unit):
+        return False
+    bbox = unit["bbox"]
+    page_w = float(unit.get("page_width") or 0) or 612.0
+    width = float(bbox[2]) - float(bbox[0])
+    return width > 0 and width < 0.55 * page_w
 
-    Only the first real body line on a page can open a chapter. Running heads that
-    repeat the previous page's title, and later lines that merely mention Chapter N,
-    are not chapter starts.
+
+def _chapter_blocked_by_table_context(units: list[dict], page: int, candidate: dict) -> bool:
+    """Reject chapter openers that sit inside / beside a table or schedule grid.
+
+    Only the candidate's local context matters — a table later on the same chapter
+    page must not cancel a real CHAPTER I opener at the top.
+    """
+    if _is_table_like_unit(candidate):
+        return True
+    page_units = [
+        unit
+        for unit in units
+        if int(unit.get("page_index") or 0) == page and (unit.get("text") or "").strip()
+    ]
+    # Unmarked continuation / schedule cell: narrow column among other narrow lines
+    # or sitting next to already-marked table cells.
+    if not _narrow_column_unit(candidate):
+        return False
+    if not _has_box(candidate):
+        return False
+    cand = candidate["bbox"]
+    near_table = False
+    narrow_neighbors = 0
+    for unit in page_units:
+        if unit is candidate or not _has_box(unit):
+            continue
+        box = unit["bbox"]
+        vertically_near = box[1] <= cand[3] + 48.0 and box[3] >= cand[1] - 48.0
+        if not vertically_near:
+            continue
+        if _is_table_like_unit(unit):
+            near_table = True
+            break
+        if _narrow_column_unit(unit):
+            narrow_neighbors += 1
+    return near_table or narrow_neighbors >= 2
+
+
+def _section_starts(units: list[dict]) -> dict[int, str]:
+    """Pages whose opening lines start a chapter or chapter-like section.
+
+    Scan the first few content lines (skip blanks / orphan labels) until prose body
+    begins. Running heads that repeat the previous title are not new chapters.
+    Chapter arabic/roman openers must be emphasized (heading, bold, or ALL CAPS);
+    bare short titles are not enough (avoids table-cell false positives).
     """
     heads: dict[int, list[dict]] = defaultdict(list)
     for unit in units:
@@ -2391,44 +2526,52 @@ def _section_starts(units: list[dict]) -> dict[int, str]:
             continue
         if _is_table_like_unit(unit):
             continue
-        # Keep a short window only to find the first content line (skip blanks).
-        if len(heads[unit["page_index"]]) < 3:
+        # Short window at the top of the page (PDF often inserts a stray line above CHAPTER).
+        if len(heads[unit["page_index"]]) < 6:
             heads[unit["page_index"]].append(unit)
     starts: dict[int, str] = {}
     previous_title = ""
     previous_kind = ""
     for page in sorted(heads):
-        page_units = heads[page]
-        # Chapter openers are the first content line - not a mention buried mid-page.
-        unit = page_units[0]
-        text = unit["text"].strip()
-        if len(text) > 60 or text.endswith(".") or re.search(r"\.{2,}\s*\S+$|…", text):
-            previous_title = text.casefold()
+        accepted = None
+        for unit in heads[page]:
+            text = unit["text"].strip()
+            # Hit normal body prose — stop looking for a chapter opener on this page.
+            if len(text) > 60 or text.endswith(".") or re.search(r"\.{2,}\s*\S+$|…", text):
+                break
+            kind = (
+                "chapter_roman" if CHAPTER_ROMAN_RE.match(text)
+                else "chapter_arabic" if CHAPTER_ARABIC_RE.match(text)
+                else "back_matter" if BACK_MATTER_RE.match(text)
+                else "preliminary" if PRELIM_HEADING_RE.match(text)
+                else None
+            )
+            if not kind:
+                continue
+            role = str(unit.get("role") or "")
+            emphasized = role.startswith("heading") or _is_bold(unit) or text.isupper()
+            bare_title = len(text.split()) <= 3 and not re.search(r"[,:;]", text)
+            # Real chapter openers are emphasized; bare "Chapter 3" schedule cells are not.
+            if kind in {"chapter_roman", "chapter_arabic"}:
+                if not emphasized:
+                    continue
+                if _chapter_blocked_by_table_context(units, page, unit):
+                    continue
+            elif not (emphasized or bare_title):
+                continue
+            folded = text.casefold()
+            # Running head / continued chapter label on later pages is not a new chapter.
+            if previous_title and folded == previous_title:
+                continue
+            if kind in {"chapter_roman", "chapter_arabic"} and kind == previous_kind and folded == previous_title:
+                continue
+            accepted = (kind, folded)
+            break
+        if not accepted:
+            if heads[page]:
+                previous_title = heads[page][0]["text"].strip().casefold()
             continue
-        kind = (
-            "chapter_roman" if CHAPTER_ROMAN_RE.match(text)
-            else "chapter_arabic" if CHAPTER_ARABIC_RE.match(text)
-            else "back_matter" if BACK_MATTER_RE.match(text)
-            else "preliminary" if PRELIM_HEADING_RE.match(text)
-            else None
-        )
-        if not kind:
-            previous_title = text.casefold()
-            continue
-        role = str(unit.get("role") or "")
-        emphasized = role.startswith("heading") or _is_bold(unit) or text.isupper()
-        bare_title = len(text.split()) <= 3 and not re.search(r"[,:;]", text)
-        if not (emphasized or bare_title):
-            previous_title = text.casefold()
-            continue
-        folded = text.casefold()
-        # Running head / continued chapter label on later pages is not a new chapter.
-        if previous_title and folded == previous_title:
-            previous_title = folded
-            continue
-        if kind in {"chapter_roman", "chapter_arabic"} and kind == previous_kind and folded == previous_title:
-            previous_title = folded
-            continue
+        kind, folded = accepted
         starts[page] = kind
         previous_title = folded
         previous_kind = kind

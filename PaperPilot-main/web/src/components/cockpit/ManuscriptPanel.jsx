@@ -358,12 +358,8 @@ export default function ManuscriptPanel({
               </div>
 
               <div
-                className={`relative max-h-[min(36rem,72vh)] min-h-[22rem] flex-1 ${
-                  previewPreparing || previewUploading
-                    ? "overflow-hidden bg-[#e8ecf1]"
-                    : file?.name?.toLowerCase().endsWith(".pdf")
-                      ? "overflow-hidden bg-white"
-                      : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
+                className={`relative min-h-[22rem] flex-1 bg-[#e8ecf1] p-3 ${
+                  previewPreparing || previewUploading ? "overflow-hidden" : ""
                 }`}
               >
                 {preview?.error ? (
@@ -374,15 +370,20 @@ export default function ManuscriptPanel({
                   <div
                     className={
                       previewPreparing || previewUploading
-                        ? "pointer-events-none h-full overflow-hidden"
+                        ? "pointer-events-none overflow-hidden"
                         : undefined
                     }
                     aria-hidden={previewPreparing || previewUploading || undefined}
                   >
+                    {/* Same paged PDF/DOCX display as Issue Tracing — document only, no highlights/XAI. */}
                     <DocumentPagePreview
                       file={file}
                       preview={preview}
+                      documentUrl={preview?.cloudinary_url || preview?.public_url || ""}
+                      documentName={file?.name || preview?.filename || ""}
                       emptyLabel="No manuscript preview available yet."
+                      paged
+                      pageCountHint={preview?.page_count || 0}
                     />
                   </div>
                 )}

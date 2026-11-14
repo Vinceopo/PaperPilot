@@ -1,0 +1,43 @@
+# Mobile / local builds — not needed for Vercel web+API
+mobile/
+builds/
+android/
+
+# Local Python / caches
+.venv/
+venv/
+api/.venv/
+api/venv/
+api/data/
+api/tests/
+**/.pytest_cache/
+**/__pycache__/
+
+# ML / docs / fixtures (API calls remote ML service)
+machinelearning/
+paperpilot-ml/
+testdata/
+docs/
+scripts/
+
+# Frontend deps / build output (Vercel builds web separately)
+web/node_modules/
+web/dist/
+web/.vercel/
+mobile/node_modules/
+mobile/.expo/
+node_modules/
+
+# Secrets / local junk
+**/.env
+**/.env.*
+!**/.env.example
+*firebase-adminsdk*
+*.pem
+creds.json
+**/*.apk
+**/*.aab
+**/*.pdf
+**/*.docx
+.vscode/
+.idea/

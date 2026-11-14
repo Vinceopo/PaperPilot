@@ -277,11 +277,21 @@ function blobUrlForPdfFile(file) {
   if (!file) return "";
   const cached = pdfBlobUrlCache.get(file);
   if (cached) return cached;
-  const blob =
-    file.type === "application/pdf" ? file : new Blob([file], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
+  // Use the File/Blob as-is — wrapping in a new Blob can break pdf.js on some browsers.
+  const url = URL.createObjectURL(file);
   pdfBlobUrlCache.set(file, url);
   return url;
+}
+
+/** Prefer raw bytes for the paged canvas viewer (avoids Chrome’s native PDF iframe). */
+async function pdfSourceFromFile(file) {
+  if (!file) return null;
+  try {
+    const buffer = await file.arrayBuffer();
+    return new Uint8Array(buffer);
+  } catch {
+    return blobUrlForPdfFile(file);
+  }
 }
 
 function PdfFrame({ src, page, frameHeight = 0 }) {
@@ -327,11 +337,50 @@ function PdfFrame({ src, page, frameHeight = 0 }) {
 }
 
 function PdfFilePreview({ file, scrollTarget, highlight, paged }) {
-  const [url, setUrl] = useState(() => blobUrlForPdfFile(file));
+  const [url, setUrl] = useState(() => (paged ? "" : blobUrlForPdfFile(file)));
+  const [pagedSource, setPagedSource] = useState(null);
 
   useEffect(() => {
-    setUrl(blobUrlForPdfFile(file));
-  }, [file]);
+    let cancelled = false;
+    if (!file) {
+      setUrl("");
+      setPagedSource(null);
+      return undefined;
+    }
+    if (!paged) {
+      setPagedSource(null);
+      setUrl(blobUrlForPdfFile(file));
+      return undefined;
+    }
+    // Paged mode must use pdf.js canvases — never the browser PDF iframe/toolbar.
+    setUrl("");
+    setPagedSource(null);
+    void pdfSourceFromFile(file).then((source) => {
+      if (!cancelled) setPagedSource(source);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [file, paged]);
+
+  if (paged) {
+    if (!pagedSource) {
+      return (
+        <div className="flex h-48 items-center justify-center gap-2 text-xs text-slate-500">
+          <Spinner className="h-4 w-4 text-[#16bfa8]" />
+          Opening original PDF…
+        </div>
+      );
+    }
+    return (
+      <PdfPagedPreview
+        source={pagedSource}
+        scrollTarget={scrollTarget}
+        highlight={highlight}
+        allowNativeFallback={false}
+      />
+    );
+  }
 
   if (!url) {
     return (
@@ -342,20 +391,10 @@ function PdfFilePreview({ file, scrollTarget, highlight, paged }) {
     );
   }
 
-  if (paged) {
-    return (
-      <PdfPagedPreview
-        source={url}
-        scrollTarget={scrollTarget}
-        highlight={highlight}
-      />
-    );
-  }
-
   return <PdfFrame src={url} page={scrollTarget?.page ?? highlight?.page} />;
 }
 
-function PdfPagedPreview({ source, scrollTarget, highlight }) {
+function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback = true }) {
   const scrollerRef = useRef(null);
   const pdfRef = useRef(null);
   const lineYsRef = useRef(new Map());
@@ -408,13 +447,18 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
             })
           );
           const viewport = page.getViewport({ scale });
-          const text = await page.getTextContent();
-          const ys = [];
-          for (const item of text.items || []) {
-            if (!item?.str || !String(item.str).trim()) continue;
-            const [, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-            const fontHeight = Math.hypot(item.transform[2], item.transform[3]) * viewport.scale;
-            ys.push(vy - fontHeight);
+          // Text metrics power issue highlights; tolerate failures so preview still opens.
+          let ys = [];
+          try {
+            const text = await page.getTextContent();
+            for (const item of text.items || []) {
+              if (!item?.str || !String(item.str).trim()) continue;
+              const [, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+              const fontHeight = Math.hypot(item.transform[2], item.transform[3]) * viewport.scale;
+              ys.push(vy - fontHeight);
+            }
+          } catch {
+            ys = [];
           }
           lineYsRef.current.set(
             pageNumber,
@@ -426,11 +470,21 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
             height: viewport.height,
             scale,
           });
+          // Show page 1 immediately (one-page-tall frame like Issue Tracing), then append.
+          if (pageNumber === 1) {
+            setPages([...specs]);
+            setFrameHeight(Math.round(viewport.height));
+            setLinesReady(1);
+            setBusy(false);
+          } else if (pageNumber === pdf.numPages || pageNumber % 8 === 0) {
+            setPages([...specs]);
+            setLinesReady((n) => n + 1);
+          }
         }
         if (!specs.length || cancelled) return;
         setPages(specs);
-        setFrameHeight(Math.round(specs[0].height));
-        setLinesReady(1);
+        setFrameHeight((height) => height || Math.round(specs[0].height));
+        setLinesReady((n) => n + 1);
         setBusy(false);
       } catch {
         if (!cancelled) {
@@ -578,9 +632,17 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
   }, [scrollTarget, highlight, pages, linesReady, frameHeight]);
 
   if (error) {
+    // Manuscript preview must stay on the tracing-style canvas view — never Chrome’s PDF toolbar.
+    if (!allowNativeFallback || typeof source !== "string" || !source) {
+      return (
+        <p className="rounded-lg bg-white px-4 py-3 text-xs text-rose-500 shadow-sm">
+          Could not open the PDF page preview. Try selecting the file again.
+        </p>
+      );
+    }
     return (
       <PdfFrame
-        src={typeof source === "string" ? source : ""}
+        src={source}
         page={scrollTarget?.page ?? highlight?.page}
         frameHeight={frameHeight || Math.round((scrollerRef.current?.clientWidth || 640) * (11 / 8.5))}
       />
@@ -590,8 +652,8 @@ function PdfPagedPreview({ source, scrollTarget, highlight }) {
   return (
     <div
       ref={scrollerRef}
-      className="pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain"
-      style={{ height: frameHeight || "70vh" }}
+      className="pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg bg-[#e8ecf1]"
+      style={{ height: frameHeight > 40 ? frameHeight : "min(70vh, 36rem)" }}
     >
       {busy && !pages.length ? (
         <div className="flex h-48 items-center justify-center gap-2 text-xs text-slate-500">
@@ -1275,6 +1337,7 @@ export default function DocumentPagePreview({
           source={safeDocumentUrl}
           scrollTarget={scrollTarget}
           highlight={highlight}
+          allowNativeFallback={false}
         />
       );
     }

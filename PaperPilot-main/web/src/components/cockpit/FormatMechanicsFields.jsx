@@ -277,14 +277,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               <option value="Landscape">Landscape</option>
             </select>
           </Field>
-          <Field label="Substance" hint="Paper weight">
-            <input
-              disabled={disabled}
-              value={form.paperSubstance}
-              onChange={set("paperSubstance")}
-              className={inputClass}
-            />
-          </Field>
           <Field label="Spacing" hint="Pick a choice or type your own, e.g. 1.5 or Double">
             <ComboInput
               disabled={disabled}
@@ -562,17 +554,6 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
             />
           </Field>
         </div>
-      </Section>
-
-      <Section title="Page breaks">
-        <Field label="Page break rules">
-          <textarea
-            disabled={disabled}
-            value={form.pageBreaks}
-            onChange={set("pageBreaks")}
-            className={areaClass}
-          />
-        </Field>
       </Section>
 
       <Section title="Layout for tables">

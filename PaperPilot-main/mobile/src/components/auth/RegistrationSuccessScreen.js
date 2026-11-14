@@ -31,9 +31,6 @@ export default function RegistrationSuccessScreen({ profile, onContinue }) {
           <Text style={styles.fieldLabel}>Full Name</Text>
           <View style={styles.fieldBox}>
             <Text style={styles.fieldValue}>{fullName}</Text>
-            <View style={styles.miniCheck}>
-              <Text style={styles.miniCheckText}>✓</Text>
-            </View>
           </View>
 
           <Text style={styles.fieldLabel}>Email Address</Text>
@@ -41,6 +38,9 @@ export default function RegistrationSuccessScreen({ profile, onContinue }) {
             <Text style={styles.fieldValue} numberOfLines={1}>
               {profile?.email}
             </Text>
+            <View style={styles.miniCheck}>
+              <Text style={styles.miniCheckText}>✓</Text>
+            </View>
           </View>
         </View>
 

@@ -414,6 +414,13 @@ export default function SubscriptionScreen({
               ? "View status, renewal date, and billing history."
               : "Secure checkout powered by PayMongo (Card, GCash, Maya, and more)."}
           </p>
+          {onBack ? (
+            <BackToDashboardButton
+              onClick={onBack}
+              label="Back to Account details"
+              className="mt-3"
+            />
+          ) : null}
         </div>
         {isPremium && checkoutOpen ? (
           <button

@@ -201,6 +201,219 @@ class PaginationTests(unittest.TestCase):
         same_rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "Same position as other pages"}}
         self.assertNotIn("pagination_position", _issue_types(self.scan(_thesis(chapter_first_page=None), same_rules)))
 
+    def test_unmarked_table_continuation_chapter_cell_is_not_chapter_start(self):
+        """Continuation table page: short unmarked 'Chapter 3' must not hide-number FP."""
+        def page(index, lines, number=None, mark_table=None):
+            mark_table = mark_table or set()
+            out = []
+            for line_index, text in enumerate(lines):
+                unit = {
+                    "text": text,
+                    "bbox": [72, 120 + line_index * 18, 280, 134 + line_index * 18],
+                    "spans": [{"text": text, "size": 11, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": line_index,
+                    "page_width": 612,
+                    "page_height": 792,
+                    "source": "body",
+                }
+                if line_index in mark_table:
+                    unit["table_row"] = True
+                    unit["source"] = "table"
+                out.append(unit)
+            if number is not None:
+                out.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(out),
+                    "page_width": 612,
+                    "page_height": 792,
+                })
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": out}
+
+        pages = [
+            page(0, ["A STUDY OF MANUSCRIPT FORMATTING"]),
+            page(1, ["ABSTRACT", BODY[:80]], number="ii"),
+            page(
+                2,
+                [
+                    "Chapter 3",
+                    "Review of Related Literature  environment variables",
+                    "shared components and project board",
+                    "GitHub branches  Android Studio  VS Code",
+                ],
+                number="35",
+                mark_table={1, 2, 3},
+            ),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "title_page": "Hidden but counted",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
+        result = self.scan(parsed, rules)
+        self.assertNotIn("pagination_chapter_first", _issue_types(result, "pagination"))
+
+    def test_real_chapter_first_page_with_number_still_flagged(self):
+        """Emphasized CHAPTER I with a visible number must still raise chapter-first."""
+        def page(index, number=None, heading=None):
+            lines = []
+            if heading:
+                lines.append({
+                    "text": heading,
+                    "bbox": [72, 120, 540, 140],
+                    "spans": [{"text": heading, "size": 14, "font": "Times-Bold", "flags": 2**4}],
+                    "page_index": index,
+                    "line_index": 0,
+                    "page_width": 612,
+                    "page_height": 792,
+                    "role": "heading1",
+                    "formatting": {"bold": True},
+                    "source": "body",
+                })
+            lines.append({
+                "text": f"Body text continues on page {index + 1} with enough words for readers.",
+                "bbox": [72, 180, 540, 194],
+                "spans": [{"text": "body", "size": 12, "font": "Times"}],
+                "page_index": index,
+                "line_index": len(lines),
+                "page_width": 612,
+                "page_height": 792,
+                "source": "body",
+            })
+            if number is not None:
+                lines.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                })
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        pages = [
+            page(0),
+            page(1, number="ii"),
+            page(2, number="1", heading="CHAPTER I"),
+            page(3, number="2"),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "title_page": "Hidden but counted",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
+        result = self.scan(parsed, rules)
+        self.assertIn("pagination_chapter_first", _issue_types(result, "pagination"))
+
+    def test_hidden_chapter_first_page_is_not_missing_number(self):
+        """CHAPTER I with no number + hide rule must not raise pagination_missing."""
+        def page(index, number=None, heading=None, orphan=None, table_at=None):
+            lines = []
+            if orphan:
+                lines.append({
+                    "text": orphan,
+                    "bbox": [72, 90, 200, 104],
+                    "spans": [{"text": orphan, "size": 10, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": 0,
+                    "page_width": 612,
+                    "page_height": 792,
+                    "source": "body",
+                })
+            if heading:
+                lines.append({
+                    "text": heading,
+                    "bbox": [72, 120, 540, 140],
+                    "spans": [{"text": heading, "size": 14, "font": "Times-Bold", "flags": 2**4}],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                    "role": "heading1",
+                    "formatting": {"bold": True},
+                    "source": "body",
+                })
+            lines.append({
+                "text": "INTRODUCTION",
+                "bbox": [72, 150, 540, 168],
+                "spans": [{"text": "INTRODUCTION", "size": 12, "font": "Times-Bold"}],
+                "page_index": index,
+                "line_index": len(lines),
+                "page_width": 612,
+                "page_height": 792,
+                "role": "heading1",
+                "formatting": {"bold": True},
+                "source": "body",
+            })
+            lines.append({
+                "text": (
+                    "In response to these challenges, there is a growing need for an intelligent "
+                    "system that can help students format academic manuscripts correctly."
+                ),
+                "bbox": [72, 200, 540, 240],
+                "spans": [{"text": "body", "size": 12, "font": "Times"}],
+                "page_index": index,
+                "line_index": len(lines),
+                "page_width": 612,
+                "page_height": 792,
+                "source": "body",
+            })
+            if table_at is not None:
+                lines.append({
+                    "text": "Task  Owner  Status",
+                    "bbox": [72, table_at, 500, table_at + 14],
+                    "spans": [{"text": "Task  Owner  Status", "size": 11, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                    "source": "table",
+                    "table_row": True,
+                })
+            if number is not None:
+                lines.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                })
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        pages = [
+            page(0),
+            page(1, number="ii"),
+            page(2, heading="CHAPTER I", orphan="PaperPilot", table_at=520),
+            page(3, number="2"),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "title_page": "Hidden but counted",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
+        result = self.scan(parsed, rules)
+        types = _issue_types(result, "pagination")
+        self.assertNotIn("pagination_missing", types)
+        self.assertNotIn("pagination_chapter_first", types)
+
     def test_hidden_and_not_counted_title_page(self):
         rules = {"pagination": {**PAGINATION_RULES["pagination"], "title_page": "Hidden and not counted"}}
         self.assertIn("pagination_sequence", _issue_types(self.scan(_thesis(), rules)))
@@ -517,6 +730,127 @@ class HeadingAndSpacingTests(unittest.TestCase):
         flagged = IssueCollector()
         _check_indentation([{**base, "list_item": False}], {"first_line_indent_inches": 0.5}, CategoryStats(), flagged)
         self.assertIn("first_line_indent", flagged.items)
+
+    def test_glossary_term_entries_skip_first_line_indent(self):
+        """Definition-of-terms 'Term. Definition…' lines are not body indent targets."""
+        from app.compliance import CategoryStats, IssueCollector, _check_indentation
+
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "text": "Definition of Terms",
+                "role": "heading1",
+                "source": "body",
+                "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 1,
+                "text": (
+                    "PaperPilot. An AI-assisted web and mobile system designed to help researchers "
+                    "and students analyze academic documents for compliance with institutional rules."
+                ),
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 1,
+                "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 2,
+                "text": (
+                    "Academic Documents. Scholarly materials such as theses, dissertations, research "
+                    "papers, and related academic reports that must follow prescribed guidelines."
+                ),
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 2,
+                "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 3,
+                "text": (
+                    "Students prepare manuscripts with careful attention to indent rules across the "
+                    "full chapter body after the glossary section ends."
+                ),
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 3,
+                "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+                "spans": [],
+            },
+        ]
+        collector = IssueCollector()
+        _check_indentation(units, {"first_line_indent_inches": 0.5}, CategoryStats(), collector)
+        self.assertNotIn("first_line_indent", collector.items)
+
+        units.append(
+            {
+                "page_index": 0,
+                "line_index": 4,
+                "text": "Chapter II",
+                "role": "heading1",
+                "source": "body",
+                "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+                "spans": [],
+            }
+        )
+        units.append(
+            {
+                "page_index": 0,
+                "line_index": 5,
+                "text": (
+                    "Students prepare manuscripts with careful attention to indent rules across the "
+                    "full chapter body after the glossary section ends."
+                ),
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 4,
+                "formatting": {"first_line_indent_inches": 0.0, "left_indent_inches": 0.0},
+                "spans": [],
+            }
+        )
+        flagged = IssueCollector()
+        _check_indentation(units, {"first_line_indent_inches": 0.5}, CategoryStats(), flagged)
+        self.assertIn("first_line_indent", flagged.items)
+
+    def test_hanging_indent_skips_first_line_indent_rule(self):
+        """Hanging layout is not scored as a missing positive first-line indent."""
+        from app.compliance import CategoryStats, IssueCollector, _check_indentation
+
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "text": (
+                    "Students prepare manuscripts with careful attention to indent rules across the "
+                    "full chapter body when hanging indents are used for reference style entries."
+                ),
+                "role": "body",
+                "source": "body",
+                "paragraph_index": 0,
+                "formatting": {"first_line_indent_inches": -0.5, "left_indent_inches": 0.5},
+                "spans": [],
+            }
+        ]
+        collector = IssueCollector()
+        _check_indentation(units, {"first_line_indent_inches": 0.5}, CategoryStats(), collector)
+        self.assertNotIn("first_line_indent", collector.items)
+
+    def test_pdf_column_left_uses_rare_body_edge_cluster(self):
+        """A single wrap-line body edge still beats a majority first-line indent cluster."""
+        from app.compliance import PT_PER_INCH, _column_from_boxes
+
+        body_edge = 72.0
+        indented = body_edge + 0.5 * PT_PER_INCH
+        boxes = [[indented, 0, 540, 12]] * 9 + [[body_edge, 0, 540, 12]]
+        left, _right = _column_from_boxes(boxes)
+        self.assertEqual(left, body_edge)
 
     def test_decorative_drawing_is_not_a_missing_figure_caption(self):
         """Logos and seals under 1.5 inches are not figures that need a caption."""

@@ -20,9 +20,6 @@ export default function RegistrationSuccessScreen({ profile, onContinue }) {
             Full name
           </span>
           <span className="min-w-0 flex-1 text-sm font-medium text-slate-700">{fullName}</span>
-          <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-emerald-100 text-[10px] text-emerald-600">
-            ✓
-          </span>
         </div>
         <div className="flex items-start justify-between gap-4 py-3">
           <span className="w-28 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -30,6 +27,9 @@ export default function RegistrationSuccessScreen({ profile, onContinue }) {
           </span>
           <span className="min-w-0 flex-1 break-all text-sm font-medium text-slate-700">
             {profile?.email || "—"}
+          </span>
+          <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-emerald-100 text-[10px] text-emerald-600">
+            ✓
           </span>
         </div>
       </div>

@@ -27,11 +27,13 @@
     "api/index.py": {
       "maxDuration": 300,
       "memory": 1024,
-      "includeFiles": "api/app/**"
+      "includeFiles": "api/app/**",
+      "excludeFiles": "{mobile/**,web/node_modules/**,.venv/**,api/.venv/**,api/venv/**,api/data/**,api/tests/**,machinelearning/**,paperpilot-ml/**,testdata/**,docs/**,scripts/**,builds/**,**/.pytest_cache/**,**/__pycache__/**,**/*.pdf,**/*.docx,**/*.apk,**/*.aab}"
     },
     "api/webhooks/paymongo.py": {
       "maxDuration": 30,
-      "includeFiles": "api/app/**"
+      "includeFiles": "api/app/**",
+      "excludeFiles": "{mobile/**,web/node_modules/**,.venv/**,api/.venv/**,api/venv/**,api/data/**,api/tests/**,machinelearning/**,paperpilot-ml/**,testdata/**,docs/**,scripts/**,builds/**,**/.pytest_cache/**,**/__pycache__/**,**/*.pdf,**/*.docx,**/*.apk,**/*.aab}"
     }
   },
   "rewrites": [
