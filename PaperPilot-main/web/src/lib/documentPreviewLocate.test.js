@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   excerptNeedles,
   isApproximateTracing,
+  isIndentationIssue,
   pageAlign,
   pageRegion,
   pickBestRects,
@@ -53,6 +54,25 @@ describe("excerptNeedles", () => {
   it("ignores empty excerpts", () => {
     expect(excerptNeedles("")).toEqual([]);
     expect(excerptNeedles(" ")).toEqual([]);
+  });
+
+  it("skips tail needles for paragraph-start / indent excerpts", () => {
+    const text =
+      "students prepare manuscripts with careful attention to indent rules across pages and chapters";
+    const tail = text.slice(-40).trim();
+    const normal = excerptNeedles(text);
+    const startOnly = excerptNeedles(text, { paragraphStart: true });
+    expect(normal).toContain(tail);
+    expect(startOnly).not.toContain(tail);
+    expect(startOnly[0]).toBe(text);
+  });
+});
+
+describe("isIndentationIssue", () => {
+  it("recognizes first_line_indent and Indentation section", () => {
+    expect(isIndentationIssue({ issue_type: "first_line_indent" })).toBe(true);
+    expect(isIndentationIssue({ section: "Indentation" })).toBe(true);
+    expect(isIndentationIssue({ issue_type: "font_size", section: "Font" })).toBe(false);
   });
 });
 
@@ -116,6 +136,12 @@ describe("resolvePdfMarkY", () => {
 
   it("uses bbox when no line pin exists", () => {
     expect(resolvePdfMarkY({ line: null, ys, bboxY: 55, pageHeight: 800 })).toBe(55);
+  });
+
+  it("keeps indent marks on the scanner bbox when line rows disagree", () => {
+    expect(
+      resolvePdfMarkY({ line: 4, ys, bboxY: 42, pageHeight: 800, preferBbox: true })
+    ).toBe(42);
   });
 });
 

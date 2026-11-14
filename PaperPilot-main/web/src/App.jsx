@@ -1372,7 +1372,7 @@ export default function App() {
     }
   }
 
-  async function onManuscriptUpload({ file, title, manuscriptId }) {
+  async function onManuscriptUpload({ file, title, manuscriptId, documentUrl = "" }) {
     setError("");
 
     const resolvedTitle = (title || file.name.replace(/\.(pdf|docx)$/i, "")).trim();
@@ -1411,6 +1411,8 @@ export default function App() {
       return "";
     };
 
+    const reusedDocumentUrl = String(documentUrl || "").trim();
+
     try {
       let apiManuscriptId = resolveApiManuscriptId();
       let created;
@@ -1420,6 +1422,7 @@ export default function App() {
           title: resolvedTitle,
           manuscriptId: apiManuscriptId || undefined,
           mechanicsId: selectedMechanicsId,
+          documentUrl: reusedDocumentUrl,
         });
       } catch (firstErr) {
         const missingParent =
@@ -1433,6 +1436,7 @@ export default function App() {
             file,
             title: resolvedTitle,
             mechanicsId: selectedMechanicsId,
+            documentUrl: reusedDocumentUrl,
           });
         } else if (isConflict && manuscriptId) {
           const fromApi = await listManuscripts().catch(() => null);
@@ -1447,6 +1451,7 @@ export default function App() {
             title: resolvedTitle,
             manuscriptId: matched.id,
             mechanicsId: selectedMechanicsId,
+            documentUrl: reusedDocumentUrl,
           });
         } else {
           throw firstErr;

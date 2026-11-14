@@ -17,6 +17,7 @@ import {
   excerptNeedles,
   fitPageScale,
   hitPaint,
+  isIndentationIssue,
   isMarginTarget,
   onePageHeight,
   marginRegion,
@@ -507,12 +508,18 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     const pdf = pdfRef.current;
     if (!pdf || !pages.length) return undefined;
     let cancelled = false;
+    let paintToken = 0;
 
     async function paint() {
+      // Background tabs often leave alpha:false canvases black after pdf.js render.
+      // Wait until the tab is visible, then paint (and re-paint on return).
+      if (document.visibilityState === "hidden") return;
+      const token = ++paintToken;
       for (const spec of pages) {
-        if (cancelled) return;
+        if (cancelled || token !== paintToken) return;
+        if (document.visibilityState === "hidden") return;
         const page = await pdf.getPage(spec.pageNumber);
-        if (cancelled) return;
+        if (cancelled || token !== paintToken) return;
         const viewport = page.getViewport({ scale: spec.scale });
         const canvas = scrollerRef.current?.querySelector(
           `canvas[data-canvas="${spec.pageNumber}"]`
@@ -530,14 +537,20 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
         try {
           await task.promise;
         } catch {
-          if (cancelled) return;
+          if (cancelled || token !== paintToken) return;
         }
       }
     }
 
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void paint();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
     void paint();
     return () => {
       cancelled = true;
+      paintToken += 1;
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [pages]);
 
@@ -564,11 +577,13 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     const bboxY =
       bbox && Number.isFinite(Number(bbox.y)) ? Number(bbox.y) * pageHeight : null;
     // Line number wins over a shared/coarse bbox so lines 13/14/15 stay distinct.
+    const indentIssue = isIndentationIssue(target);
     const y = resolvePdfMarkY({
       line: target.line,
       ys,
       bboxY,
       pageHeight,
+      preferBbox: indentIssue,
     });
     if (isMarginTarget(target) || shouldUsePaginationEdge(target)) {
       const side = isMarginTarget(target) ? resolveEdgeSide(target) : pageRegion(target);
@@ -604,7 +619,8 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
         page: pageNumber,
         kind: "box",
         severity: target.severity,
-        top: usedLine ? `${y}px` : `${Number(bbox.y) * 100}%`,
+        // Indent: always use the resolved Y (bbox-preferred). Other issues keep line/bbox mix.
+        top: indentIssue || usedLine ? `${y}px` : `${Number(bbox.y) * 100}%`,
         left: `${Number(bbox.x) * 100}%`,
         width: `${Math.max(0.02, Number(bbox.w)) * 100}%`,
         height: `${boxH * 100}%`,
@@ -681,13 +697,34 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
 function waitForWidth(element) {
   return new Promise((resolve) => {
     let frames = 0;
+    let settled = false;
+    let timer = 0;
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        frames = 0;
+        requestAnimationFrame(check);
+      }
+    };
+    const finish = (width) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      resolve(width > 40 ? width : 640);
+    };
     const check = () => {
+      if (settled) return;
+      // Hidden tabs throttle rAF and may report 0 width - wait until visible.
+      if (document.visibilityState === "hidden") return;
       frames += 1;
       const width = element?.clientWidth || 0;
-      if (width > 40 || frames > 30) resolve(width > 40 ? width : 640);
+      if (width > 40 || frames > 30) finish(width);
       else requestAnimationFrame(check);
     };
-    check();
+    document.addEventListener("visibilitychange", onVisibility);
+    if (document.visibilityState === "visible") requestAnimationFrame(check);
+    // Safety: never hang forever if the tab stays hidden.
+    timer = window.setTimeout(() => finish(element?.clientWidth || 0), 120000);
   });
 }
 
@@ -781,7 +818,7 @@ function textRangesIn(section, needle) {
   return ranges;
 }
 
-function lineCountBox(section, line, scroller) {
+function lineCountBox(section, line, scroller, { paragraphStart = false } = {}) {
   const blocks = readDocxBlocks(section);
   if (!blocks.length) return null;
   const hit = visualLineTarget(blocks, line || 1);
@@ -810,7 +847,8 @@ function lineCountBox(section, line, scroller) {
   const rect = block.el.getBoundingClientRect();
   const scale = block.el.offsetHeight ? rect.height / block.el.offsetHeight : 1;
   const base = contentBox(scroller, rect);
-  const delta = index === hit.index ? hit.delta : 0;
+  // Indent / paragraph-start issues must stay on the first visual line, never mid/last.
+  const delta = paragraphStart ? 0 : index === hit.index ? hit.delta : 0;
   const top = base.top + Math.max(0, delta) * scale;
   const height = Math.max(12, Math.min(block.lineHeight * scale, base.height || block.lineHeight * scale));
   // Soft-wrapped paragraphs expose one client rect per visual line - paint that
@@ -822,10 +860,12 @@ function lineCountBox(section, line, scroller) {
       .filter((box) => box.width > 2 && box.height > 2)
       .map((box) => contentBox(scroller, box));
     if (ink.length) {
-      const lineIndex = Math.min(
-        ink.length - 1,
-        Math.max(0, Math.round(Math.max(0, delta) / Math.max(1, block.lineHeight)))
-      );
+      const lineIndex = paragraphStart
+        ? 0
+        : Math.min(
+            ink.length - 1,
+            Math.max(0, Math.round(Math.max(0, delta) / Math.max(1, block.lineHeight)))
+          );
       const chosen = ink[lineIndex] || ink[0];
       return {
         rects: [{ top: chosen.top, left: chosen.left, width: Math.max(chosen.width, 24), height: Math.max(12, chosen.height) }],
@@ -843,15 +883,27 @@ function lineCountBox(section, line, scroller) {
  * Where an issue really sits in the rendered Word pages.
  * When a scanner line is present, that line always disambiguates excerpt hits
  * so issues on lines 13 / 14 / 15 never collapse onto one highlight.
+ * Indentation is paragraph-start only - keep the first-line excerpt, never snap to mid/last.
  */
-function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRadius = 2 } = {}) {
+function locateDocxBox(
+  sections,
+  pageNumber,
+  line,
+  excerpt,
+  scroller,
+  { searchRadius = 2, paragraphStart = false } = {}
+) {
   const reported = sections[pageNumber - 1];
-  const estimate = reported ? lineCountBox(reported, line, scroller) : null;
-  const needles = excerptNeedles(excerpt);
+  const estimate = reported ? lineCountBox(reported, line, scroller, { paragraphStart }) : null;
+  const needles = excerptNeedles(excerpt, { paragraphStart });
   const hasLine = line != null && line !== "" && Number.isFinite(Number(line));
 
   const pack = (rects) => {
     if (!rects?.length) return null;
+    if (paragraphStart) {
+      const first = rects[0];
+      return { rects: [first], top: first.top, height: first.height };
+    }
     const last = rects[rects.length - 1];
     return { rects, top: rects[0].top, height: last.top + last.height - rects[0].top };
   };
@@ -891,7 +943,7 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRa
     const maxLen = Math.max(...pool.map((item) => item.needleLen));
     const bestNeedle = pool.filter((item) => item.needleLen === maxLen);
     const best =
-      hasLine && estimate
+      hasLine && estimate && !paragraphStart
         ? pickBestRects(
             bestNeedle.map((item) => item.rects),
             estimate.top
@@ -899,6 +951,8 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRa
         : bestNeedle[0].rects;
     const boxed = pack(best);
     if (boxed) {
+      // Indent: keep the start-of-paragraph excerpt even when the line estimate drifted.
+      if (paragraphStart) return boxed;
       // Line pin wins when excerpt still lands far from the estimated line.
       if (hasLine && estimate && Math.abs(boxed.top - estimate.top) > Math.max(28, estimate.height * 2)) {
         return estimate;
@@ -910,9 +964,9 @@ function locateDocxBox(sections, pageNumber, line, excerpt, scroller, { searchRa
 }
 
 /** Always leave a visible mark on the target page when line/excerpt locate fails. */
-function fallbackDocxBox(pageEl, line, scroller) {
+function fallbackDocxBox(pageEl, line, scroller, { paragraphStart = false } = {}) {
   if (!pageEl) return null;
-  const byLine = lineCountBox(pageEl, line, scroller);
+  const byLine = lineCountBox(pageEl, line, scroller, { paragraphStart });
   if (byLine) return byLine;
   const body = docxBody(pageEl);
   const rect = body.getBoundingClientRect();
@@ -1076,10 +1130,12 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint =
 
     const searchRadius =
       sections.length < Math.max(8, Number(pageCountHint) || 0) * 0.7 ? sections.length : 3;
+    const paragraphStart = isIndentationIssue(target);
     const box =
       locateDocxBox(sections, pageNumber, target.line, target.excerpt || target.finding, scroller, {
         searchRadius,
-      }) || fallbackDocxBox(pageEl, target.line, scroller);
+        paragraphStart,
+      }) || fallbackDocxBox(pageEl, target.line, scroller, { paragraphStart });
     if (!box) return;
     paintBoxes(scroller, box.rects, target.severity);
     if (paged) {

@@ -414,8 +414,18 @@ async function withRetry(send, attempts = 3) {
   throw lastError;
 }
 
-export async function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
-  const uploaded = await uploadDocument(file);
+export async function uploadManuscriptVersion({
+  file,
+  mechanicsId,
+  title,
+  manuscriptId,
+  /** Reuse S3 URL from previewManuscript to skip a second PUT. */
+  documentUrl = "",
+}) {
+  const reusedUrl = String(documentUrl || "").trim();
+  const uploaded = reusedUrl
+    ? { url: reusedUrl, originalFilename: file?.name || "document" }
+    : await uploadDocument(file);
   // Same id on every retry, so a save whose reply was lost is not stored twice.
   const clientRequestId = newRequestId();
   const created = await withRetry(() =>
