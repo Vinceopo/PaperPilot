@@ -126,18 +126,20 @@ def is_paid_tier(tier) -> bool:
 
 
 def _reset_period(tier) -> str:
-    """Pro allowance resets every Monday; Free and Premium reset monthly."""
+    """Pro allowance resets every 7 days from payment; Free and Premium reset monthly."""
     return "weekly" if str(tier or "").lower() == "pro" else "monthly"
 
 
-def _monday_week_bounds(now: datetime) -> tuple[datetime, datetime]:
-    """Philippine calendar week: Monday 00:00 through next Monday 00:00 (UTC+8)."""
-    local = now.astimezone(BILLING_TZ)
-    start_local = (local - timedelta(days=local.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    end_local = start_local + timedelta(days=7)
-    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+def _weekly_cycle_bounds(anchor: datetime, now: datetime) -> tuple[datetime, datetime]:
+    """7-day window containing `now`, counted from the payment/anchor instant."""
+    elapsed = (now - anchor).total_seconds()
+    weeks = max(int(elapsed // (7 * 24 * 3600)), 0) if elapsed >= 0 else 0
+    start = anchor + timedelta(days=7 * weeks)
+    if start > now and weeks > 0:
+        weeks -= 1
+        start = anchor + timedelta(days=7 * weeks)
+    end = start + timedelta(days=7)
+    return start, end
 
 
 def _usage_bounds(
@@ -147,14 +149,15 @@ def _usage_bounds(
     *,
     coverage_end: datetime | None = None,
 ) -> tuple[str, str]:
-    """Pro resets every Monday while paid; Premium on billing date; Free on the 1st."""
+    """Pro resets every 7 days from payment; Premium on billing date; Free on the 1st."""
     if _reset_period(tier) != "weekly":
         if str(tier or "").lower() == "premium" and anchor:
             start, end = _billing_cycle_bounds(anchor, now)
             return _iso(start), _iso(end)
         return _month_bounds(now)
-    start_dt, end_dt = _monday_week_bounds(now)
-    # Weekly Pro windows stop at the paid-through date (end of the subscribed month/year).
+    # Weekly Pro windows are anchored to when the user paid (billing_period_start).
+    start_dt, end_dt = _weekly_cycle_bounds(anchor or now, now)
+    # Stop at the paid-through date (end of the subscribed month/year).
     if coverage_end:
         if coverage_end <= start_dt:
             end_dt = start_dt
@@ -1027,7 +1030,7 @@ def _subscription_row(owner_uid: str) -> dict:
 
     tier = str(row.get("tier") or "free").lower()
     coverage = None if row.get("premium_ended") else _coverage_end(row)
-    # Pro Monday resets only run while the paid subscription term is still open.
+    # Pro weekly resets only run while the paid subscription term is still open.
     # After the paid month/year ends, leave counters alone - snapshot drops the tier to free.
     if tier == "pro" and not (coverage and coverage >= now):
         return row
@@ -1050,7 +1053,7 @@ def _subscription_row(owner_uid: str) -> dict:
         }
         ref.set(row)
     elif (row.get("period_start"), row.get("period_end")) != (start, end):
-        # Same allowance window, just re-aligned (e.g. calendar month -> billing cycle / Monday).
+        # Same allowance window, just re-aligned (e.g. calendar month -> billing / payment cycle).
         fix = {"period_start": start, "period_end": end, "updated_at": now_text}
         ref.update(fix)
         row = {**row, **fix}

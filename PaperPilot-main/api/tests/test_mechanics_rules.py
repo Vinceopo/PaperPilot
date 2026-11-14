@@ -540,6 +540,159 @@ class PaginationTests(unittest.TestCase):
         self.assertNotIn("pagination_missing", types)
         self.assertNotIn("pagination_chapter_first", types)
 
+    def test_hidden_chapter_not_missing_even_with_table_grid_nearby(self):
+        """Chapter opener must keep hide-rule even when a side-by-side grid is on the page."""
+        def page(index, *, number=None, heading=None, grid=False):
+            lines = []
+            if heading:
+                lines.append({
+                    "text": heading,
+                    "bbox": [72, 120, 400, 140],
+                    "spans": [{"text": heading, "size": 14, "font": "Times-Bold", "flags": 2**4}],
+                    "page_index": index,
+                    "line_index": 0,
+                    "page_width": 612,
+                    "page_height": 792,
+                    "formatting": {"bold": True},
+                    "source": "body",
+                })
+            lines.append({
+                "text": "Body prose continues after the chapter title with enough words for the reader.",
+                "bbox": [72, 180, 540, 210],
+                "spans": [{"text": "body", "size": 12, "font": "Times"}],
+                "page_index": index,
+                "line_index": len(lines),
+                "page_width": 612,
+                "page_height": 792,
+                "source": "body",
+            })
+            if grid:
+                # Borderless two-column row that table detection would otherwise absorb.
+                lines.append({
+                    "text": "Phase Duration",
+                    "bbox": [72, 400, 420, 414],
+                    "spans": [
+                        {"text": "Phase", "size": 11, "font": "Times", "bbox": [72, 400, 140, 414]},
+                        {"text": "Duration", "size": 11, "font": "Times", "bbox": [220, 400, 300, 414]},
+                    ],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                    "table_row": True,
+                    "source": "table",
+                })
+                lines.append({
+                    "text": "4 Weeks",
+                    "bbox": [220, 420, 300, 434],
+                    "spans": [{"text": "4 Weeks", "size": 11, "font": "Times", "bbox": [220, 420, 300, 434]}],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                    "source": "body",
+                })
+            if number is not None:
+                lines.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                })
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        pages = [
+            page(0),
+            page(1, heading="CHAPTER I"),  # body starts; hide rule applies
+            page(2, number="10"),  # body page after chapter 1
+            page(3, heading="CHAPTER II", grid=True),  # next chapter first page (no number)
+            page(4, number="2"),  # restart after chapter — no body_numbering rule set
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "title_page": "Hidden but counted",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
+        result = self.scan(parsed, rules)
+        types = _issue_types(result, "pagination")
+        self.assertNotIn("pagination_missing", types)
+        self.assertNotIn("pagination_chapter_first", types)
+        # Without an explicit continuous/restart body rule, chapter restart is not a sequence fail.
+        self.assertNotIn("pagination_sequence", types)
+
+    def test_hidden_chapter_inferred_from_numbering_gap_without_title_text(self):
+        """Hide-rule blanks in a 10 → (blank) → 2 jump must not be missing/sequence FPs.
+
+        Chapter title wording differs per manuscript; inference uses number structure only.
+        """
+        def page(index, *, number=None, lines=None):
+            out = []
+            for line_index, text in enumerate(lines or ["Body prose on this page with enough words for layout."]):
+                out.append({
+                    "text": text,
+                    "bbox": [72, 120 + line_index * 18, 540, 134 + line_index * 18],
+                    "spans": [{"text": text, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": line_index,
+                    "page_width": 612,
+                    "page_height": 792,
+                    "source": "body",
+                })
+            if number is not None:
+                out.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(out),
+                    "page_width": 612,
+                    "page_height": 792,
+                })
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": out}
+
+        long_body = (
+            "Earlier body page continues the manuscript discussion with enough words "
+            "so the scanner treats this as normal body structure rather than a cover."
+        )
+        pages = [
+            page(0, number="9", lines=[long_body]),
+            page(1, number="10", lines=[long_body.replace("Earlier", "Following", 1)]),
+            # Chapter first page: no CHAPTER label, no number (user hide rule).
+            page(2, lines=["Introduction to the next part of the study without a folio shown."]),
+            page(3, number="2", lines=[long_body.replace("Earlier", "Restarted", 1)]),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        # No title_page / body_numbering — only position + chapter-first hide.
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
+        types = _issue_types(self.scan(parsed, rules), "pagination")
+        self.assertNotIn("pagination_missing", types)
+        self.assertNotIn("pagination_sequence", types)
+
+        # Continuous gap 10 → blank → 12 is a real missing number, not a chapter hide.
+        pages_continuous = [
+            page(0, number="10", lines=[long_body]),
+            page(1, lines=["Body page that forgot its folio in a continuous sequence of numbers."]),
+            page(2, number="12", lines=[long_body.replace("Earlier", "Twelfth", 1)]),
+        ]
+        continuous = self.scan(
+            {"text": "", "metadata": {"format": "pdf"}, "pages": pages_continuous},
+            rules,
+        )
+        self.assertIn("pagination_missing", _issue_types(continuous, "pagination"))
+
 
 class HeadingAndSpacingTests(unittest.TestCase):
     def _doc(self, heading_bold=True, body=BODY):
@@ -1281,6 +1434,121 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         rules = normalize_mechanics_rules({"font": {"body_size": 12}})
         result = run_compliance_scan(self._body_doc(size=11), rules)
         self.assertIn("font_size", _issue_types(result))
+
+    def test_table_cells_never_heading_flags_real_h1_still_checked(self):
+        """Table cell like '4 Weeks' must not be Heading 1; real H1 outside still checked."""
+        import fitz
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        # Real Heading 1 outside the table (wrong size vs 14 pt rule).
+        page.insert_text((72, 72), "1 Introduction", fontsize=11, fontname="helv")
+        # Bordered table; "4 Weeks" matches numbered-heading shape but must stay non-heading.
+        table_top, table_left = 120.0, 72.0
+        col_w, row_h = 180.0, 22.0
+        cells = (("Phase", "Duration"), ("Pilot", "4 Weeks"), ("Full", "8 Weeks"))
+        for r, row in enumerate(cells):
+            for c, label in enumerate(row):
+                x0 = table_left + c * col_w
+                y0 = table_top + r * row_h
+                page.draw_rect(fitz.Rect(x0, y0, x0 + col_w, y0 + row_h), color=(0, 0, 0), width=0.8)
+                page.insert_text((x0 + 8, y0 + 14), label, fontsize=11, fontname="helv")
+        data = doc.tobytes()
+        doc.close()
+
+        parsed = parse_document(data, "pdf")
+        rules = normalize_mechanics_rules(
+            {"font": {"heading1_size": 14, "body_size": 11, "families": ["Helvetica"]}}
+        )
+        result = run_compliance_scan(parsed, rules)
+        self.assertIn("font_size_heading1", _issue_types(result))
+        for issue in result.get("issues") or []:
+            if not str(issue.get("issue_type") or "").startswith("font_size_heading"):
+                continue
+            for loc in issue.get("locations") or []:
+                excerpt = (loc.get("excerpt") or loc.get("text") or "").lower()
+                self.assertNotIn("4 weeks", excerpt)
+                self.assertNotIn("8 weeks", excerpt)
+
+    def test_toc_appendix_and_table_chapter_not_heading1(self):
+        """TOC appendix lines and in-table 'Chapter I' must not raise Heading 1 size flags."""
+        from app.compliance import _annotate_roles, _document_units, _check_fonts, CategoryStats, IssueCollector
+
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [
+                {
+                    "page_index": 0,
+                    "width_points": 612,
+                    "height_points": 792,
+                    "lines": [
+                        {
+                            "text": "APPENDIX M – Grammarly Results ........................ 167",
+                            "bbox": [72, 120, 540, 134],
+                            "spans": [{"text": "APPENDIX M – Grammarly Results ........................ 167", "size": 11}],
+                            "page_index": 0,
+                            "line_index": 0,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                        },
+                        {
+                            "text": "TEAM COMPOSITION ..................................... 170",
+                            "bbox": [72, 140, 540, 154],
+                            "spans": [{"text": "TEAM COMPOSITION ..................................... 170", "size": 11}],
+                            "page_index": 0,
+                            "line_index": 1,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                        },
+                        {
+                            "text": "Chapter I",
+                            "bbox": [80, 400, 160, 414],
+                            "spans": [{"text": "Chapter I", "size": 11}],
+                            "page_index": 0,
+                            "line_index": 2,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "table",
+                            "table_row": True,
+                        },
+                        {
+                            "text": "CHAPTER II",
+                            "bbox": [72, 200, 400, 220],
+                            "spans": [{"text": "CHAPTER II", "size": 11, "font": "Times-Bold", "flags": 2**4}],
+                            "page_index": 0,
+                            "line_index": 3,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                            "formatting": {"bold": True},
+                        },
+                    ],
+                }
+            ],
+        }
+        rules = normalize_mechanics_rules({"font": {"heading1_size": 14, "body_size": 11}})
+        units = _document_units(parsed, rules)
+        _annotate_roles(units, rules)
+        roles = { (u.get("text") or "")[:20]: u.get("role") for u in units if (u.get("text") or "").strip() }
+        self.assertEqual(next(u["role"] for u in units if "APPENDIX M" in (u.get("text") or "")), "toc")
+        self.assertEqual(next(u["role"] for u in units if (u.get("text") or "").strip() == "Chapter I"), "table")
+        self.assertTrue(str(next(u["role"] for u in units if (u.get("text") or "").strip() == "CHAPTER II")).startswith("heading"))
+
+        stats, collector = CategoryStats(), IssueCollector()
+        _check_fonts(units, rules, stats, collector)
+        for issue in collector.result():
+            if not str(issue.get("issue_type") or "").startswith("font_size_heading"):
+                continue
+            for loc in issue.get("locations") or []:
+                excerpt = (loc.get("excerpt") or "").strip().lower()
+                self.assertNotIn("appendix m", excerpt)
+                self.assertNotIn("team composition", excerpt)
+                # Exact in-table "Chapter I" — not the real "CHAPTER II" opener.
+                self.assertNotEqual(excerpt, "chapter i")
+                self.assertFalse(excerpt.startswith("chapter i "))
 
 
 class NormalizeTests(unittest.TestCase):

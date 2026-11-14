@@ -975,6 +975,32 @@ def _is_bold(unit: dict) -> bool:
 
 
 TOC_LINE_RE = re.compile(r"^\S.{2,}?(?:\s|\.{2,}|…)\s*(?:\d{1,3}|[ivxlc]{1,6})$", re.I)
+# "APPENDIX M – Title …… 167" / dotted leaders / trailing folio — never a Heading N.
+TOC_ENTRY_TRAIL_RE = re.compile(
+    r"(?:\.{2,}|…|\s{2,}|[ \t]+)(?:\d{1,4}|[ivxlcdm]{1,8})\s*$",
+    re.I,
+)
+
+
+def _is_toc_entry_line(text: str) -> bool:
+    """True for contents/list entries (leaders or a trailing page folio)."""
+    value = (text or "").strip()
+    if not value or value.endswith("."):
+        return False
+    # "Chapter I" / "APPENDIX A" alone are section openers, not TOC rows.
+    # TOC rows have dotted leaders and/or an arabic folio after a longer title.
+    section_label = bool(
+        CHAPTER_RE.match(value) or BACK_MATTER_RE.match(value) or PRELIM_HEADING_RE.match(value)
+    )
+    has_leaders = bool(re.search(r"\.{2,}|…", value))
+    has_arabic_folio = bool(re.search(r"\s\d{1,4}\s*$", value))
+    if section_label and not has_leaders and not has_arabic_folio:
+        return False
+    if TOC_LINE_RE.match(value):
+        return True
+    if TOC_ENTRY_TRAIL_RE.search(value) and len(value.split()) >= 2:
+        return True
+    return False
 
 
 def _mark_toc_lines(units: list[dict]) -> None:
@@ -988,8 +1014,13 @@ def _mark_toc_lines(units: list[dict]) -> None:
             unit
             for unit in page_units
             if re.search(r"\btoc\b|table of (contents|figures)", str(unit.get("style") or ""), re.I)
-            or (TOC_LINE_RE.match(unit["text"].strip()) and not unit["text"].strip().endswith("."))
+            or _is_toc_entry_line(unit["text"])
         ]
+        # Mark clear per-line TOC entries even when the page mix is sparse, and
+        # also promote dense TOC pages (legacy threshold).
+        for unit in matches:
+            if _is_toc_entry_line(unit.get("text") or ""):
+                unit["role"] = "toc"
         if len(matches) >= 4 and len(matches) >= 0.4 * len(page_units):
             for unit in matches:
                 unit["role"] = "toc"
@@ -1058,12 +1089,35 @@ def _is_structural_heading_text(text: str) -> bool:
 
     Bare ALL-CAPS prose lines are NOT structural - soft-wrapped body lines like
     "THE COMPLETION OF THIS RESEARCH" must stay body, not Heading 1.
+    TOC/list entries and in-cell "Chapter I …" prose are never structural.
     """
     value = (text or "").strip()
     if not value:
         return False
-    if CHAPTER_RE.match(value) or PRELIM_HEADING_RE.match(value) or BACK_MATTER_RE.match(value):
+    if _is_toc_entry_line(value):
+        return False
+    if CHAPTER_RE.match(value):
+        # Real opener: "CHAPTER I" / "Chapter 2 Method". Reject sentence-like tails.
+        rest = re.sub(r"^(?:chapter|ch\.?)\s+(?:\d+|[ivxlcdm]+)\b\s*", "", value, flags=re.I).strip()
+        if rest and (len(rest) > 48 or rest[:1].islower() or re.search(r"\bwith\b|\bof\b|\bfor\b", rest, re.I)):
+            return False
         return True
+    if PRELIM_HEADING_RE.match(value):
+        return True
+    if BACK_MATTER_RE.match(value):
+        # Standalone "APPENDIX A" / "REFERENCES" only — not "APPENDIX M – Title 167".
+        rest = re.sub(
+            r"^(?:references|bibliography|works\s+cited|literature\s+cited|appendix|appendices)\b\s*",
+            "",
+            value,
+            flags=re.I,
+        ).strip()
+        rest = re.sub(r"^[A-Z0-9]{1,4}\b\s*", "", rest).strip()  # optional letter/number
+        if not rest:
+            return True
+        if re.search(r"[–—:.-]", rest) or TOC_ENTRY_TRAIL_RE.search(value) or len(rest.split()) > 6:
+            return False
+        return len(rest) <= 48
     if NUMBERED_HEADING_RE.match(value) and len(value.split()) <= HEADING_MAX_WORDS:
         return True
     return False
@@ -1103,6 +1157,10 @@ def _looks_like_heading_line(unit: dict, text: str) -> bool:
     if not value:
         return False
     if unit.get("soft_wrap_continuation"):
+        return False
+    if unit.get("table_row") or unit.get("source") == "table" or unit.get("role") == "table":
+        return False
+    if _is_toc_entry_line(value):
         return False
     words = value.split()
     if len(words) > HEADING_MAX_WORDS or len(value) > HEADING_MAX_CHARS:
@@ -1201,12 +1259,16 @@ def _lowest_defined_heading(defined: set[str]) -> str | None:
 
 
 def _annotate_roles(units: list[dict], rules: dict) -> None:
+    from app.indent_check import _looks_like_table_row, _mark_indent_table_units
+
     font = rules.get("font") or {}
     # The combined legacy size equals body text, so it cannot tell headings apart by size.
     heading_sizes = _heading_sizes(font, include_legacy=False)
     defined = _defined_heading_levels(font)
     lowest_heading = _lowest_defined_heading(defined)
-    for unit in units:
+    # Reuse indentation table detection so cell text is never classified as a heading.
+    table_ids = _mark_indent_table_units(units)
+    for index, unit in enumerate(units):
         text = (unit.get("text") or "").strip()
         style = str(unit.get("style") or "").lower()
         size = _dominant_size(unit)
@@ -1220,13 +1282,25 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
         if PAGE_NUMBER_RE.match(text) or _is_running_edge(unit, rules):
             unit["role"] = "pagination"
             continue
-        if unit.get("source") == "table" or unit.get("role") == "table":
+        # Table cells are never headings — including cells that mention "Chapter I".
+        # Pagination chapter-first uses section detection + numbering-gap inference.
+        if (
+            index in table_ids
+            or unit.get("source") == "table"
+            or unit.get("role") == "table"
+            or unit.get("table_row")
+            or _looks_like_table_row(unit)
+        ):
             unit["role"] = "table"
             continue
         if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not PROSE_REFERENCE_RE.match(
             text
         ):
             unit["role"] = "caption"
+            continue
+        # Contents / list-of-appendices entries are navigation, not Heading 1.
+        if _is_toc_entry_line(text):
+            unit["role"] = "toc"
             continue
         # Grid / sprint-plan cells often lack table_row marks but are still not headings.
         if "\t" in text or text.count("  ") >= 3:
@@ -1371,7 +1445,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         for unit in units:
             role = unit.get("role") or "body"
             text = (unit.get("text") or "").strip()
-            if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure"}:
+            if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure", "toc"}:
                 continue
             shown_font, sample_size = _dominant_font_sample(unit)
             if not shown_font and sample_size is None and not _line_font_samples(unit):
@@ -1385,7 +1459,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         role = unit.get("role") or "body"
         text = (unit.get("text") or "").strip()
         # Blank / spacing gaps and non-prose lines have nothing meaningful to measure.
-        if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure"}:
+        if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure", "toc"}:
             continue
         # Table cells still get family checks; size rules apply only to roles with sizes.
         shown_font, sample_size = _dominant_font_sample(unit)
@@ -2196,6 +2270,13 @@ def _is_alignment_eligible_line(unit: dict, paragraph: list[dict]) -> bool:
     # Single-line CV / address / contact entries are naturally left-aligned.
     if len(paragraph) == 1 and not re.search(r'[.?!]"?$', text):
         return False
+    # Ragged / last visual rows cannot prove justify vs left (large right gap).
+    if _has_box(unit):
+        left, right = unit.get("column") or (0.0, float(unit.get("page_width") or 612))
+        span = max(1.0, right - left)
+        right_gap = right - unit["bbox"][2]
+        if right_gap > max(36.0, 0.12 * span):
+            return False
     return True
 
 
@@ -2388,6 +2469,20 @@ def _page_token(text: str) -> tuple[int, str] | None:
     return _roman_to_int(token), style
 
 
+def _is_section_opener_text(text: str) -> bool:
+    """True for CHAPTER / prelim / back-matter openers — never treat as table cells."""
+    value = (text or "").strip()
+    if not value:
+        return False
+    return bool(
+        CHAPTER_ROMAN_RE.match(value)
+        or CHAPTER_ARABIC_RE.match(value)
+        or CHAPTER_RE.match(value)
+        or BACK_MATTER_RE.match(value)
+        or PRELIM_HEADING_RE.match(value)
+    )
+
+
 def _is_table_like_unit(unit: dict) -> bool:
     """Table cells / grid rows must not open chapters (PDF often leaves them as source=body)."""
     if unit.get("source") == "table" or unit.get("role") in {"table", "caption", "figure"}:
@@ -2515,6 +2610,7 @@ def _section_starts(units: list[dict]) -> dict[int, str]:
         previous_title = folded
         previous_kind = kind
     return starts
+
 
 
 def _docx_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
@@ -2651,6 +2747,18 @@ def _check_pagination(
                 return page + (1 if title_counts else 0)
             return None
         if title_rule:
+            return page + (1 if title_counts else 0)
+        return None
+        if title_rule and block_of(page) == "prelim":
+            return page + (1 if title_counts else 0)
+        if title_rule and body_numbering == BODY_CONTINUOUS:
+            return page + (1 if title_counts else 0)
+        if title_rule and not body_numbering:
+            # Absolute folio from page 1 only before any chapter-first boundary.
+            # After a hide-rule chapter gap, last_shown was cleared — do not re-pin
+            # (users restart numbering without always setting body_numbering).
+            if any(chapter_page < page for chapter_page in chapter_pages):
+                return None
             return page + (1 if title_counts else 0)
         return None
 

@@ -4,7 +4,7 @@ import re
 from collections import Counter, defaultdict
 
 from app.documents import parse_alignment
-from app.enrichment import enrich_compliance_issues
+from app.gemini_client import enrich_compliance_issues
 from app.mechanics_options import (
     BODY_CONTINUOUS,
     BODY_RESTART,
@@ -92,7 +92,7 @@ def _is_decorative_font(name: str | None) -> bool:
 
 
 def _is_prose_font_text(text: str) -> bool:
-    """True when the run has real letters/digits — not only emoji/symbols/spaces."""
+    """True when the run has real letters/digits - not only emoji/symbols/spaces."""
     return any(ch.isalnum() for ch in text)
 
 
@@ -327,6 +327,21 @@ def _docx_body_pt(parsed: dict, rules: dict) -> float:
     font = rules.get("font") or {}
     sizes = font.get("sizes_points") or []
     return float(_body_size(font) or (min(sizes) if sizes else 12.0))
+
+
+def _docx_body_spacing(parsed: dict) -> float | None:
+    """The document's own dominant line spacing, weighted by text length."""
+    weights: dict[float, int] = defaultdict(int)
+    for paragraph in parsed.get("paragraphs") or []:
+        if (paragraph.get("source") or "body") in CHROME_SOURCES:
+            continue
+        spacing = (paragraph.get("formatting") or {}).get("line_spacing")
+        text = str(paragraph.get("text") or "").strip()
+        if spacing and text:
+            weights[round(float(spacing) * 4) / 4] += len(text)
+    if not weights:
+        return None
+    return max(weights.items(), key=lambda item: item[1])[0]
 
 
 def _docx_body_spacing(parsed: dict) -> float | None:
@@ -909,12 +924,12 @@ def _line_fonts(unit: dict) -> list[tuple[str | None, float | None]]:
 
 
 SIZE_TOLERANCE = 0.75
-MARGIN_TOLERANCE = 0.15  # inches — Word/PDF rounding and printer offsets
+MARGIN_TOLERANCE = 0.15  # inches - Word/PDF rounding and printer offsets
 PAGE_NUMBER_RE = re.compile(r"^(?:page\s+)?\d{1,4}(?:\s*[/\-]\s*\d{1,4})?$", re.I)
 CHAPTER_RE = re.compile(r"^(?:chapter|ch\.?)\s+(?:\d+|[ivxlcdm]+)\b", re.I)
 TABLE_CAPTION_RE = re.compile(r"^\s*table\s+\d+\b", re.I)
 FIGURE_CAPTION_RE = re.compile(r"^\s*figure\s+\d+\b", re.I)
-# "Figure 1 illustrates ..." is a sentence about the figure, not its caption.
+# "Figure 1 illustrates ..." / "Table 18 presents ..." is prose, not a caption label.
 PROSE_REFERENCE_RE = re.compile(
     r"^\s*(?:[Tt]able|[Ff]igure|TABLE|FIGURE)\s+\d+(?:\.\d+)*\s*(?:[:.\-\u2013]\s*)?(?=[a-z])"
 )
@@ -960,6 +975,32 @@ def _is_bold(unit: dict) -> bool:
 
 
 TOC_LINE_RE = re.compile(r"^\S.{2,}?(?:\s|\.{2,}|…)\s*(?:\d{1,3}|[ivxlc]{1,6})$", re.I)
+# "APPENDIX M – Title …… 167" / dotted leaders / trailing folio — never a Heading N.
+TOC_ENTRY_TRAIL_RE = re.compile(
+    r"(?:\.{2,}|…|\s{2,}|[ \t]+)(?:\d{1,4}|[ivxlcdm]{1,8})\s*$",
+    re.I,
+)
+
+
+def _is_toc_entry_line(text: str) -> bool:
+    """True for contents/list entries (leaders or a trailing page folio)."""
+    value = (text or "").strip()
+    if not value or value.endswith("."):
+        return False
+    # "Chapter I" / "APPENDIX A" alone are section openers, not TOC rows.
+    # TOC rows have dotted leaders and/or an arabic folio after a longer title.
+    section_label = bool(
+        CHAPTER_RE.match(value) or BACK_MATTER_RE.match(value) or PRELIM_HEADING_RE.match(value)
+    )
+    has_leaders = bool(re.search(r"\.{2,}|…", value))
+    has_arabic_folio = bool(re.search(r"\s\d{1,4}\s*$", value))
+    if section_label and not has_leaders and not has_arabic_folio:
+        return False
+    if TOC_LINE_RE.match(value):
+        return True
+    if TOC_ENTRY_TRAIL_RE.search(value) and len(value.split()) >= 2:
+        return True
+    return False
 
 
 def _mark_toc_lines(units: list[dict]) -> None:
@@ -973,8 +1014,13 @@ def _mark_toc_lines(units: list[dict]) -> None:
             unit
             for unit in page_units
             if re.search(r"\btoc\b|table of (contents|figures)", str(unit.get("style") or ""), re.I)
-            or (TOC_LINE_RE.match(unit["text"].strip()) and not unit["text"].strip().endswith("."))
+            or _is_toc_entry_line(unit["text"])
         ]
+        # Mark clear per-line TOC entries even when the page mix is sparse, and
+        # also promote dense TOC pages (legacy threshold).
+        for unit in matches:
+            if _is_toc_entry_line(unit.get("text") or ""):
+                unit["role"] = "toc"
         if len(matches) >= 4 and len(matches) >= 0.4 * len(page_units):
             for unit in matches:
                 unit["role"] = "toc"
@@ -999,7 +1045,7 @@ def _size_matches(actual: float | None, expected: float | None) -> bool:
 
 HEADING_ROLE_RE = re.compile(r"^heading(\d)$")
 HEADING_STYLE_RE = re.compile(r"heading\s*(\d)")
-# Structure-only limits — not compliance rule values.
+# Structure-only limits - not compliance rule values.
 HEADING_MAX_CHARS = 120
 HEADING_MAX_WORDS = 15
 NUMBERED_HEADING_RE = re.compile(r"^\d+(?:\.\d+){0,5}\s+\S")
@@ -1041,14 +1087,37 @@ def _first_line_indent_inches(unit: dict) -> float | None:
 def _is_structural_heading_text(text: str) -> bool:
     """Chapter / prelim / back-matter titles, or numbered headings.
 
-    Bare ALL-CAPS prose lines are NOT structural — soft-wrapped body lines like
+    Bare ALL-CAPS prose lines are NOT structural - soft-wrapped body lines like
     "THE COMPLETION OF THIS RESEARCH" must stay body, not Heading 1.
+    TOC/list entries and in-cell "Chapter I …" prose are never structural.
     """
     value = (text or "").strip()
     if not value:
         return False
-    if CHAPTER_RE.match(value) or PRELIM_HEADING_RE.match(value) or BACK_MATTER_RE.match(value):
+    if _is_toc_entry_line(value):
+        return False
+    if CHAPTER_RE.match(value):
+        # Real opener: "CHAPTER I" / "Chapter 2 Method". Reject sentence-like tails.
+        rest = re.sub(r"^(?:chapter|ch\.?)\s+(?:\d+|[ivxlcdm]+)\b\s*", "", value, flags=re.I).strip()
+        if rest and (len(rest) > 48 or rest[:1].islower() or re.search(r"\bwith\b|\bof\b|\bfor\b", rest, re.I)):
+            return False
         return True
+    if PRELIM_HEADING_RE.match(value):
+        return True
+    if BACK_MATTER_RE.match(value):
+        # Standalone "APPENDIX A" / "REFERENCES" only — not "APPENDIX M – Title 167".
+        rest = re.sub(
+            r"^(?:references|bibliography|works\s+cited|literature\s+cited|appendix|appendices)\b\s*",
+            "",
+            value,
+            flags=re.I,
+        ).strip()
+        rest = re.sub(r"^[A-Z0-9]{1,4}\b\s*", "", rest).strip()  # optional letter/number
+        if not rest:
+            return True
+        if re.search(r"[–—:.-]", rest) or TOC_ENTRY_TRAIL_RE.search(value) or len(rest.split()) > 6:
+            return False
+        return len(rest) <= 48
     if NUMBERED_HEADING_RE.match(value) and len(value.split()) <= HEADING_MAX_WORDS:
         return True
     return False
@@ -1075,7 +1144,7 @@ def _is_short_standalone_title(text: str) -> bool:
         return False
     if all_caps:
         return True
-    # Title Case short labels (e.g. "Related Work") — not full sentences.
+    # Title Case short labels (e.g. "Related Work") - not full sentences.
     return bool(re.match(r"^[A-Z0-9][\w'’\-]*(?:\s+[A-Z0-9][\w'’\-]*){0,7}$", value))
 
 
@@ -1088,6 +1157,10 @@ def _looks_like_heading_line(unit: dict, text: str) -> bool:
     if not value:
         return False
     if unit.get("soft_wrap_continuation"):
+        return False
+    if unit.get("table_row") or unit.get("source") == "table" or unit.get("role") == "table":
+        return False
+    if _is_toc_entry_line(value):
         return False
     words = value.split()
     if len(words) > HEADING_MAX_WORDS or len(value) > HEADING_MAX_CHARS:
@@ -1122,7 +1195,7 @@ def _scalar_pt(value) -> float | None:
 
 
 def _format_expected_pt(value) -> str | None:
-    """Printable point size for issue text — never raw Python/JSON list brackets."""
+    """Printable point size for issue text - never raw Python/JSON list brackets."""
     if isinstance(value, (int, float)):
         return f"{float(value):g}"
     if isinstance(value, (list, tuple, set)):
@@ -1166,7 +1239,7 @@ def _heading_sizes(font: dict, *, include_legacy: bool = True) -> dict[str, floa
 
 
 def _defined_heading_levels(font: dict) -> set[str]:
-    """Heading roles with real size or style rules — not empty slots from heading_levels.
+    """Heading roles with real size or style rules - not empty slots from heading_levels.
 
     `heading_levels` only sizes the editor UI (e.g. empty Heading 1 above a filled
     Heading 2). Blank levels must not be treated as rules to enforce.
@@ -1186,12 +1259,16 @@ def _lowest_defined_heading(defined: set[str]) -> str | None:
 
 
 def _annotate_roles(units: list[dict], rules: dict) -> None:
+    from app.indent_check import _looks_like_table_row, _mark_indent_table_units
+
     font = rules.get("font") or {}
     # The combined legacy size equals body text, so it cannot tell headings apart by size.
     heading_sizes = _heading_sizes(font, include_legacy=False)
     defined = _defined_heading_levels(font)
     lowest_heading = _lowest_defined_heading(defined)
-    for unit in units:
+    # Reuse indentation table detection so cell text is never classified as a heading.
+    table_ids = _mark_indent_table_units(units)
+    for index, unit in enumerate(units):
         text = (unit.get("text") or "").strip()
         style = str(unit.get("style") or "").lower()
         size = _dominant_size(unit)
@@ -1205,13 +1282,25 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
         if PAGE_NUMBER_RE.match(text) or _is_running_edge(unit, rules):
             unit["role"] = "pagination"
             continue
-        if unit.get("source") == "table" or unit.get("role") == "table":
+        # Table cells are never headings — including cells that mention "Chapter I".
+        # Pagination chapter-first uses section detection + numbering-gap inference.
+        if (
+            index in table_ids
+            or unit.get("source") == "table"
+            or unit.get("role") == "table"
+            or unit.get("table_row")
+            or _looks_like_table_row(unit)
+        ):
             unit["role"] = "table"
             continue
         if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not PROSE_REFERENCE_RE.match(
             text
         ):
             unit["role"] = "caption"
+            continue
+        # Contents / list-of-appendices entries are navigation, not Heading 1.
+        if _is_toc_entry_line(text):
+            unit["role"] = "toc"
             continue
         # Grid / sprint-plan cells often lack table_row marks but are still not headings.
         if "\t" in text or text.count("  ") >= 3:
@@ -1335,7 +1424,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         for size in font_rule.get("sizes_points") or []
         if (number := _scalar_pt(size)) is not None
     }
-    # Stale profiles dumped heading sizes into sizes_points — strip those so unset H1
+    # Stale profiles dumped heading sizes into sizes_points - strip those so unset H1
     # is not judged against H2/H3 point sizes.
     heading_only_sizes = {round(float(value), 2) for value in _heading_sizes(font_rule).values()}
     body_pt = _body_size(font_rule)
@@ -1346,7 +1435,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
     # IGNORE / list / blank role sizes must not activate font checks.
     role_sizes = _body_size(font_rule) is not None or bool(_heading_sizes(font_rule))
     color_rule = str(font_rule.get("color") or "").strip()
-    # Blank / NA color is not a rule — do not invent Black/Automatic checks.
+    # Blank / NA color is not a rule - do not invent Black/Automatic checks.
     want_black = (not rule_unset(color_rule)) and bool(
         re.search(r"black|automatic", color_rule, re.I)
     )
@@ -1356,7 +1445,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         for unit in units:
             role = unit.get("role") or "body"
             text = (unit.get("text") or "").strip()
-            if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure"}:
+            if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure", "toc"}:
                 continue
             shown_font, sample_size = _dominant_font_sample(unit)
             if not shown_font and sample_size is None and not _line_font_samples(unit):
@@ -1370,7 +1459,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         role = unit.get("role") or "body"
         text = (unit.get("text") or "").strip()
         # Blank / spacing gaps and non-prose lines have nothing meaningful to measure.
-        if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure"}:
+        if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure", "toc"}:
             continue
         # Table cells still get family checks; size rules apply only to roles with sizes.
         shown_font, sample_size = _dominant_font_sample(unit)
@@ -1441,7 +1530,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 if _is_heading_role(role)
                 else {"caption": "caption", "body": "body text", "title_page": "title page text"}.get(role, "text")
             )
-            # Never print raw list brackets (e.g. "[11.0]") — only a scalar or "a or b".
+            # Never print raw list brackets (e.g. "[11.0]") - only a scalar or "a or b".
             expected_text = _format_expected_pt(
                 expected_size if expected_size is not None else sorted(listed_sizes)
             )
@@ -1518,7 +1607,7 @@ def _docx_page_sections(parsed: dict, units: list[dict]) -> dict[int, int]:
 
 
 def _docx_page_sources(parsed: dict, units: list[dict]) -> list[tuple[int, float | None, float | None, dict]]:
-    """One margin check per Word section — page setup is section-level, not per rendered page."""
+    """One margin check per Word section - page setup is section-level, not per rendered page."""
     sections = parsed.get("sections") or [{}]
     first_page: dict[int, int] = {}
     for page, index in sorted(_docx_page_sections(parsed, units).items()):
@@ -1545,7 +1634,7 @@ def _page_body_units(units: list[dict]) -> dict[int, list[dict]]:
 
 
 def _margin_edge_bbox(side: str, width: float, height: float) -> list[float]:
-    """Normalized page-edge band (PDF points) for margin highlights — not a body line."""
+    """Normalized page-edge band (PDF points) for margin highlights - not a body line."""
     band = max(24.0, min(width, height) * 0.07)
     if side == "bottom":
         return [0.0, max(0.0, height - band), width, height]
@@ -1559,7 +1648,7 @@ def _margin_edge_bbox(side: str, width: float, height: float) -> list[float]:
 
 
 def _margin_side_location(page: int | None, side: str, by_page: dict[int, list[dict]]) -> dict:
-    """Locate a margin issue on the page edge — never on body line 1 / title text."""
+    """Locate a margin issue on the page edge - never on body line 1 / title text."""
     loc = _location(page if page is not None else 0, None, "Margins")
     loc["margin_side"] = side
     lines = by_page.get(page if page is not None else 0) or []
@@ -1587,7 +1676,7 @@ def _table_or_figure_pages(parsed: dict, units: list[dict]) -> set[int]:
 
 
 def _pdf_body_lines(page: dict, rules: dict) -> list[dict]:
-    """Body text only — ignore page numbers and header/footer bands for margin measure."""
+    """Body text only - ignore page numbers and header/footer bands for margin measure."""
     width = page.get("width_points")
     height = page.get("height_points")
     if not width or not height:
@@ -1967,6 +2056,24 @@ def _prose_paragraphs(units: list[dict]) -> list[list[dict]]:
     return paragraphs
 
 
+# Word multiples the checker compares against. PDF gap math often lands a little
+# off these (1.5 is commonly measured as about 1.64).
+_SPACING_STANDARDS = (1.0, 1.15, 1.5, 2.0, 2.5, 3.0)
+
+
+def _spacing_matches(actual: float, expected: float) -> bool:
+    """True when a measured multiple is the spacing the mechanics require.
+
+    A reading within 0.12 already matches. A slightly noisier reading matches
+    only when it sits on the same standard multiple as the requirement, so
+    1.64 counts as 1.5 while 1.0, 1.15, 1.5, and 2.0 stay different rules.
+    """
+    if abs(actual - expected) <= 0.12:
+        return True
+    nearest = min(_SPACING_STANDARDS, key=lambda standard: (abs(actual - standard), standard))
+    return abs(actual - nearest) <= 0.16 and abs(nearest - expected) <= 0.05
+
+
 def _allowed_line_spacings(rules: dict) -> list[float]:
     """Primary spacing plus any additional multiples named in the mechanics guide."""
     values: list[float] = []
@@ -2008,22 +2115,6 @@ def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collect
                 stats.observe(True)
                 continue
             _observe_spacing(unit, measured, primary, stats, collector)
-
-
-_SPACING_STANDARDS = (1.0, 1.15, 1.5, 2.0, 2.5, 3.0)
-
-
-def _spacing_matches(actual: float, expected: float) -> bool:
-    """True when a measured multiple is the spacing the mechanics require.
-
-    A reading within 0.12 already matches. A slightly noisier reading matches
-    only when it sits on the same standard multiple as the requirement, so
-    1.64 counts as 1.5 while 1.0, 1.15, 1.5, and 2.0 stay different rules.
-    """
-    if abs(actual - expected) <= 0.12:
-        return True
-    nearest = min(_SPACING_STANDARDS, key=lambda standard: (abs(actual - standard), standard))
-    return abs(actual - nearest) <= 0.16 and abs(nearest - expected) <= 0.05
 
 
 def _observe_spacing(unit: dict, actual: float, expected: float, stats: CategoryStats, collector: IssueCollector) -> None:
@@ -2179,6 +2270,13 @@ def _is_alignment_eligible_line(unit: dict, paragraph: list[dict]) -> bool:
     # Single-line CV / address / contact entries are naturally left-aligned.
     if len(paragraph) == 1 and not re.search(r'[.?!]"?$', text):
         return False
+    # Ragged / last visual rows cannot prove justify vs left (large right gap).
+    if _has_box(unit):
+        left, right = unit.get("column") or (0.0, float(unit.get("page_width") or 612))
+        span = max(1.0, right - left)
+        right_gap = right - unit["bbox"][2]
+        if right_gap > max(36.0, 0.12 * span):
+            return False
     return True
 
 
@@ -2324,16 +2422,17 @@ PRELIM_HEADING_RE = re.compile(
 )
 ROMAN_RE = re.compile(r"^(?=[mdclxvi]+$)m{0,3}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})$", re.I)
 PAGE_TOKEN_RE = re.compile(
-    r"^(?:page\s+)?[-–—]?\s*(\d{1,4}|[ivxlcdm]{1,7})\s*[-–—]?(?:\s*(?:of|/)\s*\d{1,4})?$", re.I
+    r"^(?:page\s+)?[-\u2013\u2014]?\s*(\d{1,4}|[ivxlcdm]{1,7})\s*[-\u2013\u2014]?(?:\s*(?:of|/)\s*\d{1,4})?$",
+    re.I,
 )
 BARE_PAGE_TOKEN_RE = re.compile(r"^(\d{1,4}|[ivxlcdm]{1,7})$", re.I)
+ROMAN_STYLES = frozenset({"roman_lower", "roman_upper"})
 ROMAN_NUMERALS = (
     (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
     (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"),
 )
 STYLE_LABELS = {"arabic": "Arabic (1, 2, 3)", "roman_lower": "lowercase Roman (i, ii, iii)",
                 "roman_upper": "uppercase Roman (I, II, III)", "other": "letters or another style"}
-ROMAN_STYLES = frozenset({"roman_lower", "roman_upper"})
 
 
 def _roman_to_int(token: str) -> int:
@@ -2370,102 +2469,18 @@ def _page_token(text: str) -> tuple[int, str] | None:
     return _roman_to_int(token), style
 
 
-def _is_bare_page_token(text: str) -> bool:
-    """True for '2' / 'ii' / 'II' only — no 'Page 2', dashes, or 'of N'."""
-    raw = (text or "").strip()
-    if not BARE_PAGE_TOKEN_RE.match(raw):
+def _is_section_opener_text(text: str) -> bool:
+    """True for CHAPTER / prelim / back-matter openers — never treat as table cells."""
+    value = (text or "").strip()
+    if not value:
         return False
-    if raw.isdigit():
-        return True
-    return bool(ROMAN_RE.match(raw))
-
-
-def _docx_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
-    """Word prints page numbers from header/footer fields, so compute each page's number from the section setup."""
-    sections = parsed.get("sections") or [{}]
-    page_sections = _docx_page_sections(parsed, units)
-    marks = []
-    counter = 0
-    previous = None
-    for page in range(page_count):
-        index = page_sections.get(page, 0)
-        setup = (sections[index] if index < len(sections) else {}).get("page_number") or {}
-        first_of_section = index != previous
-        previous = index
-        counter = setup["start"] if first_of_section and setup.get("start") is not None else counter + 1
-        if "shown" in setup:
-            placement = {"where": setup.get("where"), "align": setup.get("align")} if setup["shown"] else None
-            if first_of_section and setup.get("different_first_page"):
-                placement = setup.get("first_page")
-        else:
-            # Section data saved by an older parser: only placement and a hidden first page.
-            placement = {"where": setup.get("where"), "align": setup.get("align")} if setup.get("where") else None
-            if first_of_section and setup.get("first_page_hidden"):
-                placement = None
-        mark = {
-            "page": page,
-            "shown": bool(placement and placement.get("where")),
-            "value": counter,
-            "style": setup.get("format") or "arabic",
-            "unit": None,
-            "raw": None,
-            "bare": True,
-        }
-        if mark["shown"]:
-            mark["vertical"] = "top" if placement["where"] == "header" else "bottom"
-            mark["horizontal"] = placement.get("align") or "left"
-            mark["raw"] = _format_page_value(counter, mark["style"])
-        marks.append(mark)
-    return marks
-
-
-def _pdf_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
-    """The printed number nearest the top or bottom edge of each PDF page."""
-    by_page: dict[int, list[dict]] = defaultdict(list)
-    for unit in units:
-        by_page[unit["page_index"]].append(unit)
-    marks = []
-    for page in range(page_count):
-        best = None
-        for unit in by_page.get(page, []):
-            bbox = unit.get("bbox")
-            height = float(unit.get("page_height") or 0)
-            width = float(unit.get("page_width") or 0)
-            raw = (unit.get("text") or "").strip()
-            token = _page_token(raw)
-            if not token or not bbox or len(bbox) < 4 or not height or not width:
-                continue
-            if bbox[1] <= height * 0.15:
-                vertical, distance = "top", bbox[1]
-            elif bbox[3] >= height * 0.85:
-                vertical, distance = "bottom", height - bbox[3]
-            else:
-                continue
-            middle = (bbox[0] + bbox[2]) / 2 / width
-            horizontal = "left" if middle < 0.4 else "right" if middle > 0.6 else "center"
-            if best is None or distance < best[0]:
-                best = (distance, unit, token, vertical, horizontal, raw)
-        if best is None:
-            marks.append({"page": page, "shown": False, "value": None, "style": None, "unit": None,
-                          "raw": None, "bare": True})
-            continue
-        _distance, unit, (value, style), vertical, horizontal, raw = best
-        marks.append({
-            "page": page,
-            "shown": True,
-            "value": value,
-            "style": style,
-            "unit": unit,
-            "vertical": vertical,
-            "horizontal": horizontal,
-            "raw": raw,
-            "bare": _is_bare_page_token(raw),
-        })
-    return marks
-
-
-def _position_label(vertical: str | None, horizontal: str | None) -> str:
-    return " ".join(part for part in (vertical, horizontal) if part) or "the specified position"
+    return bool(
+        CHAPTER_ROMAN_RE.match(value)
+        or CHAPTER_ARABIC_RE.match(value)
+        or CHAPTER_RE.match(value)
+        or BACK_MATTER_RE.match(value)
+        or PRELIM_HEADING_RE.match(value)
+    )
 
 
 def _is_table_like_unit(unit: dict) -> bool:
@@ -2597,6 +2612,76 @@ def _section_starts(units: list[dict]) -> dict[int, str]:
     return starts
 
 
+
+def _docx_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
+    """Word prints page numbers from header/footer fields, so compute each page's number from the section setup."""
+    sections = parsed.get("sections") or [{}]
+    page_sections = _docx_page_sections(parsed, units)
+    marks = []
+    counter = 0
+    previous = None
+    for page in range(page_count):
+        index = page_sections.get(page, 0)
+        setup = (sections[index] if index < len(sections) else {}).get("page_number") or {}
+        first_of_section = index != previous
+        previous = index
+        counter = setup["start"] if first_of_section and setup.get("start") is not None else counter + 1
+        if "shown" in setup:
+            placement = {"where": setup.get("where"), "align": setup.get("align")} if setup["shown"] else None
+            if first_of_section and setup.get("different_first_page"):
+                placement = setup.get("first_page")
+        else:
+            # Section data saved by an older parser: only placement and a hidden first page.
+            placement = {"where": setup.get("where"), "align": setup.get("align")} if setup.get("where") else None
+            if first_of_section and setup.get("first_page_hidden"):
+                placement = None
+        mark = {"page": page, "shown": bool(placement and placement.get("where")), "value": counter,
+                "style": setup.get("format") or "arabic", "unit": None}
+        if mark["shown"]:
+            mark["vertical"] = "top" if placement["where"] == "header" else "bottom"
+            mark["horizontal"] = placement.get("align") or "left"
+        marks.append(mark)
+    return marks
+
+
+def _pdf_page_marks(parsed: dict, units: list[dict], page_count: int) -> list[dict]:
+    """The printed number nearest the top or bottom edge of each PDF page."""
+    by_page: dict[int, list[dict]] = defaultdict(list)
+    for unit in units:
+        by_page[unit["page_index"]].append(unit)
+    marks = []
+    for page in range(page_count):
+        best = None
+        for unit in by_page.get(page, []):
+            bbox = unit.get("bbox")
+            height = float(unit.get("page_height") or 0)
+            width = float(unit.get("page_width") or 0)
+            token = _page_token(unit.get("text") or "")
+            if not token or not bbox or len(bbox) < 4 or not height or not width:
+                continue
+            if bbox[1] <= height * 0.15:
+                vertical, distance = "top", bbox[1]
+            elif bbox[3] >= height * 0.85:
+                vertical, distance = "bottom", height - bbox[3]
+            else:
+                continue
+            middle = (bbox[0] + bbox[2]) / 2 / width
+            horizontal = "left" if middle < 0.4 else "right" if middle > 0.6 else "center"
+            if best is None or distance < best[0]:
+                best = (distance, unit, token, vertical, horizontal)
+        if best is None:
+            marks.append({"page": page, "shown": False, "value": None, "style": None, "unit": None})
+            continue
+        _distance, unit, (value, style), vertical, horizontal = best
+        marks.append({"page": page, "shown": True, "value": value, "style": style, "unit": unit,
+                      "vertical": vertical, "horizontal": horizontal})
+    return marks
+
+
+def _position_label(vertical: str | None, horizontal: str | None) -> str:
+    return " ".join(part for part in (vertical, horizontal) if part) or "the specified position"
+
+
 def _check_pagination(
     units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector, parsed: dict | None = None
 ) -> None:
@@ -2662,6 +2747,18 @@ def _check_pagination(
                 return page + (1 if title_counts else 0)
             return None
         if title_rule:
+            return page + (1 if title_counts else 0)
+        return None
+        if title_rule and block_of(page) == "prelim":
+            return page + (1 if title_counts else 0)
+        if title_rule and body_numbering == BODY_CONTINUOUS:
+            return page + (1 if title_counts else 0)
+        if title_rule and not body_numbering:
+            # Absolute folio from page 1 only before any chapter-first boundary.
+            # After a hide-rule chapter gap, last_shown was cleared — do not re-pin
+            # (users restart numbering without always setting body_numbering).
+            if any(chapter_page < page for chapter_page in chapter_pages):
+                return None
             return page + (1 if title_counts else 0)
         return None
 
@@ -3335,7 +3432,7 @@ def _mark_title_page(units: list[dict], rules: dict) -> None:
         if not text or len(text) > 160:
             continue
         style = str(unit.get("style") or "").lower()
-        # Real Heading styles / chapter titles stay headings — never “title page”.
+        # Real Heading styles / chapter titles stay headings - never “title page”.
         if HEADING_STYLE_RE.search(style) or CHAPTER_RE.match(text):
             continue
         unit["content_role"] = unit.get("role")
@@ -3528,7 +3625,7 @@ def _filter_unset_heading_font_issues(issues: list[dict], mechanics_rules: dict)
 
     Unset Heading 1 must never appear on Issues just because Heading 2/3 have sizes.
     Also strips list-bracket leaks ("[11.0]") from issue text. Role contradictions from
-    Gemini are discarded in enrichment before wording is applied.
+    Gemini are discarded in gemini_client / enrichment before wording is applied.
     """
     font = mechanics_rules.get("font") if isinstance(mechanics_rules.get("font"), dict) else {}
     sized = set(_heading_sizes(font, include_legacy=False).keys())
@@ -3545,7 +3642,7 @@ def _filter_unset_heading_font_issues(issues: list[dict], mechanics_rules: dict)
             role = f"heading{title_match.group(1)}"
             if role not in sized and issue_type.startswith("font_size"):
                 continue
-        # Bracket cleanup only — Gemini role contradictions are rejected in enrichment
+        # Bracket cleanup only - Gemini role contradictions are rejected in gemini_client
         # before wording is applied (no post-hoc Heading→body rewrite reliance).
         for key in ("explanation", "recommendation", "summary"):
             text = issue.get(key)

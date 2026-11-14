@@ -22,18 +22,16 @@ PT_PER_INCH = 72.0
 INDENT_DEFAULT_TOLERANCE_IN = 0.08
 # Extra margin beyond tolerance before a reading becomes a Fail (not Uncertain).
 INDENT_SAFETY_MARGIN_IN = 0.02
-# If this share of eligible paragraphs Fail, abandon the category as unreliable.
-INDENT_RELIABILITY_FAIL_SHARE = 0.55
-# Minimum eligible paragraphs before the flood / reliability guard applies.
+# Minimum eligible paragraphs used by tests / diagnostics (no fail-share suppress).
 INDENT_RELIABILITY_MIN_ELIGIBLE = 8
 # If this share of eligible paragraphs share one indent, treat others as outliers.
 INDENT_MODE_SHARE = 0.55
 # Vertical gap factor (× median line pitch) that suggests a paragraph break
 # when the next line is indented.
 INDENT_PARA_GAP_FACTOR = 1.35
-# Stronger gap required to start a flush-left paragraph (avoids splitting a
-# soft-wrapped continuation after a full-width line on ordinary leading).
-INDENT_FLUSH_PARA_GAP_FACTOR = 2.0
+# Flush-left paragraph break only when the gap is clearly larger than ordinary
+# leading (never on a small pitch bump alone).
+INDENT_FLUSH_PARA_GAP_FACTOR = 2.8
 # Minimum left offset from block baseline (pt) to count as visibly indented.
 INDENT_MIN_INDENT_PT = 14.0
 # Right gap (pt) below which a line counts as full-width within its column.
@@ -43,9 +41,15 @@ INDENT_SHORT_LINE_RIGHT_GAP_PT = 36.0
 # Horizontal gap (pt) that separates multi-column blocks. Must stay above the
 # largest typical first-line indent (~0.85") so indent clusters are not columns.
 INDENT_COLUMN_SEPARATION_PT = 72.0
+# Span/cell gap (em multiples) that marks a borderless table row.
+INDENT_TABLE_CELL_GAP_EM = 1.6
+# Narrow line width share of page that can belong to a table column.
+INDENT_TABLE_NARROW_PAGE_SHARE = 0.55
+# Header / footer edge bands (pt) used only as geometry — no text matching.
+INDENT_EDGE_BAND_PT = 56.0
 # Maximum first-line words stored on an issue for naming / bbox verification.
 INDENT_FIRST_WORDS = 8
-# Skip a first-of-page line that may continue the previous page's paragraph.
+# Never flag the first body line of a page (often a prior-page continuation).
 INDENT_SKIP_PAGE_CONTINUE = True
 
 LIST_ITEM_RE = re.compile(
@@ -199,28 +203,202 @@ def _parse_indent_inches(value) -> float | None:
     return parse_length_inches(text)
 
 
-def _body_lines(units: list[dict]) -> list[dict]:
-    lines = []
-    for unit in units:
-        if not _text(unit):
-            continue
-        if (unit.get("source") or "body") in {"header", "footer", "footnote", "endnote", "textbox"}:
-            continue
-        if unit.get("role") == "pagination":
-            continue
-        if unit.get("has_drawing") and not _text(unit):
-            continue
-        if not _has_box(unit):
-            continue
-        lines.append(unit)
-    return lines
-
-
 def _median(values: list[float]) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
     return ordered[len(ordered) // 2]
+
+
+def _is_edge_band_unit(unit: dict) -> bool:
+    """True when the line sits in the page header/footer band (geometry only)."""
+    if not _has_box(unit):
+        return False
+    bbox = unit["bbox"]
+    height = float(unit.get("page_height") or 0.0)
+    if height <= 0:
+        return False
+    return bbox[1] <= INDENT_EDGE_BAND_PT or bbox[3] >= height - INDENT_EDGE_BAND_PT
+
+
+def _is_non_body_chrome(unit: dict) -> bool:
+    """Header, footer, page-number chrome — structural roles / bands, never text."""
+    source = unit.get("source") or "body"
+    if source in {"header", "footer", "footnote", "endnote", "textbox"}:
+        return True
+    role = unit.get("role") or ""
+    if role in {"pagination", "header", "footer"}:
+        return True
+    return _is_edge_band_unit(unit)
+
+
+def _span_cell_gaps(unit: dict) -> int:
+    """Count wide horizontal gaps between span clusters on one printed row."""
+    spans = [
+        span
+        for span in (unit.get("spans") or [])
+        if span.get("text") and len(span.get("bbox") or []) >= 4
+    ]
+    if len(spans) < 2:
+        return 0
+    spans = sorted(spans, key=lambda span: span["bbox"][0])
+    sizes = [float(span.get("size") or 0) for span in spans if span.get("size")]
+    em = max(6.0, _median(sizes) or 11.0)
+    gaps = 0
+    for previous, current in zip(spans, spans[1:]):
+        if current["bbox"][0] - previous["bbox"][2] > INDENT_TABLE_CELL_GAP_EM * em:
+            gaps += 1
+    return gaps
+
+
+def _looks_like_table_row(unit: dict) -> bool:
+    if unit.get("table_row") or unit.get("source") == "table" or unit.get("role") == "table":
+        return True
+    if _span_cell_gaps(unit) >= 1:
+        return True
+    text = unit.get("text") or ""
+    if "\t" in text or text.count("  ") >= 3:
+        return True
+    return False
+
+
+def _mark_indent_table_units(units: list[dict]) -> set[int]:
+    """Identify table text via row geometry, side-by-side narrow blocks, and drawings.
+
+    Returns indexes into ``units`` that must be skipped (no unit, no issue).
+    """
+    table_ids: set[int] = set()
+    by_page: dict[int, list[tuple[int, dict]]] = defaultdict(list)
+    drawings_by_page: dict[int, list[dict]] = defaultdict(list)
+
+    for index, unit in enumerate(units):
+        page = int(unit.get("page_index") or 0)
+        if unit.get("has_drawing") and _has_box(unit) and not _text(unit):
+            drawings_by_page[page].append(unit)
+            continue
+        if not _has_box(unit) or not _text(unit):
+            continue
+        by_page[page].append((index, unit))
+
+    for page, items in by_page.items():
+        # Seed from explicit / span-gap table rows.
+        for index, unit in items:
+            if _looks_like_table_row(unit):
+                table_ids.add(index)
+
+        # Borderless layout: several narrow blocks side by side at the same height.
+        # Units are usually pre-merged; still catch unmerged peers by y-band.
+        bands: dict[int, list[tuple[int, dict]]] = defaultdict(list)
+        for index, unit in items:
+            y_key = int(round(unit["bbox"][1] / 4.0) * 4)
+            bands[y_key].append((index, unit))
+        for peers in bands.values():
+            if len(peers) < 2:
+                continue
+            page_w = float(peers[0][1].get("page_width") or 612.0)
+            narrow = [
+                (index, unit)
+                for index, unit in peers
+                if (unit["bbox"][2] - unit["bbox"][0]) <= INDENT_TABLE_NARROW_PAGE_SHARE * page_w
+            ]
+            if len(narrow) < 2:
+                continue
+            ordered = sorted(narrow, key=lambda item: item[1]["bbox"][0])
+            side_by_side = 0
+            for previous, current in zip(ordered, ordered[1:]):
+                if current[1]["bbox"][0] >= previous[1]["bbox"][2] - 2:
+                    side_by_side += 1
+            if side_by_side >= 1:
+                for index, _unit in ordered:
+                    table_ids.add(index)
+
+        # Text inside or hugging a drawn rectangle / image is table-or-figure chrome.
+        for drawing in drawings_by_page.get(page, []):
+            db = drawing["bbox"]
+            pad = 6.0
+            region = [db[0] - pad, db[1] - pad, db[2] + pad, db[3] + pad]
+            inside = []
+            for index, unit in items:
+                box = unit["bbox"]
+                if box[0] >= region[0] and box[2] <= region[2] and box[1] >= region[1] and box[3] <= region[3]:
+                    inside.append(index)
+            if len(inside) >= 2:
+                table_ids.update(inside)
+
+        # Grow seeded table columns: absorb nearby narrow column-aligned lines.
+        page_w_default = float((items[0][1].get("page_width") if items else 612.0) or 612.0)
+        for _ in range(6):
+            anchors = [units[i] for i in table_ids if i < len(units) and _has_box(units[i])]
+            if not anchors:
+                break
+            lefts = sorted({round(float(unit["bbox"][0]) / 4.0) * 4.0 for unit in anchors})
+            changed = False
+            for index, unit in items:
+                if index in table_ids:
+                    continue
+                bbox = unit["bbox"]
+                width = float(bbox[2]) - float(bbox[0])
+                page_w = float(unit.get("page_width") or page_w_default)
+                if width >= 0.85 * page_w:
+                    continue
+                left = float(bbox[0])
+                if not any(abs(left - edge) <= 10.0 for edge in lefts):
+                    continue
+                near = any(
+                    bbox[1] <= anchor["bbox"][3] + 40.0 and bbox[3] >= anchor["bbox"][1] - 40.0
+                    for anchor in anchors
+                )
+                if not near:
+                    continue
+                table_ids.add(index)
+                changed = True
+            if not changed:
+                break
+
+    return table_ids
+
+
+def _body_lines(units: list[dict]) -> list[dict]:
+    table_ids = _mark_indent_table_units(units)
+    lines = []
+    for index, unit in enumerate(units):
+        if index in table_ids:
+            continue
+        if not _text(unit):
+            continue
+        if _is_non_body_chrome(unit):
+            continue
+        if unit.get("has_drawing") and not _text(unit):
+            continue
+        if not _has_box(unit):
+            continue
+        if _looks_like_table_row(unit):
+            continue
+        lines.append(unit)
+    return lines
+
+
+def _first_body_line_ids(units: list[dict]) -> set[int]:
+    """Identity of the first non-chrome body line on each page (by object id)."""
+    by_page: dict[int, list[dict]] = defaultdict(list)
+    table_ids = _mark_indent_table_units(units)
+    for index, unit in enumerate(units):
+        if index in table_ids or not _text(unit) or not _has_box(unit):
+            continue
+        if _is_non_body_chrome(unit):
+            continue
+        if unit.get("has_drawing") and not _text(unit):
+            continue
+        if _looks_like_table_row(unit):
+            continue
+        by_page[int(unit.get("page_index") or 0)].append(unit)
+    first_ids: set[int] = set()
+    for page, page_lines in by_page.items():
+        if page <= 0 or not page_lines:
+            continue
+        ordered = sorted(page_lines, key=lambda u: (u["bbox"][1], u["bbox"][0], u.get("line_index") or 0))
+        first_ids.add(id(ordered[0]))
+    return first_ids
 
 
 def _group_column_blocks(lines: list[dict]) -> list[list[dict]]:
@@ -291,12 +469,18 @@ def _block_baseline_x0(block: list[dict]) -> float:
 
 
 def _line_pitch(block: list[dict]) -> float:
+    """Ordinary line leading — ignore paragraph blanks that inflate the median."""
     gaps = []
     for previous, current in zip(block, block[1:]):
         gap = current["bbox"][1] - previous["bbox"][1]
         if gap > 0:
             gaps.append(gap)
-    return _median(gaps) or 16.0
+    if not gaps:
+        return 16.0
+    # Keep gaps near the smallest positive spacing (soft-wrap leading).
+    floor = min(gaps)
+    tight = [gap for gap in gaps if gap <= 1.6 * floor + 1.0]
+    return _median(tight) or _median(gaps) or 16.0
 
 
 def _is_full_width(unit: dict, baseline: float, block_right: float) -> bool:
@@ -320,6 +504,12 @@ def _is_heading_unit(unit: dict) -> bool:
     if unit.get("dominant_size") and float(unit["dominant_size"]) >= 13:
         return True
     return bool(text.isupper() and len(text.split()) <= 10)
+
+
+def _is_list_line(unit: dict) -> bool:
+    if unit.get("list_item"):
+        return True
+    return bool(LIST_ITEM_RE.match(_text(unit)))
 
 
 def _visibly_indented(unit: dict, baseline: float) -> bool:
@@ -362,7 +552,7 @@ def indent_prose_paragraphs(units: list[dict]) -> list[dict]:
             current = []
 
         for index, unit in enumerate(block):
-            if unit.get("table_row") or unit.get("source") == "table":
+            if unit.get("table_row") or unit.get("source") == "table" or _looks_like_table_row(unit):
                 close()
                 continue
             if _is_heading_unit(unit):
@@ -380,9 +570,10 @@ def indent_prose_paragraphs(units: list[dict]) -> list[dict]:
             prev_short = _is_short_last(previous, block_right)
             prev_heading = _is_heading_unit(previous)
 
-            # Flush-left after a full-width line is a continuation unless a clear
-            # paragraph blank separates them (unindented manuscripts).
-            if not indented and prev_full and not flush_para_gap:
+            # Flush-left after a full-width (or mid-length) line stays a
+            # continuation unless the previous line is clearly short or the gap
+            # is much larger than normal pitch — never on a small gap bump alone.
+            if not indented and not prev_short and not flush_para_gap:
                 current.append(unit)
                 continue
             # New paragraph: indented after a short last line, gap, heading, or
@@ -391,8 +582,14 @@ def indent_prose_paragraphs(units: list[dict]) -> list[dict]:
                 close()
                 current = [unit]
                 continue
-            # Flush paragraph style (no first-line indent) after a clear blank.
-            if not indented and flush_para_gap:
+            # Flush paragraph style: only after a clearly short last line or a
+            # much-larger-than-pitch blank (keeps consistently unindented docs
+            # as real multi-paragraph fails when blanks/shorts are present).
+            # List wraps after a short marker line are NOT new body paragraphs.
+            if not indented and (prev_short or flush_para_gap):
+                if _is_list_line(previous) or (current and _is_list_line(current[0])):
+                    current.append(unit)
+                    continue
                 close()
                 current = [unit]
                 continue
@@ -509,7 +706,13 @@ def _is_list_paragraph(lines: list[dict]) -> bool:
     return False
 
 
-def eligibility(paragraph: dict, units: list[dict], rule: dict) -> tuple[bool, str | None]:
+def eligibility(
+    paragraph: dict,
+    units: list[dict],
+    rule: dict,
+    *,
+    first_body_ids: set[int] | None = None,
+) -> tuple[bool, str | None]:
     """Return (eligible, skip_reason). Skipped items are not units."""
     lines = paragraph.get("lines") or []
     if not lines:
@@ -529,7 +732,7 @@ def eligibility(paragraph: dict, units: list[dict], rule: dict) -> tuple[bool, s
     if start_page is not None and (page + 1) < int(start_page):
         return False, "before_start_page"
 
-    if first.get("table_row") or first.get("source") == "table":
+    if first.get("table_row") or first.get("source") == "table" or _looks_like_table_row(first):
         return False, "table"
     # Far-right column / table cell (not body text).
     page_w = float(first.get("page_width") or 612)
@@ -548,21 +751,9 @@ def eligibility(paragraph: dict, units: list[dict], rule: dict) -> tuple[bool, s
         return False, "beside_image"
     if REFERENCE_LIKE_RE.search(text) and len(text) < 120:
         return False, "reference"
-    # Front-matter heuristic: roman folio pages often precede body_start; if the
-    # rule set a start_page we already skipped. Without it, still skip very short
-    # single-line non-sentences.
-    if len(lines) == 1:
-        return False, "single_line"
-    if INDENT_SKIP_PAGE_CONTINUE:
-        # First line on a page with no indent vs baseline may continue prior page.
-        page_lines = [u for u in units if u.get("page_index") == page and _has_box(u) and _text(u)]
-        if page_lines and page_lines[0] is first and not _visibly_indented(first, paragraph["baseline_x0"]):
-            if page > 0:
-                return False, "possible_page_continuation"
-
-    # Default: body paragraphs of at least 2 lines.
-    if len(lines) < 2:
-        return False, "single_line"
+    if INDENT_SKIP_PAGE_CONTINUE and first_body_ids and id(first) in first_body_ids:
+        # First body line on a page (chrome excluded) — never flag; often a wrap.
+        return False, "page_top_body"
     return True, None
 
 
@@ -629,6 +820,7 @@ def check_pdf_indentation(
     stats.applicable = True
     paragraphs = indent_prose_paragraphs(units)
     labels = _printed_page_labels(units)
+    first_body_ids = _first_body_line_ids(units)
     indent_type = rule["indent_type"]
     expected = float(rule["value_in"])
     tolerance = float(rule["tolerance_in"])
@@ -643,19 +835,30 @@ def check_pdf_indentation(
             meta["skipped"].append({"paragraph_id": paragraph["paragraph_id"], "reason": "list_continuation"})
             prev_was_list = True
             continue
-        ok, skip_reason = eligibility(paragraph, units, rule)
+        ok, skip_reason = eligibility(paragraph, units, rule, first_body_ids=first_body_ids)
         if not ok:
             meta["skipped"].append({"paragraph_id": paragraph["paragraph_id"], "reason": skip_reason})
             prev_was_list = is_list or skip_reason == "list"
             continue
         measured = measure_paragraph_indent(paragraph, indent_type)
+        first = paragraph["lines"][0]
+        opening = _first_words(_text(first))
         if measured is None:
-            meta["skipped"].append({"paragraph_id": paragraph["paragraph_id"], "reason": "unmeasurable"})
+            # No following line in the same block to measure against → Uncertain.
+            meta["uncertain"] += 1
+            stats.observe(True)
+            meta.setdefault("needs_review", []).append(
+                {
+                    "paragraph_id": paragraph["paragraph_id"],
+                    "measured": None,
+                    "expected": expected,
+                    "opening": opening,
+                    "reason": "no_following_line",
+                }
+            )
             prev_was_list = False
             continue
         outcome = _classify(measured["measured_in"], expected, tolerance)
-        first = paragraph["lines"][0]
-        opening = _first_words(_text(first))
         evaluated.append(
             {
                 "paragraph": paragraph,
@@ -672,30 +875,12 @@ def check_pdf_indentation(
         meta["status"] = "checked"
         return meta
 
-    # Consistency: if most share one indent, only flag outliers vs that mode when
-    # the mode matches the rule; if every reading shares the same delta from the
-    # rule, suspect a wrong baseline.
+    # Score against the user's resolved rule only (never invent inches).
+    # A high fail share is a real manuscript problem vs that rule — emit issues.
+    # Do not abandon the category as "unreliable" just because many paragraphs fail.
     measured_values = [round(item["measured"]["measured_in"], 2) for item in evaluated]
     mode_value, mode_count = Counter(measured_values).most_common(1)[0]
     mode_share = mode_count / len(evaluated)
-    deltas = [round(item["measured"]["measured_in"] - expected, 2) for item in evaluated]
-    common_delta, delta_count = Counter(deltas).most_common(1)[0]
-    # Consistently unindented (measured ≈ 0) is a real failure pattern — emit issues.
-    consistently_unindented = abs(mode_value) <= tolerance + INDENT_SAFETY_MARGIN_IN
-    if (
-        len(evaluated) >= INDENT_RELIABILITY_MIN_ELIGIBLE
-        and delta_count == len(evaluated)
-        and abs(common_delta) > tolerance + INDENT_SAFETY_MARGIN_IN
-        and not consistently_unindented
-    ):
-        stats.unreliable = True
-        stats.notice = (
-            "Could not check reliably: every eligible paragraph differs from the "
-            "rule by the same amount, which usually means a wrong baseline."
-        )
-        meta.update(status="unreliable", notice=stats.notice)
-        logger.info("indentation unreliable: uniform delta=%s", common_delta)
-        return meta
 
     failed_items = []
     uncertain_items = []
@@ -717,28 +902,6 @@ def check_pdf_indentation(
             stats.observe(True)
         else:
             failed_items.append(item)
-
-    # Reliability flood guard (not when every paragraph is simply unindented).
-    if (
-        len(evaluated) >= INDENT_RELIABILITY_MIN_ELIGIBLE
-        and len(failed_items) / len(evaluated) >= INDENT_RELIABILITY_FAIL_SHARE
-        and not consistently_unindented
-    ):
-        # Roll back unit observations for this category.
-        stats.checked = 0
-        stats.failed = 0
-        stats.unreliable = True
-        stats.notice = (
-            "Could not check reliably: an unusually high share of eligible "
-            "paragraphs failed, so indentation issues were not emitted."
-        )
-        meta.update(status="unreliable", notice=stats.notice, failed=0)
-        logger.info(
-            "indentation unreliable: fail_share=%s/%s",
-            len(failed_items),
-            len(evaluated),
-        )
-        return meta
 
     for item in failed_items:
         first = item["first"]
@@ -790,7 +953,8 @@ def check_pdf_indentation(
 
     meta["failed"] = stats.failed
     meta["status"] = "checked"
-    meta["needs_review"] = [
+    review = list(meta.get("needs_review") or [])
+    review.extend(
         {
             "paragraph_id": item["paragraph"]["paragraph_id"],
             "measured": item["measured"]["measured_in"],
@@ -798,5 +962,6 @@ def check_pdf_indentation(
             "opening": item["opening"],
         }
         for item in uncertain_items
-    ]
+    )
+    meta["needs_review"] = review
     return meta

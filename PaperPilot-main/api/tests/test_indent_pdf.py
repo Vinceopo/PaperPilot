@@ -93,6 +93,87 @@ def _pdf_flush_continuation_after_fullwidth():
     return data
 
 
+def _pdf_page_top_table_midpara_regression():
+    """Real multi-page PDF: page-top continuation, bordered table, mid-para flush line.
+
+    With a correct 0.5\" indent rule this must produce zero indentation flags.
+    """
+    doc = fitz.open()
+    # Page 0: indented body that will continue onto page 1.
+    page0 = doc.new_page(width=PAGE_W, height=PAGE_H)
+    y = 72.0
+    page0.insert_text(
+        (BODY_LEFT + 36, y),
+        "Opening of a long body paragraph that will continue across the page break soon.",
+        fontsize=11,
+        fontname="helv",
+    )
+    y += 16
+    for i in range(38):
+        page0.insert_text(
+            (BODY_LEFT, y),
+            f"Full width body line {i:02d} that fills the measure toward the right edge here.",
+            fontsize=11,
+            fontname="helv",
+        )
+        y += 16
+
+    # Page 1: page number (chrome), continuation, table, then indented para with mid wrap.
+    page1 = doc.new_page(width=PAGE_W, height=PAGE_H)
+    page1.insert_text((PAGE_W / 2 - 4, 36), "2", fontsize=10, fontname="helv")
+    y = 72.0
+    # Page-top continuation (flush) — must never be flagged.
+    page1.insert_text(
+        (BODY_LEFT, y),
+        "Continuation across the page break stays flush on the body edge of the column.",
+        fontsize=11,
+        fontname="helv",
+    )
+    y += 28
+    # Bordered 2x2 table (drawn rectangles + cell text).
+    table_top, table_left = y, BODY_LEFT
+    col_w, row_h = 200.0, 22.0
+    for r in range(2):
+        for c in range(2):
+            x0 = table_left + c * col_w
+            y0 = table_top + r * row_h
+            rect = fitz.Rect(x0, y0, x0 + col_w, y0 + row_h)
+            page1.draw_rect(rect, color=(0, 0, 0), width=0.8)
+            page1.insert_text((x0 + 8, y0 + 14), f"Cell {r}-{c} value", fontsize=10, fontname="helv")
+    y = table_top + 2 * row_h + 28
+    # Properly indented paragraph with a mid-paragraph flush line after a small gap.
+    page1.insert_text(
+        (BODY_LEFT + 36, y),
+        "Fresh indented paragraph after the table opens with the required half inch indent.",
+        fontsize=11,
+        fontname="helv",
+    )
+    y += 16
+    page1.insert_text(
+        (BODY_LEFT, y),
+        "Full width continuation line that reaches near the right margin of the page body.",
+        fontsize=11,
+        fontname="helv",
+    )
+    y += 16
+    page1.insert_text(
+        (BODY_LEFT, y),
+        "Another full width line of the same paragraph filling the typed measure fully.",
+        fontsize=11,
+        fontname="helv",
+    )
+    y += 20  # small gap bump — must remain the same paragraph, not a new start
+    page1.insert_text(
+        (BODY_LEFT, y),
+        "Mid paragraph flush line after a small gap must not become a false paragraph start.",
+        fontsize=11,
+        fontname="helv",
+    )
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
 def _parse(data: bytes) -> dict:
     return parse_document(data, "pdf")
 
@@ -211,6 +292,13 @@ class IndentPdfCleanDirtyTests(unittest.TestCase):
         joined = " ".join(line.get("text") or "" for line in body[0]["lines"])
         self.assertIn("Flush left continuation", joined)
 
+    def test_page_top_table_midpara_zero_indent_flags(self):
+        """Page-top continuation + table + mid-para flush line → zero indent flags."""
+        parsed = _parse(_pdf_page_top_table_midpara_regression())
+        stats, collector, _units = _run_indent(parsed, {"first_line_indent_inches": 0.5})
+        self.assertEqual(collector.result(), [])
+        self.assertEqual(stats.failed, 0)
+
     def test_ignore_rule_zero_units(self):
         data = _pdf_with_paragraphs(
             [
@@ -298,6 +386,104 @@ class IndentPdfCleanDirtyTests(unittest.TestCase):
         self.assertFalse(getattr(stats, "unreliable", False))
         self.assertGreaterEqual(stats.failed, INDENT_RELIABILITY_MIN_ELIGIBLE)
         self.assertEqual(stats.failed, sum(iss["count"] for iss in collector.result()))
+
+    def test_one_inch_rule_with_half_inch_doc_emits_issues_not_unreliable(self):
+        """User rule 1 inch + manuscript at 0.5 inch → real fails, never 'could not check'."""
+        from app.compliance import _unit_location
+        from app.indent_check import INDENT_RELIABILITY_MIN_ELIGIBLE, check_pdf_indentation
+
+        units = []
+        y = 72.0
+        indent_pt = 0.5 * PT
+        n = INDENT_RELIABILITY_MIN_ELIGIBLE + 2
+        for i in range(n):
+            for j, text in enumerate(
+                (
+                    f"Half inch opening {i} that should fail a one inch first line indent rule.",
+                    f"Continuation {i} stays on the body edge so first line indent can be measured.",
+                )
+            ):
+                x0 = BODY_LEFT + (indent_pt if j == 0 else 0.0)
+                units.append(
+                    {
+                        "page_index": 0,
+                        "line_index": len(units),
+                        "text": text,
+                        "bbox": [x0, y, PAGE_W - 72, y + 12],
+                        "page_width": PAGE_W,
+                        "page_height": PAGE_H,
+                        "column": (BODY_LEFT, PAGE_W - 72),
+                        "formatting": {},
+                        "source": "body",
+                        "role": "body",
+                        "spans": [{"size": 11, "text": text}],
+                        "dominant_size": 11,
+                    }
+                )
+                y += 16
+            y += 40
+        stats = CategoryStats()
+        collector = IssueCollector()
+        check_pdf_indentation(
+            units,
+            {"first_line_indent_inches": 1.0, "indention": "1 inch"},
+            stats,
+            collector,
+            unit_location_fn=_unit_location,
+        )
+        self.assertFalse(getattr(stats, "unreliable", False))
+        self.assertIsNone(getattr(stats, "notice", None))
+        self.assertGreaterEqual(stats.failed, INDENT_RELIABILITY_MIN_ELIGIBLE)
+        self.assertEqual(stats.failed, sum(iss["count"] for iss in collector.result()))
+
+    def test_high_fail_share_never_suppresses_when_rule_set(self):
+        """Scattered wrong indents vs a set rule still emit issues (no flood suppress)."""
+        from app.compliance import _unit_location
+        from app.indent_check import INDENT_RELIABILITY_MIN_ELIGIBLE, check_pdf_indentation
+
+        # Varied first-line offsets so there is no single mode share ≥ 55%.
+        offsets_in = [0.0, 0.25, 0.35, 0.45, 0.55, 0.65, 0.2, 0.3, 0.4, 0.5]
+        units = []
+        y = 72.0
+        for i, inches in enumerate(offsets_in[: INDENT_RELIABILITY_MIN_ELIGIBLE + 2]):
+            for j, text in enumerate(
+                (
+                    f"Varied opening {i} under a one inch rule should still be scored.",
+                    f"Continuation {i} anchors the body edge for measurement.",
+                )
+            ):
+                x0 = BODY_LEFT + (inches * PT if j == 0 else 0.0)
+                units.append(
+                    {
+                        "page_index": 0,
+                        "line_index": len(units),
+                        "text": text,
+                        "bbox": [x0, y, PAGE_W - 72, y + 12],
+                        "page_width": PAGE_W,
+                        "page_height": PAGE_H,
+                        "column": (BODY_LEFT, PAGE_W - 72),
+                        "formatting": {},
+                        "source": "body",
+                        "role": "body",
+                        "spans": [{"size": 11, "text": text}],
+                        "dominant_size": 11,
+                    }
+                )
+                y += 16
+            y += 40
+        stats = CategoryStats()
+        collector = IssueCollector()
+        check_pdf_indentation(
+            units,
+            {"first_line_indent_inches": 1.0, "indention": "1 inch"},
+            stats,
+            collector,
+            unit_location_fn=_unit_location,
+        )
+        self.assertFalse(getattr(stats, "unreliable", False))
+        self.assertIsNone(getattr(stats, "notice", None))
+        self.assertGreaterEqual(stats.failed, INDENT_RELIABILITY_MIN_ELIGIBLE)
+        self.assertGreater(len(collector.result()), 0)
 
     def test_unreliable_category_excluded_from_overall_mean(self):
         fonts = CategoryStats()
