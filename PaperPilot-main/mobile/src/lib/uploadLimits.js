@@ -34,6 +34,22 @@ export const MECHANICS_ACCEPTED_MIME_TYPES = [
 export const MANUSCRIPT_ACCEPTED_EXTENSIONS = [".pdf"];
 export const MANUSCRIPT_ACCEPTED_MIME_TYPES = ["application/pdf"];
 
+/** Android providers often use these instead of application/pdf. */
+const PDF_MIME_ALIASES = new Set([
+  "application/pdf",
+  "application/x-pdf",
+  "application/acrobat",
+  "application/vnd.pdf",
+  "text/pdf",
+  "text/x-pdf",
+]);
+
+const DOCX_MIME_ALIASES = new Set([
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
+  "application/docx",
+]);
+
 /** @deprecated Prefer MECHANICS_* or MANUSCRIPT_*. */
 export const ACCEPTED_EXTENSIONS = MECHANICS_ACCEPTED_EXTENSIONS;
 export const ACCEPTED_MIME_TYPES = MECHANICS_ACCEPTED_MIME_TYPES;
@@ -60,6 +76,15 @@ function readHead(uri, length) {
   }
 }
 
+function sniffKindFromBytes(head) {
+  if (!head || !head.length) return "";
+  let start = 0;
+  while (start < head.length && head[start] <= 0x20) start += 1;
+  if (startsWith(head.subarray(start), PDF_SIGNATURE)) return "pdf";
+  if (startsWith(head, ZIP_SIGNATURE)) return "docx";
+  return "";
+}
+
 function hasExpectedSignature(file, ext) {
   let head;
   try {
@@ -73,7 +98,62 @@ function hasExpectedSignature(file, ext) {
     while (start < head.length && head[start] <= 0x20) start += 1;
     return startsWith(head.subarray(start), PDF_SIGNATURE);
   }
-  return startsWith(head, ZIP_SIGNATURE);
+  if (ext === ".docx") return startsWith(head, ZIP_SIGNATURE);
+  // Missing extension: accept when the bytes themselves look like the expected kind.
+  const sniffed = sniffKindFromBytes(head);
+  return sniffed === "pdf" || sniffed === "docx";
+}
+
+function mimeLooksAllowed(mime, kind) {
+  const value = String(mime || "").toLowerCase().trim();
+  if (!value || value === "application/octet-stream" || value === "*/*") return true;
+  if (kind === "manuscript") return PDF_MIME_ALIASES.has(value);
+  return PDF_MIME_ALIASES.has(value) || DOCX_MIME_ALIASES.has(value);
+}
+
+/**
+ * Ensure a picked asset has a usable name/extension/size for Android providers that
+ * omit them (common with Downloads / Google Drive).
+ */
+export async function normalizePickedFile(file, kind = "mechanics") {
+  if (!file?.uri) return file;
+  let name = String(file.name || "document").trim() || "document";
+  let mimeType = String(file.mimeType || "").trim();
+  let size = Number(file.size) || 0;
+  let ext = fileExtension({ name });
+
+  let head = null;
+  try {
+    head = readHead(file.uri, 1024);
+  } catch {
+    head = null;
+  }
+  const sniffed = sniffKindFromBytes(head);
+
+  if (!ext) {
+    if (kind === "manuscript" || sniffed === "pdf" || PDF_MIME_ALIASES.has(mimeType.toLowerCase())) {
+      name = `${name}.pdf`;
+      ext = ".pdf";
+      if (!mimeType) mimeType = "application/pdf";
+    } else if (sniffed === "docx" || DOCX_MIME_ALIASES.has(mimeType.toLowerCase())) {
+      name = `${name}.docx`;
+      ext = ".docx";
+      if (!mimeType) {
+        mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      }
+    }
+  }
+
+  if (!size) {
+    try {
+      const bytes = Number(new File(file.uri).size) || 0;
+      if (bytes > 0) size = bytes;
+    } catch {
+      // Keep size 0 — server still accepts when content_length is omitted.
+    }
+  }
+
+  return { ...file, name, mimeType: mimeType || file.mimeType || "application/octet-stream", size };
 }
 
 /**
@@ -88,15 +168,25 @@ export async function getFileRejection(file, kind = "mechanics", maxBytes = MAX_
   if (!file) return "";
   const allowedExt =
     kind === "manuscript" ? MANUSCRIPT_ACCEPTED_EXTENSIONS : MECHANICS_ACCEPTED_EXTENSIONS;
-  const allowedMime =
-    kind === "manuscript" ? MANUSCRIPT_ACCEPTED_MIME_TYPES : MECHANICS_ACCEPTED_MIME_TYPES;
-  const ext = fileExtension(file);
-  if (!allowedExt.includes(ext)) return "type";
+  let ext = fileExtension(file);
   const mime = String(file.mimeType || "").toLowerCase();
-  if (mime && mime !== "application/octet-stream" && !allowedMime.includes(mime)) {
-    return "type";
+
+  // Android sometimes strips the extension; recover from MIME or file signature.
+  if (!ext) {
+    let sniffed = "";
+    try {
+      sniffed = sniffKindFromBytes(readHead(file.uri, 1024));
+    } catch {
+      sniffed = "";
+    }
+    if (kind === "manuscript" && (sniffed === "pdf" || PDF_MIME_ALIASES.has(mime))) ext = ".pdf";
+    else if (sniffed === "pdf" || PDF_MIME_ALIASES.has(mime)) ext = ".pdf";
+    else if (sniffed === "docx" || DOCX_MIME_ALIASES.has(mime)) ext = ".docx";
   }
-  if (!hasExpectedSignature(file, ext)) return "type";
+
+  if (!allowedExt.includes(ext)) return "type";
+  if (!mimeLooksAllowed(mime, kind)) return "type";
+  if (!hasExpectedSignature(file, ext || fileExtension(file))) return "type";
   const limit = Number(maxBytes) > 0 ? Number(maxBytes) : MAX_FILE_SIZE_BYTES;
   if (Number(file.size) > limit) return "size";
   return "";

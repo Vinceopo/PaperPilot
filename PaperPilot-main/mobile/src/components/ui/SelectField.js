@@ -15,6 +15,9 @@ function Chevron({ color = "#64748b" }) {
 /**
  * Native-feeling replacement for a web <select>: shows the current option and
  * opens a bottom sheet of choices. `options` is [{ value, label }].
+ *
+ * Use `presentation="inline"` inside another React Native Modal — nested Modals
+ * often swallow taps on Android, so the sheet never appears to select anything.
  */
 export default function SelectField({
   value,
@@ -25,16 +28,44 @@ export default function SelectField({
   title,
   style,
   textStyle,
+  presentation = "modal",
 }) {
   const insets = useSafeAreaInsets();
   const [open, setOpen] = useState(false);
   const current = options.find((item) => item.value === value);
+  const inline = presentation === "inline";
+
+  function choose(next) {
+    setOpen(false);
+    onChange?.(next);
+  }
+
+  const optionList = (
+    <>
+      {title ? <Text style={styles.sheetTitle}>{title}</Text> : null}
+      <ScrollView style={styles.list} bounces={false} nestedScrollEnabled>
+        {options.map((item) => {
+          const active = item.value === value;
+          return (
+            <Pressable
+              key={String(item.value)}
+              style={({ pressed }) => [styles.option, active && styles.optionActive, pressed && styles.optionPressed]}
+              onPress={() => choose(item.value)}
+            >
+              <Text style={[styles.optionText, active && styles.optionTextActive]}>{item.label}</Text>
+              {active ? <Text style={styles.check}>✓</Text> : null}
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </>
+  );
 
   return (
     <>
       <Pressable
         style={[styles.field, disabled && styles.fieldDisabled, style]}
-        onPress={() => setOpen(true)}
+        onPress={() => setOpen((was) => !was)}
         disabled={disabled}
         accessibilityRole="button"
         accessibilityLabel={title ? `${title}: ${current?.label || placeholder}` : undefined}
@@ -45,31 +76,20 @@ export default function SelectField({
         <Chevron />
       </Pressable>
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
-          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 12 }]} onPress={() => {}}>
-            {title ? <Text style={styles.sheetTitle}>{title}</Text> : null}
-            <ScrollView style={styles.list} bounces={false}>
-              {options.map((item) => {
-                const active = item.value === value;
-                return (
-                  <Pressable
-                    key={String(item.value)}
-                    style={({ pressed }) => [styles.option, active && styles.optionActive, pressed && styles.optionPressed]}
-                    onPress={() => {
-                      setOpen(false);
-                      if (item.value !== value) onChange?.(item.value);
-                    }}
-                  >
-                    <Text style={[styles.optionText, active && styles.optionTextActive]}>{item.label}</Text>
-                    {active ? <Text style={styles.check}>✓</Text> : null}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+      {inline && open ? <View style={styles.inlineSheet}>{optionList}</View> : null}
+
+      {!inline ? (
+        <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+          <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
+            <Pressable
+              style={[styles.sheet, { paddingBottom: insets.bottom + 12 }]}
+              onPress={() => {}}
+            >
+              {optionList}
+            </Pressable>
           </Pressable>
-        </Pressable>
-      </Modal>
+        </Modal>
+      ) : null}
     </>
   );
 }
@@ -91,6 +111,16 @@ const styles = StyleSheet.create({
   value: { flex: 1, fontSize: 13, color: "#334155" },
   placeholder: { color: colors.muted },
   backdrop: { flex: 1, backgroundColor: "rgba(15, 23, 42, 0.4)", justifyContent: "flex-end" },
+  inlineSheet: {
+    marginTop: 8,
+    maxHeight: 220,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.white,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
   sheet: {
     maxHeight: "70%",
     borderTopLeftRadius: 16,

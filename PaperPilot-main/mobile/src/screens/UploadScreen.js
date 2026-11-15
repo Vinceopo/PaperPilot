@@ -4,6 +4,7 @@ import {
   BackHandler,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -51,6 +52,7 @@ import {
   fileExtension,
   getFileRejection,
   maxUploadBytesForPlan,
+  normalizePickedFile,
 } from "../lib/uploadLimits";
 import { isScanReady } from "../lib/scanMapper";
 import { normalizeTitle } from "../lib/scannedLibrary";
@@ -110,24 +112,23 @@ function formFromSaved(item) {
 }
 
 async function pickDocument(kind = "mechanics") {
-  // Include */* so Android file managers that omit PDF MIME still show documents;
-  // getFileRejection / validate* enforce the real allow-list after pick.
-  const types =
-    kind === "manuscript"
-      ? [...MANUSCRIPT_ACCEPTED_MIME_TYPES, "*/*"]
-      : [...MECHANICS_ACCEPTED_MIME_TYPES, "*/*"];
+  // Prefer a single MIME so Android ACTION_OPEN_DOCUMENT is reliable; validation
+  // still enforces PDF/DOCX after pick (including providers that omit extensions).
+  const type =
+    kind === "manuscript" ? "application/pdf" : ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
   const res = await DocumentPicker.getDocumentAsync({
-    type: types,
+    type,
     copyToCacheDirectory: true,
   });
   if (res.canceled || !res.assets?.length) return null;
   const asset = res.assets[0];
-  return {
+  const raw = {
     uri: asset.uri,
     name: decodeFilename(asset.name || "document"),
     mimeType: asset.mimeType || "application/octet-stream",
     size: asset.size || 0,
   };
+  return normalizePickedFile(raw, kind);
 }
 
 export default function UploadScreen({ navigation }) {
@@ -232,7 +233,8 @@ export default function UploadScreen({ navigation }) {
   // Do not also wait on the background preview API (previewBusy).
   const msOpeningPreview = Boolean(showMsPreview && !msUploading && !previewUnlock);
   const msPanelBusy = manuscriptBusy || confirmBusy || msOpeningPreview;
-  const canPickManuscript = mechanicsSelected && !manuscriptBusy && !previewBusy && !confirmBusy;
+  // Do not gate browsing on previewBusy — a hung preview API must not block picking.
+  const canPickManuscript = mechanicsSelected && !manuscriptBusy && !confirmBusy;
   const mechanicsOptions = mechanics.map((item) => ({
     value: item.id,
     label: item.name || item.source_filename,
@@ -458,8 +460,12 @@ export default function UploadScreen({ navigation }) {
   }
 
   async function pickMechanics() {
-    const file = await pickDocument("mechanics");
-    if (file) requestExtract(file);
+    try {
+      const file = await pickDocument("mechanics");
+      if (file) requestExtract(file);
+    } catch (err) {
+      setMechError(err?.message || "Could not open the file picker. Try again.");
+    }
   }
 
   function buildCreatePayload() {
@@ -647,24 +653,28 @@ export default function UploadScreen({ navigation }) {
 
   async function pickManuscript() {
     if (!canPickManuscript) return;
-    const file = await pickDocument("manuscript");
-    if (!file) return;
-    const pickId = ++pickRequest.current;
-    const issue = await getFileRejection(file, "manuscript", maxBytes);
-    if (pickRequest.current !== pickId) return;
-    setManuscriptReady(false);
-    setFileDetailsNotice("");
-    scanFlow.selectFile(null);
-    if (issue) {
-      rejectManuscript(file, issue);
-      return;
+    try {
+      const file = await pickDocument("manuscript");
+      if (!file) return;
+      const pickId = ++pickRequest.current;
+      const issue = await getFileRejection(file, "manuscript", maxBytes);
+      if (pickRequest.current !== pickId) return;
+      setManuscriptReady(false);
+      setFileDetailsNotice("");
+      scanFlow.selectFile(null);
+      if (issue) {
+        rejectManuscript(file, issue);
+        return;
+      }
+      setViewerReady(false);
+      setPreviewUnlock(false);
+      setMsFile(file);
+      setMsError("");
+      setMsSuccess("");
+      void loadPreview(file);
+    } catch (err) {
+      setMsError(err?.message || "Could not open the file picker. Try again.");
     }
-    setViewerReady(false);
-    setPreviewUnlock(false);
-    setMsFile(file);
-    setMsError("");
-    setMsSuccess("");
-    void loadPreview(file);
   }
 
   function chooseAnotherFile() {
@@ -717,6 +727,12 @@ export default function UploadScreen({ navigation }) {
     });
   }
 
+  function openUploadConfirm(pending) {
+    // Android often drops a ConfirmDialog opened in the same tick a parent Modal closes.
+    setTitleOpen(false);
+    setTimeout(() => queueUpload(pending), 350);
+  }
+
   function useExistingManuscript(id) {
     const selected = uploadTargets.find((item) => item.id === id);
     if (!selected) {
@@ -728,8 +744,7 @@ export default function UploadScreen({ navigation }) {
     setMsTitle("");
     setTitleError("");
     setMsError("");
-    setTitleOpen(false);
-    queueUpload({
+    openUploadConfirm({
       file: msFile,
       title: selected.title,
       manuscriptId: selected.id,
@@ -760,10 +775,9 @@ export default function UploadScreen({ navigation }) {
     }
     setTitleError("");
     setMsError("");
-    setTitleOpen(false);
     setManuscriptId("");
     selectUploadTarget("");
-    queueUpload({
+    openUploadConfirm({
       file: msFile,
       title: resolvedTitle,
       manuscriptId: "",
@@ -783,7 +797,8 @@ export default function UploadScreen({ navigation }) {
     setManuscriptId("");
     setMsTitle("");
     setTitleError("");
-    setTitleMode("new");
+    // Prefer existing titles when the library already has manuscripts — clearer on mobile.
+    setTitleMode(uploadTargets.length ? "existing" : "new");
     setExistingId(uploadTargets[0]?.id || "");
     setTitleOpen(true);
   }
@@ -1506,16 +1521,30 @@ export default function UploadScreen({ navigation }) {
             {titleMode === "existing" && uploadTargets.length > 0 ? (
               <View style={{ marginTop: 16 }}>
                 <Text style={styles.modalLabel}>Existing title</Text>
-                <SelectField
-                  title="Existing title"
-                  value={existingId}
-                  options={titleOptions}
-                  onChange={(value) => {
-                    setExistingId(value);
-                    setTitleError("");
-                  }}
-                  style={{ marginTop: 8 }}
-                />
+                {/* Inline list — nested SelectField Modals swallow taps on Android. */}
+                <ScrollView style={styles.titlePickList} nestedScrollEnabled bounces={false}>
+                  {titleOptions.map((item) => {
+                    const active = item.value === existingId;
+                    return (
+                      <Pressable
+                        key={String(item.value)}
+                        style={[styles.titlePickRow, active && styles.titlePickRowActive]}
+                        onPress={() => {
+                          setExistingId(item.value);
+                          setTitleError("");
+                        }}
+                      >
+                        <Text
+                          style={[styles.titlePickText, active && styles.titlePickTextActive]}
+                          numberOfLines={2}
+                        >
+                          {item.label}
+                        </Text>
+                        {active ? <Text style={styles.titlePickCheck}>✓</Text> : null}
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
               </View>
             ) : (
               <TextInput
@@ -1953,6 +1982,28 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   modalContinueText: { fontSize: 12, fontWeight: "700", color: "#092823" },
+  titlePickList: {
+    marginTop: 8,
+    maxHeight: 220,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.fileBg,
+    overflow: "hidden",
+  },
+  titlePickRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  titlePickRowActive: { backgroundColor: "#e7f8f5" },
+  titlePickText: { flex: 1, fontSize: 13, color: "#334155" },
+  titlePickTextActive: { fontWeight: "700", color: "#0f766e" },
+  titlePickCheck: { fontSize: 14, fontWeight: "700", color: colors.accent },
   cardDisabled: { opacity: 0.5 },
   dropzoneDisabled: { borderColor: "#cbd5e1", backgroundColor: "#f8fafc" },
   dropBusy: { alignItems: "center", gap: 4 },
