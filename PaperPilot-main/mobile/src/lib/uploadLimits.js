@@ -3,7 +3,7 @@
  * Limits match subscription plans (Free 15 MB · Premium 45 MB · Pro 120 MB).
  */
 
-import { File } from "expo-file-system";
+import { File, FileMode } from "expo-file-system";
 import { normalizeTier } from "./plans";
 
 /** Bytes per plan. Unknown / missing plan → Free. */
@@ -35,7 +35,7 @@ export const MANUSCRIPT_ACCEPTED_EXTENSIONS = [".pdf"];
 export const MANUSCRIPT_ACCEPTED_MIME_TYPES = ["application/pdf"];
 
 /** Android providers often use these instead of application/pdf. */
-const PDF_MIME_ALIASES = new Set([
+export const PDF_MIME_ALIASES = new Set([
   "application/pdf",
   "application/x-pdf",
   "application/acrobat",
@@ -64,31 +64,52 @@ export function fileExtension(file) {
 }
 
 function startsWith(bytes, signature) {
+  if (!bytes || typeof bytes.length !== "number") return false;
   return signature.every((byte, index) => bytes[index] === byte);
 }
 
-function readHead(uri, length) {
-  const handle = new File(uri).open();
-  try {
-    return handle.readBytes(length);
-  } finally {
-    handle.close();
-  }
-}
-
-function sniffKindFromBytes(head) {
-  if (!head || !head.length) return "";
+/** Pure helper — exported for unit tests. */
+export function sniffKindFromBytes(head) {
+  if (!head || typeof head.length !== "number" || !head.length) return "";
   let start = 0;
   while (start < head.length && head[start] <= 0x20) start += 1;
-  if (startsWith(head.subarray(start), PDF_SIGNATURE)) return "pdf";
+  if (startsWith(typeof head.subarray === "function" ? head.subarray(start) : head, PDF_SIGNATURE)) {
+    return "pdf";
+  }
   if (startsWith(head, ZIP_SIGNATURE)) return "docx";
   return "";
+}
+
+/**
+ * IMPORTANT: expo-file-system FileHandle.readBytes() is async and returns a Promise.
+ * Calling .subarray on that Promise throws "undefined is not a function" on device.
+ * Always use readBytesSync here.
+ */
+function readHeadSync(uri, length) {
+  const handle = new File(uri).open(FileMode.ReadOnly);
+  try {
+    if (typeof handle.readBytesSync !== "function") {
+      throw new Error("Sync file read unavailable");
+    }
+    const bytes = handle.readBytesSync(length);
+    // Guard against a mistaken async handle leaking a Promise into callers.
+    if (!bytes || typeof bytes.length !== "number" || typeof bytes.subarray !== "function") {
+      throw new Error("File head was not a byte array");
+    }
+    return bytes;
+  } finally {
+    try {
+      handle.close();
+    } catch {
+      // ignore close errors
+    }
+  }
 }
 
 function hasExpectedSignature(file, ext) {
   let head;
   try {
-    head = readHead(file.uri, 1024);
+    head = readHeadSync(file.uri, 1024);
   } catch {
     // Unreadable here (e.g. provider URI) - the API validates the contents again.
     return true;
@@ -99,12 +120,11 @@ function hasExpectedSignature(file, ext) {
     return startsWith(head.subarray(start), PDF_SIGNATURE);
   }
   if (ext === ".docx") return startsWith(head, ZIP_SIGNATURE);
-  // Missing extension: accept when the bytes themselves look like the expected kind.
   const sniffed = sniffKindFromBytes(head);
   return sniffed === "pdf" || sniffed === "docx";
 }
 
-function mimeLooksAllowed(mime, kind) {
+export function mimeLooksAllowed(mime, kind) {
   const value = String(mime || "").toLowerCase().trim();
   if (!value || value === "application/octet-stream" || value === "*/*") return true;
   if (kind === "manuscript") return PDF_MIME_ALIASES.has(value);
@@ -114,6 +134,7 @@ function mimeLooksAllowed(mime, kind) {
 /**
  * Ensure a picked asset has a usable name/extension/size for Android providers that
  * omit them (common with Downloads / Google Drive).
+ * Manuscripts stay PDF-only.
  */
 export async function normalizePickedFile(file, kind = "mechanics") {
   if (!file?.uri) return file;
@@ -124,19 +145,26 @@ export async function normalizePickedFile(file, kind = "mechanics") {
 
   let head = null;
   try {
-    head = readHead(file.uri, 1024);
+    head = readHeadSync(file.uri, 1024);
   } catch {
     head = null;
   }
   const sniffed = sniffKindFromBytes(head);
 
   if (!ext) {
-    if (kind === "manuscript" || sniffed === "pdf" || PDF_MIME_ALIASES.has(mimeType.toLowerCase())) {
-      name = `${name}.pdf`;
+    if (kind === "manuscript") {
+      // Manuscripts are PDF-only — never invent a .docx name here.
+      if (sniffed === "pdf" || PDF_MIME_ALIASES.has(mimeType.toLowerCase()) || !sniffed) {
+        name = `${name.replace(/\.+$/, "")}.pdf`;
+        ext = ".pdf";
+        if (!mimeType) mimeType = "application/pdf";
+      }
+    } else if (sniffed === "pdf" || PDF_MIME_ALIASES.has(mimeType.toLowerCase())) {
+      name = `${name.replace(/\.+$/, "")}.pdf`;
       ext = ".pdf";
       if (!mimeType) mimeType = "application/pdf";
     } else if (sniffed === "docx" || DOCX_MIME_ALIASES.has(mimeType.toLowerCase())) {
-      name = `${name}.docx`;
+      name = `${name.replace(/\.+$/, "")}.docx`;
       ext = ".docx";
       if (!mimeType) {
         mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -153,7 +181,12 @@ export async function normalizePickedFile(file, kind = "mechanics") {
     }
   }
 
-  return { ...file, name, mimeType: mimeType || file.mimeType || "application/octet-stream", size };
+  return {
+    ...file,
+    name,
+    mimeType: mimeType || file.mimeType || "application/octet-stream",
+    size,
+  };
 }
 
 /**
@@ -175,15 +208,21 @@ export async function getFileRejection(file, kind = "mechanics", maxBytes = MAX_
   if (!ext) {
     let sniffed = "";
     try {
-      sniffed = sniffKindFromBytes(readHead(file.uri, 1024));
+      sniffed = sniffKindFromBytes(readHeadSync(file.uri, 1024));
     } catch {
       sniffed = "";
     }
-    if (kind === "manuscript" && (sniffed === "pdf" || PDF_MIME_ALIASES.has(mime))) ext = ".pdf";
-    else if (sniffed === "pdf" || PDF_MIME_ALIASES.has(mime)) ext = ".pdf";
-    else if (sniffed === "docx" || DOCX_MIME_ALIASES.has(mime)) ext = ".docx";
+    if (kind === "manuscript") {
+      if (sniffed === "pdf" || PDF_MIME_ALIASES.has(mime)) ext = ".pdf";
+      else if (sniffed === "docx") return "type"; // never accept DOCX as manuscript
+    } else if (sniffed === "pdf" || PDF_MIME_ALIASES.has(mime)) {
+      ext = ".pdf";
+    } else if (sniffed === "docx" || DOCX_MIME_ALIASES.has(mime)) {
+      ext = ".docx";
+    }
   }
 
+  if (kind === "manuscript" && ext === ".docx") return "type";
   if (!allowedExt.includes(ext)) return "type";
   if (!mimeLooksAllowed(mime, kind)) return "type";
   if (!hasExpectedSignature(file, ext || fileExtension(file))) return "type";

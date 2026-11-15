@@ -112,10 +112,15 @@ function formFromSaved(item) {
 }
 
 async function pickDocument(kind = "mechanics") {
-  // Prefer a single MIME so Android ACTION_OPEN_DOCUMENT is reliable; validation
-  // still enforces PDF/DOCX after pick (including providers that omit extensions).
+  // Manuscripts: PDF only. Mechanics: PDF or DOCX.
+  // Single-string MIME for manuscripts keeps Android ACTION_OPEN_DOCUMENT reliable.
   const type =
-    kind === "manuscript" ? "application/pdf" : ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+    kind === "manuscript"
+      ? "application/pdf"
+      : [
+          "application/pdf",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ];
   const res = await DocumentPicker.getDocumentAsync({
     type,
     copyToCacheDirectory: true,
