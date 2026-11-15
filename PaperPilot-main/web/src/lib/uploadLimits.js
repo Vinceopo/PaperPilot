@@ -41,7 +41,7 @@ export const MANUSCRIPT_ACCEPT_ATTRIBUTE = [
   ...MANUSCRIPT_ACCEPTED_MIME_TYPES,
 ].join(",");
 
-/** @deprecated Prefer MECHANICS_* or MANUSCRIPT_* — kept for shared helpers. */
+/** @deprecated Prefer MECHANICS_* or MANUSCRIPT_* - kept for shared helpers. */
 export const ACCEPTED_EXTENSIONS = MECHANICS_ACCEPTED_EXTENSIONS;
 export const ACCEPTED_MIME_TYPES = MECHANICS_ACCEPTED_MIME_TYPES;
 export const ACCEPT_ATTRIBUTE = MECHANICS_ACCEPT_ATTRIBUTE;

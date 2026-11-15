@@ -1,6 +1,6 @@
 /**
  * Persist user-scanned manuscripts for the My Manuscripts page.
- * Starts empty — only real scans are added.
+ * Starts empty - only real scans are added.
  * Re-scans of the same title become new versions, not new rows.
  */
 
@@ -91,13 +91,13 @@ export function dismissScanIds(ids, uid) {
   }
 }
 
-/** Normalize titles so the same file name always matches (e.g. PAPERPILOT–FINAL_MANUSCRIPT). */
+/** Normalize titles so the same file name always matches (e.g. PAPERPILOT-FINAL_MANUSCRIPT). */
 export function normalizeTitle(title) {
   return String(title || "")
     .trim()
     .toLowerCase()
     .replace(/\.(pdf|docx)$/i, "")
-    .replace(/[\s_–—−-]+/g, " ")
+    .replace(/[\s_\-\u2013\u2014\u2212]+/g, " ")
     .replace(/\s+/g, " ");
 }
 
@@ -120,7 +120,7 @@ export function saveScannedManuscripts(items, uid) {
       localStorage.setItem(storageKey(uid), JSON.stringify(build()));
       return true;
     } catch {
-      // Quota exceeded — retry with a smaller copy.
+      // Quota exceeded - retry with a smaller copy.
     }
   }
   return false;
@@ -183,7 +183,7 @@ export function mergeServerScans(items, summaries, dismissed = new Set(), delete
         id: manuscriptId || `doc-${scanId}`,
         serverManuscriptId: manuscriptId || undefined,
         title,
-        institution: "—",
+        institution: "-",
         citationStyle: "APA",
         createdThisMonth: String(scan.created_at || "").startsWith(monthPrefix),
         versions: [],
@@ -260,7 +260,6 @@ function versionPartsFromResult(scanResult) {
       section: b.metric || b.section || "Section",
       score: b.score == null ? null : Number(b.score),
       status: b.status || null,
-      applicable: b.applicable,
       unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
       unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
       unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),
@@ -316,26 +315,29 @@ export function dedupeManuscriptsByTitle(items) {
     if (m.createdThisMonth) existing.createdThisMonth = true;
   }
 
-  return [...map.values()].map((m) => {
-    const chronological = uniqueByScanId(m.versions || []).sort((a, b) => {
-      const da = versionTime(a);
-      const db = versionTime(b);
-      if (da !== db) return da.localeCompare(db);
-      return (Number(a.versionNumber) || 0) - (Number(b.versionNumber) || 0);
-    });
-    // Server numbers are kept as-is (gaps after a delete are expected); only
-    // legacy versions without one get the next number in order.
-    let last = 0;
-    const versions = chronological
-      .map((v) => {
-        const own = Number(v.versionNumber);
-        const versionNumber = own > 0 ? own : last + 1;
-        last = Math.max(last, versionNumber);
-        return { ...v, manuscriptId: m.id, versionNumber };
-      })
-      .reverse();
-    return { ...m, versions };
-  });
+  return [...map.values()]
+    .map((m) => {
+      const chronological = uniqueByScanId(m.versions || []).sort((a, b) => {
+        const da = versionTime(a);
+        const db = versionTime(b);
+        if (da !== db) return da.localeCompare(db);
+        return (Number(a.versionNumber) || 0) - (Number(b.versionNumber) || 0);
+      });
+      // Server numbers are kept as-is (gaps after a delete are expected); only
+      // legacy versions without one get the next number in order.
+      let last = 0;
+      const versions = chronological
+        .map((v) => {
+          const own = Number(v.versionNumber);
+          const versionNumber = own > 0 ? own : last + 1;
+          last = Math.max(last, versionNumber);
+          return { ...v, manuscriptId: m.id, versionNumber };
+        })
+        .reverse();
+      return { ...m, versions };
+    })
+    // Newest last scan first so My Manuscripts / Upload targets surface it immediately.
+    .sort((a, b) => versionTime((b.versions || [])[0]).localeCompare(versionTime((a.versions || [])[0])));
 }
 
 /**
@@ -396,16 +398,19 @@ export function upsertFromScanResult(items, scanResult, versionNumber = 0) {
       ...existing,
       id: documentId,
       title: title || existing.title,
-      institution: scanResult.campus || existing.institution || "—",
+      institution: scanResult.campus || existing.institution || "-",
       citationStyle: scanResult.citationStyle || existing.citationStyle || "APA",
+      formatMechanicsName:
+        scanResult.formatMechanicsName || existing.formatMechanicsName || "",
       versions: [version, ...(existing.versions || [])],
     };
   } else {
     list.unshift({
       id: documentId,
       title,
-      institution: scanResult.campus || scanResult.college || "—",
+      institution: scanResult.campus || scanResult.college || "-",
       citationStyle: scanResult.citationStyle || "APA",
+      formatMechanicsName: scanResult.formatMechanicsName || "",
       createdThisMonth: true,
       versions: [version],
     });
@@ -441,7 +446,9 @@ export function versionToScanResult(manuscript, version) {
       documentTitle: version.scanResult.documentTitle || manuscript?.title || "Untitled",
       campus: version.scanResult.campus || manuscript?.institution,
       citationStyle: version.scanResult.citationStyle || manuscript?.citationStyle,
-      mechanicsName: version.scanResult.mechanicsName || manuscript?.mechanicsName || "",
+      formatMechanicsName:
+        version.scanResult.formatMechanicsName || manuscript?.formatMechanicsName || "",
+      mechanicsRules: version.scanResult.mechanicsRules || null,
       versionNumber: version.versionNumber,
     };
   }
@@ -450,9 +457,10 @@ export function versionToScanResult(manuscript, version) {
   return {
     documentId: manuscript?.id || version.manuscriptId,
     documentTitle: manuscript?.title || "Untitled",
-    campus: manuscript?.institution || "—",
+    campus: manuscript?.institution || "-",
     citationStyle: manuscript?.citationStyle || "APA",
-    mechanicsName: manuscript?.mechanicsName || "",
+    formatMechanicsName: manuscript?.formatMechanicsName || "",
+    mechanicsRules: null,
     scannedAt: version.scannedAt || version.scannedDate,
     overallScore: version.score,
     versionNumber: version.versionNumber,
@@ -460,7 +468,6 @@ export function versionToScanResult(manuscript, version) {
       metric: b.section,
       score: b.score == null ? null : Number(b.score),
       status: b.status || null,
-      applicable: b.applicable,
       unitsChecked: b.unitsChecked == null ? null : Number(b.unitsChecked),
       unitsPassed: b.unitsPassed == null ? null : Number(b.unitsPassed),
       unitsFailed: b.unitsFailed == null ? null : Number(b.unitsFailed),

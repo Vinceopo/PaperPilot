@@ -46,14 +46,14 @@ function circleClass(item, current) {
 export function ShowStepsRow({ step, total = 3, onShowSteps }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#16bfa8]">
+      <p className="text-xs font-bold uppercase tracking-[0.12em] text-[#16bfa8]">
         Step {step} of {total}
       </p>
       {typeof onShowSteps === "function" && (
         <button
           type="button"
           onClick={onShowSteps}
-          className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#109b89] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8] focus-visible:ring-offset-2"
+          className="text-xs font-bold uppercase tracking-[0.12em] text-[#109b89] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8] focus-visible:ring-offset-2"
         >
           Show Steps
         </button>
@@ -86,14 +86,14 @@ export default function UploadJourneyModal({ open, current = 1, onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="upload-journey-title"
-        className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl md:p-8"
+        className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-7 shadow-2xl md:p-9"
         onClick={(event) => event.stopPropagation()}
       >
-        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#16bfa8]">How a scan works</p>
-        <h2 id="upload-journey-title" className="mt-2 text-2xl font-bold tracking-tight text-[#172033]">
+        <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#16bfa8]">How a scan works</p>
+        <h2 id="upload-journey-title" className="mt-2 text-3xl font-bold tracking-tight text-[#172033]">
           Three steps
         </h2>
-        <p className="mt-1 text-sm leading-relaxed text-slate-500">
+        <p className="mt-2 text-base leading-relaxed text-slate-500">
           You are on step {current}: {currentItem.label}.
         </p>
 
@@ -126,7 +126,7 @@ export default function UploadJourneyModal({ open, current = 1, onClose }) {
                       </span>
                     )}
                   </p>
-                  <p className="mt-1 text-sm leading-relaxed text-slate-500">{item.description}</p>
+                  <p className="mt-1.5 text-base leading-relaxed text-slate-500">{item.description}</p>
                 </div>
               </li>
             );
@@ -136,7 +136,7 @@ export default function UploadJourneyModal({ open, current = 1, onClose }) {
         <button
           type="button"
           onClick={onClose}
-          className="mt-6 w-full rounded-xl bg-[#16bfa8] py-3 text-sm font-bold text-[#092823] shadow-sm hover:bg-[#12ae99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8] focus-visible:ring-offset-2"
+          className="mt-7 w-full rounded-xl bg-[#16bfa8] py-3.5 text-base font-bold text-[#092823] shadow-sm hover:bg-[#12ae99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16bfa8] focus-visible:ring-offset-2"
         >
           {current === 1 ? "Start step 1" : `Continue on step ${current}`}
         </button>

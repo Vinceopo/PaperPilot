@@ -1,5 +1,5 @@
 /**
- * Format Fields — editable form for Customize, Upload extract, and Saved mechanics.
+ * Format Fields - editable form for Customize, Upload extract, and Saved mechanics.
  * Values shown are the actual rules (from extraction, saved profile, or sample starter).
  */
 
@@ -7,13 +7,12 @@ import { supportedCitationStyle } from "../../lib/formatMechanicsForm.js";
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, Plus, Trash2, X } from "lucide-react";
 import {
-  BODY_NUMBERING_OPTIONS,
   CHAPTER_FIRST_PAGE_OPTIONS,
-  CHAPTER_MARKER_OPTIONS,
   FONT_FAMILIES,
   HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
   MAX_HEADING_LEVELS,
+  PAGE_NO_NUMBERS,
   PAGE_POSITIONS,
   PRELIMINARY_STYLE_OPTIONS,
   TITLE_PAGE_OPTIONS,
@@ -21,8 +20,6 @@ import {
   emptyHeading,
   headingLabel,
 } from "../../lib/mechanicsOptions";
-import { isIgnoreFormValue } from "../../lib/formatMechanicsForm.js";
-
 const LINE_SPACING_OPTIONS = [
   { value: "1", label: "1 (Single)" },
   { value: "1.15" },
@@ -33,16 +30,16 @@ const FONT_FAMILY_OPTIONS = FONT_FAMILIES.map((value) => ({ value }));
 const FONT_COLOR_OPTIONS = ["Black/Automatic", "Black", "Automatic"].map((value) => ({ value }));
 
 const inputClass =
-  "mt-1.5 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
+  "mt-1.5 h-11 w-full rounded-lg border border-slate-200 bg-white px-3.5 text-sm text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
 const areaClass =
-  "mt-1.5 min-h-[4.5rem] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
+  "mt-1.5 min-h-[5rem] w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
 
 function Field({ label, children, hint }) {
   return (
-    <label className="block text-[11px] font-semibold text-slate-600">
+    <label className="block text-sm font-semibold text-slate-600">
       {label}
       {children}
-      {hint ? <span className="mt-1 block text-[10px] font-normal text-slate-400">{hint}</span> : null}
+      {hint ? <span className="mt-1 block text-xs font-normal text-slate-400">{hint}</span> : null}
     </label>
   );
 }
@@ -176,8 +173,8 @@ function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "IGNORE
 
 function Section({ title, children }) {
   return (
-    <div className="space-y-3 border-t border-slate-200/80 pt-3 first:border-t-0 first:pt-0">
-      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#109b89]">{title}</p>
+    <div className="space-y-3.5 border-t border-slate-200/80 pt-4 first:border-t-0 first:pt-0">
+      <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#109b89]">{title}</p>
       {children}
     </div>
   );
@@ -191,6 +188,29 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
     return (value) => onChange?.({ ...form, [key]: value });
   }
   const headings = Array.isArray(form.headings) ? form.headings : [];
+  const noPageNumbers = String(form.paginationPosition || "") === PAGE_NO_NUMBERS;
+  function applyNoPageNumbers() {
+    onChange?.({
+      ...form,
+      paginationPosition: PAGE_NO_NUMBERS,
+      paginationTitlePage: "IGNORE",
+      paginationFirstPageRule: "IGNORE",
+      paginationPreliminaryStyle: "IGNORE",
+      paginationBodyNumbering: "",
+      paginationChapterMarkers: [],
+    });
+  }
+  function clearNoPageNumbers() {
+    onChange?.({
+      ...form,
+      paginationPosition: "",
+      paginationTitlePage: "",
+      paginationFirstPageRule: "",
+      paginationPreliminaryStyle: "",
+      paginationBodyNumbering: "",
+      paginationChapterMarkers: [],
+    });
+  }
   function setHeadings(next) {
     onChange?.({ ...form, headings: next });
   }
@@ -218,13 +238,13 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
   }
 
   return (
-    <div className="flex max-h-[min(32rem,70vh)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#f8f9fb]">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 px-4 py-3">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{title}</p>
-        <p className="text-[10px] text-slate-400">Edit any rule to customize</p>
+    <div className="flex max-h-[min(40rem,75vh)] min-h-[22rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#f8f9fb]">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 px-5 py-3.5">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{title}</p>
+        <p className="text-xs text-slate-400">Edit any rule to customize</p>
       </div>
 
-      <div className="pp-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div className="pp-scroll min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
       <Field label="Profile name">
         <input
           disabled={disabled}
@@ -281,7 +301,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
               className={inputClass}
             />
           </Field>
-          <Field label="Alignment" hint="Body text alignment — IGNORE skips this check">
+          <Field label="Alignment" hint="Body text alignment - IGNORE skips this check">
             <select
               disabled={disabled}
               value={form.alignment || ""}
@@ -336,7 +356,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
 
       <Section title="Font">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Body text size" hint="Same as Contents Size — not heading size">
+          <Field label="Body text size" hint="Same as Contents Size - not heading size">
             <input
               disabled={disabled}
               type="number"
@@ -373,7 +393,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
         </p>
         {headings.length ? null : (
           <p className="text-[11px] text-slate-400">
-            No heading rules — this check is skipped. Add a level only if your guide defines one.
+            No heading rules - this check is skipped. Add a level only if your guide defines one.
           </p>
         )}
         {headings.map((heading, index) => {
@@ -438,7 +458,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
                 </div>
               ) : (
                 <p className="mt-1 text-[10px] text-slate-400">
-                  No rules set — this heading level is skipped (same as IGNORE).
+                  No rules set - this heading level is skipped (same as IGNORE).
                 </p>
               )}
               {!disabled && missing.length ? (
@@ -472,18 +492,46 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
       </Section>
 
       <Section title="Pagination">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200/90 bg-slate-50/80 px-3 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="text-[12px] font-semibold text-slate-800">Entire manuscript</p>
+            <p className="text-[11px] leading-snug text-slate-500">
+              Use when the format does not require page numbers on any page.
+            </p>
+          </div>
+          {!disabled ? (
+            <button
+              type="button"
+              onClick={noPageNumbers ? clearNoPageNumbers : applyNoPageNumbers}
+              className={
+                noPageNumbers
+                  ? "shrink-0 rounded-lg border border-[#16bfa8]/40 bg-[#16bfa8]/10 px-3 py-1.5 text-[11px] font-semibold text-[#0f7f72]"
+                  : "shrink-0 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:border-[#16bfa8] hover:text-[#109b89]"
+              }
+            >
+              {noPageNumbers ? "No page numbers · selected" : "No page numbers"}
+            </button>
+          ) : (
+            <span className="shrink-0 text-[11px] font-semibold text-slate-500">
+              {noPageNumbers ? "No page numbers" : "Page numbers required"}
+            </span>
+          )}
+        </div>
+        <div className={`grid gap-3 sm:grid-cols-2 ${noPageNumbers ? "opacity-50" : ""}`}>
           <Field label="Position" hint="Where page numbers sit on normal pages">
             <ChoiceSelect
-              disabled={disabled}
+              disabled={disabled || noPageNumbers}
               value={form.paginationPosition}
               onChange={setValue("paginationPosition")}
               options={PAGE_POSITIONS}
             />
           </Field>
-          <Field label="Title page" hint="Document page 1">
+          <Field
+            label="Title page"
+            hint="Document page 1 — leave IGNORE unless your guide says whether page 1 shows a number"
+          >
             <ChoiceSelect
-              disabled={disabled}
+              disabled={disabled || noPageNumbers}
               value={form.paginationTitlePage}
               onChange={setValue("paginationTitlePage")}
               options={TITLE_PAGE_OPTIONS}
@@ -491,7 +539,7 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
           </Field>
           <Field label="First page of each chapter">
             <ChoiceSelect
-              disabled={disabled}
+              disabled={disabled || noPageNumbers}
               value={form.paginationFirstPageRule}
               onChange={setValue("paginationFirstPageRule")}
               options={CHAPTER_FIRST_PAGE_OPTIONS}
@@ -499,64 +547,11 @@ export default function FormatMechanicsFields({ form, onChange, disabled, title 
           </Field>
           <Field label="Preliminary pages" hint="Pages before Chapter 1">
             <ChoiceSelect
-              disabled={disabled}
+              disabled={disabled || noPageNumbers}
               value={form.paginationPreliminaryStyle}
               onChange={setValue("paginationPreliminaryStyle")}
               options={PRELIMINARY_STYLE_OPTIONS}
             />
-          </Field>
-          <Field label="Body numbering" hint="From Chapter 1 onward">
-            <ChoiceSelect
-              disabled={disabled}
-              value={form.paginationBodyNumbering}
-              onChange={setValue("paginationBodyNumbering")}
-              options={BODY_NUMBERING_OPTIONS}
-            />
-          </Field>
-          <Field
-            label="Chapter starts"
-            hint="How chapter headings are written — set IGNORE if your guide does not specify this"
-          >
-            <select
-              disabled={disabled}
-              className={inputClass}
-              value={
-                isIgnoreFormValue(form.paginationChapterMarkers)
-                  ? "IGNORE"
-                  : Array.isArray(form.paginationChapterMarkers) && form.paginationChapterMarkers.length
-                    ? form.paginationChapterMarkers.join(",")
-                    : ""
-              }
-              onChange={(e) => {
-                const next = e.target.value;
-                if (next === "IGNORE") {
-                  onChange?.({ ...form, paginationChapterMarkers: "IGNORE" });
-                } else if (!next) {
-                  onChange?.({ ...form, paginationChapterMarkers: [] });
-                } else {
-                  onChange?.({
-                    ...form,
-                    paginationChapterMarkers: next.split(",").map((part) => part.trim()).filter(Boolean),
-                  });
-                }
-              }}
-            >
-              {!(
-                isIgnoreFormValue(form.paginationChapterMarkers) ||
-                (Array.isArray(form.paginationChapterMarkers) && form.paginationChapterMarkers.length)
-              ) ? (
-                <option value="">Choose…</option>
-              ) : null}
-              <option value="IGNORE">IGNORE</option>
-              <option value="chapter_roman,chapter_arabic">
-                CHAPTER I… and Chapter 1… (both)
-              </option>
-              {CHAPTER_MARKER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
           </Field>
         </div>
       </Section>

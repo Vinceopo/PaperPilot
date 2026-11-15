@@ -3,14 +3,19 @@
  * Values shown are the actual rules (from extraction, saved profile, or sample starter).
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors } from "../../theme";
 import SelectField from "../ui/SelectField";
 import FocusAwareTextInput from "../ui/FocusAwareTextInput";
 import { useKeyboardScroll } from "../ui/KeyboardScrollContext";
 import { ChevronDownIcon, CloseIcon, TrashIcon } from "../shell/icons";
-import { supportedCitationStyle } from "../../lib/formatMechanicsForm";
+import {
+  PAGE_ALIGNMENT_OPTIONS,
+  alignmentPageOverrideRowsFromText,
+  alignmentPageOverridesTextFromRows,
+  supportedCitationStyle,
+} from "../../lib/formatMechanicsForm";
 import {
   CHAPTER_FIRST_PAGE_OPTIONS,
   FONT_FAMILIES,
@@ -61,6 +66,78 @@ const MARGINS = [
   ["marginHeader", "Header"],
   ["marginFooter", "Footer"],
 ];
+
+function AlignmentPageOverridesEditor({ value, onChange, disabled }) {
+  const [rows, setRows] = useState(() => alignmentPageOverrideRowsFromText(value));
+
+  useEffect(() => {
+    const incoming = alignmentPageOverridesTextFromRows(alignmentPageOverrideRowsFromText(value));
+    const current = alignmentPageOverridesTextFromRows(rows);
+    if (incoming !== current) setRows(alignmentPageOverrideRowsFromText(value));
+    // Keep incomplete draft rows while the parent echoes the same complete overrides.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  function commit(next) {
+    setRows(next);
+    onChange(alignmentPageOverridesTextFromRows(next));
+  }
+
+  function updateRow(index, patch) {
+    commit(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  return (
+    <View style={styles.overrideList}>
+      {rows.length ? (
+        rows.map((row, index) => (
+          <View key={index} style={styles.overrideRow}>
+            <View style={styles.overridePage}>
+              <Text style={styles.overrideLabel}>Page</Text>
+              <FocusAwareTextInput
+                editable={!disabled}
+                keyboardType="number-pad"
+                value={row.page}
+                onChangeText={(page) => updateRow(index, { page })}
+                placeholder="e.g. 1"
+                placeholderTextColor={colors.muted}
+                style={[styles.input, disabled && styles.inputDisabled]}
+              />
+            </View>
+            <View style={styles.overrideAlign}>
+              <Text style={styles.overrideLabel}>Alignment</Text>
+              <SelectField
+                title="Alignment"
+                value={row.alignment || "center"}
+                options={PAGE_ALIGNMENT_OPTIONS}
+                onChange={(alignment) => updateRow(index, { alignment })}
+                disabled={disabled}
+              />
+            </View>
+            {disabled ? null : (
+              <Pressable
+                style={styles.overrideRemove}
+                onPress={() => commit(rows.filter((_, i) => i !== index))}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Remove page override ${index + 1}`}
+              >
+                <TrashIcon size={16} color={colors.rose} />
+              </Pressable>
+            )}
+          </View>
+        ))
+      ) : (
+        <Text style={styles.hint}>No page overrides yet — body alignment applies to every page.</Text>
+      )}
+      {disabled ? null : (
+        <Pressable style={styles.overrideAdd} onPress={() => commit([...rows, { page: "", alignment: "center" }])}>
+          <Text style={styles.overrideAddText}>+ Add page override</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
 
 function Field({ label, hint, children, style, labelStyle }) {
   return (
@@ -300,6 +377,16 @@ export default function FormatMechanicsFields({
               }
               onChange={(v) => set("alignment", v)}
               disabled={disabled}
+            />
+          </Field>
+          <Field
+            label="Alignment page overrides"
+            hint="Optional — set a different alignment for specific pages (e.g. title page centered)"
+          >
+            <AlignmentPageOverridesEditor
+              disabled={disabled}
+              value={form.alignmentPageOverrides || ""}
+              onChange={(next) => set("alignmentPageOverrides", next)}
             />
           </Field>
           <Field label="Landscape pages" hint="When pages may be turned sideways">
@@ -701,4 +788,35 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   addLevelText: { fontSize: 12, fontWeight: "600", color: "#475569" },
+  overrideList: { gap: 10, marginTop: 4 },
+  overrideRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  overridePage: { width: 88 },
+  overrideAlign: { flex: 1 },
+  overrideLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: colors.muted,
+  },
+  overrideRemove: {
+    height: 40,
+    width: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+  },
+  overrideAdd: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "#cbd5e1",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  overrideAddText: { fontSize: 12, fontWeight: "600", color: "#475569" },
 });

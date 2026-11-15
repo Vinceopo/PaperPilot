@@ -110,8 +110,12 @@ function formFromSaved(item) {
 }
 
 async function pickDocument(kind = "mechanics") {
+  // Include */* so Android file managers that omit PDF MIME still show documents;
+  // getFileRejection / validate* enforce the real allow-list after pick.
   const types =
-    kind === "manuscript" ? MANUSCRIPT_ACCEPTED_MIME_TYPES : MECHANICS_ACCEPTED_MIME_TYPES;
+    kind === "manuscript"
+      ? [...MANUSCRIPT_ACCEPTED_MIME_TYPES, "*/*"]
+      : [...MECHANICS_ACCEPTED_MIME_TYPES, "*/*"];
   const res = await DocumentPicker.getDocumentAsync({
     type: types,
     copyToCacheDirectory: true,
@@ -201,6 +205,8 @@ export default function UploadScreen({ navigation }) {
   const [preview, setPreview] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [viewerReady, setViewerReady] = useState(false);
+  // Upload must not wait forever on WebView/CDN paint — unlock after ready or a short timeout.
+  const [previewUnlock, setPreviewUnlock] = useState(false);
   const [titleOpen, setTitleOpen] = useState(false);
   const [titleMode, setTitleMode] = useState("new");
   const [existingId, setExistingId] = useState("");
@@ -222,10 +228,9 @@ export default function UploadScreen({ navigation }) {
   const mechanicsSelected = Boolean(selectedMechanicsId);
   const msUploading = Boolean(manuscriptBusy || (confirmBusy && uploadWizardStep === 2));
   const showMsPreview = Boolean(msFile) && !validateManuscriptFile(msFile, maxBytes);
-  // Keep "Opening manuscript preview…" until the WebView has painted (avoids loader blink).
-  // Upload unlocks with that same moment — do not also wait on the background preview API
-  // (previewBusy), or the button stays locked after the animation already finished.
-  const msOpeningPreview = Boolean(showMsPreview && !msUploading && !viewerReady);
+  // Keep "Opening manuscript preview…" until the WebView paints or the unlock timeout fires.
+  // Do not also wait on the background preview API (previewBusy).
+  const msOpeningPreview = Boolean(showMsPreview && !msUploading && !previewUnlock);
   const msPanelBusy = manuscriptBusy || confirmBusy || msOpeningPreview;
   const canPickManuscript = mechanicsSelected && !manuscriptBusy && !previewBusy && !confirmBusy;
   const mechanicsOptions = mechanics.map((item) => ({
@@ -245,6 +250,7 @@ export default function UploadScreen({ navigation }) {
     setPreview(null);
     setPreviewBusy(false);
     setViewerReady(false);
+    setPreviewUnlock(false);
     setMsError("");
     setMsSuccess("");
     setMsTitle("");
@@ -254,7 +260,19 @@ export default function UploadScreen({ navigation }) {
 
   useEffect(() => {
     setViewerReady(false);
+    setPreviewUnlock(false);
   }, [msFile?.uri]);
+
+  // Keep the "Opening manuscript preview…" overlay, but never soft-lock Upload if CDN/WebView hangs.
+  useEffect(() => {
+    if (!msFile?.uri) return undefined;
+    if (viewerReady) {
+      setPreviewUnlock(true);
+      return undefined;
+    }
+    const timer = setTimeout(() => setPreviewUnlock(true), 5000);
+    return () => clearTimeout(timer);
+  }, [msFile?.uri, viewerReady]);
 
   // Keep Format Fields in sync with the selected saved mechanics.
   useEffect(() => {
@@ -621,6 +639,7 @@ export default function UploadScreen({ navigation }) {
     setPreview(null);
     setPreviewBusy(false);
     setViewerReady(false);
+    setPreviewUnlock(false);
     setMsError("");
     setMsSuccess("");
     setRejection({ kind, name: file.name, size: file.size, scope: "manuscript" });
@@ -641,6 +660,7 @@ export default function UploadScreen({ navigation }) {
       return;
     }
     setViewerReady(false);
+    setPreviewUnlock(false);
     setMsFile(file);
     setMsError("");
     setMsSuccess("");

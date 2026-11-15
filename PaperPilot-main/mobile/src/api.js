@@ -1,4 +1,5 @@
 import Constants from "expo-constants";
+import { File } from "expo-file-system";
 import * as FileSystem from "expo-file-system/legacy";
 import { auth } from "./firebase";
 import { saveFileToDevice } from "./lib/saveFile";
@@ -227,6 +228,81 @@ function cleanFilename(name = "upload.bin", mimeType = "") {
   return cleaned;
 }
 
+function putFailedStatus(status) {
+  return new ApiError(
+    "The file could not be uploaded. Check that it is a PDF or DOCX within your plan’s size limit, then try again.",
+    status
+  );
+}
+
+/** Prefer native upload paths — Android release builds often cannot fetch(file://).blob(). */
+async function putLocalFileToS3(uploadUrl, uri, putHeaders) {
+  try {
+    const result = await FileSystem.uploadAsync(uploadUrl, uri, {
+      httpMethod: "PUT",
+      headers: putHeaders,
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+    });
+    if (result.status >= 200 && result.status < 300) return;
+    throw putFailedStatus(result.status);
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    // Fall through when uploadAsync is unavailable or rejects before a status.
+  }
+
+  try {
+    const result = await new File(uri).upload(uploadUrl, {
+      httpMethod: "PUT",
+      headers: putHeaders,
+    });
+    if (result?.status != null) {
+      if (result.status >= 200 && result.status < 300) return;
+      throw putFailedStatus(result.status);
+    }
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+  }
+
+  let body;
+  try {
+    const bytes = await new File(uri).bytes();
+    body = new Blob([bytes], { type: putHeaders["Content-Type"] || "application/octet-stream" });
+  } catch {
+    try {
+      const fileRes = await fetch(uri);
+      body = await fileRes.blob();
+    } catch {
+      throw new ApiError("Could not read the selected file. Pick it again, then upload.", 0);
+    }
+  }
+
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", uploadUrl);
+    xhr.timeout = 180000;
+    Object.entries(putHeaders).forEach(([key, value]) => {
+      if (value != null && value !== "") xhr.setRequestHeader(key, String(value));
+    });
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      reject(putFailedStatus(xhr.status));
+    };
+    xhr.onerror = () =>
+      reject(new ApiError("Upload failed. Check your internet connection and try again.", 0));
+    xhr.ontimeout = () =>
+      reject(
+        new ApiError(
+          "The upload took too long. Check your connection or try a smaller file, then upload again.",
+          0
+        )
+      );
+    xhr.send(body);
+  });
+}
+
 /**
  * Upload a picked document to S3 via an API-issued presigned PUT.
  * Subsequent API calls still send the public URL as `cloudinary_url` for schema compatibility.
@@ -269,44 +345,7 @@ async function uploadToS3({ uri, name, mimeType, size }) {
     putHeaders["Content-Type"] = contentType;
   }
 
-  let body;
-  try {
-    const fileRes = await fetch(uri);
-    body = await fileRes.blob();
-  } catch {
-    throw new ApiError("Could not read the selected file. Pick it again, then upload.", 0);
-  }
-
-  await new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", uploadUrl);
-    xhr.timeout = 180000;
-    Object.entries(putHeaders).forEach(([key, value]) => {
-      if (value != null && value !== "") xhr.setRequestHeader(key, String(value));
-    });
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-        return;
-      }
-      reject(
-        new ApiError(
-          "The file could not be uploaded. Check that it is a PDF or DOCX within your plan’s size limit, then try again.",
-          xhr.status
-        )
-      );
-    };
-    xhr.onerror = () =>
-      reject(new ApiError("Upload failed. Check your internet connection and try again.", 0));
-    xhr.ontimeout = () =>
-      reject(
-        new ApiError(
-          "The upload took too long. Check your connection or try a smaller file, then upload again.",
-          0
-        )
-      );
-    xhr.send(body);
-  });
+  await putLocalFileToS3(uploadUrl, uri, putHeaders);
 
   return { url: publicUrl, originalFilename: safeName };
 }

@@ -3,6 +3,7 @@ import { completeRegister, otpBypassToken, registerCheck, sendOtp } from "../../
 import { auth, db, firebaseReady } from "../../firebase.js";
 import { registerWithEmail, saveUserProfile, signInWithEmail } from "../../services/auth.js";
 import FloatingLabelInput from "../FloatingLabelInput.jsx";
+import AuthFeatureCard from "./AuthFeatureCard.jsx";
 import AuthShell from "./AuthShell.jsx";
 import OtpStep from "./OtpStep.jsx";
 import TermsModal from "./TermsModal.jsx";
@@ -161,7 +162,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
   }
 
   const loginFooter = (
-    <p className="mt-3 text-center text-[13px] leading-4 text-slate-500">
+    <p className="mt-4 text-center text-sm leading-5 text-slate-500">
       Already have an account?{" "}
       <button
         type="button"
@@ -175,14 +176,12 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
 
   if (step === "otp") {
     return (
-      <AuthShell
-        variant="register"
-        slideDir="left"
-        panelKey="register-otp"
+      <AuthFeatureCard
+        mode="page"
+        icon="shield"
         title="Verify your email"
         subtitle="Your account becomes active once the code is confirmed."
         footer={loginFooter}
-        compact
       >
         <OtpStep
           email={values.email.trim()}
@@ -194,7 +193,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
           onBack={() => setStep("form")}
           backLabel="Use a different email"
         />
-      </AuthShell>
+      </AuthFeatureCard>
     );
   }
 
@@ -210,9 +209,9 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
       footer={loginFooter}
       compact
     >
-      <form className="mt-3 flex flex-col gap-2" onSubmit={onSubmit} noValidate>
+      <form className="mt-4 flex flex-col gap-2.5" onSubmit={onSubmit} noValidate>
         {/* 1. First Name | Middle Name */}
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
           <FloatingLabelInput
             {...inputProps("firstName", "First name", { icon: "user", autoComplete: "given-name" })}
           />
@@ -240,7 +239,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             autoCapitalize: "none",
             spellCheck: false,
             maxLength: 20,
-            hint: "3–20 chars: letters, numbers, _ or .",
+            hint: "3-20 chars: letters, numbers, _ or .",
           })}
         />
 
@@ -255,11 +254,11 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             })}
           />
           {values.password && !errors.password ? (
-            <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+            <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
               {checks.map((check) => (
                 <li
                   key={check.label}
-                  className={`text-[11px] leading-3.5 ${check.met ? "text-accent" : "text-slate-400"}`}
+                  className={`text-xs leading-4 ${check.met ? "text-accent" : "text-slate-400"}`}
                 >
                   {check.met ? "✓" : "○"} {check.label}
                 </li>
@@ -281,7 +280,7 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
         <div>
           <label
             htmlFor="register-terms"
-            className="flex min-h-11 cursor-pointer items-start gap-2 text-[13px] leading-4 text-slate-600"
+            className="flex min-h-11 cursor-pointer items-start gap-2.5 text-sm leading-5 text-slate-600"
           >
             <input
               id="register-terms"
@@ -308,14 +307,14 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
             </span>
           </label>
           {termsError ? (
-            <p id="register-terms-error" className="mt-0.5 text-[11px] leading-[14px] text-rose-500" role="alert">
+            <p id="register-terms-error" className="mt-1 text-xs leading-4 text-rose-500" role="alert">
               {termsError}
             </p>
           ) : null}
         </div>
 
         {formError && (
-          <p className="text-[13px] leading-4 text-rose-500" role="alert">
+          <p className="text-sm leading-5 text-rose-500" role="alert">
             {formError}
           </p>
         )}
@@ -323,20 +322,13 @@ export default function RegisterScreen({ slideDir, onGoToLogin }) {
         <button
           type="submit"
           disabled={busy}
-          className="mt-0.5 flex h-11 w-full items-center justify-center rounded-[9px] bg-accent text-sm font-semibold text-navy shadow-[0_8px_20px_rgba(27,201,160,0.25)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
+          className="mt-1 flex h-12 w-full items-center justify-center rounded-[10px] bg-accent text-[15px] font-semibold text-navy shadow-[0_8px_20px_rgba(27,201,160,0.25)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
         >
           {busy ? "Sending code…" : "Create account"}
         </button>
       </form>
 
-      <TermsModal
-        open={termsOpen}
-        onClose={() => setTermsOpen(false)}
-        onAgree={() => {
-          setAgreed(true);
-          setTermsOpen(false);
-        }}
-      />
+      <TermsModal open={termsOpen} onClose={() => setTermsOpen(false)} />
     </AuthShell>
   );
 }

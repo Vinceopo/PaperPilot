@@ -111,7 +111,7 @@ export default function LoginScreen({
       title="Welcome back"
       subtitle="Sign in to continue reviewing manuscripts."
       footer={
-        <p className="mt-5 text-center text-sm leading-5 text-slate-500">
+        <p className="mt-6 text-center text-[15px] leading-6 text-slate-500">
           Don&apos;t have an account?{" "}
           <button
             type="button"
@@ -123,7 +123,7 @@ export default function LoginScreen({
         </p>
       }
     >
-      <form className="mt-5 flex flex-col gap-3.5" onSubmit={onSubmit} noValidate>
+      <form className="mt-6 flex flex-col gap-4" onSubmit={onSubmit} noValidate>
         <FloatingLabelInput
           id="login-identifier"
           label="Email or Username"
@@ -156,8 +156,8 @@ export default function LoginScreen({
           showPasswordToggle
         />
 
-        <div className="flex h-5 items-center justify-between">
-          <label className="flex cursor-pointer items-center gap-2 text-sm leading-5 text-slate-600">
+        <div className="flex min-h-6 items-center justify-between">
+          <label className="flex cursor-pointer items-center gap-2.5 text-[15px] leading-5 text-slate-600">
             <input
               type="checkbox"
               className="auth-check"
@@ -168,7 +168,7 @@ export default function LoginScreen({
           </label>
           <button
             type="button"
-            className="text-sm font-bold leading-5 text-accent hover:text-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-sm"
+            className="text-[15px] font-bold leading-5 text-accent hover:text-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-sm"
             onClick={() => onGoToForgotPassword(identifier.includes("@") ? identifier.trim() : "")}
           >
             Forgot password?
@@ -176,12 +176,12 @@ export default function LoginScreen({
         </div>
 
         {formError && (
-          <p className="text-sm leading-5 text-rose-500" role="alert">
+          <p className="text-[15px] leading-5 text-rose-500" role="alert">
             {formError}
           </p>
         )}
         {notice && !formError && (
-          <p className="text-sm leading-5 text-accent" role="status">
+          <p className="text-[15px] leading-5 text-accent" role="status">
             {notice}
           </p>
         )}
@@ -189,7 +189,7 @@ export default function LoginScreen({
         <button
           type="submit"
           disabled={busy}
-          className="mt-0.5 flex h-[52px] w-full items-center justify-center rounded-[10px] bg-accent text-sm font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
+          className="mt-1 flex h-14 w-full items-center justify-center rounded-[10px] bg-accent text-base font-semibold text-navy shadow-[0_10px_24px_rgba(27,201,160,0.28)] transition hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-60"
         >
           {busy ? "Please wait…" : "Sign in to PaperPilot"}
         </button>

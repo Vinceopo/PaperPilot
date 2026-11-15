@@ -267,6 +267,13 @@ export default function TraceDocumentViewer({
     sendingRef.current = false;
   }, [canRender, file?.uri, documentUrl, kind]);
 
+  // CDN script tags can hang without WebView onError — fail closed so parents unlock Upload.
+  useEffect(() => {
+    if (!canRender || ready || failed) return undefined;
+    const timer = setTimeout(() => setFailed(true), 12000);
+    return () => clearTimeout(timer);
+  }, [canRender, ready, failed, file?.uri, documentUrl, kind]);
+
   useEffect(() => {
     if (ready) onReadyRef.current?.();
   }, [ready]);

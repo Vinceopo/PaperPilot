@@ -1,5 +1,5 @@
 /**
- * Shared “Back to Dashboard” control — pill mint style used across cockpit screens.
+ * Shared “Back to Dashboard” control - pill mint style used across cockpit screens.
  * Includes consistent vertical padding so header/content layouts stay even.
  */
 export default function BackToDashboardButton({ onClick, className = "", label = "Back to Dashboard" }) {

@@ -1,6 +1,6 @@
 /**
  * Upload documents to Amazon S3 via an API-issued presigned PUT URL.
- * AWS credentials never leave the API — clients only receive a short-lived upload URL.
+ * AWS credentials never leave the API - clients only receive a short-lived upload URL.
  */
 
 import { formatFileSize } from "./formatFileSize.js";
@@ -61,7 +61,7 @@ export async function uploadToS3(file, options = {}) {
     throw new Error("Upload could not be prepared. Try again.");
   }
   // Presigned PUT URLs are not navigable. Never open upload_url in a tab/iframe
-  // or treat it as the document URL — that GETs a PUT signature and AWS returns
+  // or treat it as the document URL - that GETs a PUT signature and AWS returns
   // SignatureDoesNotMatch XML. Only public_url is safe for preview/download.
   if (/[?&]X-Amz-Signature=/i.test(publicUrl) || !/[?&]X-Amz-Signature=/i.test(uploadUrl)) {
     throw new Error("Upload could not be prepared. Try again.");

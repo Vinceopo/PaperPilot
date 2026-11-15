@@ -31,7 +31,7 @@ function rejectionMessage(rejection, tier, maxBytes) {
 }
 
 /**
- * manuscripts — shared library entries from My Manuscripts (same source of truth).
+ * manuscripts - shared library entries from My Manuscripts (same source of truth).
  */
 export default function ManuscriptPanel({
   mechanicsSelected = true,
@@ -138,6 +138,7 @@ export default function ManuscriptPanel({
       file,
       title: selected.title,
       manuscriptId: selected.id,
+      documentUrl: preview?.cloudinary_url || preview?.public_url || "",
     });
     setConfirmOpen(true);
   }
@@ -171,6 +172,7 @@ export default function ManuscriptPanel({
       file,
       title: resolvedTitle,
       manuscriptId: "",
+      documentUrl: preview?.cloudinary_url || preview?.public_url || "",
     });
     setConfirmOpen(true);
   }
@@ -265,21 +267,27 @@ export default function ManuscriptPanel({
 
   return (
     <section
-      className={`relative w-full rounded-xl border p-6 shadow-sm transition md:p-8 ${
+      className={`relative flex w-full flex-col rounded-xl border p-8 shadow-sm transition md:p-10 ${
+        showPreview
+          ? "h-[calc(100dvh-7.5rem)] min-h-0 overflow-hidden"
+          : "min-h-[calc(100dvh-7.5rem)]"
+      } ${
         mechanicsSelected
           ? "border-slate-200 bg-white"
           : "border-slate-200 bg-white opacity-50 grayscale"
       }`}
       aria-disabled={!mechanicsSelected}
     >
-      <ShowStepsRow step={2} onShowSteps={onShowSteps} />
-      <h2 className="mt-1 text-lg font-bold text-[#172033]">Upload Manuscript</h2>
-      <p className="mt-1 text-xs leading-relaxed text-slate-400">
+      <div className="shrink-0">
+        <ShowStepsRow step={2} onShowSteps={onShowSteps} />
+      </div>
+      <h2 className="mt-2 shrink-0 text-2xl font-bold text-[#172033]">Upload Manuscript</h2>
+      <p className="mt-2 max-w-3xl shrink-0 text-sm leading-relaxed text-slate-500">
         Upload the manuscript you want to check against the confirmed format guide.
       </p>
 
-      <form onSubmit={requestUpload} className="mt-5 space-y-3">
-        <div className="flex flex-col gap-4">
+      <form onSubmit={requestUpload} className="mt-5 flex min-h-0 flex-1 flex-col gap-3">
+        <div className={`flex min-h-0 flex-col gap-4 ${showPreview ? "flex-1" : ""}`}>
           <label
             ref={dropRef}
             tabIndex={-1}
@@ -287,7 +295,9 @@ export default function ManuscriptPanel({
             onDragOver={onDropZoneDragOver}
             onDragLeave={onDropZoneDragLeave}
             onDrop={onDropZoneDrop}
-            className={`relative flex min-h-44 flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 text-center transition outline-none ${
+            className={`relative flex shrink-0 flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 text-center transition outline-none ${
+              showPreview ? "min-h-[7.5rem] py-3" : "min-h-56"
+            } ${
               dropPulse
                 ? "border-rose-400 bg-rose-50 ring-2 ring-rose-300"
                 : dragOver && canPickFile
@@ -300,26 +310,32 @@ export default function ManuscriptPanel({
             }`}
           >
             <>
-              <span className="grid h-11 w-11 place-items-center rounded-full bg-[#dcf7f2] text-3xl font-light text-[#16bfa8]">
-                ↑
-              </span>
-              <p className="mt-3 text-sm font-bold text-slate-700">
+              {!showPreview && (
+                <span className="grid h-11 w-11 place-items-center rounded-full bg-[#dcf7f2] text-3xl font-light text-[#16bfa8]">
+                  ↑
+                </span>
+              )}
+              <p className={`text-sm font-bold text-slate-700 ${showPreview ? "" : "mt-3"}`}>
                 {dragOver && canPickFile
                   ? "Release to upload"
                   : file
                     ? file.name
                     : "Drop your manuscript here"}
               </p>
-              <p className="mt-1 text-[11px] text-slate-400">
+              <p className="mt-1.5 text-sm text-slate-500">
                 {file
                   ? previewPreparing
-                    ? `${formatFileSize(file.size)} · Preparing document preview on the right…`
+                    ? `${formatFileSize(file.size)} · Preparing document preview…`
                     : previewUploading
-                      ? `${formatFileSize(file.size)} · Uploading — see progress beside this panel`
-                      : `${formatFileSize(file.size)} · Preview appears beside this panel — confirm Upload when ready`
+                      ? `${formatFileSize(file.size)} · Uploading - see progress in the preview`
+                      : `${formatFileSize(file.size)} · Confirm Upload when ready`
                   : `Drag & drop or browse · PDF only · Max ${formatFileSize(maxBytes)}`}
               </p>
-              <span className="mt-3 rounded-full border border-[#16bfa8] bg-white px-5 py-1.5 text-[11px] font-semibold text-[#109b89]">
+              <span
+                className={`rounded-full border border-[#16bfa8] bg-white px-6 py-2 text-sm font-semibold text-[#109b89] ${
+                  showPreview ? "mt-2" : "mt-4"
+                }`}
+              >
                 Browse files
               </span>
             </>
@@ -337,8 +353,8 @@ export default function ManuscriptPanel({
           </label>
 
           {showPreview && (
-            <div className="relative flex min-h-44 flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
-              <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2.5">
+            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
+              <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   Manuscript preview
                 </p>
@@ -358,12 +374,8 @@ export default function ManuscriptPanel({
               </div>
 
               <div
-                className={`relative max-h-[min(36rem,72vh)] min-h-[22rem] flex-1 ${
-                  previewPreparing || previewUploading
-                    ? "overflow-hidden bg-[#e8ecf1]"
-                    : file?.name?.toLowerCase().endsWith(".pdf")
-                      ? "overflow-hidden bg-white"
-                      : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
+                className={`relative min-h-0 flex-1 bg-[#e8ecf1] p-3 ${
+                  previewPreparing || previewUploading ? "overflow-hidden" : "overflow-y-auto"
                 }`}
               >
                 {preview?.error ? (
@@ -374,26 +386,31 @@ export default function ManuscriptPanel({
                   <div
                     className={
                       previewPreparing || previewUploading
-                        ? "pointer-events-none h-full overflow-hidden"
+                        ? "pointer-events-none overflow-hidden"
                         : undefined
                     }
                     aria-hidden={previewPreparing || previewUploading || undefined}
                   >
+                    {/* Same paged PDF/DOCX display as Issue Tracing — document only, no highlights/XAI. */}
                     <DocumentPagePreview
                       file={file}
                       preview={preview}
+                      documentUrl={preview?.cloudinary_url || preview?.public_url || ""}
+                      documentName={file?.name || preview?.filename || ""}
                       emptyLabel="No manuscript preview available yet."
+                      paged
+                      pageCountHint={preview?.page_count || 0}
                     />
                   </div>
                 )}
 
                 {(previewPreparing || previewUploading) && (
                   <div
-                    className="absolute inset-0 z-20 flex touch-none flex-col items-center justify-center gap-3 overflow-hidden overscroll-none bg-[#e8ecf1]/88 backdrop-blur-[2px]"
+                    className="absolute inset-0 z-20 flex touch-none flex-col items-center justify-center gap-3 overflow-hidden overscroll-none bg-[#e8ecf1]/88 px-3 backdrop-blur-[2px]"
                     role="status"
                     aria-live="polite"
                   >
-                    <DocumentLoader className="h-28 w-28" />
+                    <DocumentLoader className="h-24 w-24" />
                     <p className="text-sm font-bold text-slate-800">
                       {previewUploading ? "Uploading manuscript…" : "Opening manuscript preview…"}
                     </p>
@@ -405,12 +422,12 @@ export default function ManuscriptPanel({
                   </div>
                 )}
               </div>
-              <p className="border-t border-slate-200/80 bg-[#f3f5f7] px-4 py-2 text-[10px] text-slate-400">
+              <p className="shrink-0 border-t border-slate-200/80 bg-[#f3f5f7] px-4 py-1.5 text-[10px] text-slate-400">
                 {previewUploading
-                  ? "Uploading in progress — stay on this page until it completes."
+                  ? "Uploading in progress - stay on this page until it completes."
                   : previewPreparing
                     ? "Preparing live preview of your academic document…"
-                    : "Live preview of your uploaded manuscript — scroll to see pages below."}
+                    : "Live preview — scroll inside to read pages."}
               </p>
             </div>
           )}
@@ -427,12 +444,12 @@ export default function ManuscriptPanel({
           onCancel={() => setError("")}
         />
         {success && !error && (
-          <p className="text-xs font-semibold text-emerald-600" role="status">
+          <p className="shrink-0 text-xs font-semibold text-emerald-600" role="status">
             {success}
           </p>
         )}
 
-        <div className="flex gap-3">
+        <div className="flex shrink-0 gap-3">
           <button
             type="button"
             onClick={() => {
@@ -440,14 +457,14 @@ export default function ManuscriptPanel({
               else onCancel?.();
             }}
             disabled={previewUploading}
-            className="rounded-lg border border-slate-200 bg-white px-7 py-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg border border-slate-200 bg-white px-7 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={!mechanicsSelected || !file || panelBusy}
-            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-2.5 text-xs font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#16bfa8] py-3 text-sm font-bold text-white transition hover:bg-[#12ae99] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {previewUploading ? (
               <>

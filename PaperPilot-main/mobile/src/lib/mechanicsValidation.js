@@ -5,7 +5,7 @@
  * IGNORE is omitted from saved rules and listed in ignored_fields so scans skip it.
  */
 
-import { formToRules } from "./formatMechanicsForm.js";
+import { formToRules, invalidAlignmentPageOverrideLines } from "./formatMechanicsForm.js";
 import { headingHasNoRules } from "./mechanicsOptions.js";
 
 export function isIgnoreFormValue(value) {
@@ -236,12 +236,37 @@ function incompleteHeadingStyleIssues(form) {
   return out;
 }
 
+function alignmentPageOverrideIssues(form) {
+  const bad = invalidAlignmentPageOverrideLines(form?.alignmentPageOverrides);
+  if (!bad.length) return [];
+  return [
+    {
+      id: "paper:alignment_page_overrides_invalid",
+      category: "paper",
+      field: "alignment",
+      code: "invalid_value",
+      message: `Alignment page overrides: each row needs a page number and alignment (got: ${bad[0]}).`,
+      severity: "critical",
+      location: {
+        page: 1,
+        line: 1,
+        excerpt: bad[0],
+        severity: "critical",
+        section: "Mechanics",
+      },
+    },
+  ];
+}
+
 /** Drop document issues already resolved by Format Fields values or IGNORE. */
 export function filterValidationForForm(validation, form) {
   const issues = Array.isArray(validation?.issues) ? validation.issues : [];
   const rules = formToRules(form || {});
   const remaining = issues.filter((issue) => !issueCovered(issue, form || {}, rules));
-  const incomplete = incompleteHeadingStyleIssues(form || {});
+  const incomplete = [
+    ...incompleteHeadingStyleIssues(form || {}),
+    ...alignmentPageOverrideIssues(form || {}),
+  ];
   const merged = [...remaining, ...incomplete];
   return { ok: merged.length === 0, issues: merged };
 }

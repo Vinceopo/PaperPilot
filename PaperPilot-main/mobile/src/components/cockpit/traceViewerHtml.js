@@ -736,9 +736,19 @@ export const TRACE_VIEWER_HTML = `<!DOCTYPE html>
   /* Status is toggled from JS; RN shows DocumentLoader — no circle spinner here. */
   #status { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: none; }
 </style>
-<script src="${JSZIP}"></script>
-<script src="${DOCX_PREVIEW}"></script>
-<script src="${PDFJS}/pdf.min.js"></script>
+<script>
+  // Surface CDN load failures to RN (blocking script tags never fire WebView onError alone).
+  window.__ppCdnFail = function (name) {
+    try {
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: "error", reason: name || "cdn" }));
+      }
+    } catch (e) {}
+  };
+</script>
+<script src="${JSZIP}" onerror="window.__ppCdnFail && window.__ppCdnFail('jszip')"></script>
+<script src="${DOCX_PREVIEW}" onerror="window.__ppCdnFail && window.__ppCdnFail('docx')"></script>
+<script src="${PDFJS}/pdf.min.js" onerror="window.__ppCdnFail && window.__ppCdnFail('pdfjs')"></script>
 </head>
 <body>
   <div id="scroller">

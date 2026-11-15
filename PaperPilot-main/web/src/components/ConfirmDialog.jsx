@@ -20,8 +20,11 @@ export default function ConfirmDialog({
 
   const confirmClass =
     tone === "danger"
-      ? "bg-rose-600 hover:bg-rose-700 disabled:bg-rose-300"
-      : "bg-[#16bfa8] hover:bg-[#12ae99] disabled:bg-slate-200 disabled:text-slate-400";
+      ? "bg-rose-600 text-white shadow-[0_6px_16px_rgba(225,29,72,0.28)] hover:bg-rose-700 disabled:bg-rose-300 disabled:shadow-none"
+      : "bg-[#16bfa8] text-white shadow-[0_6px_16px_rgba(22,191,168,0.28)] hover:bg-[#12ae99] disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none";
+
+  const btnBase =
+    "inline-flex h-11 min-w-[7.5rem] items-center justify-center rounded-lg px-6 text-sm font-bold transition disabled:opacity-40";
 
   return (
     <div
@@ -43,20 +46,20 @@ export default function ConfirmDialog({
         ) : null}
         <div className="mt-6 flex flex-wrap justify-end gap-3">
           {cancelLabel ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onCancel}
-            className="rounded-lg border border-slate-200 bg-white px-5 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
-          >
-            {cancelLabel}
-          </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onCancel}
+              className={`${btnBase} border border-slate-200 bg-white text-slate-600 shadow-[0_4px_12px_rgba(15,23,41,0.08)] hover:bg-slate-50`}
+            >
+              {cancelLabel}
+            </button>
           ) : null}
           <button
             type="button"
             disabled={busy}
             onClick={onConfirm}
-            className={`inline-flex min-w-28 items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-xs font-bold text-white ${confirmClass}`}
+            className={`${btnBase} gap-2 ${confirmClass}`}
           >
             {busy ? (
               <>

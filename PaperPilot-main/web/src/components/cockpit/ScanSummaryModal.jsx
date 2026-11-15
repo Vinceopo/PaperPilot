@@ -1,5 +1,5 @@
 /**
- * Post-scan compact summary — right/wrong %, category wrong slices, severity chips.
+ * Post-scan compact summary - right/wrong %, category wrong slices, severity chips.
  * Routes to full ScanResultsScreen (issue tracing & XAI live there).
  */
 
@@ -77,7 +77,7 @@ export default function ScanSummaryModal({
           {result.documentTitle || "Your manuscript"}
         </h2>
         <p className="mt-1 text-xs text-slate-500">
-          Formatting compliance summary — not grammar or content.
+          Formatting compliance summary - not grammar or content.
           {issueCount > 0 ? ` ${issueCount} issue type${issueCount === 1 ? "" : "s"} flagged.` : " No format issues flagged."}
         </p>
 
@@ -85,7 +85,7 @@ export default function ScanSummaryModal({
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-center">
             <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Overall</p>
             <p className="mt-1 text-2xl font-extrabold text-[#172033]">
-              {hasValue(overall) ? `${formatScore(overall, 0)}%` : "—"}
+              {hasValue(overall) ? `${formatScore(overall, 0)}%` : "-"}
             </p>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-3 py-3 text-center">
