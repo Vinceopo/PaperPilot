@@ -960,9 +960,57 @@ CHAPTER_RE = re.compile(r"^(?:chapter|ch\.?)\s+(?:\d+|[ivxlcdm]+)\b", re.I)
 TABLE_CAPTION_RE = re.compile(r"^\s*table\s+\d+\b", re.I)
 FIGURE_CAPTION_RE = re.compile(r"^\s*figure\s+\d+\b", re.I)
 # "Figure 1 illustrates ..." / "Table 18 presents ..." is prose, not a caption label.
+# Lowercase continuation after the number (legacy signal).
 PROSE_REFERENCE_RE = re.compile(
     r"^\s*(?:[Tt]able|[Ff]igure|TABLE|FIGURE)\s+\d+(?:\.\d+)*\s*(?:[:.\-\u2013]\s*)?(?=[a-z])"
 )
+# Narrative verbs after Table/Figure N (any casing) → body reference, not a caption.
+_CAPTION_NARRATIVE_VERB_RE = re.compile(
+    r"(?i)^\s*(?:table|figure|fig\.?)\s+\d+(?:\.\d+)*\s*[:.\-\u2013]?\s*"
+    r"(?:"
+    r"presents?|shows?|illustrates?|depicts?|displays?|contains?|lists?|"
+    r"summarizes?|provides?|describes?|indicates?|demonstrates?|reveals?|"
+    r"highlights?|outlines?|compares?|reports?|includes?|gives?|explains?|"
+    r"discusses?|examines?|introduces?|represents?|defines?|details?|"
+    r"covers?|follows?|appears?|refers?|corresponds?|depicts?"
+    r")\b"
+)
+_CAPTION_LABEL_HEAD_RE = re.compile(
+    r"(?i)^\s*(?:table|figure|fig\.?)\s+(\d+(?:\.\d+)*)\b\s*[:.\-\u2013]?\s*(.*)$"
+)
+
+
+def _is_caption_prose_reference(text: str) -> bool:
+    """True when a Table/Figure line is body narrative, not a caption label.
+
+    Rule #1: parameterized for any manuscript — no document-specific titles,
+    page numbers, or fixed wording beyond generic narrative patterns.
+
+    Short lowercase titles (e.g. wrong-case captions) still count as caption
+    candidates so case/style rules can flag them; only narrative sentences skip.
+    """
+    raw = " ".join(str(text or "").split()).strip()
+    if not raw:
+        return False
+    if _CAPTION_NARRATIVE_VERB_RE.match(raw):
+        return True
+    match = _CAPTION_LABEL_HEAD_RE.match(raw)
+    if not match:
+        return False
+    remainder = (match.group(2) or "").strip()
+    if not remainder:
+        return False
+    words = remainder.split()
+    # Caption titles stay short labels; narrative continues as a full sentence.
+    if len(words) >= 12:
+        return True
+    if len(remainder) >= 80 and ("," in remainder or "." in remainder[8:]):
+        return True
+    # Legacy lowercase-continuation signal, but only for sentence-length remainders
+    # so short titles like "Table 3. sensor readings" remain caption candidates.
+    if PROSE_REFERENCE_RE.match(raw) and len(words) >= 6:
+        return True
+    return False
 IN_TEXT_NUMERIC_RE = re.compile(r"\[(?:\d+)(?:\s*[-,]\s*\d+)*\]")
 IN_TEXT_APA_RE = re.compile(
     r"\([A-Z][A-Za-z'’-]+(?:\s+(?:et al\.|&\s+[A-Z][A-Za-z'’-]+))?,?\s+\d{4}[a-z]?(?:,\s*p+\.\s*\d+)?\)"
@@ -1344,7 +1392,7 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             unit["source"] = "table"
             unit["table_row"] = True
             continue
-        if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not PROSE_REFERENCE_RE.match(
+        if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not _is_caption_prose_reference(
             text
         ):
             unit["role"] = "caption"
@@ -3095,8 +3143,16 @@ def _flag_caption(collector: IssueCollector, issue_type: str, unit: dict, title:
     )
 
 
-def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, collector: IssueCollector) -> None:
+def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, collector: IssueCollector) -> bool:
+    """Check one caption line. Returns True when the caption unit passed."""
     text = (unit.get("text") or "").strip()
+    failed = False
+
+    def flag(issue_type: str, title: str, detail: str, fix: str) -> None:
+        nonlocal failed
+        failed = True
+        _flag_caption(collector, issue_type, unit, title, detail, fix)
+
     if kind == "table":
         title = (match.group(2) or "").strip()
         label = "Table"
@@ -3105,19 +3161,15 @@ def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, col
         title = (match.group(3) or "").strip()
         label = "Figure"
         if prefix.lower().startswith("fig") and not prefix.lower().startswith("figure"):
-            _flag_caption(
-                collector,
+            flag(
                 "figure_caption",
-                unit,
                 "Figure caption prefix differs",
                 f"Found “{text}”; the format expects the caption to start with Figure and a number.",
                 "Rewrite the caption so it starts with Figure and the figure number.",
             )
     if expect["wants_title"] and not title:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption",
-            unit,
             f"{label} caption is missing its title",
             f"Found “{text}”; the format expects a {label.lower()} number and a title.",
             f"Add the {label.lower()} title on the caption line required by the format.",
@@ -3125,51 +3177,42 @@ def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, col
     if title and expect["upper"]:
         letters = [ch for ch in title if ch.isalpha()]
         if letters and not all(ch.isupper() for ch in letters):
-            _flag_caption(
-                collector,
+            flag(
                 f"{kind}_caption",
-                unit,
                 f"{label} title is not in the required caption form",
                 f"Found “{text}”; the format expects the {label.lower()} title in capital letters.",
                 f"Retype the {label.lower()} title in capital letters.",
             )
     elif title and expect["title_case"] and not _is_title_case(title):
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption",
-            unit,
             f"{label} title is not in the required caption form",
             f"Found “{text}”; the format expects the {label.lower()} title in Title Case.",
             f"Retype the {label.lower()} title in Title Case.",
         )
     pieces = _caption_pieces(unit)
     if pieces and expect["bold"] and _share(pieces, "bold") < 0.6:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} caption is not bold",
             f"Found “{text}”; the format expects this {label.lower()} caption in bold.",
             f"Select the {label.lower()} caption and turn on bold.",
         )
     if pieces and (expect["italic"] or expect["title_italic"]) and _share(pieces, "italic") < 0.4:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} caption is not italic",
             f"Found “{text}”; the format expects italic text in this {label.lower()} caption.",
             f"Select the {label.lower()} title and turn on italic.",
         )
     if pieces and expect["number_bold"] and _share(pieces, "bold") < 0.2:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} number is not bold",
             f"Found “{text}”; the format expects the {label.lower()} number in bold.",
             f"Select the {label.lower()} number and turn on bold.",
         )
+    return not failed
 
 
 def _is_table_unit(unit: dict) -> bool:
@@ -3233,7 +3276,7 @@ def _nearest_caption(units: list[dict], cluster: list[int], pattern: re.Pattern,
         text = (unit.get("text") or "").strip()
         if text and not _is_table_unit(unit):
             seen += 1
-            if pattern.match(text) and not PROSE_REFERENCE_RE.match(text):
+            if pattern.match(text) and not _is_caption_prose_reference(text):
                 return index
             if seen >= 4 and len(text) > 80:
                 break
@@ -3250,7 +3293,13 @@ def _is_title_or_cover_page(units: list[dict], page: int | None) -> bool:
     return False
 
 
-def _check_object_placement(units: list[dict], kind: str, expect: dict, collector: IssueCollector) -> None:
+def _check_object_placement(
+    units: list[dict],
+    kind: str,
+    expect: dict,
+    collector: IssueCollector,
+    stats: CategoryStats | None = None,
+) -> None:
     if not expect["above"] and not expect["below"]:
         return
     pattern = TABLE_LABEL_RE if kind == "table" else FIGURE_LABEL_RE
@@ -3272,6 +3321,8 @@ def _check_object_placement(units: list[dict], kind: str, expect: dict, collecto
                 f"This {label.lower()} has no “{label} n” caption; the format requires one {wanted} it.",
                 f"Add a {label} number and title {wanted} this {label.lower()}.",
             )
+            if stats is not None:
+                stats.observe(False)
             continue
         present = before if wanted == "above" else after
         other = after if wanted == "above" else before
@@ -3285,17 +3336,26 @@ def _check_object_placement(units: list[dict], kind: str, expect: dict, collecto
                 f"the format requires it {wanted}.",
                 f"Move the {label.lower()} caption so it sits {wanted} the {label.lower()}.",
             )
+            if stats is not None:
+                stats.observe(False)
+        elif present is not None and stats is not None:
+            stats.observe(True)
 
 
-def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -> None:
-    table_rules = _layout_rule_text(
-        rules.get("table_layout_requirements") or rules.get("table_layout")
-    )
-    figure_rules = _layout_rule_text(
-        rules.get("figure_layout_requirements") or rules.get("figure_layout")
-    )
+def _check_captions(
+    units: list[dict],
+    rules: dict,
+    collector: IssueCollector,
+    stats: CategoryStats | None = None,
+) -> None:
+    table_raw = rules.get("table_layout_requirements") or rules.get("table_layout")
+    figure_raw = rules.get("figure_layout_requirements") or rules.get("figure_layout")
+    table_rules = "" if rule_unset(table_raw) else _layout_rule_text(table_raw)
+    figure_rules = "" if rule_unset(figure_raw) else _layout_rule_text(figure_raw)
     if not table_rules and not figure_rules:
         return
+    if stats is not None:
+        stats.applicable = True
     kinds = []
     if table_rules:
         kinds.append(("table", TABLE_LABEL_RE, _layout_expectations(table_rules)))
@@ -3306,15 +3366,18 @@ def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -
             if (unit.get("source") or "body") in CHROME_SOURCES:
                 continue
             text = (unit.get("text") or "").strip()
-            if not text or PROSE_REFERENCE_RE.match(text):
+            if not text or _is_caption_prose_reference(text):
                 continue
-            # Captions live outside the grid; skip cell text that merely mentions tables.
-            if kind == "table" and _is_table_unit(unit) and not pattern.match(text):
+            # Caption labels sit outside the grid — never score table-cell text as captions.
+            # (In-cell "Table N …" is body/grid content, not a caption line.)
+            if _is_table_unit(unit):
                 continue
             match = pattern.match(text)
             if match:
-                _check_one_caption(unit, kind, match, expect, collector)
-        _check_object_placement(units, kind, expect, collector)
+                ok = _check_one_caption(unit, kind, match, expect, collector)
+                if stats is not None:
+                    stats.observe(ok)
+        _check_object_placement(units, kind, expect, collector, stats)
 
 
 def _expected_citation_families(style: str) -> set[str]:
@@ -3808,7 +3871,7 @@ def run_compliance_scan(
         ("Checking word spacing", lambda: _check_word_spacing(units, parsed, mechanics_rules, stats["Spacing"], collector)),
         ("Checking alignment", lambda: _check_alignment(units, mechanics_rules, stats["Alignment"], collector)),
         ("Checking page numbers", lambda: _check_pagination(units, mechanics_rules, stats["Pagination"], collector, parsed)),
-        ("Checking captions", lambda: _check_captions(units, mechanics_rules, collector)),
+        ("Checking captions", lambda: _check_captions(units, mechanics_rules, collector, stats["Captions"])),
         ("Checking citations", lambda: _check_citations(units, parsed.get("text", ""), mechanics_rules, collector, stats["Citations"])),
     )
     total_checks = len(checks)

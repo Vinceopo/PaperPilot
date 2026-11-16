@@ -91,6 +91,94 @@ def parse_document(data: bytes, file_type: str, on_progress=None) -> dict:
         raise DocumentError("The document could not be parsed.") from exc
 
 
+def is_deferred_parse(parsed: dict | None) -> bool:
+    """True when create stored a probe stub instead of a full layout tree."""
+    if not isinstance(parsed, dict):
+        return True
+    meta = parsed.get("metadata") if isinstance(parsed.get("metadata"), dict) else {}
+    if str(meta.get("parse_status") or "").strip().lower() == "deferred":
+        return True
+    # Full PDF / DOCX parses always carry pages or paragraphs.
+    return not (parsed.get("pages") or parsed.get("paragraphs"))
+
+
+def probe_document(data: bytes, file_type: str, *, max_probe_pages: int = 2) -> dict:
+    """Fast create-time check: password, page count, extractable text sample.
+
+    Does **not** build the compliance layout tree. Analyse / ML still run
+    ``parse_document`` when scoring.
+    """
+    try:
+        if file_type == "pdf":
+            return _probe_pdf(data, max_probe_pages=max_probe_pages)
+        return _probe_docx(data)
+    except DocumentError:
+        raise
+    except Exception as exc:
+        raise DocumentError("The document could not be read.") from exc
+
+
+def _probe_pdf(data: bytes, max_probe_pages: int = 2) -> dict:
+    with fitz.open(stream=data, filetype="pdf") as document:
+        if document.needs_pass:
+            raise DocumentError("Password-protected PDFs are not supported.")
+        page_count = int(document.page_count or 0)
+        sample_parts: list[str] = []
+        limit = min(page_count, max(1, int(max_probe_pages or 2)))
+        for page_index in range(limit):
+            text = (document.load_page(page_index).get_text("text") or "").strip()
+            if text:
+                sample_parts.append(text)
+            # Enough evidence the PDF has extractable text.
+            if sum(len(part) for part in sample_parts) >= 400:
+                break
+        sample = "\n\n".join(sample_parts).strip()
+    return {
+        "text": sample,
+        "metadata": {
+            "format": "pdf",
+            "page_count": page_count,
+            "parse_status": "deferred",
+        },
+        "pages": [],
+    }
+
+
+def _probe_docx(data: bytes) -> dict:
+    document = Document(io.BytesIO(data))
+    parts: list[str] = []
+    for paragraph in document.paragraphs[:50]:
+        text = (paragraph.text or "").strip()
+        if text:
+            parts.append(text)
+        if sum(len(part) for part in parts) >= 2000:
+            break
+    if sum(len(part) for part in parts) < 200:
+        for table in document.tables[:5]:
+            for row in table.rows[:10]:
+                for cell in row.cells:
+                    text = (cell.text or "").strip()
+                    if text:
+                        parts.append(text)
+                    if sum(len(part) for part in parts) >= 2000:
+                        break
+                if sum(len(part) for part in parts) >= 2000:
+                    break
+            if sum(len(part) for part in parts) >= 2000:
+                break
+    sample = "\n".join(parts).strip()
+    return {
+        "text": sample,
+        "metadata": {
+            "format": "docx",
+            "page_count": 0,
+            "parse_status": "deferred",
+        },
+        "paragraphs": [],
+        "pages": [],
+    }
+
+
 def _pdf_vector_drawing_bboxes(page) -> list[dict]:
     """Collect vector cell/frame rects from PDF drawings (table borders, boxes).
 

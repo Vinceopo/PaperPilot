@@ -116,7 +116,7 @@ export default function IssueTracingSection({
       category: entry.category || categoryForIssue(entry),
     }));
     // Match live web: hide findings for categories with no active Format Mechanics rule
-    // (Captions are not a scored category, so they drop out here).
+    // Captions stay when table/figure layout rules are active.
     return filterIssuesByActiveRules(mapped, result?.mechanicsRules);
   }, [entries, result?.mechanicsRules]);
 

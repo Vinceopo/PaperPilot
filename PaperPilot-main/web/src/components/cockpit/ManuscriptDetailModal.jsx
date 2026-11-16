@@ -270,13 +270,9 @@ export default function ManuscriptDetailModal({
     ...row,
     section: row.section || row.metric,
   }));
-  const formatLabel =
-    String(
-      selected?.scanResult?.formatMechanicsName ||
-        manuscript.formatMechanicsName ||
-        manuscript.citationStyle ||
-        "",
-    ).trim() || "";
+  const formatLabel = String(
+    selected?.scanResult?.formatMechanicsName || manuscript.formatMechanicsName || "",
+  ).trim();
 
   return (
     <div className="flex h-[calc(100dvh-7.5rem)] max-h-[calc(100dvh-7.5rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,41,0.05)]">

@@ -110,7 +110,6 @@ export async function downloadReport(result, opts = {}) {
     college,
     scannedAt,
     formatMechanicsName = "",
-    citationStyle = "",
     overallScore = null,
     rightPct,
     wrongPct,
@@ -124,10 +123,8 @@ export async function downloadReport(result, opts = {}) {
 
   const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
   const versionLabel = `v${versionNumber}.0`;
-  const formatLabel =
-    String(formatMechanicsName || "").trim() ||
-    String(citationStyle || "").trim() ||
-    "Format mechanics";
+  // Same Document Details source as ScanResultsScreen — profile name, not citation style.
+  const formatLabel = String(formatMechanicsName || "").trim() || "Format mechanics";
   const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
   const categoryCards = resolveCategoryUnitDisplays(activeBreakdown).map((row) => ({
     ...row,

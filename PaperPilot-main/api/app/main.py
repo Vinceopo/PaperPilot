@@ -79,8 +79,10 @@ from app.documents import (
     assert_mechanics_guide,
     build_sample_mechanics_docx,
     derive_mechanics_rules,
+    is_deferred_parse,
     normalize_mechanics_rules,
     parse_document,
+    probe_document,
     validate_document,
 )
 from app.mechanics_validate import (
@@ -306,6 +308,16 @@ def _read_document_bytes(
     return filename, file_type, parsed
 
 
+def _probe_document_bytes(
+    filename: str, data: bytes, max_bytes: int | None = None
+) -> tuple[str, str, dict]:
+    """Validate + light text probe for fast manuscript create (no full layout parse)."""
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
+    file_type = validate_document(filename, data, limit)
+    probed = probe_document(data, file_type)
+    return filename, file_type, probed
+
+
 def _read_uploaded_document(
     url: str,
     filename_hint: str | None = None,
@@ -317,6 +329,49 @@ def _read_uploaded_document(
     if not Path(filename).suffix and hint and Path(hint).suffix:
         filename = Path(hint).name
     return _read_document_bytes(filename, data, limit)
+
+
+def _probe_uploaded_document(
+    url: str,
+    filename_hint: str | None = None,
+    max_bytes: int | None = None,
+) -> tuple[str, str, dict]:
+    """Download + validate + text probe for version create (defers full parse to Analyse)."""
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
+    data, hint = fetch_s3_bytes(url, max_bytes=limit)
+    filename = Path((filename_hint or hint or "document").strip()).name
+    if not Path(filename).suffix and hint and Path(hint).suffix:
+        filename = Path(hint).name
+    return _probe_document_bytes(filename, data, limit)
+
+
+def _ensure_version_parsed_for_scan(version: dict, max_bytes: int | None = None) -> dict:
+    """Return a full parse tree for in-process scan; re-parse when create deferred it."""
+    parsed = version.get("parsed_data") if isinstance(version.get("parsed_data"), dict) else {}
+    if not is_deferred_parse(parsed):
+        return parsed
+    document_url = (version.get("cloudinary_url") or "").strip()
+    if not document_url:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This manuscript version has no stored document URL. "
+                "Upload the document again, then run the scan."
+            ),
+        )
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
+    try:
+        data, hint = fetch_s3_bytes(document_url, max_bytes=limit)
+    except S3StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    filename = Path((version.get("source_filename") or hint or "document").strip()).name
+    file_type = (version.get("file_type") or "").strip().lower()
+    if file_type not in {"pdf", "docx"}:
+        file_type = validate_document(filename, data, limit)
+    try:
+        return parse_document(data, file_type)
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 def _document_preview_pages(parsed: dict, text: str, limit: int = 500) -> list[dict]:
@@ -626,10 +681,11 @@ async def manuscript_version_create(
             detail="Format mechanics not found. Select a saved format profile, then upload again.",
         )
     try:
-        filename, file_type, parsed = _read_uploaded_document(
+        # Probe only at create — full layout parse runs on Analyse (ML or in-process).
+        filename, file_type, parsed = _probe_uploaded_document(
             body.cloudinary_url, body.filename, max_bytes=_user_upload_byte_limit(uid)
         )
-        if not parsed["text"]:
+        if not (parsed.get("text") or "").strip():
             raise DocumentError("No extractable text was found in the document.")
         version, created_parent = create_version(
             uid,
@@ -816,8 +872,11 @@ def compliance_scan_create(
             except LookupError:
                 raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
 
+    parsed_for_scan = _ensure_version_parsed_for_scan(
+        version, max_bytes=_user_upload_byte_limit(uid)
+    )
     result = run_compliance_scan(
-        version["parsed_data"],
+        parsed_for_scan,
         _scan_rules(mechanics["rules"], mechanics.get("ignored_fields")),
         _feature_tier(subscription["tier"]),
     )

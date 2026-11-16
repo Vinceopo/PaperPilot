@@ -259,7 +259,7 @@ export async function downloadReport(result, opts = {}) {
   doc.roundedRect(ML, Y, CW, 22, 2, 2, "FD");
   const metaCols = [
     ["DOCUMENT", `${documentTitle} · ${versionLabel}`],
-    ["FORMAT MECHANICS", mechanicsName || citationStyle || "—"],
+    ["FORMAT MECHANICS", mechanicsName || "Format mechanics"],
     ["SCANNED", scannedDate],
     ["GENERATED", generatedDate],
   ];

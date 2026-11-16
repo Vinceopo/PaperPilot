@@ -211,7 +211,7 @@ export default function UploadScreen({ navigation }) {
   const [preview, setPreview] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [viewerReady, setViewerReady] = useState(false);
-  // Upload must not wait forever on WebView/CDN paint — unlock after ready or a short timeout.
+  // Upload unlocks as soon as a valid file is picked; WebView preview paints in the background.
   const [previewUnlock, setPreviewUnlock] = useState(false);
   const [titleOpen, setTitleOpen] = useState(false);
   const [titleMode, setTitleMode] = useState("new");
@@ -266,19 +266,9 @@ export default function UploadScreen({ navigation }) {
 
   useEffect(() => {
     setViewerReady(false);
-    setPreviewUnlock(false);
+    // Unlock Upload as soon as a file is present; WebView paint stays non-blocking.
+    setPreviewUnlock(Boolean(msFile?.uri));
   }, [msFile?.uri]);
-
-  // Keep the "Opening manuscript preview…" overlay, but never soft-lock Upload if CDN/WebView hangs.
-  useEffect(() => {
-    if (!msFile?.uri) return undefined;
-    if (viewerReady) {
-      setPreviewUnlock(true);
-      return undefined;
-    }
-    const timer = setTimeout(() => setPreviewUnlock(true), 5000);
-    return () => clearTimeout(timer);
-  }, [msFile?.uri, viewerReady]);
 
   // Keep Format Fields in sync with the selected saved mechanics.
   useEffect(() => {
@@ -689,8 +679,8 @@ export default function UploadScreen({ navigation }) {
         return;
       }
       setViewerReady(false);
-      setPreviewUnlock(false);
       setMsFile(file);
+      setPreviewUnlock(true);
       setMsError("");
       setMsSuccess("");
       void loadPreview(file);

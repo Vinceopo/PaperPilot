@@ -237,8 +237,9 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
         self.assertEqual(result["wrong_pct"], 0.0)
         self.assertEqual(result["overall_score"], 100.0)
         statuses = {c["category"]: c["status"] for c in result["scoring"]["categories"]}
-        # RULES has no pagination / citation_style, so those categories stay not applicable.
+        # RULES has no pagination / caption layout / citation_style, so those stay not applicable.
         self.assertEqual(statuses.pop("Pagination"), "not_applicable")
+        self.assertEqual(statuses.pop("Captions"), "not_applicable")
         self.assertEqual(statuses.pop("Citations"), "not_applicable")
         self.assertTrue(all(status == "pass" for status in statuses.values()))
         self.assertTrue(all(row["wrong_pct"] is None for row in result["category_wrong_pct"]))
