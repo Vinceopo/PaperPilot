@@ -235,10 +235,9 @@ export default function UploadScreen({ navigation }) {
   const msUploading = Boolean(manuscriptBusy || (confirmBusy && uploadWizardStep === 2));
   const showMsPreview = Boolean(msFile) && !validateManuscriptFile(msFile, maxBytes);
   // Keep "Opening manuscript preview…" until the WebView paints or the unlock timeout fires.
-  // Do not also wait on the background preview API (previewBusy).
+  // Preview is device-local (no upload/API parse); only the WebView needs time to open the file.
   const msOpeningPreview = Boolean(showMsPreview && !msUploading && !previewUnlock);
   const msPanelBusy = manuscriptBusy || confirmBusy || msOpeningPreview;
-  // Do not gate browsing on previewBusy — a hung preview API must not block picking.
   const canPickManuscript = mechanicsSelected && !manuscriptBusy && !confirmBusy;
   const mechanicsOptions = mechanics.map((item) => ({
     value: item.id,
@@ -630,17 +629,35 @@ export default function UploadScreen({ navigation }) {
 
   async function loadPreview(file) {
     const requestId = ++previewRequest.current;
-    setPreview(null);
-    setPreviewBusy(true);
+    if (!file) {
+      setPreview(null);
+      setPreviewBusy(false);
+      return;
+    }
+    // Local stub so TraceDocumentViewer can open the file URI immediately.
+    // No S3 upload / server parse during preview.
+    setPreview({
+      filename: file.name,
+      text_preview: "",
+      page_count: 0,
+      cloudinary_url: "",
+    });
+    setPreviewBusy(false);
+    if (!onPreviewManuscript) return;
     try {
       const data = await onPreviewManuscript(file);
       if (previewRequest.current !== requestId) return;
-      setPreview(data);
+      setPreview({
+        filename: data?.filename || file.name,
+        file_type: data?.file_type,
+        text_preview: data?.text_preview || "",
+        char_count: data?.char_count || 0,
+        page_count: data?.page_count || 0,
+        pages: data?.pages || [],
+        cloudinary_url: "",
+      });
     } catch {
-      if (previewRequest.current !== requestId) return;
-      setPreview({ filename: file.name, text_preview: "", page_count: 0 });
-    } finally {
-      if (previewRequest.current === requestId) setPreviewBusy(false);
+      // Keep the local stub; the WebView still uses the picked file.
     }
   }
 
@@ -709,7 +726,8 @@ export default function UploadScreen({ navigation }) {
   }
 
   function queueUpload(pending) {
-    const reuseUrl = String(pending.cloudinaryUrl || preview?.cloudinary_url || "").trim();
+    // Preview is local-only; upload once on confirm. Still honor an explicit reuse URL if present.
+    const reuseUrl = String(pending.cloudinaryUrl || "").trim();
     setConfirm({
       title: pending.manuscriptId ? "Upload new version?" : "Upload manuscript?",
       message: `Save “${pending.file?.name}” as “${pending.title}” on the server? File Details opens only after the upload finishes.`,
@@ -719,7 +737,6 @@ export default function UploadScreen({ navigation }) {
           file: pending.file,
           title: pending.title,
           manuscriptId: pending.manuscriptId || undefined,
-          // Reuse the preview S3 upload so saving a version does not upload the file twice.
           cloudinaryUrl: reuseUrl || undefined,
         });
         if (ok) {
@@ -753,7 +770,7 @@ export default function UploadScreen({ navigation }) {
       file: msFile,
       title: selected.title,
       manuscriptId: selected.id,
-      cloudinaryUrl: preview?.cloudinary_url,
+      cloudinaryUrl: "",
     });
   }
 
@@ -786,7 +803,7 @@ export default function UploadScreen({ navigation }) {
       file: msFile,
       title: resolvedTitle,
       manuscriptId: "",
-      cloudinaryUrl: preview?.cloudinary_url,
+      cloudinaryUrl: "",
     });
   }
 
@@ -1272,7 +1289,7 @@ export default function UploadScreen({ navigation }) {
                       <DocumentPreview
                         file={msFile}
                         preview={preview}
-                        documentUrl={preview?.cloudinary_url || ""}
+                        documentUrl=""
                         documentName={msFile?.name || preview?.filename || ""}
                         suppressLoader
                         onReady={() => setViewerReady(true)}

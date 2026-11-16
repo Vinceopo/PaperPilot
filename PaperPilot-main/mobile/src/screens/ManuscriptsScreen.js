@@ -5,7 +5,6 @@ import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import ManuscriptDetailModal from "../components/cockpit/ManuscriptDetailModal";
-import PaperPlaneLoader from "../components/ui/PaperPlaneLoader";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -63,6 +62,61 @@ function StatCard({ label, value, sub, accent }) {
       <Text style={[styles.statValue, accent ? { color: accent } : null]}>{value}</Text>
       {sub ? <Text style={[styles.statSub, { color: sub.color }]}>{sub.text}</Text> : null}
     </View>
+  );
+}
+
+function SkeletonBlock({ style }) {
+  return <View style={[styles.skeleton, style]} />;
+}
+
+function MyManuscriptsSkeleton() {
+  return (
+    <ScrollView style={styles.root} contentContainerStyle={styles.scroll}>
+      <View style={styles.skeletonHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.skeletonTitle}>Loading your manuscripts…</Text>
+          <Text style={styles.skeletonSub}>Retrieving your library and scan history.</Text>
+        </View>
+        <View style={styles.syncPill}>
+          <View style={styles.syncDot} />
+          <Text style={styles.syncText}>Syncing</Text>
+        </View>
+      </View>
+
+      <View style={styles.statGrid}>
+        {Array.from({ length: 4 }, (_, i) => (
+          <View key={i} style={styles.statCard}>
+            <SkeletonBlock style={{ width: 72, height: 8 }} />
+            <SkeletonBlock style={{ width: 40, height: 18, marginTop: 10 }} />
+            <SkeletonBlock style={{ width: 56, height: 8, marginTop: 8 }} />
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.toolbar}>
+        <SkeletonBlock style={{ height: 40, borderRadius: 10 }} />
+        <View style={styles.toolbarActions}>
+          <SkeletonBlock style={{ width: 88, height: 36, borderRadius: 10 }} />
+          <SkeletonBlock style={{ width: 108, height: 36, borderRadius: 10 }} />
+        </View>
+      </View>
+
+      <View style={styles.listWrap}>
+        {Array.from({ length: 5 }, (_, i) => (
+          <View key={i} style={styles.msCard}>
+            <View style={[styles.bandBar, { backgroundColor: "#e2e8f0" }]} />
+            <View style={styles.msCardBody}>
+              <SkeletonBlock style={{ width: "72%", height: 12 }} />
+              <SkeletonBlock style={{ width: "48%", height: 10, marginTop: 8 }} />
+              <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+                <SkeletonBlock style={{ width: 42, height: 22, borderRadius: 999 }} />
+                <SkeletonBlock style={{ width: 88, height: 22, borderRadius: 999 }} />
+              </View>
+            </View>
+          </View>
+        ))}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -166,10 +220,7 @@ export default function ManuscriptsScreen({ navigation }) {
   if (loading) {
     return (
       <AppShell active="manuscripts" breadcrumb="Dashboard / My Manuscripts" title="My Manuscripts">
-        <View style={styles.loadingBox}>
-          <PaperPlaneLoader />
-          <Text style={styles.loadingText}>Loading your compliance workspace…</Text>
-        </View>
+        <MyManuscriptsSkeleton />
       </AppShell>
     );
   }
@@ -476,19 +527,37 @@ const cardShadow = {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.pageBg },
-  loadingBox: {
-    flex: 1,
-    minHeight: 240,
-    alignItems: "center",
-    justifyContent: "center",
+  skeleton: {
+    backgroundColor: "rgba(226,232,240,0.9)",
+    borderRadius: 6,
+  },
+  skeletonHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
     gap: 10,
-    margin: 12,
-    borderRadius: 12,
+    marginBottom: 4,
+  },
+  skeletonTitle: { fontSize: 14, fontWeight: "600", color: "#0F1729" },
+  skeletonSub: { marginTop: 2, fontSize: 11, color: colors.muted },
+  syncPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  loadingText: { fontSize: 13, color: colors.muted },
+  syncDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: "#16bfa8",
+  },
+  syncText: { fontSize: 11, fontWeight: "500", color: colors.muted },
   scroll: { padding: 12, paddingBottom: 32 },
   statGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   statCard: {

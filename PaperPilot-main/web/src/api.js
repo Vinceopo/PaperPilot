@@ -1,5 +1,6 @@
 import { auth } from "./firebase.js";
 import { uploadToS3 } from "./lib/s3Upload.js";
+import { localManuscriptPreview } from "./lib/localManuscriptPreview.js";
 import { isFatalAuthError } from "./services/auth.js";
 
 /**
@@ -371,15 +372,12 @@ export function deleteManuscriptVersion({ manuscriptId, versionId } = {}) {
   );
 }
 
+/**
+ * Browser-local preview only — no S3 upload and no server parse.
+ * Saving a version still uploads once via uploadManuscriptVersion.
+ */
 export async function previewManuscript(file) {
-  const uploaded = await uploadDocument(file);
-  return authorizedFetch("/manuscripts/preview", {
-    method: "POST",
-    body: JSON.stringify({
-      cloudinary_url: uploaded.url,
-      filename: file.name || uploaded.originalFilename,
-    }),
-  });
+  return localManuscriptPreview(file);
 }
 
 function newRequestId() {
@@ -405,8 +403,19 @@ async function withRetry(send, attempts = 3) {
   throw lastError;
 }
 
-export async function uploadManuscriptVersion({ file, mechanicsId, title, manuscriptId }) {
-  const uploaded = await uploadDocument(file);
+export async function uploadManuscriptVersion({
+  file,
+  mechanicsId,
+  title,
+  manuscriptId,
+  documentUrl,
+  cloudinaryUrl,
+}) {
+  // Prefer a URL already uploaded (e.g. reused object). Otherwise one S3 PUT here.
+  const existingUrl = String(documentUrl || cloudinaryUrl || "").trim();
+  const uploaded = existingUrl
+    ? { url: existingUrl, originalFilename: file?.name || "manuscript.pdf" }
+    : await uploadDocument(file);
   // Same id on every retry, so a save whose reply was lost is not stored twice.
   const clientRequestId = newRequestId();
   const created = await withRetry(() =>

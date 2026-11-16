@@ -646,10 +646,10 @@ export function AppDataProvider({ children }) {
 
   async function onPreviewManuscript(fileAsset) {
     setError("");
+    // Local metadata only — TraceDocumentViewer renders file.uri; no network upload.
     return previewManuscript({
-      uri: fileAsset.uri,
-      name: fileAsset.name,
-      mimeType: fileAsset.mimeType,
+      name: fileAsset?.name,
+      mimeType: fileAsset?.mimeType,
     });
   }
 

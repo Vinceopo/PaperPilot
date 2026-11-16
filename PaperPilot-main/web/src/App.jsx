@@ -30,7 +30,9 @@ import ScanResultsScreen from "./components/cockpit/ScanResultsScreen.jsx";
 import AnalysisProgress from "./components/cockpit/AnalysisProgress.jsx";
 import PaperCarryAway, { PAPER_CARRY_HOLD_MS } from "./components/cockpit/PaperCarryAway.jsx";
 import AccountSettingsScreen from "./components/cockpit/AccountSettingsScreen.jsx";
-import MyManuscriptsScreen from "./components/cockpit/MyManuscriptsScreen.jsx";
+import MyManuscriptsScreen, {
+  MyManuscriptsSkeleton,
+} from "./components/cockpit/MyManuscriptsScreen.jsx";
 import SubscriptionScreen from "./components/cockpit/SubscriptionScreen.jsx";
 import NotificationsScreen from "./components/cockpit/NotificationsScreen.jsx";
 import UpgradePrompt from "./components/cockpit/UpgradePrompt.jsx";
@@ -42,7 +44,6 @@ import UploadJourneyModal, {
   uploadJourneySeen,
 } from "./components/cockpit/UploadJourneyModal.jsx";
 import PaperRollAnimation from "./components/PaperRollAnimation.jsx";
-import PaperPlaneLoader from "./components/PaperPlaneLoader.jsx";
 import FileTypeIcon from "./components/FileTypeIcon.jsx";
 import { useScanFlow } from "./hooks/useScanFlow.js";
 import { isScanReady, isServerId, mapComplianceScanToResult, scanTargetIds } from "./lib/scanMapper.js";
@@ -1542,13 +1543,17 @@ export default function App() {
           return next;
         });
       }
-      const data = await listManuscripts();
-      if (uploadSessionRef.current !== sessionId) return false;
-      setManuscripts(itemsFrom(data, "manuscripts"));
       setManuscriptReady(true);
       advanceUploadWizard(3);
       focusFileDetails("Manuscript uploaded completely and ready to scan.");
       appendNotifications(notificationFromUpload(resolvedTitle, version.version_number || nextVersionNumber));
+      // Refresh the library list in the background so upload UI unlocks immediately.
+      void listManuscripts()
+        .then((data) => {
+          if (uploadSessionRef.current !== sessionId) return;
+          setManuscripts(itemsFrom(data, "manuscripts"));
+        })
+        .catch(() => {});
       return true;
     } catch (err) {
       if (uploadSessionRef.current !== sessionId) return false;
@@ -2051,12 +2056,7 @@ export default function App() {
 
         {activePage === "manuscripts" && (
           loading ? (
-            <div className="grid min-h-[calc(100dvh-7.5rem)] place-items-center rounded-xl border border-slate-200 bg-white text-sm text-slate-400">
-              <div className="flex flex-col items-center gap-3">
-                <PaperPlaneLoader className="h-32 w-56" />
-                Loading your compliance workspace…
-              </div>
-            </div>
+            <MyManuscriptsSkeleton />
           ) : (
           <MyManuscriptsScreen
             items={scannedLibrary}

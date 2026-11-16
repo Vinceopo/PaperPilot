@@ -588,8 +588,27 @@ export function deleteManuscriptVersion({ manuscriptId, versionId } = {}) {
   );
 }
 
-export function previewManuscript({ uri, name, mimeType }) {
-  return postUploadedDocument("/manuscripts/preview", { uri, name, mimeType }, "manuscript.pdf");
+/**
+ * Device-local preview metadata only — no S3 upload and no server parse.
+ * TraceDocumentViewer renders the picked file URI; saving still uploads once.
+ */
+export async function previewManuscript({ name, mimeType } = {}) {
+  const filename = displayFilename(name, mimeType, "manuscript.pdf");
+  const lower = String(filename).toLowerCase();
+  const isDocx =
+    lower.endsWith(".docx") ||
+    String(mimeType || "")
+      .toLowerCase()
+      .includes("wordprocessingml");
+  return {
+    filename,
+    file_type: isDocx ? "docx" : "pdf",
+    text_preview: "",
+    char_count: 0,
+    page_count: 0,
+    pages: [],
+    cloudinary_url: "",
+  };
 }
 
 export async function uploadManuscriptVersion({
