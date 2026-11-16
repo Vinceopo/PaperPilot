@@ -65,6 +65,10 @@ def _number_header(section, where="header", align=WD_ALIGN_PARAGRAPH.RIGHT, firs
             first_paragraph = first_part.paragraphs[0]
             first_paragraph.alignment = first_align
             _page_field(first_paragraph)
+    else:
+        # New sections inherit Different First Page from the previous section; clear it when
+        # this section should number every page the same way.
+        section.different_first_page_header_footer = False
 
 
 def _body(doc, text=BODY, count=2):
@@ -91,7 +95,7 @@ def _thesis(
     prelim_fmt="lowerRoman",
     body_start=1,
     title_first_page="hidden",
-    chapter_first_page=("footer", WD_ALIGN_PARAGRAPH.CENTER),
+    chapter_first_page=None,
     align=WD_ALIGN_PARAGRAPH.RIGHT,
 ):
     """Title page + 2 preliminary pages, then Chapter I (2 pages) and Chapter II, each chapter its own section."""
@@ -166,40 +170,156 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(pages, {3, 5})
 
     def test_compliant_thesis_has_no_pagination_issues(self):
-        result = self.scan(_thesis(), PAGINATION_RULES)
+        # PAGINATION_RULES asks for bottom-center on chapter openers.
+        result = self.scan(
+            _thesis(chapter_first_page=("footer", WD_ALIGN_PARAGRAPH.CENTER)),
+            PAGINATION_RULES,
+        )
         self.assertEqual(_issue_types(result, "pagination"), set())
         self.assertEqual(_section(result, "Pagination")["formatting_score"], 100.0)
         self.assertGreater(_section(result, "Pagination")["issue_count"], -1)
 
-    def test_title_page_number_shown_is_flagged(self):
-        result = self.scan(_thesis(title_first_page=None), PAGINATION_RULES)
-        self.assertIn("pagination_title_page", _issue_types(result))
+    def test_missing_page_one_is_not_an_issue(self):
+        result = self.scan(_thesis(title_first_page="hidden"), {"pagination": {"position": "Top right"}})
+        self.assertEqual(_issue_types(result, "pagination"), set())
 
     def test_left_position_is_checked(self):
-        rules = {"pagination": {**PAGINATION_RULES["pagination"], "position": "Top left"}}
+        rules = {"pagination": {"position": "Top left"}}
         result = self.scan(_thesis(), rules)
         self.assertIn("pagination_position", _issue_types(result))
         compliant = self.scan(_thesis(align=WD_ALIGN_PARAGRAPH.LEFT), rules)
         self.assertNotIn("pagination_position", _issue_types(compliant))
 
-    def test_arabic_preliminary_pages_flagged_when_roman_required(self):
-        result = self.scan(_thesis(prelim_fmt="decimal"), PAGINATION_RULES)
-        self.assertIn("pagination_style", _issue_types(result))
-
-    def test_body_must_restart_at_one(self):
-        result = self.scan(_thesis(body_start=5), PAGINATION_RULES)
-        issues = {issue["issue_type"]: issue for issue in result["issues"]}
-        self.assertIn("pagination_sequence", issues)
-        self.assertIn("restart at 1", issues["pagination_sequence"]["explanation"])
-
-    def test_chapter_first_page_rules(self):
-        hidden_rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "No page number shown"}}
-        self.assertIn("pagination_chapter_first", _issue_types(self.scan(_thesis(), hidden_rules)))
-        self.assertNotIn(
-            "pagination_chapter_first", _issue_types(self.scan(_thesis(chapter_first_page="hidden"), hidden_rules))
+    def test_style_and_sequence_mismatches_are_flagged(self):
+        result = self.scan(
+            _thesis(prelim_fmt="decimal", body_start=5, chapter_first_page=("footer", WD_ALIGN_PARAGRAPH.CENTER)),
+            PAGINATION_RULES,
         )
-        same_rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "Same position as other pages"}}
-        self.assertNotIn("pagination_position", _issue_types(self.scan(_thesis(chapter_first_page=None), same_rules)))
+        types = _issue_types(result, "pagination")
+        self.assertTrue(types & {"pagination_style", "pagination_sequence"})
+
+    def test_chapter_first_and_title_rules_are_not_flagged(self):
+        hidden_rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "No page number shown"}}
+        self.assertEqual(
+            _issue_types(self.scan(_thesis(chapter_first_page="hidden"), hidden_rules), "pagination"),
+            set(),
+        )
+        shown_title_rules = {
+            "pagination": {**PAGINATION_RULES["pagination"], "title_page": "Number shown"}
+        }
+        shown_title = self.scan(
+            _thesis(title_first_page=None, chapter_first_page=("footer", WD_ALIGN_PARAGRAPH.CENTER)),
+            shown_title_rules,
+        )
+        self.assertEqual(_issue_types(shown_title, "pagination"), set())
+
+    def test_page_tokens(self):
+        self.assertEqual(_page_token("iv"), (4, "roman_lower"))
+        self.assertEqual(_page_token("Page 12 of 40"), (12, "arabic"))
+        self.assertEqual(_page_token("- 7 -"), (7, "arabic"))
+        self.assertIsNone(_page_token("iiii"))
+        self.assertIsNone(_page_token("Introduction"))
+
+    def test_pdf_only_flags_wrong_position(self):
+        def page(index, number, x=540, y=40, heading=None):
+            lines = [{"text": heading or f"Body text line on page {index + 1} with enough words.",
+                      "bbox": [72, 300, 540, 314], "spans": [{"text": "x", "size": 12, "font": "Times"}]}]
+            if number is not None:
+                lines.append({"text": number, "bbox": [x, y, x + 10, y + 12],
+                              "spans": [{"text": number, "size": 12, "font": "Times"}]})
+            for line_index, line in enumerate(lines):
+                line.update(page_index=index, line_index=line_index)
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        pages = [
+            page(0, None),
+            page(1, "ii"),
+            page(2, "iii"),
+            page(3, "1", heading="CHAPTER I"),
+            page(4, "2"),
+            page(5, "3", x=72, y=750),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        result = self.scan(parsed, {"pagination": {"position": "Top right"}})
+        issues = [issue for issue in result["issues"] if issue["issue_type"].startswith("pagination")]
+        self.assertEqual({issue["issue_type"] for issue in issues}, {"pagination_position"})
+        self.assertEqual(issues[0]["locations"][0]["page"], 6)
+
+    def test_no_page_numbers_mode_passes_without_marks(self):
+        def page(index, heading=None):
+            lines = [{
+                "text": heading or f"Body text line on page {index + 1} with enough words.",
+                "bbox": [72, 300, 540, 314],
+                "spans": [{"text": "x", "size": 12, "font": "Times"}],
+                "page_index": index,
+                "line_index": 0,
+            }]
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [page(0, "A STUDY OF FORMATTING"), page(1), page(2, "CHAPTER I")],
+        }
+        result = self.scan(
+            parsed,
+            {
+                "pagination": {
+                    "position": "No page numbers",
+                    "first_page_of_chapter": "No page number shown",
+                    "title_page": "Number shown",
+                }
+            },
+        )
+        self.assertEqual(_issue_types(result, "pagination"), set())
+
+    def test_schedule_cell_chapter_mention_is_not_chapter_start(self):
+        """Mid-doc table/schedule lines that mention Chapter N must not hide-number false positives."""
+        def page(index, lines, number=None):
+            out = []
+            for line_index, text in enumerate(lines):
+                out.append({
+                    "text": text,
+                    "bbox": [72, 120 + line_index * 18, 540, 134 + line_index * 18],
+                    "spans": [{"text": text, "size": 11, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": line_index,
+                    "table_row": True,
+                })
+            if number is not None:
+                out.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(out),
+                })
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": out}
+
+        pages = [
+            page(0, ["A STUDY OF MANUSCRIPT FORMATTING"]),
+            page(1, ["ABSTRACT", BODY[:80]], number="ii"),
+            page(
+                2,
+                [
+                    "Chapter 3 implementation tasks for sprint planning",
+                    "Review of Related Literature  environment variables",
+                    "shared components and project board",
+                ],
+                number="25",
+            ),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "title_page": "Hidden but counted",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
+        result = self.scan(parsed, rules)
+        self.assertNotIn("pagination_chapter_first", _issue_types(result, "pagination"))
 
     def test_unmarked_table_continuation_chapter_cell_is_not_chapter_start(self):
         """Continuation table page: short unmarked 'Chapter 3' must not hide-number FP."""
@@ -207,6 +327,7 @@ class PaginationTests(unittest.TestCase):
             mark_table = mark_table or set()
             out = []
             for line_index, text in enumerate(lines):
+                # Narrow column cells like a sprint-plan grid (page ~612 wide).
                 unit = {
                     "text": text,
                     "bbox": [72, 120 + line_index * 18, 280, 134 + line_index * 18],
@@ -236,6 +357,8 @@ class PaginationTests(unittest.TestCase):
         pages = [
             page(0, ["A STUDY OF MANUSCRIPT FORMATTING"]),
             page(1, ["ABSTRACT", BODY[:80]], number="ii"),
+            # Page 35-style continuation: first line looks like a chapter opener but is an
+            # unmarked cell; neighboring rows still carry table marks.
             page(
                 2,
                 [
@@ -319,13 +442,13 @@ class PaginationTests(unittest.TestCase):
 
     def test_hidden_chapter_first_page_is_not_missing_number(self):
         """CHAPTER I with no number + hide rule must not raise pagination_missing."""
-        def page(index, number=None, heading=None, orphan=None, table_at=None):
+        def page(index, number=None, heading=None, extra=None, table_at=None):
             lines = []
-            if orphan:
+            if extra:
                 lines.append({
-                    "text": orphan,
+                    "text": extra,
                     "bbox": [72, 90, 200, 104],
-                    "spans": [{"text": orphan, "size": 10, "font": "Times"}],
+                    "spans": [{"text": extra, "size": 10, "font": "Times"}],
                     "page_index": index,
                     "line_index": 0,
                     "page_width": 612,
@@ -397,9 +520,12 @@ class PaginationTests(unittest.TestCase):
         pages = [
             page(0),
             page(1, number="ii"),
-            page(2, heading="CHAPTER I", orphan="PaperPilot", table_at=520),
+            # Stray label above CHAPTER I (common PDF extract quirk) + table lower on page.
+            page(2, heading="CHAPTER I", extra=" ", table_at=520),
             page(3, number="2"),
         ]
+        # Replace the blank extra with a real non-chapter orphan line.
+        pages[2]["lines"][0]["text"] = "PaperPilot"
         parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
         rules = {
             "pagination": {
@@ -414,36 +540,158 @@ class PaginationTests(unittest.TestCase):
         self.assertNotIn("pagination_missing", types)
         self.assertNotIn("pagination_chapter_first", types)
 
-    def test_hidden_and_not_counted_title_page(self):
-        rules = {"pagination": {**PAGINATION_RULES["pagination"], "title_page": "Hidden and not counted"}}
-        self.assertIn("pagination_sequence", _issue_types(self.scan(_thesis(), rules)))
-
-    def test_page_tokens(self):
-        self.assertEqual(_page_token("iv"), (4, "roman_lower"))
-        self.assertEqual(_page_token("Page 12 of 40"), (12, "arabic"))
-        self.assertEqual(_page_token("- 7 -"), (7, "arabic"))
-        self.assertIsNone(_page_token("iiii"))
-        self.assertIsNone(_page_token("Introduction"))
-
-    def test_pdf_page_numbers(self):
-        def page(index, number, x=540, y=40, heading=None):
-            lines = [{"text": heading or f"Body text line on page {index + 1} with enough words.",
-                      "bbox": [72, 300, 540, 314], "spans": [{"text": "x", "size": 12, "font": "Times"}]}]
+    def test_hidden_chapter_not_missing_even_with_table_grid_nearby(self):
+        """Chapter opener must keep hide-rule even when a side-by-side grid is on the page."""
+        def page(index, *, number=None, heading=None, grid=False):
+            lines = []
+            if heading:
+                lines.append({
+                    "text": heading,
+                    "bbox": [72, 120, 400, 140],
+                    "spans": [{"text": heading, "size": 14, "font": "Times-Bold", "flags": 2**4}],
+                    "page_index": index,
+                    "line_index": 0,
+                    "page_width": 612,
+                    "page_height": 792,
+                    "formatting": {"bold": True},
+                    "source": "body",
+                })
+            lines.append({
+                "text": "Body prose continues after the chapter title with enough words for the reader.",
+                "bbox": [72, 180, 540, 210],
+                "spans": [{"text": "body", "size": 12, "font": "Times"}],
+                "page_index": index,
+                "line_index": len(lines),
+                "page_width": 612,
+                "page_height": 792,
+                "source": "body",
+            })
+            if grid:
+                # Borderless two-column row that table detection would otherwise absorb.
+                lines.append({
+                    "text": "Phase Duration",
+                    "bbox": [72, 400, 420, 414],
+                    "spans": [
+                        {"text": "Phase", "size": 11, "font": "Times", "bbox": [72, 400, 140, 414]},
+                        {"text": "Duration", "size": 11, "font": "Times", "bbox": [220, 400, 300, 414]},
+                    ],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                    "table_row": True,
+                    "source": "table",
+                })
+                lines.append({
+                    "text": "4 Weeks",
+                    "bbox": [220, 420, 300, 434],
+                    "spans": [{"text": "4 Weeks", "size": 11, "font": "Times", "bbox": [220, 420, 300, 434]}],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                    "source": "body",
+                })
             if number is not None:
-                lines.append({"text": number, "bbox": [x, y, x + 10, y + 12],
-                              "spans": [{"text": number, "size": 12, "font": "Times"}]})
-            for line_index, line in enumerate(lines):
-                line.update(page_index=index, line_index=line_index)
+                lines.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(lines),
+                    "page_width": 612,
+                    "page_height": 792,
+                })
             return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
 
-        pages = [page(0, None), page(1, "ii"), page(2, "iii"),
-                 page(3, None, heading="CHAPTER I"), page(4, "2"), page(5, "4")]
+        pages = [
+            page(0),
+            page(1, heading="CHAPTER I"),  # body starts; hide rule applies
+            page(2, number="10"),  # body page after chapter 1
+            page(3, heading="CHAPTER II", grid=True),  # next chapter first page (no number)
+            page(4, number="2"),  # restart after chapter — no body_numbering rule set
+        ]
         parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
-        rules = {"pagination": {**PAGINATION_RULES["pagination"], "first_page_of_chapter": "No page number shown"}}
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "title_page": "Hidden but counted",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
         result = self.scan(parsed, rules)
-        issues = {issue["issue_type"]: issue for issue in result["issues"]}
-        self.assertEqual(set(issues), {"pagination_sequence"})
-        self.assertEqual(issues["pagination_sequence"]["locations"][0]["page"], 6)
+        types = _issue_types(result, "pagination")
+        self.assertNotIn("pagination_missing", types)
+        self.assertNotIn("pagination_chapter_first", types)
+        # Without an explicit continuous/restart body rule, chapter restart is not a sequence fail.
+        self.assertNotIn("pagination_sequence", types)
+
+    def test_hidden_chapter_inferred_from_numbering_gap_without_title_text(self):
+        """Hide-rule blanks in a 10 → (blank) → 2 jump must not be missing/sequence FPs.
+
+        Chapter title wording differs per manuscript; inference uses number structure only.
+        """
+        def page(index, *, number=None, lines=None):
+            out = []
+            for line_index, text in enumerate(lines or ["Body prose on this page with enough words for layout."]):
+                out.append({
+                    "text": text,
+                    "bbox": [72, 120 + line_index * 18, 540, 134 + line_index * 18],
+                    "spans": [{"text": text, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": line_index,
+                    "page_width": 612,
+                    "page_height": 792,
+                    "source": "body",
+                })
+            if number is not None:
+                out.append({
+                    "text": number,
+                    "bbox": [540, 40, 550, 52],
+                    "spans": [{"text": number, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": len(out),
+                    "page_width": 612,
+                    "page_height": 792,
+                })
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": out}
+
+        long_body = (
+            "Earlier body page continues the manuscript discussion with enough words "
+            "so the scanner treats this as normal body structure rather than a cover."
+        )
+        pages = [
+            page(0, number="9", lines=[long_body]),
+            page(1, number="10", lines=[long_body.replace("Earlier", "Following", 1)]),
+            # Chapter first page: no CHAPTER label, no number (user hide rule).
+            page(2, lines=["Introduction to the next part of the study without a folio shown."]),
+            page(3, number="2", lines=[long_body.replace("Earlier", "Restarted", 1)]),
+        ]
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        # No title_page / body_numbering — only position + chapter-first hide.
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "first_page_of_chapter": "No page number shown",
+                "chapter_markers": ["chapter_roman", "chapter_arabic"],
+            }
+        }
+        types = _issue_types(self.scan(parsed, rules), "pagination")
+        self.assertNotIn("pagination_missing", types)
+        self.assertNotIn("pagination_sequence", types)
+
+        # Continuous gap 10 → blank → 12 is a real missing number, not a chapter hide.
+        pages_continuous = [
+            page(0, number="10", lines=[long_body]),
+            page(1, lines=["Body page that forgot its folio in a continuous sequence of numbers."]),
+            page(2, number="12", lines=[long_body.replace("Earlier", "Twelfth", 1)]),
+        ]
+        continuous = self.scan(
+            {"text": "", "metadata": {"format": "pdf"}, "pages": pages_continuous},
+            rules,
+        )
+        self.assertIn("pagination_missing", _issue_types(continuous, "pagination"))
 
 
 class HeadingAndSpacingTests(unittest.TestCase):
@@ -488,9 +736,57 @@ class HeadingAndSpacingTests(unittest.TestCase):
         self.assertEqual(stats.failed, 0)
         self.assertEqual(collector.result(), [])
 
+    def test_measured_one_point_eight_eight_matches_one_and_a_half_spacing(self):
+        """Inflated PDF readings (~1.88) of true 1.5 must not false-positive; real 2.0 still fails."""
+        from app.compliance import CategoryStats, IssueCollector, _check_spacing, _pdf_spacing_multiple
+
+        self.assertTrue(_spacing_matches(1.88, 1.5))
+        self.assertFalse(_spacing_matches(2.0, 1.5))
+        self.assertFalse(_spacing_matches(1.15, 1.5))
+        stats = CategoryStats()
+        collector = IssueCollector()
+        _observe_spacing(
+            {"page_index": 0, "line_index": 2, "text": "Body line measuring high of a 1.5 setting."},
+            1.88,
+            1.5,
+            stats,
+            collector,
+        )
+        self.assertEqual(stats.failed, 0)
+        self.assertEqual(collector.result(), [])
+
+        # Synthetic PDF tops: gap chosen so font×1.15 math alone yields ~1.88 for a 1.5 setting.
+        font = 12.0
+        gap = 1.88 * font * 1.15
+        unit = {
+            "page_index": 0,
+            "line_index": 0,
+            "text": "First wrapped body line with enough words to stay eligible for spacing.",
+            "role": "body",
+            "source": "body",
+            "paragraph_index": 0,
+            "bbox": [72, 120, 540, 132],
+            "page_width": 612,
+            "dominant_size": font,
+            "spans": [{"text": "x", "size": font}],
+            "formatting": {},
+        }
+        below = {
+            **unit,
+            "line_index": 1,
+            "text": "Second wrapped body line continuing the same paragraph for measurement.",
+            "bbox": [72, 120 + gap, 540, 132 + gap],
+        }
+        measured = _pdf_spacing_multiple(unit, below)
+        self.assertIsNotNone(measured)
+        self.assertTrue(_spacing_matches(float(measured), 1.5))
+        spacing_collector = IssueCollector()
+        _check_spacing([unit, below], {"line_spacing": 1.5}, CategoryStats(), spacing_collector)
+        self.assertEqual(spacing_collector.result(), [])
+
     def test_lists_and_table_columns_skip_first_line_indent(self):
         """Numbered questions and far-right table cells are not body indent targets."""
-        from app.compliance import _check_indentation
+        from app.compliance import CategoryStats, IssueCollector, _check_indentation
 
         list_units = [
             {
@@ -577,6 +873,7 @@ class HeadingAndSpacingTests(unittest.TestCase):
                             "table_row": True,
                         },
                         {
+                            # Narrow left-column wrap - no cell gap on this row alone.
                             "text": "Build the formatter pipeline for chapter one",
                             "bbox": [72, 150, 250, 164],
                             "spans": [{"text": "x", "size": 11, "font": "Times"}],
@@ -604,6 +901,7 @@ class HeadingAndSpacingTests(unittest.TestCase):
         _check_indentation(units, {"first_line_indent_inches": 0.5}, CategoryStats(), indent_collector)
         self.assertEqual(spacing_collector.result(), [])
         self.assertNotIn("first_line_indent", indent_collector.items)
+        # Direct promote helper stays idempotent on already-marked cells.
         _promote_pdf_table_cells(units)
         self.assertTrue(all(unit.get("source") == "table" for unit in units if unit.get("text")))
 
@@ -635,6 +933,7 @@ class HeadingAndSpacingTests(unittest.TestCase):
             {
                 "page_index": 0,
                 "line_index": 0,
+                # Correct 0.5 inch first-line indent.
                 "text": "Students prepare manuscripts with careful attention to indent rules across pages.",
                 "role": "body",
                 "source": "body",
@@ -647,6 +946,7 @@ class HeadingAndSpacingTests(unittest.TestCase):
             {
                 "page_index": 0,
                 "line_index": 1,
+                # ~0.17 inch nudge (>9pt old threshold, <0.28 inch new) - wrap jitter.
                 "text": "Continuation of the same paragraph should not be scored as a new indent.",
                 "role": "body",
                 "source": "body",
@@ -785,10 +1085,12 @@ class HeadingAndSpacingTests(unittest.TestCase):
                 "spans": [],
             },
         ]
+        # Still inside Definition of Terms: plain prose under that heading is also skipped.
         collector = IssueCollector()
         _check_indentation(units, {"first_line_indent_inches": 0.5}, CategoryStats(), collector)
         self.assertNotIn("first_line_indent", collector.items)
 
+        # After a later heading, normal body prose with 0" indent is still flagged.
         units.append(
             {
                 "page_index": 0,
@@ -848,6 +1150,7 @@ class HeadingAndSpacingTests(unittest.TestCase):
 
         body_edge = 72.0
         indented = body_edge + 0.5 * PT_PER_INCH
+        # Nine indented openings, one body-edge wrap — body edge is not a top mode.
         boxes = [[indented, 0, 540, 12]] * 9 + [[body_edge, 0, 540, 12]]
         left, _right = _column_from_boxes(boxes)
         self.assertEqual(left, body_edge)
@@ -981,6 +1284,53 @@ class HeadingAndSpacingTests(unittest.TestCase):
         )
         self.assertEqual(units[0]["role"], "heading2")
 
+    def test_equal_size_outline_maps_heading_depth(self):
+        """When H1/H2/H3 share one size, numbered outline depth still selects the level."""
+        from app.compliance import _annotate_roles
+
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "text": "1 Introduction",
+                "style": None,
+                "source": "body",
+                "formatting": {"first_line_indent_inches": 0.0},
+                "spans": [{"text": "1 Introduction", "size": 20}],
+            },
+            {
+                "page_index": 0,
+                "line_index": 1,
+                "text": "1.1 Background",
+                "style": None,
+                "source": "body",
+                "formatting": {"first_line_indent_inches": 0.0},
+                "spans": [{"text": "1.1 Background", "size": 20}],
+            },
+            {
+                "page_index": 0,
+                "line_index": 2,
+                "text": "1.1.1 Scope",
+                "style": None,
+                "source": "body",
+                "formatting": {"first_line_indent_inches": 0.0},
+                "spans": [{"text": "1.1.1 Scope", "size": 20}],
+            },
+        ]
+        _annotate_roles(
+            units,
+            {
+                "font": {
+                    "heading1_size": 20,
+                    "heading2_size": 20,
+                    "heading3_size": 20,
+                    "body_size": 12,
+                    "heading_levels": 3,
+                }
+            },
+        )
+        self.assertEqual([unit["role"] for unit in units], ["heading1", "heading2", "heading3"])
+
     def test_running_chapter_head_is_not_a_new_chapter_start(self):
         """A repeated CHAPTER I running head on later pages must not hide page numbers."""
         from app.compliance import _section_starts
@@ -1088,8 +1438,8 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         result = run_compliance_scan(self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER), rules)
         self.assertNotIn("alignment", _issue_types(result))
         alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
-        self.assertEqual(alignment["status"], "pass")
-        self.assertGreater(alignment["units_checked"], 0)
+        self.assertEqual(alignment["status"], "not_applicable")
+        self.assertEqual(alignment["units_checked"], 0)
         self.assertEqual(alignment["units_failed"], 0)
 
     def test_justified_synonym_still_checks_alignment(self):
@@ -1103,32 +1453,264 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         self.assertGreater(alignment["units_checked"], 0)
         self.assertIn("alignment", _issue_types(result))
 
-    def test_ignore_alignment_passes_with_units(self):
-        """IGNORE counts eligible alignment units as all passed (no issues)."""
+    def test_ignore_alignment_not_applicable(self):
+        """IGNORE alignment is not scored (0 units, not_applicable)."""
         result = run_compliance_scan(
             self._body_doc(align=WD_ALIGN_PARAGRAPH.CENTER),
             {"alignment": "IGNORE"},
         )
         alignment = next(item for item in result["scoring"]["categories"] if item["category"] == "Alignment")
-        self.assertEqual(alignment["status"], "pass")
-        self.assertGreater(alignment["units_checked"], 0)
-        self.assertEqual(alignment["units_failed"], 0)
+        self.assertEqual(alignment["status"], "not_applicable")
+        self.assertEqual(alignment["units_checked"], 0)
         self.assertNotIn("alignment", _issue_types(result))
 
-    def test_empty_mechanics_pass_alignment_and_spacing_units(self):
-        """Unset categories still show checked units that all pass on Score Breakdown."""
+    def test_blank_mechanics_fields_are_not_enforced(self):
+        """Blank / NA fields must not invent mismatch issues or scored units."""
+        rules = normalize_mechanics_rules(
+            {
+                "font": {
+                    "color": "NA",
+                    "heading_levels": 2,
+                    "heading_styles": {"heading1": {}},
+                },
+                "alignment": "n/a",
+                "spacing": "",
+                "indention": "none",
+                "word_spacing": "",
+                "paper": {"orientation": "NA", "size": ""},
+                "pagination": {"position": "", "title_page": "not checked"},
+            }
+        )
+        font = rules.get("font") or {}
+        self.assertNotIn("color", font)
+        self.assertNotIn("alignment", rules)
+        self.assertNotIn("line_spacing", rules)
+        self.assertNotIn("first_line_indent_inches", rules)
+        self.assertNotIn("word_spacing", rules)
+        paper = rules.get("paper") or {}
+        self.assertNotIn("orientation", paper)
+        result = run_compliance_scan(self._body_doc(size=14, align=WD_ALIGN_PARAGRAPH.CENTER), rules)
+        self.assertEqual(result["issues"], [])
+        by_cat = {item["category"]: item for item in result["scoring"]["categories"]}
+        self.assertEqual(by_cat["Alignment"]["status"], "not_applicable")
+        self.assertEqual(by_cat["Alignment"]["units_checked"], 0)
+
+    def test_empty_mechanics_alignment_and_spacing_not_applicable(self):
+        """Unset categories stay not_applicable with 0 units (not scored)."""
         result = run_compliance_scan(self._body_doc(align=WD_ALIGN_PARAGRAPH.LEFT), {})
         by_cat = {item["category"]: item for item in result["scoring"]["categories"]}
         for name in ("Alignment", "Spacing"):
+            self.assertEqual(by_cat[name]["units_checked"], 0, name)
             self.assertEqual(by_cat[name]["units_failed"], 0, name)
-            self.assertGreater(by_cat[name]["units_checked"], 0, name)
-            self.assertEqual(by_cat[name]["status"], "pass", name)
+            self.assertEqual(by_cat[name]["status"], "not_applicable", name)
         self.assertEqual(result["issues"], [])
+
+    def test_rule_is_set_preserves_zero_false_and_black(self):
+        from app.mechanics_options import rule_is_set, rule_unset
+
+        self.assertTrue(rule_unset(None))
+        self.assertTrue(rule_unset(""))
+        self.assertTrue(rule_unset([]))
+        self.assertTrue(rule_unset({}))
+        self.assertTrue(rule_unset("IGNORE"))
+        self.assertTrue(rule_unset("none"))
+        self.assertTrue(rule_unset("n/a"))
+        self.assertTrue(rule_unset([None, ""]))
+        self.assertFalse(rule_unset(0))
+        self.assertFalse(rule_unset(False))
+        self.assertFalse(rule_unset("Black/Automatic"))
+        self.assertTrue(rule_is_set(0))
+        self.assertTrue(rule_is_set(False))
+        self.assertTrue(rule_is_set("Black/Automatic"))
+        self.assertFalse(rule_is_set("IGNORE"))
 
     def test_explicit_body_size_still_flags_mismatch(self):
         rules = normalize_mechanics_rules({"font": {"body_size": 12}})
         result = run_compliance_scan(self._body_doc(size=11), rules)
         self.assertIn("font_size", _issue_types(result))
+
+    def test_table_cells_never_heading_flags_real_h1_still_checked(self):
+        """Table cell like '4 Weeks' must not be Heading 1; real H1 outside still checked."""
+        import fitz
+
+        doc = fitz.open()
+        page = doc.new_page(width=612, height=792)
+        # Real Heading 1 outside the table (wrong size vs 14 pt rule).
+        page.insert_text((72, 72), "1 Introduction", fontsize=11, fontname="helv")
+        # Bordered table; "4 Weeks" matches numbered-heading shape but must stay non-heading.
+        table_top, table_left = 120.0, 72.0
+        col_w, row_h = 180.0, 22.0
+        cells = (("Phase", "Duration"), ("Pilot", "4 Weeks"), ("Full", "8 Weeks"))
+        for r, row in enumerate(cells):
+            for c, label in enumerate(row):
+                x0 = table_left + c * col_w
+                y0 = table_top + r * row_h
+                page.draw_rect(fitz.Rect(x0, y0, x0 + col_w, y0 + row_h), color=(0, 0, 0), width=0.8)
+                page.insert_text((x0 + 8, y0 + 14), label, fontsize=11, fontname="helv")
+        data = doc.tobytes()
+        doc.close()
+
+        parsed = parse_document(data, "pdf")
+        rules = normalize_mechanics_rules(
+            {"font": {"heading1_size": 14, "body_size": 11, "families": ["Helvetica"]}}
+        )
+        result = run_compliance_scan(parsed, rules)
+        self.assertIn("font_size_heading1", _issue_types(result))
+        for issue in result.get("issues") or []:
+            if not str(issue.get("issue_type") or "").startswith("font_size_heading"):
+                continue
+            for loc in issue.get("locations") or []:
+                excerpt = (loc.get("excerpt") or loc.get("text") or "").lower()
+                self.assertNotIn("4 weeks", excerpt)
+                self.assertNotIn("8 weeks", excerpt)
+
+    def test_year_range_education_line_is_not_heading1(self):
+        """CV year ranges like '2020 - 2022 …' must stay body, not Heading 1 font fails."""
+        from app.compliance import CategoryStats, IssueCollector, _annotate_roles, _check_fonts, _document_units
+
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [
+                {
+                    "page_index": 0,
+                    "width_points": 612,
+                    "height_points": 792,
+                    "lines": [
+                        {
+                            "text": "2020 - 2022 Senior High School Education",
+                            "bbox": [72, 120, 420, 134],
+                            "spans": [{"text": "2020 - 2022 Senior High School Education", "size": 11.05}],
+                            "page_index": 0,
+                            "line_index": 0,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                        },
+                        {
+                            "text": "Canduman National High School H. Abellana",
+                            "bbox": [72, 140, 420, 154],
+                            "spans": [{"text": "Canduman National High School H. Abellana", "size": 11.05}],
+                            "page_index": 0,
+                            "line_index": 1,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                        },
+                        {
+                            "text": "1 Introduction",
+                            "bbox": [72, 200, 300, 218],
+                            "spans": [{"text": "1 Introduction", "size": 11.05}],
+                            "page_index": 0,
+                            "line_index": 2,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                        },
+                    ],
+                }
+            ],
+        }
+        rules = normalize_mechanics_rules({"font": {"heading1_size": 14, "body_size": 11}})
+        units = _document_units(parsed, rules)
+        _annotate_roles(units, rules)
+        year = next(u for u in units if "2020" in (u.get("text") or ""))
+        school = next(u for u in units if "Canduman" in (u.get("text") or ""))
+        outline = next(u for u in units if (u.get("text") or "").startswith("1 Introduction"))
+        self.assertEqual(year.get("role"), "body")
+        self.assertNotEqual(school.get("role"), "heading1")
+        self.assertTrue(str(outline.get("role") or "").startswith("heading"))
+
+        stats, collector = CategoryStats(), IssueCollector()
+        _check_fonts(units, rules, stats, collector)
+        for issue in collector.result():
+            if not str(issue.get("issue_type") or "").startswith("font_size_heading"):
+                continue
+            for loc in issue.get("locations") or []:
+                excerpt = (loc.get("excerpt") or loc.get("text") or "").lower()
+                self.assertNotIn("2020", excerpt)
+                self.assertNotIn("canduman", excerpt)
+
+    def test_toc_appendix_and_table_chapter_not_heading1(self):
+        """TOC appendix lines and in-table 'Chapter I' must not raise Heading 1 size flags."""
+        from app.compliance import _annotate_roles, _document_units, _check_fonts, CategoryStats, IssueCollector
+
+        parsed = {
+            "text": "",
+            "metadata": {"format": "pdf"},
+            "pages": [
+                {
+                    "page_index": 0,
+                    "width_points": 612,
+                    "height_points": 792,
+                    "lines": [
+                        {
+                            "text": "APPENDIX M – Grammarly Results ........................ 167",
+                            "bbox": [72, 120, 540, 134],
+                            "spans": [{"text": "APPENDIX M – Grammarly Results ........................ 167", "size": 11}],
+                            "page_index": 0,
+                            "line_index": 0,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                        },
+                        {
+                            "text": "TEAM COMPOSITION ..................................... 170",
+                            "bbox": [72, 140, 540, 154],
+                            "spans": [{"text": "TEAM COMPOSITION ..................................... 170", "size": 11}],
+                            "page_index": 0,
+                            "line_index": 1,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                        },
+                        {
+                            "text": "Chapter I",
+                            "bbox": [80, 400, 160, 414],
+                            "spans": [{"text": "Chapter I", "size": 11}],
+                            "page_index": 0,
+                            "line_index": 2,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "table",
+                            "table_row": True,
+                        },
+                        {
+                            "text": "CHAPTER II",
+                            "bbox": [72, 200, 400, 220],
+                            "spans": [{"text": "CHAPTER II", "size": 11, "font": "Times-Bold", "flags": 2**4}],
+                            "page_index": 0,
+                            "line_index": 3,
+                            "page_width": 612,
+                            "page_height": 792,
+                            "source": "body",
+                            "formatting": {"bold": True},
+                        },
+                    ],
+                }
+            ],
+        }
+        rules = normalize_mechanics_rules({"font": {"heading1_size": 14, "body_size": 11}})
+        units = _document_units(parsed, rules)
+        _annotate_roles(units, rules)
+        roles = { (u.get("text") or "")[:20]: u.get("role") for u in units if (u.get("text") or "").strip() }
+        self.assertEqual(next(u["role"] for u in units if "APPENDIX M" in (u.get("text") or "")), "toc")
+        self.assertEqual(next(u["role"] for u in units if (u.get("text") or "").strip() == "Chapter I"), "table")
+        self.assertTrue(str(next(u["role"] for u in units if (u.get("text") or "").strip() == "CHAPTER II")).startswith("heading"))
+
+        stats, collector = CategoryStats(), IssueCollector()
+        _check_fonts(units, rules, stats, collector)
+        for issue in collector.result():
+            if not str(issue.get("issue_type") or "").startswith("font_size_heading"):
+                continue
+            for loc in issue.get("locations") or []:
+                excerpt = (loc.get("excerpt") or "").strip().lower()
+                self.assertNotIn("appendix m", excerpt)
+                self.assertNotIn("team composition", excerpt)
+                # Exact in-table "Chapter I" — not the real "CHAPTER II" opener.
+                self.assertNotEqual(excerpt, "chapter i")
+                self.assertFalse(excerpt.startswith("chapter i "))
+
 
 class NormalizeTests(unittest.TestCase):
     def test_legacy_values_map_to_dropdown_choices(self):
@@ -1152,6 +1734,135 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(rules["word_spacing"], "Two spaces after periods")
         self.assertEqual(rules["paper"]["landscape_pages"], "Allowed on any page")
         self.assertEqual(rules["font"]["heading_styles"], {"heading2": {"bold": True, "alignment": "left"}})
+
+    def test_alignment_page_overrides_normalize(self):
+        rules = normalize_mechanics_rules(
+            {
+                "alignment": "justify",
+                "alignment_page_overrides": "Page 1 = center\nPage 3 = left",
+            }
+        )
+        self.assertEqual(rules["alignment"], "justify")
+        # Firebase-safe page_N keys (numeric keys become arrays in RTDB).
+        self.assertEqual(rules["alignment_page_overrides"], {"page_1": "center", "page_3": "left"})
+
+    def test_alignment_page_overrides_recover_rtdb_array(self):
+        from app.mechanics_options import parse_alignment_page_overrides
+
+        recovered = parse_alignment_page_overrides([None, "center", "left"])
+        self.assertEqual(recovered, {1: "center", 2: "left"})
+        rules = normalize_mechanics_rules({"alignment_page_overrides": [None, "center", "left"]})
+        self.assertEqual(rules["alignment_page_overrides"], {"page_1": "center", "page_2": "left"})
+
+
+class AlignmentOverrideTests(unittest.TestCase):
+    def test_page_override_allows_centered_title_page(self):
+        from app.compliance import CategoryStats, IssueCollector, _check_alignment
+
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "paragraph_index": 0,
+                "text": "A centered title page line with enough characters to check.",
+                "role": "body",
+                "source": "body",
+                "alignment": "center",
+                "formatting": {"alignment": "center"},
+            },
+            {
+                "page_index": 1,
+                "line_index": 0,
+                "paragraph_index": 1,
+                "text": "Body prose on later pages that should stay justified for the rule.",
+                "role": "body",
+                "source": "body",
+                "alignment": "justify",
+                "formatting": {"alignment": "justify"},
+            },
+        ]
+        collector = IssueCollector()
+        _check_alignment(
+            units,
+            {"alignment": "justify", "alignment_page_overrides": {1: "center"}},
+            CategoryStats(),
+            collector,
+        )
+        self.assertEqual(collector.result(), [])
+
+    def test_page_override_still_flags_wrong_alignment(self):
+        from app.compliance import CategoryStats, IssueCollector, _check_alignment
+
+        units = [
+            {
+                "page_index": 0,
+                "line_index": 0,
+                "paragraph_index": 0,
+                "text": "This title page line is left aligned but the override wants center.",
+                "role": "body",
+                "source": "body",
+                "alignment": "left",
+                "formatting": {"alignment": "left"},
+            },
+        ]
+        collector = IssueCollector()
+        _check_alignment(
+            units,
+            {"alignment": "justify", "alignment_page_overrides": {1: "center"}},
+            CategoryStats(),
+            collector,
+        )
+        self.assertIn("alignment", collector.items)
+
+
+class PaginationAbsolutePinTests(unittest.TestCase):
+    def test_title_page_alone_does_not_absolute_pin_sequence(self):
+        """title_page set + body_numbering unset must not force folio == file page index + 1."""
+        long_body = (
+            "Body prose continues with enough words so the scanner treats this as normal "
+            "body structure rather than a cover-only sheet."
+        )
+
+        def page(index, number=None):
+            lines = [
+                {
+                    "text": long_body,
+                    "bbox": [72, 120, 540, 160],
+                    "spans": [{"text": long_body, "size": 12, "font": "Times"}],
+                    "page_index": index,
+                    "line_index": 0,
+                    "page_width": 612,
+                    "page_height": 792,
+                    "source": "body",
+                }
+            ]
+            if number is not None:
+                lines.append(
+                    {
+                        "text": number,
+                        "bbox": [540, 40, 550, 52],
+                        "spans": [{"text": number, "size": 12, "font": "Times"}],
+                        "page_index": index,
+                        "line_index": 1,
+                        "page_width": 612,
+                        "page_height": 792,
+                    }
+                )
+            return {"page_index": index, "width_points": 612, "height_points": 792, "lines": lines}
+
+        # File page 12 (index 11) shows printed "2" — absolute pin would wrongly expect 12.
+        pages = [page(i, None if i == 0 else str(i)) for i in range(11)]
+        pages.append(page(11, "2"))
+        parsed = {"text": "", "metadata": {"format": "pdf"}, "pages": pages}
+        rules = {
+            "pagination": {
+                "position": "Top right",
+                "title_page": "Hidden but counted",
+                # body_numbering intentionally unset / IGNORE
+            }
+        }
+        result = run_compliance_scan(parsed, normalize_mechanics_rules(rules))
+        self.assertNotIn("pagination_sequence", _issue_types(result, "pagination"))
 
 
 if __name__ == "__main__":

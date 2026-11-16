@@ -7,7 +7,16 @@ from __future__ import annotations
 
 import re
 
-PAGE_POSITIONS = ("Top left", "Top center", "Top right", "Bottom left", "Bottom center", "Bottom right")
+PAGE_NO_NUMBERS = "No page numbers"
+PAGE_POSITIONS = (
+    "Top left",
+    "Top center",
+    "Top right",
+    "Bottom left",
+    "Bottom center",
+    "Bottom right",
+    PAGE_NO_NUMBERS,
+)
 
 CHAPTER_FIRST_HIDDEN = "No page number shown"
 CHAPTER_FIRST_SAME = "Same position as other pages"
@@ -49,6 +58,7 @@ HEADING_LEVELS = tuple(f"heading{n}" for n in range(1, MAX_HEADING_LEVELS + 1))
 FONT_SIZE_KEYS = ("body_size", "heading3_content_size", *(f"{level}_size" for level in HEADING_LEVELS))
 HEADING_CASES = ("upper", "title")
 HEADING_ALIGNMENTS = ("center", "left")
+ALIGNMENT_CHOICES = ("left", "center", "right", "justify")
 
 
 def _text(value) -> str:
@@ -113,11 +123,120 @@ def page_position_parts(value) -> tuple[str | None, str | None]:
     return vertical, horizontal
 
 
+def pagination_omits_all_numbers(value) -> bool:
+    """True when the format requires no page numbers anywhere in the manuscript."""
+    if _rule_unset(value):
+        return False
+    text = _text(value)
+    if text == _text(PAGE_NO_NUMBERS):
+        return True
+    return bool(
+        re.search(r"\bno\s+page\s+numbers\b", text)
+        or re.search(r"\bwithout\s+page\s+numbers?\b", text)
+        or re.search(r"\bpage\s+numbers?\s+not\s+required\b", text)
+        or re.search(r"\bunnumbered\s+(?:manuscript|document|paper|thesis)\b", text)
+        or re.search(r"\bdo\s+not\s+(?:use|include|put|require)\s+page\s+numbers?\b", text)
+        or re.search(r"\bentire\s+(?:manuscript|document|paper).{0,40}no\s+page\s+numbers?\b", text)
+    )
+
+
 def canonical_page_position(value) -> str:
+    if pagination_omits_all_numbers(value):
+        return PAGE_NO_NUMBERS
     vertical, horizontal = page_position_parts(value)
     if vertical and horizontal:
         return f"{vertical.title()} {horizontal}"
     return " ".join(str(value or "").split())
+
+
+def parse_alignment_token(value) -> str | None:
+    """Map free text to left|center|right|justify."""
+    text = _text(value)
+    if not text:
+        return None
+    if re.search(r"justif|\bfull\b|\bboth\b", text):
+        return "justify"
+    if re.search(r"cent(?:er|re)", text):
+        return "center"
+    if re.search(r"\bright\b", text):
+        return "right"
+    if re.search(r"\bleft\b", text):
+        return "left"
+    return None
+
+
+def parse_alignment_page_overrides(value) -> dict[int, str]:
+    """Parse per-page alignment exceptions into {1-based page: alignment}.
+
+    Accepts a dict ({1: 'center'} / {'page_1': 'center'}), a list of
+    ``{page, alignment}`` objects, Firebase RTDB arrays coerced from numeric
+    keys (``[null, 'center', 'left']``), or free text lines like
+    ``Page 1 = center`` / ``Page 3: justify``.
+    """
+    out: dict[int, str] = {}
+
+    def _store(page_raw, align_raw) -> None:
+        try:
+            page = int(str(page_raw).strip())
+        except (TypeError, ValueError):
+            return
+        if page < 1 or page > 9999:
+            return
+        align = parse_alignment_token(align_raw)
+        if align in ALIGNMENT_CHOICES:
+            out[page] = align
+
+    if isinstance(value, dict):
+        for key, raw in value.items():
+            key_text = str(key or "").strip()
+            match = re.match(r"(?i)^(?:page[_\s-]*)?(\d+)$", key_text)
+            if match:
+                _store(match.group(1), raw)
+            else:
+                _store(key_text, raw)
+        return out
+
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            if item is None or item == "":
+                continue
+            if isinstance(item, dict):
+                _store(
+                    item.get("page") if item.get("page") is not None else item.get("page_index"),
+                    item.get("alignment") if item.get("alignment") is not None else item.get("align"),
+                )
+                continue
+            # RTDB may turn {1: "center", 2: "left"} into [null, "center", "left"].
+            align = parse_alignment_token(item)
+            if align in ALIGNMENT_CHOICES and index >= 1:
+                out[index] = align
+                continue
+            match = re.search(
+                r"(?i)\bpage\s*(\d+)\s*[=:]\s*(left|right|center|centre|centered|centred|"
+                r"justify|justified|flush\s+left|flush\s+right)\b",
+                str(item),
+            )
+            if match:
+                _store(match.group(1), match.group(2))
+        return out
+
+    text = str(value or "").strip()
+    if not text:
+        return out
+    for line in re.split(r"[\n;]+", text):
+        match = re.search(
+            r"(?i)\bpage\s*(\d+)\s*[=:]\s*(left|right|center|centre|centered|centred|"
+            r"justify|justified|flush\s+left|flush\s+right)\b",
+            line,
+        )
+        if match:
+            _store(match.group(1), match.group(2))
+    return out
+
+
+def alignment_page_overrides_for_storage(overrides: dict[int, str]) -> dict[str, str]:
+    """Firebase-safe map — numeric keys become arrays in RTDB and wipe on reload."""
+    return {f"page_{page}": align for page, align in sorted((overrides or {}).items())}
 
 
 def page_number_only(value) -> bool:

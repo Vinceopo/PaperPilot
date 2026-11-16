@@ -400,7 +400,7 @@ export default function ScanResultsScreen({
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <h3 className="text-lg font-bold text-slate-900">Score Breakdown</h3>
-        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-4">
           {categoryCards.map((item) => (
             <CategoryScoreCard
               key={item.metric || item.section}

@@ -5,7 +5,13 @@ import {
   filterValidationForForm,
   ignoredFieldsFromForm,
 } from "./mechanicsValidation.js";
-import { emptyMechanicsForm, formToRules, rulesToForm } from "./formatMechanicsForm.js";
+import {
+  alignmentPageOverrideRowsFromText,
+  alignmentPageOverridesTextFromRows,
+  emptyMechanicsForm,
+  formToRules,
+  rulesToForm,
+} from "./formatMechanicsForm.js";
 
 describe("deleted headings mean no rules", () => {
   it("omits heading rules and marks them ignored when headings are removed", () => {
@@ -50,8 +56,7 @@ describe("fillEmptyFieldsWithIgnore", () => {
     expect(form.marginLeft).toBe("IGNORE");
     expect(form.bodySize).toBe("IGNORE");
     expect(form.paginationTitlePage).toBe("IGNORE");
-    // Chapter starts / body numbering were removed from Format Fields.
-    expect(form.paginationChapterMarkers).toEqual([]);
+    expect(form.paginationChapterMarkers).toBe("IGNORE");
     expect(form.headings).toEqual([]);
   });
 
@@ -123,6 +128,56 @@ describe("filterValidationForForm font coverage", () => {
   });
 });
 
+describe("alignment page overrides", () => {
+  it("serializes Page N = alignment lines into alignment_page_overrides", () => {
+    const form = {
+      ...emptyMechanicsForm("Capstone"),
+      alignment: "Left",
+      alignmentPageOverrides: "Page 1 = center\nPage 3 = justify",
+    };
+    const rules = formToRules(form);
+    expect(rules.alignment).toBe("left");
+    expect(rules.alignment_page_overrides).toEqual({ page_1: "center", page_3: "justify" });
+    const roundTrip = rulesToForm(rules, "Capstone");
+    expect(roundTrip.alignmentPageOverrides).toBe("Page 1 = center\nPage 3 = justify");
+  });
+
+  it("recovers Firebase RTDB array overrides when reloading saved mechanics", () => {
+    const form = rulesToForm({
+      alignment: "justify",
+      alignment_page_overrides: [null, "center", "left"],
+    });
+    expect(form.alignmentPageOverrides).toBe("Page 1 = center\nPage 2 = left");
+    expect(formToRules(form).alignment_page_overrides).toEqual({
+      page_1: "center",
+      page_2: "left",
+    });
+  });
+
+  it("round-trips row editor helpers without dropping pages", () => {
+    const text = "Page 1 = center\nPage 3 = justify";
+    const rows = alignmentPageOverrideRowsFromText(text);
+    expect(rows).toEqual([
+      { page: "1", alignment: "center" },
+      { page: "3", alignment: "justify" },
+    ]);
+    expect(alignmentPageOverridesTextFromRows([...rows, { page: "", alignment: "left" }])).toBe(text);
+  });
+
+  it("flags invalid override lines in filterValidationForForm", () => {
+    const form = {
+      ...emptyMechanicsForm("Capstone"),
+      alignment: "Left",
+      alignmentPageOverrides: "title page centered",
+    };
+    const result = filterValidationForForm({ ok: true, issues: [] }, form);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.id === "paper:alignment_page_overrides_invalid")).toBe(
+      true
+    );
+  });
+});
+
 describe("applyIgnoredFieldsToForm", () => {
   it("restores pagination IGNORE so Saved Mechanics does not show Choose…", () => {
     const rules = {
@@ -133,12 +188,16 @@ describe("applyIgnoredFieldsToForm", () => {
       "pagination:title_page",
       "pagination:first_page_of_chapter",
       "pagination:preliminary_pages",
+      "pagination:body_numbering",
+      "pagination:chapter_starts",
     ];
     const form = applyIgnoredFieldsToForm(rulesToForm(rules, "Capstone"), ignored);
     expect(form.paginationPosition).toBe("Top right");
     expect(form.paginationTitlePage).toBe("IGNORE");
     expect(form.paginationFirstPageRule).toBe("IGNORE");
     expect(form.paginationPreliminaryStyle).toBe("IGNORE");
+    expect(form.paginationBodyNumbering).toBe("IGNORE");
+    expect(form.paginationChapterMarkers).toBe("IGNORE");
   });
 
   it("round-trips IGNORE through ignoredFieldsFromForm", () => {

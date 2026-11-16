@@ -5,7 +5,7 @@
  * IGNORE is omitted from saved rules and listed in ignored_fields so scans skip it.
  */
 
-import { formToRules } from "./formatMechanicsForm.js";
+import { formToRules, invalidAlignmentPageOverrideLines } from "./formatMechanicsForm.js";
 import { headingHasNoRules } from "./mechanicsOptions.js";
 
 export function isIgnoreFormValue(value) {
@@ -39,6 +39,8 @@ const FIELD_FORM_KEYS = {
   "pagination:title_page": ["paginationTitlePage"],
   "pagination:first_page_of_chapter": ["paginationFirstPageRule"],
   "pagination:preliminary_pages": ["paginationPreliminaryStyle"],
+  "pagination:body_numbering": ["paginationBodyNumbering"],
+  "pagination:chapter_starts": ["paginationChapterMarkers"],
   "table_layout:table_layout": ["tableLayout"],
   "figure_layout:figure_layout": ["figureLayout"],
   "citation_format:citation_style": ["citationFormat"],
@@ -70,6 +72,8 @@ const FIELD_COVERED = {
   "pagination:title_page": (rules) => Boolean(rules?.pagination?.title_page),
   "pagination:first_page_of_chapter": (rules) => Boolean(rules?.pagination?.first_page_of_chapter),
   "pagination:preliminary_pages": (rules) => Boolean(rules?.pagination?.preliminary_style),
+  "pagination:body_numbering": (rules) => Boolean(rules?.pagination?.body_numbering),
+  "pagination:chapter_starts": (rules) => Boolean(rules?.pagination?.chapter_markers?.length),
   "table_layout:table_layout": (rules) => Boolean(rules?.table_layout_requirements?.length),
   "figure_layout:figure_layout": (rules) => Boolean(rules?.figure_layout_requirements?.length),
   "citation_format:citation_style": (rules) => Boolean(rules?.citation_style),
@@ -88,12 +92,14 @@ const CATEGORY_FIELDS = {
   ],
   font: ["heading1_size", "heading2_size", "body_size", "font_type", "font_color"],
   heading_styles: ["heading1_style", "heading2_style"],
-  // Must match Format Fields Pagination controls.
+  // Must match Format Fields Pagination controls (including Chapter starts).
   pagination: [
     "page_number_position",
     "title_page",
     "first_page_of_chapter",
     "preliminary_pages",
+    "body_numbering",
+    "chapter_starts",
   ],
   table_layout: ["table_layout"],
   figure_layout: ["figure_layout"],
@@ -115,7 +121,7 @@ function headingStyleKeysAdded(heading) {
 }
 
 /**
- * Added a style rule but left it on "Choose…" - that is an issue.
+ * Added a style rule but left it on "Choose…" — that is an issue.
  * Not adding the chip at all is IGNORE (optional).
  */
 function incompleteHeadingStyleKeys(heading) {
@@ -236,12 +242,37 @@ function incompleteHeadingStyleIssues(form) {
   return out;
 }
 
+function alignmentPageOverrideIssues(form) {
+  const bad = invalidAlignmentPageOverrideLines(form?.alignmentPageOverrides);
+  if (!bad.length) return [];
+  return [
+    {
+      id: "paper:alignment_page_overrides_invalid",
+      category: "paper",
+      field: "alignment",
+      code: "invalid_value",
+      message: `Alignment page overrides: each row needs a page number and alignment (got: ${bad[0]}).`,
+      severity: "critical",
+      location: {
+        page: 1,
+        line: 1,
+        excerpt: bad[0],
+        severity: "critical",
+        section: "Mechanics",
+      },
+    },
+  ];
+}
+
 /** Drop document issues already resolved by Format Fields values or IGNORE. */
 export function filterValidationForForm(validation, form) {
   const issues = Array.isArray(validation?.issues) ? validation.issues : [];
   const rules = formToRules(form || {});
   const remaining = issues.filter((issue) => !issueCovered(issue, form || {}, rules));
-  const incomplete = incompleteHeadingStyleIssues(form || {});
+  const incomplete = [
+    ...incompleteHeadingStyleIssues(form || {}),
+    ...alignmentPageOverrideIssues(form || {}),
+  ];
   const merged = [...remaining, ...incomplete];
   return { ok: merged.length === 0, issues: merged };
 }
@@ -272,7 +303,7 @@ export function ignoredFieldsFromForm(form) {
 /**
  * After extract: set every empty Format Field to IGNORE so missing guide rules
  * auto-pass (nothing to enforce). Extracted values are left unchanged.
- * Headings stay empty when unset - empty already means skip in the UI.
+ * Headings stay empty when unset — empty already means skip in the UI.
  */
 export function fillEmptyFieldsWithIgnore(form) {
   return applyIgnoredFieldsToForm(form, Object.keys(FIELD_FORM_KEYS));
@@ -281,7 +312,7 @@ export function fillEmptyFieldsWithIgnore(form) {
 /**
  * Re-apply saved ignored_fields as literal "IGNORE" in Format Fields.
  * Rules omit IGNORE on save, so without this Saved Mechanics shows Choose… again.
- * Heading sizes/styles stay empty when ignored - empty already means skip in the UI.
+ * Heading sizes/styles stay empty when ignored — empty already means skip in the UI.
  */
 export function applyIgnoredFieldsToForm(form, ignoredFields) {
   const list = Array.isArray(ignoredFields) ? ignoredFields : [];

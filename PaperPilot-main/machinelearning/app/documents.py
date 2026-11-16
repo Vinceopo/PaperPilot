@@ -39,6 +39,8 @@ from app.mechanics_options import (
     page_number_only,
     page_position_parts,
     pagination_omits_all_numbers,
+    alignment_page_overrides_for_storage,
+    parse_alignment_page_overrides,
     rule_unset,
 )
 
@@ -87,6 +89,78 @@ def parse_document(data: bytes, file_type: str, on_progress=None) -> dict:
         raise
     except Exception as exc:
         raise DocumentError("The document could not be parsed.") from exc
+
+
+def _pdf_vector_drawing_bboxes(page) -> list[dict]:
+    """Collect vector cell/frame rects from PDF drawings (table borders, boxes).
+
+    Raster images alone are not enough — real manuscripts usually draw table grids
+    with path strokes. Indent / role checks need those rects as ``has_drawing`` units
+    so cell text is not treated as body paragraphs.
+    """
+    page_w = float(page.rect.width)
+    page_h = float(page.rect.height)
+    page_area = max(1.0, page_w * page_h)
+    rects: list[list[float]] = []
+    strokes_h: list[list[float]] = []
+    strokes_v: list[list[float]] = []
+    for drawing in page.get_drawings() or []:
+        raw = drawing.get("rect")
+        if raw is None:
+            continue
+        x0, y0, x1, y1 = float(raw.x0), float(raw.y0), float(raw.x1), float(raw.y1)
+        if x1 < x0:
+            x0, x1 = x1, x0
+        if y1 < y0:
+            y0, y1 = y1, y0
+        width = x1 - x0
+        height = y1 - y0
+        if width < 1.5 and height < 1.5:
+            continue
+        box = [round(x0, 2), round(y0, 2), round(x1, 2), round(y1, 2)]
+        # Closed / filled cell or frame.
+        if width >= 14.0 and height >= 14.0:
+            area = width * height
+            if area >= 0.55 * page_area or width >= 0.92 * page_w:
+                continue
+            rects.append(box)
+            continue
+        # Thin rules — used later to rebuild a grid union when cells are line-drawn.
+        if height <= 3.0 and width >= 40.0:
+            strokes_h.append(box)
+        elif width <= 3.0 and height >= 40.0:
+            strokes_v.append(box)
+
+    if len(strokes_h) >= 2 and len(strokes_v) >= 2:
+        xs0 = [b[0] for b in strokes_h + strokes_v]
+        ys0 = [b[1] for b in strokes_h + strokes_v]
+        xs1 = [b[2] for b in strokes_h + strokes_v]
+        ys1 = [b[3] for b in strokes_h + strokes_v]
+        union = [min(xs0), min(ys0), max(xs1), max(ys1)]
+        union_w = union[2] - union[0]
+        union_h = union[3] - union[1]
+        union_area = max(0.0, union_w * union_h)
+        if (
+            union_w >= 40.0
+            and union_h >= 40.0
+            and union_w < 0.92 * page_w
+            and union_area < 0.55 * page_area
+        ):
+            rects.append([round(value, 2) for value in union])
+
+    # Deduplicate near-identical rects (stroke redraws, overlapping cell paths).
+    unique: list[list[float]] = []
+    for box in rects:
+        if any(
+            abs(box[0] - other[0]) <= 1.5
+            and abs(box[1] - other[1]) <= 1.5
+            and abs(box[2] - other[2]) <= 1.5
+            and abs(box[3] - other[3]) <= 1.5
+            for other in unique
+        ):
+            continue
+        unique.append(box)
+    return [{"bbox": box} for box in unique]
 
 
 def _parse_pdf(data: bytes, on_progress=None) -> dict:
@@ -145,6 +219,7 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                     )
                     line_index += 1
             lines = _merge_pdf_rows(lines, page_index)
+            drawings = _pdf_vector_drawing_bboxes(page)
             page_text = "\n".join(line["text"] for line in lines)
             all_text.append(page_text)
             pages.append(
@@ -155,6 +230,7 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                     "rotation": page.rotation,
                     "image_count": image_count,
                     "images": images,
+                    "drawings": drawings,
                     "lines": lines,
                 }
             )
@@ -1694,6 +1770,28 @@ def derive_mechanics_rules(text: str) -> dict:
     if alignment:
         rules["alignment"] = alignment
 
+    override_blob = _value_after_label(
+        flat,
+        (
+            "Alignment page overrides",
+            "Page alignment overrides",
+            "Alignment exceptions",
+            "Per-page alignment",
+        ),
+        stop,
+    )
+    if not override_blob:
+        # Free-standing "Page N = center" lines anywhere in the guide.
+        found_lines = re.findall(
+            r"(?i)\bpage\s*\d+\s*[=:]\s*(?:left|right|center|centre|centered|centred|justify|justified|"
+            r"flush\s+left|flush\s+right)\b",
+            text,
+        )
+        override_blob = "\n".join(found_lines)
+    alignment_overrides = parse_alignment_page_overrides(override_blob)
+    if alignment_overrides:
+        rules["alignment_page_overrides"] = alignment_page_overrides_for_storage(alignment_overrides)
+
     fonts = _font_families_in(flat)
     font_type = _value_after_label(flat, ("Font type", "Font", "Typeface", "Type"), stop)
     if font_type:
@@ -2481,6 +2579,15 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     if alignment:
         rules["alignment"] = alignment
 
+    alignment_overrides = parse_alignment_page_overrides(
+        raw.get("alignment_page_overrides")
+        or raw.get("alignmentPageOverrides")
+        or raw.get("alignment_page_exceptions")
+    )
+    if alignment_overrides:
+        # Store page_N keys so Firebase RTDB does not coerce {1:…} into an array.
+        rules["alignment_page_overrides"] = alignment_page_overrides_for_storage(alignment_overrides)
+
     margins_in = raw.get("margins_inches") if isinstance(raw.get("margins_inches"), dict) else {}
     margins: dict[str, float] = {}
     for side in ("top", "bottom", "left", "right", "gutter", "header", "footer"):
@@ -2572,7 +2679,6 @@ _SAMPLE_SECTIONS = (
         (
             ("Size", "8.5 x 11"),
             ("Orientation", "Portrait"),
-            ("Substance", "20"),
             ("Spacing", "Double"),
             ("Word spacing", "One space between words and after periods"),
             ("Indention", "0.5 inch"),
@@ -2607,7 +2713,6 @@ _SAMPLE_SECTIONS = (
             ("Chapter starts", "CHAPTER I, CHAPTER II…; Chapter 1, Chapter 2…"),
         ),
     ),
-    ("Page Breaks", "Only to start each new chapter and the reference list"),
     (
         "Table Layout",
         "Table number in bold, with the title in italic title case on the next line, both placed above it",

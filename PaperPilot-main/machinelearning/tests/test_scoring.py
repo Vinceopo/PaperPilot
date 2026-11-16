@@ -298,7 +298,8 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
     def test_15_multiple_sections(self):
         paragraphs = []
         for chapter in range(3):
-            paragraphs.append(para(len(paragraphs), lines=1, style="Heading 1", indent=0.0))
+            # Keep heading indent at the mechanics value so only Fonts fails this case.
+            paragraphs.append(para(len(paragraphs), lines=1, style="Heading 1", indent=0.5))
             paragraphs.extend(para(len(paragraphs) + k, font="Arial" if chapter == 1 else "Times New Roman") for k in range(2))
         result = self.scan(paragraphs)
         self.assertEqual(self.failed_categories(result), {"Fonts"})

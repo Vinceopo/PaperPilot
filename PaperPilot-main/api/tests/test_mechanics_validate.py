@@ -28,7 +28,6 @@ class MechanicsValidateTests(unittest.TestCase):
             "Paper\n"
             "Size:\t8.5 x 11\n"
             "Orientation:\tPortrait\n"
-            "Substance:\t20\n"
             "Spacing:\tDouble\n"
             "Word spacing:\tOne space between words and after periods\n"
             "Indention:\t0.5 inch\n"

@@ -313,8 +313,18 @@ def _mark_indent_table_units(units: list[dict]) -> set[int]:
                     table_ids.add(index)
 
         # Text inside or hugging a drawn rectangle / image is table-or-figure chrome.
+        # Ignore page-sized frames (they engulf body prose). Accept a single cell
+        # when the rectangle is clearly cell-sized — closes merged/single-cell gaps.
+        page_w_for_draw = float((items[0][1].get("page_width") if items else 612.0) or 612.0)
+        page_h_for_draw = float((items[0][1].get("page_height") if items else 792.0) or 792.0)
+        page_area = max(1.0, page_w_for_draw * page_h_for_draw)
         for drawing in drawings_by_page.get(page, []):
             db = drawing["bbox"]
+            draw_w = float(db[2]) - float(db[0])
+            draw_h = float(db[3]) - float(db[1])
+            draw_area = max(0.0, draw_w * draw_h)
+            if draw_area >= 0.55 * page_area or draw_w >= 0.92 * page_w_for_draw:
+                continue
             pad = 6.0
             region = [db[0] - pad, db[1] - pad, db[2] + pad, db[3] + pad]
             inside = []
@@ -324,17 +334,30 @@ def _mark_indent_table_units(units: list[dict]) -> set[int]:
                     inside.append(index)
             if len(inside) >= 2:
                 table_ids.update(inside)
+            elif len(inside) == 1 and draw_area < 0.35 * page_area and draw_w < 0.7 * page_w_for_draw:
+                table_ids.update(inside)
 
         # Grow seeded table columns: absorb nearby narrow column-aligned lines.
+        # Anchors must stay on this page — otherwise TOC/table left edges on page N
+        # contaminate body lines on later pages that share similar y / x0.
+        # Vertical band uses the full seeded table extent so wrapped multi-line
+        # cells join even when farther than one line from the header seed.
         page_w_default = float((items[0][1].get("page_width") if items else 612.0) or 612.0)
-        for _ in range(6):
-            anchors = [units[i] for i in table_ids if i < len(units) and _has_box(units[i])]
+        page_table_ids = {index for index, _unit in items if index in table_ids}
+        for _ in range(8):
+            anchors = [
+                units[i]
+                for i in page_table_ids
+                if i < len(units) and _has_box(units[i])
+            ]
             if not anchors:
                 break
             lefts = sorted({round(float(unit["bbox"][0]) / 4.0) * 4.0 for unit in anchors})
+            band_top = min(float(unit["bbox"][1]) for unit in anchors) - 8.0
+            band_bottom = max(float(unit["bbox"][3]) for unit in anchors) + 8.0
             changed = False
             for index, unit in items:
-                if index in table_ids:
+                if index in page_table_ids:
                     continue
                 bbox = unit["bbox"]
                 width = float(bbox[2]) - float(bbox[0])
@@ -344,12 +367,14 @@ def _mark_indent_table_units(units: list[dict]) -> set[int]:
                 left = float(bbox[0])
                 if not any(abs(left - edge) <= 10.0 for edge in lefts):
                     continue
-                near = any(
+                in_band = bbox[3] >= band_top and bbox[1] <= band_bottom
+                near = in_band or any(
                     bbox[1] <= anchor["bbox"][3] + 40.0 and bbox[3] >= anchor["bbox"][1] - 40.0
                     for anchor in anchors
                 )
                 if not near:
                     continue
+                page_table_ids.add(index)
                 table_ids.add(index)
                 changed = True
             if not changed:
@@ -516,6 +541,19 @@ def _visibly_indented(unit: dict, baseline: float) -> bool:
     return (unit["bbox"][0] - baseline) >= INDENT_MIN_INDENT_PT
 
 
+def _looks_like_mid_sentence_continuation(unit: dict) -> bool:
+    """True when the line clearly continues a sentence (soft wrap), not a new paragraph."""
+    text = _text(unit)
+    if not text:
+        return False
+    first = text[0]
+    if first.islower():
+        return True
+    if first in {"\"", "'", "(", "[", "“", "‘"} and len(text) > 1 and text[1].islower():
+        return True
+    return False
+
+
 def indent_prose_paragraphs(units: list[dict]) -> list[dict]:
     """Forked paragraph detection for indentation only.
 
@@ -586,8 +624,13 @@ def indent_prose_paragraphs(units: list[dict]) -> list[dict]:
             # much-larger-than-pitch blank (keeps consistently unindented docs
             # as real multi-paragraph fails when blanks/shorts are present).
             # List wraps after a short marker line are NOT new body paragraphs.
+            # Lowercase / mid-sentence starts after a short wrap are soft wraps,
+            # not new paragraphs (avoids 0-inch false positives on true 0.5" body).
             if not indented and (prev_short or flush_para_gap):
                 if _is_list_line(previous) or (current and _is_list_line(current[0])):
+                    current.append(unit)
+                    continue
+                if _looks_like_mid_sentence_continuation(unit):
                     current.append(unit)
                     continue
                 close()
