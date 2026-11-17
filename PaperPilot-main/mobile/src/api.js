@@ -2,6 +2,7 @@ import Constants from "expo-constants";
 import { File } from "expo-file-system";
 import * as FileSystem from "expo-file-system/legacy";
 import { auth } from "./firebase";
+import { localManuscriptPreview } from "./lib/localManuscriptPreview";
 import { saveFileToDevice } from "./lib/saveFile";
 
 const extra = Constants.expoConfig?.extra || {};
@@ -588,8 +589,12 @@ export function deleteManuscriptVersion({ manuscriptId, versionId } = {}) {
   );
 }
 
+/**
+ * Device-local preview only — no S3 upload and no server parse.
+ * Saving a version still uploads once via uploadManuscriptVersion.
+ */
 export function previewManuscript({ uri, name, mimeType }) {
-  return postUploadedDocument("/manuscripts/preview", { uri, name, mimeType }, "manuscript.pdf");
+  return localManuscriptPreview({ uri, name, mimeType, type: mimeType });
 }
 
 export async function uploadManuscriptVersion({
@@ -606,8 +611,9 @@ export async function uploadManuscriptVersion({
   if (!trimmedTitle) throw new ApiError("A manuscript title is required.", 400);
   if (!mechanicsId) throw new ApiError("Select a format mechanics document first.", 400);
 
+  // Prefer a URL already uploaded (e.g. reused object). Otherwise one S3 PUT here.
+  // Preview is device-local and never produces a cloudinary URL.
   const existingUrl = String(cloudinaryUrl || "").trim();
-  // Preview already uploaded this file — reuse that URL so new versions are not double-uploaded.
   const uploaded = existingUrl
     ? { url: existingUrl }
     : await uploadToS3({ uri, name, mimeType });

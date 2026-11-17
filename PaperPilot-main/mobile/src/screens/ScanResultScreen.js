@@ -238,8 +238,8 @@ function ScanResultBody({ navigation }) {
     campus,
     college,
     scannedAt,
-    citationStyle = "APA",
     mechanicsName = "",
+    formatMechanicsName = "",
     overallScore = null,
     overallCategories = null,
     rightPct,
@@ -280,7 +280,9 @@ function ScanResultBody({ navigation }) {
     reconcileDisplayedUnits({ unitsChecked, unitsPassed, unitsFailed }, categoryCards),
     issuesFound,
   );
-  const formatMechanicsLabel = String(mechanicsName || "").trim() || citationStyle || "—";
+  // Format Mechanics profile name only — never fall back to citation style (e.g. APA).
+  const formatMechanicsLabel =
+    String(mechanicsName || formatMechanicsName || "").trim() || "Format mechanics";
   // Bar shares only — percent numbers are not shown in the public results UI.
   // Cap issues at Total so Compliant + Non-Compliant bar shares still add to 100%.
   const fromOverallUnits =

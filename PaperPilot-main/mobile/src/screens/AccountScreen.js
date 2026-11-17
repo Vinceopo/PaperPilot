@@ -18,7 +18,7 @@ import { markPasswordChanged, signOutUser } from "../services/auth";
 import { emailsMatch, maskEmail } from "../lib/maskEmail";
 import { loadNotifications, pushNotification, saveNotifications } from "../lib/notifications";
 import { emailError, nameError, phoneError, usernameError } from "../lib/validation";
-import { isPaidTier, planName } from "../lib/plans";
+import { isPaidTier, planName, scanAllowance, scanResetLabel } from "../lib/plans";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import AuthFeatureCard from "../components/auth/AuthFeatureCard";
@@ -95,6 +95,28 @@ function PlanBadge({ tier }) {
       <Text style={[styles.planBadgeText, isPremium ? styles.planBadgeTextPremium : styles.planBadgeTextFree]}>
         {isPremium ? `★ ${planName(tier)} plan` : "Free plan"}
         </Text>
+    </View>
+  );
+}
+
+function ProScanUsageCard({ subscription, tier }) {
+  const { used, remaining, limit, window, resetAt } = scanAllowance(subscription, tier);
+  const resetText = scanResetLabel(resetAt);
+  if (!Number.isFinite(limit) || limit <= 0) return null;
+  const pct = Math.min(100, Math.max(0, (used / limit) * 100));
+  return (
+    <View style={styles.usageCard}>
+      <Text style={styles.usageKicker}>Scan usage</Text>
+      <Text style={styles.usageTitle}>
+        {remaining} of {limit} scans remaining this {window}
+      </Text>
+      <Text style={styles.usageSub}>
+        {used} used · {remaining} left of {limit}
+      </Text>
+      <View style={styles.usageTrack}>
+        <View style={[styles.usageFill, { width: `${pct}%` }]} />
+      </View>
+      {resetText ? <Text style={styles.usageReset}>{resetText}</Text> : null}
     </View>
   );
 }
@@ -184,7 +206,7 @@ function BackLink({ onPress, label = "Back to account" }) {
 }
 
 export default function AccountScreen({ navigation }) {
-  const { user, tier } = useAppData();
+  const { user, tier, subscription } = useAppData();
   const { height: windowHeight } = useWindowDimensions();
   const compact = windowHeight < 740;
   const layout = useMemo(
@@ -755,6 +777,10 @@ export default function AccountScreen({ navigation }) {
             <InfoRow label="Plan" value={planName(tier)} last compact={compact} />
           </View>
 
+          {String(tier || "").toLowerCase() === "pro" ? (
+            <ProScanUsageCard subscription={subscription} tier={tier} />
+          ) : null}
+
           <View style={[styles.actions, compact && styles.actionsCompact]}>
             <Pressable
               onPress={() => {
@@ -939,6 +965,33 @@ const styles = StyleSheet.create({
     backgroundColor: "#f8f9fb",
     paddingHorizontal: 14,
   },
+  usageCard: {
+    marginTop: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#f1f5f9",
+    backgroundColor: "#f8f9fb",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  usageKicker: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    color: colors.muted,
+  },
+  usageTitle: { marginTop: 6, fontSize: 14, fontWeight: "700", color: "#1e293b" },
+  usageSub: { marginTop: 2, fontSize: 12, color: colors.muted },
+  usageTrack: {
+    marginTop: 10,
+    height: 8,
+    overflow: "hidden",
+    borderRadius: 999,
+    backgroundColor: "#e2e8f0",
+  },
+  usageFill: { height: "100%", borderRadius: 999, backgroundColor: colors.accent },
+  usageReset: { marginTop: 10, fontSize: 12, fontWeight: "600", color: "#475569" },
   infoRow: { borderBottomWidth: 1, borderBottomColor: "#f1f5f9", paddingVertical: 8 },
   infoRowCompact: { paddingVertical: 6 },
   infoRowLast: { borderBottomWidth: 0 },

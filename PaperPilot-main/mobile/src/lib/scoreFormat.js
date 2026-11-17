@@ -4,7 +4,7 @@ export function hasValue(value) {
   return value != null && Number.isFinite(Number(value));
 }
 
-/** Score Breakdown categories (matches backend BREAKDOWN_ORDER / live web). */
+/** Score Breakdown categories (matches backend BREAKDOWN_ORDER). */
 export const SCORE_BREAKDOWN_ORDER = [
   "Fonts",
   "Margins",
@@ -12,6 +12,7 @@ export const SCORE_BREAKDOWN_ORDER = [
   "Spacing",
   "Alignment",
   "Pagination",
+  "Captions",
   "Citations",
 ];
 
@@ -52,7 +53,6 @@ export function isMechanicsRuleUnset(value) {
 /**
  * Which Score Breakdown categories have at least one configured (non-IGNORE) rule
  * in the selected Format Mechanics profile.
- * Captions are not a scored breakdown category on web, so they stay out of this set.
  */
 export function activeScoreCategoriesFromRules(rules) {
   const active = new Set();
@@ -132,6 +132,12 @@ export function activeScoreCategoriesFromRules(rules) {
     active.add("Pagination");
   }
 
+  const tableLayout = rules.table_layout_requirements || rules.table_layout;
+  const figureLayout = rules.figure_layout_requirements || rules.figure_layout;
+  if (!isMechanicsRuleUnset(tableLayout) || !isMechanicsRuleUnset(figureLayout)) {
+    active.add("Captions");
+  }
+
   if (!isMechanicsRuleUnset(rules.citation_style)) {
     active.add("Citations");
   }
@@ -141,19 +147,22 @@ export function activeScoreCategoriesFromRules(rules) {
 
 /**
  * Keep only Score Breakdown rows whose category has configured/enabled rules.
- * When `rules` is null/undefined (legacy scans), rows stay as returned by the API.
+ * Always hide IGNORE / not_applicable rows. When `rules` is null/undefined
+ * (legacy scans), keep API rows except not_applicable.
  */
 export function filterScoreBreakdownByRules(scoreBreakdown = [], rules) {
   const list = Array.isArray(scoreBreakdown) ? scoreBreakdown : [];
-  if (rules == null) return list;
+  const withoutIgnored = list.filter((row) => {
+    const status = String(row?.status || "").toLowerCase();
+    // Hide IGNORE / not_applicable only. Unreliable stays visible (notice, no ring).
+    return status !== "not_applicable";
+  });
+  if (rules == null) return withoutIgnored;
   const active = activeScoreCategoriesFromRules(rules);
   if (!active.size) return [];
-  return list.filter((row) => {
+  return withoutIgnored.filter((row) => {
     const name = String(row?.metric || row?.section || "").trim();
-    if (!active.has(name)) return false;
-    const status = String(row?.status || "").toLowerCase();
-    if (status === "not_applicable") return false;
-    return true;
+    return active.has(name);
   });
 }
 

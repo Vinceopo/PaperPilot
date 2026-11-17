@@ -114,8 +114,8 @@ export async function downloadReport(result, opts = {}) {
     campus,
     college,
     scannedAt,
-    citationStyle = "APA",
     mechanicsName = "",
+    formatMechanicsName = "",
     overallScore = null,
     rightPct,
     wrongPct,
@@ -259,7 +259,8 @@ export async function downloadReport(result, opts = {}) {
   doc.roundedRect(ML, Y, CW, 22, 2, 2, "FD");
   const metaCols = [
     ["DOCUMENT", `${documentTitle} · ${versionLabel}`],
-    ["FORMAT MECHANICS", mechanicsName || citationStyle || "—"],
+    // Same Document Details source as ScanResultScreen — profile name, not citation style.
+    ["FORMAT MECHANICS", String(mechanicsName || formatMechanicsName || "").trim() || "Format mechanics"],
     ["SCANNED", scannedDate],
     ["GENERATED", generatedDate],
   ];

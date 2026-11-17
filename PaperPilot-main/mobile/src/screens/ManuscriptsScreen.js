@@ -5,7 +5,6 @@ import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import ManuscriptDetailModal from "../components/cockpit/ManuscriptDetailModal";
-import PaperPlaneLoader from "../components/ui/PaperPlaneLoader";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -45,7 +44,8 @@ function formatDate(iso) {
 function formatMeta(row) {
   const parts = [];
   if (row.institution && row.institution !== "-") parts.push(row.institution);
-  if (row.citationStyle) parts.push(row.citationStyle);
+  const formatName = String(row.mechanicsName || row.formatMechanicsName || "").trim();
+  if (formatName) parts.push(formatName);
   if (row.versionCount > 0) {
     parts.push(
       `${row.versionCount} version${row.versionCount === 1 ? "" : "s"} (${row.latestVersionLabel})`
@@ -62,6 +62,57 @@ function StatCard({ label, value, sub, accent }) {
       <Text style={styles.statLabel}>{label}</Text>
       <Text style={[styles.statValue, accent ? { color: accent } : null]}>{value}</Text>
       {sub ? <Text style={[styles.statSub, { color: sub.color }]}>{sub.text}</Text> : null}
+    </View>
+  );
+}
+
+function SkeletonPulse({ style }) {
+  return <View style={[styles.skeletonPulse, style]} />;
+}
+
+/** Layout-matched placeholder while the manuscript library loads. */
+function MyManuscriptsSkeleton() {
+  return (
+    <View style={styles.skeletonRoot} accessibilityRole="progressbar" accessibilityLabel="Loading manuscripts">
+      <View style={styles.skeletonHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.skeletonTitle}>Loading your manuscripts…</Text>
+          <Text style={styles.skeletonSub}>Retrieving your library and scan history.</Text>
+        </View>
+        <View style={styles.skeletonSync}>
+          <View style={styles.skeletonDot} />
+          <Text style={styles.skeletonSyncText}>Syncing</Text>
+        </View>
+      </View>
+
+      <View style={styles.statGrid}>
+        {Array.from({ length: 4 }, (_, i) => (
+          <View key={i} style={styles.statCard}>
+            <SkeletonPulse style={{ height: 10, width: 72 }} />
+            <SkeletonPulse style={{ marginTop: 10, height: 22, width: 40 }} />
+            <SkeletonPulse style={{ marginTop: 8, height: 10, width: 64 }} />
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.skeletonToolbar}>
+        <SkeletonPulse style={{ height: 40, flex: 1, borderRadius: 10 }} />
+        <SkeletonPulse style={{ height: 40, width: 88, borderRadius: 10 }} />
+        <SkeletonPulse style={{ height: 40, width: 104, borderRadius: 10 }} />
+      </View>
+
+      <View style={styles.skeletonList}>
+        {Array.from({ length: 5 }, (_, i) => (
+          <View key={i} style={styles.skeletonRow}>
+            <View style={{ flex: 1, gap: 8 }}>
+              <SkeletonPulse style={{ height: 14, width: "70%" }} />
+              <SkeletonPulse style={{ height: 11, width: "48%" }} />
+            </View>
+            <SkeletonPulse style={{ height: 28, width: 28, borderRadius: 14 }} />
+            <SkeletonPulse style={{ height: 28, width: 72, borderRadius: 999 }} />
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
@@ -166,10 +217,7 @@ export default function ManuscriptsScreen({ navigation }) {
   if (loading) {
     return (
       <AppShell active="manuscripts" breadcrumb="Dashboard / My Manuscripts" title="My Manuscripts">
-        <View style={styles.loadingBox}>
-          <PaperPlaneLoader />
-          <Text style={styles.loadingText}>Loading your compliance workspace…</Text>
-        </View>
+        <MyManuscriptsSkeleton />
       </AppShell>
     );
   }
@@ -476,6 +524,48 @@ const cardShadow = {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.pageBg },
+  skeletonRoot: { flex: 1, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 },
+  skeletonHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 4,
+  },
+  skeletonTitle: { fontSize: 13, fontWeight: "700", color: "#0F1729" },
+  skeletonSub: { marginTop: 2, fontSize: 11, color: colors.muted },
+  skeletonSync: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  skeletonDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent },
+  skeletonSyncText: { fontSize: 11, fontWeight: "600", color: colors.muted },
+  skeletonPulse: { backgroundColor: "rgba(226,232,240,0.9)", borderRadius: 6 },
+  skeletonToolbar: { marginTop: 12, flexDirection: "row", alignItems: "center", gap: 8 },
+  skeletonList: {
+    marginTop: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    overflow: "hidden",
+  },
+  skeletonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#f1f5f9",
+  },
   loadingBox: {
     flex: 1,
     minHeight: 240,

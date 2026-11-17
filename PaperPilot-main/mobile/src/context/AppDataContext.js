@@ -34,7 +34,7 @@ import {
 } from "../api";
 import { isServerId, mapComplianceScanToResult, scanTargetIds } from "../lib/scanMapper";
 import { supportedCitationStyle } from "../lib/formatMechanicsForm";
-import { isPaidTier, planLimit } from "../lib/plans";
+import { isPaidTier, scanAllowance } from "../lib/plans";
 import { useScanFlow } from "../hooks/useScanFlow";
 import { latestVersion } from "../lib/scoreBand";
 import {
@@ -1063,9 +1063,12 @@ export function AppDataProvider({ children }) {
   );
 
   const tier = String(subscription?.tier || "free").toLowerCase();
-  const used = Number(subscription?.used ?? subscription?.scans_used ?? 0);
-  const limit = Number(subscription?.limit) || planLimit(tier);
-  const remaining = Math.max(limit - Math.max(0, used), 0);
+  const {
+    used,
+    limit,
+    remaining,
+    window: allowanceWindow,
+  } = scanAllowance(subscription, tier);
   const notificationUnread = useMemo(() => unreadCount(notifications), [notifications]);
 
   const value = useMemo(
@@ -1102,6 +1105,7 @@ export function AppDataProvider({ children }) {
       used,
       limit,
       remaining,
+      allowanceWindow,
       loadDashboard,
       refreshSubscription,
       applySubscription,
@@ -1153,6 +1157,7 @@ export function AppDataProvider({ children }) {
       used,
       limit,
       remaining,
+      allowanceWindow,
       loadDashboard,
       refreshSubscription,
       scannedLibrary,

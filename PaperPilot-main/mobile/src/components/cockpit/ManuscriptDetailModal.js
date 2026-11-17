@@ -422,7 +422,18 @@ export default function ManuscriptDetailModal({
               {manuscript.title}
             </Text>
             <Text style={styles.subtitle}>
-              {manuscript.institution || "—"} · {manuscript.citationStyle}
+              {[
+                manuscript.institution || "—",
+                String(
+                  selected?.scanResult?.mechanicsName ||
+                    selected?.scanResult?.formatMechanicsName ||
+                    manuscript.mechanicsName ||
+                    manuscript.formatMechanicsName ||
+                    ""
+                ).trim(),
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </Text>
             <View style={[styles.pill, { backgroundColor: tone.pillBg, borderColor: tone.pillBorder }]}>
               <Text style={[styles.pillText, { color: tone.pillText }]}>

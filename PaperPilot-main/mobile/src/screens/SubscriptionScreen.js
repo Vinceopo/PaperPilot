@@ -20,6 +20,7 @@ import {
   planName,
   planPrice,
   resetWindow,
+  scanAllowance,
 } from "../lib/plans";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -348,8 +349,12 @@ export default function SubscriptionScreen({ navigation }) {
     }
   }
 
-  const planScanLimit = Number(subscription?.limit) || planLimit(tier);
-  const scansRemaining = Math.max(planScanLimit - Number(subscription?.used || 0), 0);
+  const {
+    limit: planScanLimit,
+    used: scansUsed,
+    remaining: scansRemaining,
+    window: allowanceWindow,
+  } = scanAllowance(subscription, tier);
 
   return (
     <AppShell
@@ -457,7 +462,7 @@ export default function SubscriptionScreen({ navigation }) {
                 <DetailRow label="Renewal date" value={isPremium ? formatDate(subscription?.renews_at) : "—"} />
                 <DetailRow
                   label="Scan allowance"
-                  value={`${scansRemaining} of ${planScanLimit} remaining this ${resetWindow(tier)}${
+                  value={`${scansRemaining} of ${planScanLimit} remaining this ${allowanceWindow}\n${scansUsed} used · ${scansRemaining} left of ${planScanLimit}${
                     subscription?.reset_at ? `\nResets ${formatDate(subscription.reset_at)}` : ""
                   }`}
                   last

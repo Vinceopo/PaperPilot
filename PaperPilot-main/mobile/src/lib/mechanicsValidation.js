@@ -167,11 +167,6 @@ function formIgnoresField(form, category, fieldId) {
       }
       return false;
     }
-    if (formKey === "paginationChapterMarkers") {
-      const markers = form?.paginationChapterMarkers;
-      if (isIgnoreFormValue(markers)) return true;
-      return Array.isArray(markers) && markers.length === 1 && isIgnoreFormValue(markers[0]);
-    }
     return isIgnoreFormValue(form?.[formKey]);
   });
 }
@@ -324,15 +319,6 @@ export function applyIgnoredFieldsToForm(form, ignoredFields) {
 
     for (const formKey of formKeys) {
       if (formKey === "headings") continue;
-      if (formKey === "paginationChapterMarkers") {
-        const current = next.paginationChapterMarkers;
-        const empty =
-          current == null ||
-          current === "" ||
-          (Array.isArray(current) && current.length === 0);
-        if (empty) next.paginationChapterMarkers = "IGNORE";
-        continue;
-      }
       if (!String(next[formKey] ?? "").trim()) {
         next[formKey] = "IGNORE";
       }

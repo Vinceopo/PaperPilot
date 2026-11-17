@@ -6,7 +6,7 @@ import { useAppData } from "../../context/AppDataContext";
 import { auth } from "../../firebase";
 import { signOutUser } from "../../services/auth";
 import { colors } from "../../theme";
-import { planName, resetWindow } from "../../lib/plans";
+import { planName } from "../../lib/plans";
 import BackToDashboardButton from "../ui/BackToDashboardButton";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import Sidebar from "./Sidebar";
@@ -34,6 +34,7 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
     tier,
     remaining,
     limit,
+    allowanceWindow,
     notifications,
     notificationUnread,
     markNotificationsAllRead,
@@ -139,7 +140,7 @@ export default function AppShell({ active, breadcrumb, title, onBack, backLabel,
             </Text>
             <Text style={styles.remaining} numberOfLines={2}>
               {subscription
-                ? `${remaining} of ${limit} scans remaining this ${resetWindow(tier)}`
+                ? `${remaining} of ${limit} scans remaining this ${allowanceWindow || "month"}`
                 : "Fetching your account…"}
             </Text>
           </View>

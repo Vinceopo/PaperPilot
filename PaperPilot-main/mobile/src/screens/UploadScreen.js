@@ -33,7 +33,7 @@ import DocumentPreview, { PreviewPanel, isPdfFile } from "../components/cockpit/
 import {
   emptyMechanicsForm,
   formHasAnyRule,
-  formToRules,
+  formToRulesForPlan,
   rulesToForm,
   sampleMechanicsForm,
   supportedCitationStyle,
@@ -56,7 +56,7 @@ import {
 } from "../lib/uploadLimits";
 import { isScanReady } from "../lib/scanMapper";
 import { normalizeTitle } from "../lib/scannedLibrary";
-import { isPaidTier, planName, resetWindow } from "../lib/plans";
+import { isPaidTier, planName } from "../lib/plans";
 import AnalyzeProgressBar from "../components/cockpit/AnalyzeProgressBar";
 import DocumentLoader from "../components/ui/DocumentLoader";
 import PaperPlaneLoader from "../components/ui/PaperPlaneLoader";
@@ -154,6 +154,7 @@ export default function UploadScreen({ navigation }) {
     tier,
     remaining,
     limit,
+    allowanceWindow,
     subscription,
     uploadWizardStep,
     advanceUploadWizard,
@@ -493,7 +494,7 @@ export default function UploadScreen({ navigation }) {
     const fromUpload = mode === "upload";
     return {
       name,
-      rules: formToRules(form),
+      rules: formToRulesForPlan(form, tier),
       source_filename:
         fromUpload && extractMeta?.source_filename ? extractMeta.source_filename : `${name}.docx`,
       file_type: fromUpload && extractMeta?.file_type ? extractMeta.file_type : "docx",
@@ -551,7 +552,7 @@ export default function UploadScreen({ navigation }) {
     }
     return {
       name,
-      rules: formToRules(savedForm),
+      rules: formToRulesForPlan(savedForm, tier),
       ignored_fields: ignoredFieldsFromForm(savedForm),
     };
   }
@@ -630,17 +631,38 @@ export default function UploadScreen({ navigation }) {
 
   async function loadPreview(file) {
     const requestId = ++previewRequest.current;
-    setPreview(null);
-    setPreviewBusy(true);
+    if (!file) {
+      setPreview(null);
+      setPreviewBusy(false);
+      return;
+    }
+    // Device-local stub so DocumentPreview can render the file immediately.
+    // No S3 upload / server parse during preview.
+    setPreview({
+      filename: file.name,
+      text_preview: "",
+      page_count: 0,
+      cloudinary_url: "",
+      public_url: "",
+    });
+    setPreviewBusy(false);
+    if (!onPreviewManuscript) return;
     try {
       const data = await onPreviewManuscript(file);
       if (previewRequest.current !== requestId) return;
-      setPreview(data);
+      setPreview({
+        filename: data?.filename || file.name,
+        file_type: data?.file_type,
+        text_preview: data?.text_preview || "",
+        char_count: data?.char_count || 0,
+        page_count: data?.page_count || 0,
+        pages: data?.pages || [],
+        // Preview must stay local — never attach an upload URL.
+        cloudinary_url: "",
+        public_url: "",
+      });
     } catch {
-      if (previewRequest.current !== requestId) return;
-      setPreview({ filename: file.name, text_preview: "", page_count: 0 });
-    } finally {
-      if (previewRequest.current === requestId) setPreviewBusy(false);
+      // Keep the local stub; DocumentPreview still uses `file`.
     }
   }
 
@@ -709,7 +731,6 @@ export default function UploadScreen({ navigation }) {
   }
 
   function queueUpload(pending) {
-    const reuseUrl = String(pending.cloudinaryUrl || preview?.cloudinary_url || "").trim();
     setConfirm({
       title: pending.manuscriptId ? "Upload new version?" : "Upload manuscript?",
       message: `Save “${pending.file?.name}” as “${pending.title}” on the server? File Details opens only after the upload finishes.`,
@@ -719,8 +740,8 @@ export default function UploadScreen({ navigation }) {
           file: pending.file,
           title: pending.title,
           manuscriptId: pending.manuscriptId || undefined,
-          // Reuse the preview S3 upload so saving a version does not upload the file twice.
-          cloudinaryUrl: reuseUrl || undefined,
+          // Preview is device-local; S3 upload happens once on confirm.
+          cloudinaryUrl: "",
         });
         if (ok) {
           setMsFile(null);
@@ -753,7 +774,7 @@ export default function UploadScreen({ navigation }) {
       file: msFile,
       title: selected.title,
       manuscriptId: selected.id,
-      cloudinaryUrl: preview?.cloudinary_url,
+      cloudinaryUrl: "",
     });
   }
 
@@ -786,7 +807,7 @@ export default function UploadScreen({ navigation }) {
       file: msFile,
       title: resolvedTitle,
       manuscriptId: "",
-      cloudinaryUrl: preview?.cloudinary_url,
+      cloudinaryUrl: "",
     });
   }
 
@@ -802,8 +823,8 @@ export default function UploadScreen({ navigation }) {
     setManuscriptId("");
     setMsTitle("");
     setTitleError("");
-    // Prefer existing titles when the library already has manuscripts — clearer on mobile.
-    setTitleMode(uploadTargets.length ? "existing" : "new");
+    // Always open on New title; user can switch to an existing title afterward.
+    setTitleMode("new");
     setExistingId(uploadTargets[0]?.id || "");
     setTitleOpen(true);
   }
@@ -819,7 +840,7 @@ export default function UploadScreen({ navigation }) {
     }
     if (remaining <= 0) {
       setUpgradeMessage(
-        `You have used all ${limit} scans included in your ${planName(tier)} plan this ${resetWindow(tier)}.` +
+        `You have used all ${limit} scans included in your ${planName(tier)} plan this ${allowanceWindow || "month"}.` +
           (subscription?.reset_at
             ? ` Your scans reset on ${new Date(subscription.reset_at).toLocaleDateString()}.`
             : "")
@@ -1056,6 +1077,7 @@ export default function UploadScreen({ navigation }) {
                                 onChange={setSavedForm}
                                 disabled={mechBusy}
                                 title="Format Fields (from saved mechanics)"
+                                tier={tier}
                               />
                             </View>
                           </>
@@ -1135,6 +1157,7 @@ export default function UploadScreen({ navigation }) {
                           title="Format Fields (from uploaded guide)"
                           nameError={nameError}
                           nameInputRef={nameInputRef}
+                          tier={tier}
                         />
                         <View style={styles.editorActions}>
                           <PrimaryButton
@@ -1174,6 +1197,7 @@ export default function UploadScreen({ navigation }) {
                       title="Format Fields"
                       nameError={nameError}
                       nameInputRef={nameInputRef}
+                      tier={tier}
                     />
                     <PrimaryButton
                       title={mechanicsBusy ? "Saving…" : "Save customized format & continue"}
@@ -1272,7 +1296,7 @@ export default function UploadScreen({ navigation }) {
                       <DocumentPreview
                         file={msFile}
                         preview={preview}
-                        documentUrl={preview?.cloudinary_url || ""}
+                        documentUrl=""
                         documentName={msFile?.name || preview?.filename || ""}
                         suppressLoader
                         onReady={() => setViewerReady(true)}
@@ -1499,6 +1523,17 @@ export default function UploadScreen({ navigation }) {
             {uploadTargets.length > 0 ? (
               <View style={styles.modeRow}>
                 <Pressable
+                  style={[styles.modeBtn, titleMode === "new" && styles.modeBtnActive]}
+                  onPress={() => {
+                    setTitleMode("new");
+                    setTitleError("");
+                  }}
+                >
+                  <Text style={[styles.modeBtnText, titleMode === "new" && styles.modeBtnTextActive]}>
+                    New title
+                  </Text>
+                </Pressable>
+                <Pressable
                   style={[styles.modeBtn, titleMode === "existing" && styles.modeBtnActive]}
                   onPress={() => {
                     setTitleMode("existing");
@@ -1508,17 +1543,6 @@ export default function UploadScreen({ navigation }) {
                 >
                   <Text style={[styles.modeBtnText, titleMode === "existing" && styles.modeBtnTextActive]}>
                     Use an existing title
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.modeBtn, titleMode === "new" && styles.modeBtnActive]}
-                  onPress={() => {
-                    setTitleMode("new");
-                    setTitleError("");
-                  }}
-                >
-                  <Text style={[styles.modeBtnText, titleMode === "new" && styles.modeBtnTextActive]}>
-                    New title
                   </Text>
                 </Pressable>
               </View>

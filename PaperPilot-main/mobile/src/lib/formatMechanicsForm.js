@@ -4,9 +4,7 @@
  */
 
 import {
-  canonicalBodyNumbering,
   canonicalChapterFirstPage,
-  canonicalChapterMarkers,
   canonicalLandscapePages,
   canonicalPagePosition,
   canonicalPreliminaryStyle,
@@ -23,8 +21,10 @@ function starterHeading(values) {
 }
 
 export const CITATION_STYLES = ["APA", "MLA", "IEEE"];
+/** Free plan Format Fields: APA or IGNORE only (MLA/IEEE need Premium/Pro). */
+export const FREE_CITATION_STYLES = ["APA"];
 
-/** Format Fields IGNORE choice - stored in the form, omitted from saved rules. */
+/** Format Fields IGNORE choice — stored in the form, omitted from saved rules. */
 export function isIgnoreFormValue(value) {
   return /^ignore$/i.test(String(value || "").trim());
 }
@@ -38,6 +38,22 @@ export function supportedCitationStyle(value) {
   const style = String(value || "").trim().toUpperCase();
   if (!style || style === "IGNORE") return "";
   return CITATION_STYLES.includes(style) ? style : "APA";
+}
+
+/** Citation styles selectable in Format Fields for the user's plan. */
+export function citationStylesForPlan(tier) {
+  const value = String(tier || "free").toLowerCase();
+  if (value === "premium" || value === "pro") return CITATION_STYLES;
+  return FREE_CITATION_STYLES;
+}
+
+/** Clamp a form citation value to what the plan allows (keeps IGNORE / empty). */
+export function clampCitationFormatForPlan(value, tier) {
+  if (isIgnoreFormValue(value)) return "IGNORE";
+  const style = supportedCitationStyle(value);
+  if (!style) return "";
+  const allowed = citationStylesForPlan(tier);
+  return allowed.includes(style) ? style : "APA";
 }
 
 /** APA 7th edition starter values. */
@@ -68,8 +84,7 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
       starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "left" }),
     ],
     paginationPosition: "Top right",
-    // Leave unset: schools differ on whether page 1 shows a number. Cover-like pages still auto-skip.
-    paginationTitlePage: "",
+    paginationTitlePage: "Number shown",
     paginationFirstPageRule: "Same position as other pages",
     paginationPreliminaryStyle: "",
     // Body numbering / chapter-start markers removed from Format Fields UI.
@@ -377,8 +392,9 @@ export function rulesToForm(rules = {}, name = "") {
       pagination.first_page_of_chapter || rules.pagination_first_page_rule || ""
     ),
     paginationPreliminaryStyle: canonicalPreliminaryStyle(pagination.preliminary_style),
-    paginationBodyNumbering: canonicalBodyNumbering(pagination.body_numbering),
-    paginationChapterMarkers: canonicalChapterMarkers(pagination.chapter_markers),
+    // Body numbering / chapter starts removed — ignore legacy saved keys on load.
+    paginationBodyNumbering: "",
+    paginationChapterMarkers: [],
     pageBreaks: asText(rules.page_break_requirements || rules.page_breaks)
       .split(/\n/)
       .map((part) => part.trim())
@@ -406,7 +422,7 @@ function formText(value) {
   return isIgnoreFormValue(text) ? "" : text;
 }
 
-export function formToRules(form) {
+export function formToRules(form, tier) {
   const rules = {};
   const paper = {};
   const sizeText = formText(form.paperSize);
@@ -532,10 +548,21 @@ export function formToRules(form) {
 
   const citation = formText(form.citationFormat).toUpperCase();
   if (CITATION_STYLES.includes(citation)) {
-    rules.citation_style = citation;
+    // When tier is passed, Free may only persist APA (MLA/IEEE need Premium/Pro).
+    // Omit tier to keep legacy behavior (all styles) for unit tests / callers.
+    if (tier != null && tier !== "" && !citationStylesForPlan(tier).includes(citation)) {
+      rules.citation_style = "APA";
+    } else {
+      rules.citation_style = citation;
+    }
   }
 
   return rules;
+}
+
+/** Build rules for save, clamping citation style to the user's plan. */
+export function formToRulesForPlan(form, tier) {
+  return formToRules(form, tier);
 }
 
 export function formHasAnyRule(form) {

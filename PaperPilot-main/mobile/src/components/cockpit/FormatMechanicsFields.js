@@ -14,7 +14,8 @@ import {
   PAGE_ALIGNMENT_OPTIONS,
   alignmentPageOverrideRowsFromText,
   alignmentPageOverridesTextFromRows,
-  supportedCitationStyle,
+  citationStylesForPlan,
+  clampCitationFormatForPlan,
 } from "../../lib/formatMechanicsForm";
 import {
   CHAPTER_FIRST_PAGE_OPTIONS,
@@ -22,7 +23,6 @@ import {
   HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
   MAX_HEADING_LEVELS,
-  PAGE_NO_NUMBERS,
   PAGE_POSITIONS,
   PRELIMINARY_STYLE_OPTIONS,
   TITLE_PAGE_OPTIONS,
@@ -42,12 +42,6 @@ const ALIGNMENT_OPTIONS = [
   { value: "Left", label: "Left" },
   { value: "Center", label: "Center" },
   { value: "Right", label: "Right" },
-];
-const CITATION_OPTIONS = [
-  { value: "IGNORE", label: "IGNORE" },
-  { value: "APA", label: "APA" },
-  { value: "MLA", label: "MLA" },
-  { value: "IEEE", label: "IEEE" },
 ];
 const LINE_SPACING_OPTIONS = [
   { value: "1", label: "1 (Single)" },
@@ -250,34 +244,33 @@ export default function FormatMechanicsFields({
   title = "Format Fields",
   nameError = "",
   nameInputRef,
+  tier = "free",
 }) {
+  const citationOptions = [
+    { value: "IGNORE", label: "IGNORE" },
+    ...citationStylesForPlan(tier).map((style) => ({ value: style, label: style })),
+  ];
+  const citationValue = (() => {
+    if (/^ignore$/i.test(String(form.citationFormat || "").trim())) return "IGNORE";
+    return clampCitationFormatForPlan(form.citationFormat, tier);
+  })();
+
+  // If a Free user loads a saved MLA/IEEE profile, snap the field to APA.
+  useEffect(() => {
+    const raw = String(form.citationFormat || "").trim();
+    if (!raw || /^ignore$/i.test(raw)) return;
+    const clamped = clampCitationFormatForPlan(raw, tier);
+    if (clamped && clamped.toUpperCase() !== raw.toUpperCase()) {
+      onChange?.({ ...form, citationFormat: clamped });
+    }
+  }, [tier, form.citationFormat]);
+
   function set(key, value) {
-    onChange?.({ ...form, [key]: value });
+    let next = value;
+    if (key === "citationFormat") next = clampCitationFormatForPlan(value, tier);
+    onChange?.({ ...form, [key]: next });
   }
   const headings = Array.isArray(form.headings) ? form.headings : [];
-  const noPageNumbers = String(form.paginationPosition || "") === PAGE_NO_NUMBERS;
-  function applyNoPageNumbers() {
-    onChange?.({
-      ...form,
-      paginationPosition: PAGE_NO_NUMBERS,
-      paginationTitlePage: "IGNORE",
-      paginationFirstPageRule: "IGNORE",
-      paginationPreliminaryStyle: "IGNORE",
-      paginationBodyNumbering: "",
-      paginationChapterMarkers: [],
-    });
-  }
-  function clearNoPageNumbers() {
-    onChange?.({
-      ...form,
-      paginationPosition: "",
-      paginationTitlePage: "",
-      paginationFirstPageRule: "",
-      paginationPreliminaryStyle: "",
-      paginationBodyNumbering: "",
-      paginationChapterMarkers: [],
-    });
-  }
   function updateHeading(index, update) {
     set(
       "headings",
@@ -532,38 +525,11 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Pagination">
-          <View style={styles.noPageRow}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.noPageTitle}>Entire manuscript</Text>
-              <Text style={styles.noPageHint}>
-                Use when the format does not require page numbers on any page.
-              </Text>
-            </View>
-            {!disabled ? (
-              <Pressable
-                onPress={noPageNumbers ? clearNoPageNumbers : applyNoPageNumbers}
-                style={({ pressed }) => [
-                  styles.noPageBtn,
-                  noPageNumbers && styles.noPageBtnActive,
-                  pressed && styles.chipPressed,
-                ]}
-                accessibilityRole="button"
-              >
-                <Text style={[styles.noPageBtnText, noPageNumbers && styles.noPageBtnTextActive]}>
-                  {noPageNumbers ? "No page numbers · selected" : "No page numbers"}
-                </Text>
-              </Pressable>
-            ) : (
-              <Text style={styles.noPageDisabled}>
-                {noPageNumbers ? "No page numbers" : "Page numbers required"}
-              </Text>
-            )}
-          </View>
-          <View style={[styles.paginationFields, noPageNumbers && styles.paginationDimmed]}>
+          <View style={styles.paginationFields}>
             <Field label="Position" hint="Where page numbers sit on normal pages">
               <ChoiceSelect
                 title="Position"
-                disabled={disabled || noPageNumbers}
+                disabled={disabled}
                 value={form.paginationPosition}
                 onChange={(v) => set("paginationPosition", v)}
                 options={PAGE_POSITIONS}
@@ -575,7 +541,7 @@ export default function FormatMechanicsFields({
             >
               <ChoiceSelect
                 title="Title page"
-                disabled={disabled || noPageNumbers}
+                disabled={disabled}
                 value={form.paginationTitlePage}
                 onChange={(v) => set("paginationTitlePage", v)}
                 options={TITLE_PAGE_OPTIONS}
@@ -584,7 +550,7 @@ export default function FormatMechanicsFields({
             <Field label="First page of each chapter">
               <ChoiceSelect
                 title="First page of each chapter"
-                disabled={disabled || noPageNumbers}
+                disabled={disabled}
                 value={form.paginationFirstPageRule}
                 onChange={(v) => set("paginationFirstPageRule", v)}
                 options={CHAPTER_FIRST_PAGE_OPTIONS}
@@ -593,7 +559,7 @@ export default function FormatMechanicsFields({
             <Field label="Preliminary pages" hint="Pages before Chapter 1">
               <ChoiceSelect
                 title="Preliminary pages"
-                disabled={disabled || noPageNumbers}
+                disabled={disabled}
                 value={form.paginationPreliminaryStyle}
                 onChange={(v) => set("paginationPreliminaryStyle", v)}
                 options={PRELIMINARY_STYLE_OPTIONS}
@@ -611,18 +577,21 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Citation format">
-          <Field label="Citation style" hint="IGNORE skips citation checks">
+          <Field
+            label="Citation style"
+            hint={
+              String(tier || "").toLowerCase() === "free"
+                ? "Free plan: APA or IGNORE only — MLA/IEEE need Premium/Pro"
+                : "IGNORE skips citation checks"
+            }
+          >
             <SelectField
               title="Citation style"
-              value={
-                /^ignore$/i.test(String(form.citationFormat || "").trim())
-                  ? "IGNORE"
-                  : supportedCitationStyle(form.citationFormat)
-              }
+              value={citationValue || ""}
               options={
                 String(form.citationFormat || "") === ""
-                  ? [{ value: "", label: "Choose…" }, ...CITATION_OPTIONS]
-                  : CITATION_OPTIONS
+                  ? [{ value: "", label: "Choose…" }, ...citationOptions]
+                  : citationOptions
               }
               onChange={(v) => set("citationFormat", v)}
               disabled={disabled}
