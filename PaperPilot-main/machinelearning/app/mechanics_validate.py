@@ -131,18 +131,6 @@ MECHANICS_SCHEMA: tuple[dict[str, Any], ...] = (
                 "example": "Same position as other pages",
                 "rule": ("pagination", "first_page_of_chapter"),
             },
-            {
-                "id": "body_numbering",
-                "label": "Body numbering",
-                "example": "Arabic, continuous",
-                "rule": ("pagination", "body_numbering"),
-            },
-            {
-                "id": "chapter_starts",
-                "label": "Chapter starts",
-                "example": "CHAPTER I, CHAPTER II…; Chapter 1, Chapter 2…",
-                "rule": ("pagination", "chapter_markers"),
-            },
         ),
     },
     {

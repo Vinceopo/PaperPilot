@@ -85,22 +85,38 @@ export default function ManuscriptPanel({
 
   async function loadPreview(nextFile) {
     const requestId = ++previewRequest.current;
-    setPreview(null);
-    if (!nextFile || !onPreview) return;
-    setPreviewBusy(true);
+    if (!nextFile) {
+      setPreview(null);
+      setPreviewBusy(false);
+      return;
+    }
+    // Browser-local stub so DocumentPagePreview can render the File immediately.
+    // No S3 upload / server parse during preview.
+    setPreview({
+      filename: nextFile.name,
+      text_preview: "",
+      page_count: 0,
+      cloudinary_url: "",
+      public_url: "",
+    });
+    setPreviewBusy(false);
+    if (!onPreview) return;
     try {
       const data = await onPreview(nextFile);
       if (previewRequest.current !== requestId) return;
-      setPreview(data);
-    } catch (err) {
-      if (previewRequest.current !== requestId) return;
       setPreview({
-        filename: nextFile.name,
-        text_preview: "",
-        page_count: 0,
+        filename: data?.filename || nextFile.name,
+        file_type: data?.file_type,
+        text_preview: data?.text_preview || "",
+        char_count: data?.char_count || 0,
+        page_count: data?.page_count || 0,
+        pages: data?.pages || [],
+        // Preview must stay local — never attach an upload URL from a legacy server path.
+        cloudinary_url: "",
+        public_url: "",
       });
-    } finally {
-      if (previewRequest.current === requestId) setPreviewBusy(false);
+    } catch {
+      // Keep the local stub; DocumentPagePreview still uses `file`.
     }
   }
 
@@ -138,7 +154,8 @@ export default function ManuscriptPanel({
       file,
       title: selected.title,
       manuscriptId: selected.id,
-      documentUrl: preview?.cloudinary_url || preview?.public_url || "",
+      // Preview is browser-local; S3 upload happens once on confirm.
+      documentUrl: "",
     });
     setConfirmOpen(true);
   }
@@ -172,7 +189,7 @@ export default function ManuscriptPanel({
       file,
       title: resolvedTitle,
       manuscriptId: "",
-      documentUrl: preview?.cloudinary_url || preview?.public_url || "",
+      documentUrl: "",
     });
     setConfirmOpen(true);
   }
@@ -373,11 +390,7 @@ export default function ManuscriptPanel({
                 )}
               </div>
 
-              <div
-                className={`relative min-h-0 flex-1 bg-[#e8ecf1] p-3 ${
-                  previewPreparing || previewUploading ? "overflow-hidden" : "overflow-y-auto"
-                }`}
-              >
+              <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#e8ecf1] p-3">
                 {preview?.error ? (
                   <p className="rounded-lg bg-white px-4 py-3 text-xs text-rose-500 shadow-sm">
                     {preview.error}
@@ -386,19 +399,21 @@ export default function ManuscriptPanel({
                   <div
                     className={
                       previewPreparing || previewUploading
-                        ? "pointer-events-none overflow-hidden"
-                        : undefined
+                        ? "pointer-events-none min-h-0 flex-1 overflow-hidden"
+                        : "min-h-0 flex-1 overflow-hidden"
                     }
                     aria-hidden={previewPreparing || previewUploading || undefined}
                   >
-                    {/* Same paged PDF/DOCX display as Issue Tracing — document only, no highlights/XAI. */}
+                    {/* Same paged PDF/DOCX display as Issue Tracing — document only, no highlights/XAI.
+                        Only this preview (page stack) scrolls; the outer panel must not. */}
                     <DocumentPagePreview
                       file={file}
                       preview={preview}
-                      documentUrl={preview?.cloudinary_url || preview?.public_url || ""}
+                      documentUrl=""
                       documentName={file?.name || preview?.filename || ""}
                       emptyLabel="No manuscript preview available yet."
                       paged
+                      fillHeight
                       pageCountHint={preview?.page_count || 0}
                     />
                   </div>

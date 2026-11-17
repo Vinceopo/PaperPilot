@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from app.compliance import (
+    IN_TEXT_MLA_RE,
     IssueCollector,
     _check_citations,
     _citation_marker_families,
@@ -48,6 +49,16 @@ class CitationFamilyHelpersTests(unittest.TestCase):
             _citation_marker_families("Mix (Smith, 2020) and [1]."),
             {"apa", "numeric"},
         )
+
+    def test_tech_label_is_not_mla(self):
+        """Short tech tokens like (Gen 2) must not count as MLA author-page citations."""
+        self.assertFalse(IN_TEXT_MLA_RE.search("(Gen 2)"))
+        self.assertFalse(IN_TEXT_MLA_RE.search("(GEN 2)"))
+        self.assertTrue(IN_TEXT_MLA_RE.search("(Smith 45)"))
+        self.assertTrue(IN_TEXT_MLA_RE.search("(Lee 12)"))
+        self.assertEqual(_citation_marker_families("Chipset row (Gen 2) only."), set())
+        self.assertEqual(_citation_marker_families("See (Smith 45)."), {"mla"})
+        self.assertEqual(_citation_marker_families("See (Smith, 2020)."), {"apa"})
 
 
 class CitationCheckTests(unittest.TestCase):
@@ -118,6 +129,19 @@ class CitationCheckTests(unittest.TestCase):
         ]
         issues = _run(units, "IEEE")
         self.assertEqual(issues, [])
+
+    def test_table_tech_label_ignored_under_apa(self):
+        """Table cells with (Gen 2)-like text must not raise citation_format under APA."""
+        units = [
+            _unit("Prior work shows gains (Smith, 2020)."),
+            {
+                **_unit("Accelerator family (Gen 2) in the matrix.", line_index=1, role="table"),
+                "source": "table",
+                "table_row": True,
+            },
+        ]
+        issues = _run(units, "APA")
+        self.assertEqual([item for item in issues if item["issue_type"] == "citation_format"], [])
 
 
 if __name__ == "__main__":

@@ -383,12 +383,6 @@ def normalize_pagination_rules(pagination_in: dict, raw: dict) -> dict:
     )
     if prelim:
         out["preliminary_style"] = prelim
-    body = canonical_body_numbering(pagination_in.get("body_numbering") or raw.get("pagination_body_numbering"))
-    if body:
-        out["body_numbering"] = body
-    markers = canonical_chapter_markers(
-        pagination_in.get("chapter_markers") or raw.get("pagination_chapter_markers") or []
-    )
-    if markers:
-        out["chapter_markers"] = markers
+    # Body numbering + chapter-start markers were removed from Format Fields.
+    # Ignore them on load so saved formats that still contain the keys do not error.
     return out

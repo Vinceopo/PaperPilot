@@ -175,7 +175,6 @@ export default function ScanResultsScreen({
     college,
     scannedAt,
     formatMechanicsName = "",
-    citationStyle = "",
     overallScore = null,
     rightPct,
     wrongPct,
@@ -206,10 +205,8 @@ export default function ScanResultsScreen({
     { unitsChecked, unitsPassed, unitsFailed },
     categoryCards,
   );
-  const formatLabel =
-    String(formatMechanicsName || "").trim() ||
-    String(citationStyle || "").trim() ||
-    "Format mechanics";
+  // Format Mechanics profile name only — never fall back to citation style (e.g. APA).
+  const formatLabel = String(formatMechanicsName || "").trim() || "Format mechanics";
   // Bar shares only - percent numbers are not shown in the public results UI.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)
@@ -400,7 +397,7 @@ export default function ScanResultsScreen({
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
         <h3 className="text-lg font-bold text-slate-900">Score Breakdown</h3>
-        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-4">
           {categoryCards.map((item) => (
             <CategoryScoreCard
               key={item.metric || item.section}

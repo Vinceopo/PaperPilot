@@ -79,8 +79,10 @@ from app.documents import (
     assert_mechanics_guide,
     build_sample_mechanics_docx,
     derive_mechanics_rules,
+    is_deferred_parse,
     normalize_mechanics_rules,
     parse_document,
+    probe_document,
     validate_document,
 )
 from app.mechanics_validate import (
@@ -265,7 +267,7 @@ def _user_upload_byte_limit(uid: str) -> int:
 def uploads_presign(body: PresignUploadRequest, uid: str = Depends(authenticated_uid)):
     """Issue a short-lived S3 PUT URL. Client uploads bytes, then sends public_url as cloudinary_url.
 
-    upload_url is PUT-only (presigned). Never open it in a browser tab or iframe  - 
+    upload_url is PUT-only (presigned). Never open it in a browser tab or iframe —
     that issues GET and yields SignatureDoesNotMatch. Use public_url for preview/download.
     """
     if not s3_configured():
@@ -306,6 +308,16 @@ def _read_document_bytes(
     return filename, file_type, parsed
 
 
+def _probe_document_bytes(
+    filename: str, data: bytes, max_bytes: int | None = None
+) -> tuple[str, str, dict]:
+    """Validate + light text probe for fast manuscript create (no full layout parse)."""
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
+    file_type = validate_document(filename, data, limit)
+    probed = probe_document(data, file_type)
+    return filename, file_type, probed
+
+
 def _read_uploaded_document(
     url: str,
     filename_hint: str | None = None,
@@ -317,6 +329,49 @@ def _read_uploaded_document(
     if not Path(filename).suffix and hint and Path(hint).suffix:
         filename = Path(hint).name
     return _read_document_bytes(filename, data, limit)
+
+
+def _probe_uploaded_document(
+    url: str,
+    filename_hint: str | None = None,
+    max_bytes: int | None = None,
+) -> tuple[str, str, dict]:
+    """Download + validate + text probe for version create (defers full parse to Analyse)."""
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
+    data, hint = fetch_s3_bytes(url, max_bytes=limit)
+    filename = Path((filename_hint or hint or "document").strip()).name
+    if not Path(filename).suffix and hint and Path(hint).suffix:
+        filename = Path(hint).name
+    return _probe_document_bytes(filename, data, limit)
+
+
+def _ensure_version_parsed_for_scan(version: dict, max_bytes: int | None = None) -> dict:
+    """Return a full parse tree for in-process scan; re-parse when create deferred it."""
+    parsed = version.get("parsed_data") if isinstance(version.get("parsed_data"), dict) else {}
+    if not is_deferred_parse(parsed):
+        return parsed
+    document_url = (version.get("cloudinary_url") or "").strip()
+    if not document_url:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This manuscript version has no stored document URL. "
+                "Upload the document again, then run the scan."
+            ),
+        )
+    limit = max_bytes if max_bytes is not None else document_byte_limit()
+    try:
+        data, hint = fetch_s3_bytes(document_url, max_bytes=limit)
+    except S3StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    filename = Path((version.get("source_filename") or hint or "document").strip()).name
+    file_type = (version.get("file_type") or "").strip().lower()
+    if file_type not in {"pdf", "docx"}:
+        file_type = validate_document(filename, data, limit)
+    try:
+        return parse_document(data, file_type)
+    except DocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 def _document_preview_pages(parsed: dict, text: str, limit: int = 500) -> list[dict]:
@@ -388,11 +443,21 @@ def _feature_tier(tier: str) -> str:
 
 def _scan_rules(rules: dict, ignored_fields: list[str] | None = None) -> dict:
     """Normalize rules for a scan; strip IGNORE / empty Format Fields so they do not enforce."""
-    out = apply_ignored_fields_to_rules(
-        normalize_mechanics_rules(rules or {}), ignored_fields
-    )
+    out = apply_ignored_fields_to_rules(rules or {}, ignored_fields)
     style = str(out.get("citation_style") or "").strip().upper()
     if style == "CHICAGO":
+        out["citation_style"] = "APA"
+    return out
+
+
+def _clamp_citation_style_for_plan(rules: dict, uid: str) -> dict:
+    """Free plan may only store APA (or omit / IGNORE). MLA/IEEE require Premium/Pro."""
+    out = dict(rules or {})
+    style = str(out.get("citation_style") or "").strip().upper()
+    if not style:
+        return out
+    snap = subscription_snapshot(uid)
+    if not is_paid_tier(snap.get("tier")) and style not in {"APA"}:
         out["citation_style"] = "APA"
     return out
 
@@ -418,7 +483,7 @@ async def mechanics_extract(
                 "No extractable text was found in the document. "
                 "Use a text-based PDF or DOCX (not a scanned image-only PDF)."
             )
-        rules = derive_mechanics_rules(text)
+        rules = _clamp_citation_style_for_plan(derive_mechanics_rules(text), uid)
         assert_mechanics_guide(text, rules)
         pages = _document_preview_pages(parsed, text)
         return {
@@ -449,6 +514,7 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
     rules = apply_ignored_fields_to_rules(
         normalize_mechanics_rules(body.rules), body.ignored_fields
     )
+    rules = _clamp_citation_style_for_plan(rules, uid)
     if not rules:
         raise HTTPException(
             status_code=400,
@@ -456,7 +522,7 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
         )
     filename = (body.source_filename or f"{name}.docx").strip()[:300]
     raw_type = (body.file_type or "docx").strip().lower()[:40] or "docx"
-    # SQLite CHECK only allows pdf/docx - map customize/"manual" saves to docx.
+    # SQLite CHECK only allows pdf/docx — map customize/"manual" saves to docx.
     file_type = raw_type if raw_type in ("pdf", "docx") else "docx"
     if not filename.lower().endswith((".pdf", ".docx")):
         filename = f"{Path(filename).stem}.docx"
@@ -486,16 +552,16 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
 @app.get("/mechanics/sample")
 def mechanics_sample():
     """Downloadable sample format-mechanics guide (DOCX) for users who need a starting point."""
-    from fastapi.responses import Response
+    from fastapi.responses import StreamingResponse
 
-    payload = build_sample_mechanics_docx()
-    return Response(
-        content=payload,
+    buffer = io.BytesIO(build_sample_mechanics_docx())
+    headers = {
+        "Content-Disposition": 'attachment; filename="Sample_Format_Mechanics.docx"'
+    }
+    return StreamingResponse(
+        buffer,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={
-            "Content-Disposition": 'attachment; filename="Sample_Format_Mechanics.docx"',
-            "Cache-Control": "no-store",
-        },
+        headers=headers,
     )
 
 
@@ -514,7 +580,7 @@ async def mechanics_create(
         item_name = (body.name or Path(filename).stem).strip()
         if not item_name:
             raise DocumentError("A mechanics name is required.")
-        rules = derive_mechanics_rules(text)
+        rules = _clamp_citation_style_for_plan(derive_mechanics_rules(text), uid)
         assert_mechanics_guide(text, rules)
         item = create_mechanics(
             uid, item_name[:200], filename, file_type, text, parsed, rules
@@ -542,6 +608,8 @@ def mechanics_update(
         if body.rules is not None
         else None
     )
+    if rules is not None:
+        rules = _clamp_citation_style_for_plan(rules, uid)
     if body.rules is not None and not rules:
         raise HTTPException(
             status_code=400,
@@ -628,10 +696,11 @@ async def manuscript_version_create(
             detail="Format mechanics not found. Select a saved format profile, then upload again.",
         )
     try:
-        filename, file_type, parsed = _read_uploaded_document(
+        # Probe only at create — full layout parse runs on Analyse (ML or in-process).
+        filename, file_type, parsed = _probe_uploaded_document(
             body.cloudinary_url, body.filename, max_bytes=_user_upload_byte_limit(uid)
         )
-        if not parsed["text"]:
+        if not (parsed.get("text") or "").strip():
             raise DocumentError("No extractable text was found in the document.")
         version, created_parent = create_version(
             uid,
@@ -818,8 +887,11 @@ def compliance_scan_create(
             except LookupError:
                 raise HTTPException(status_code=404, detail="Requested scan input was not found.") from None
 
+    parsed_for_scan = _ensure_version_parsed_for_scan(
+        version, max_bytes=_user_upload_byte_limit(uid)
+    )
     result = run_compliance_scan(
-        version["parsed_data"],
+        parsed_for_scan,
         _scan_rules(mechanics["rules"], mechanics.get("ignored_fields")),
         _feature_tier(subscription["tier"]),
     )
@@ -1060,7 +1132,7 @@ def subscription_confirm(body: ConfirmCheckoutRequest, uid: str = Depends(authen
 
     handled = fulfill_checkout_paid(data if isinstance(data, dict) else {"id": session_id})
     if not handled:
-        # Session is paid and owned by this user - activate even if webhook metadata was missing.
+        # Session is paid and owned by this user — activate even if webhook metadata was missing.
         billing_period = str(
             (pending or {}).get("billing_period")
             or meta.get("billing_period")
@@ -1114,7 +1186,7 @@ async def paymongo_webhook(
     paymongo_signature: str | None = Header(default=None, alias="Paymongo-Signature"),
 ):
     """
-    PayMongo webhook - raw body required for HMAC verification.
+    PayMongo webhook — raw body required for HMAC verification.
     FastAPI does not JSON-parse Request.body(), so signature verification is safe here.
     Tier changes happen only after a valid signature (never from client redirects).
     """

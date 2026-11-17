@@ -682,7 +682,7 @@ def create_version(
         request_ref = _reference(f"{ROOT}/version_requests/{owner_uid}/{request_key}")
         previous = request_ref.get()
         if isinstance(previous, dict) and previous.get("manuscript_id") and previous.get("version_id"):
-            existing = get_version(owner_uid, previous["manuscript_id"], previous["version_id"])
+            existing = get_version_meta(owner_uid, previous["manuscript_id"], previous["version_id"])
             if existing:
                 return existing, bool(previous.get("created_parent"))
 
@@ -744,14 +744,24 @@ def create_version(
         }
         if cloudinary_url:
             version["cloudinary_url"] = cloudinary_url.strip()
-        # Heavy parse trees live on S3 when configured; RTDB keeps metadata + URL only.
-        if artifacts_enabled():
+        # Deferred probe stubs stay tiny in RTDB — skip fat S3 JSON so upload returns fast.
+        # Full layout trees (legacy / explicit parse) still use the artifact sidecar when S3 is on.
+        deferred = isinstance(parsed, dict) and str(
+            ((parsed.get("metadata") or {}).get("parse_status") or "")
+        ).strip().lower() == "deferred"
+        if deferred:
+            version["extracted_text"] = (text or "")[:8000]
+            version["parsed_data"] = parsed or {}
+        elif artifacts_enabled():
             parsed_url = try_upload_json_artifact(
                 parsed_public_id(owner_uid, manuscript_id, version_id),
                 {"extracted_text": text, "parsed_data": parsed or {}},
             )
             if parsed_url:
                 version["parsed_json_url"] = parsed_url
+            else:
+                version["extracted_text"] = text
+                version["parsed_data"] = parsed
         else:
             version["extracted_text"] = text
             version["parsed_data"] = parsed
@@ -777,7 +787,8 @@ def create_version(
                 "created_at": created,
             }
         )
-    return get_version(owner_uid, manuscript_id, version_id), created_parent
+    # Slim meta only — clients need ids + document URL after upload, not the parse tree.
+    return get_version_meta(owner_uid, manuscript_id, version_id), created_parent
 
 
 def list_manuscripts(owner_uid: str) -> list[dict]:
@@ -859,6 +870,17 @@ def get_version(owner_uid: str, manuscript_id: str, version_id: str) -> dict | N
     if not isinstance(row, dict):
         return None
     return _version_row(row, include_content=True)
+
+
+def get_version_meta(owner_uid: str, manuscript_id: str, version_id: str) -> dict | None:
+    """Version metadata without hydrating parsed_data (fast upload response)."""
+    manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
+    if not isinstance(manuscript, dict):
+        return None
+    row = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
+    if not isinstance(row, dict):
+        return None
+    return _version_row(row, include_content=False)
 
 
 def get_version_full(owner_uid: str, manuscript_id: str, version_id: str) -> dict | None:
@@ -1053,8 +1075,18 @@ def _subscription_row(owner_uid: str) -> dict:
         }
         ref.set(row)
     elif (row.get("period_start"), row.get("period_end")) != (start, end):
-        # Same allowance window, just re-aligned (e.g. calendar month -> billing / payment cycle).
-        fix = {"period_start": start, "period_end": end, "updated_at": now_text}
+        # Window dates corrected (calendar → billing, or weekly Pro slide).
+        # A new period_start is a new allowance window — zero the counter.
+        # Same start with a corrected end keeps the current used count.
+        old_start = str(row.get("period_start") or "")
+        fix = {
+            "period_start": start,
+            "period_end": end,
+            "reset_period": _reset_period(tier),
+            "updated_at": now_text,
+        }
+        if start != old_start:
+            fix["scans_used"] = 0
         ref.update(fix)
         row = {**row, **fix}
     return row

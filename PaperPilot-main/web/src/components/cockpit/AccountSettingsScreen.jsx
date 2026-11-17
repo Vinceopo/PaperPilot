@@ -22,7 +22,7 @@ import AuthFeatureCard from "../auth/AuthFeatureCard.jsx";
 import OtpStep from "../auth/OtpStep.jsx";
 import { emailError, nameError, phoneError, usernameError } from "../auth/validation.js";
 import { emailsMatch, maskEmail } from "../../lib/maskEmail.js";
-import { isPaidTier, planName } from "../../lib/plans.js";
+import { isPaidTier, planName, scanAllowance, scanResetLabel } from "../../lib/plans.js";
 import {
   loadNotifications,
   saveNotifications,
@@ -111,6 +111,37 @@ function PlanBadge({ tier }) {
   );
 }
 
+function ProScanUsageCard({ subscription, tier }) {
+  const { used, remaining, limit, window, resetAt } = scanAllowance(subscription, tier);
+  const resetText = scanResetLabel(resetAt);
+  if (!Number.isFinite(limit) || limit <= 0) return null;
+  const pct = Math.min(100, Math.max(0, (used / limit) * 100));
+  return (
+    <div className="mt-6 rounded-xl border border-slate-100 bg-[#f8f9fb] px-6 py-5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Scan usage</p>
+      <p className="mt-2 text-base font-semibold text-slate-800">
+        {remaining} of {limit} scans remaining this {window}
+      </p>
+      <p className="mt-1 text-sm text-slate-500">
+        {used} used · {remaining} left of {limit}
+      </p>
+      <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-200">
+        <div
+          className="h-full rounded-full bg-[#16bfa8] transition-[width]"
+          style={{ width: `${pct}%` }}
+          role="progressbar"
+          aria-valuenow={used}
+          aria-valuemin={0}
+          aria-valuemax={limit}
+        />
+      </div>
+      {resetText ? (
+        <p className="mt-3 text-sm font-medium text-slate-600">{resetText}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function InfoRow({ label, value, badge }) {
   return (
     <div className="flex items-start justify-between gap-4 border-b border-slate-100 py-4 last:border-0">
@@ -193,7 +224,13 @@ function PwField({ label, id, value, onChange, show, onToggle, autoComplete }) {
 
 // ─── main component ───────────────────────────────────────────────────────────
 
-export default function AccountSettingsScreen({ user, tier = "free", onSignOut, onManageSubscription }) {
+export default function AccountSettingsScreen({
+  user,
+  tier = "free",
+  subscription = null,
+  onSignOut,
+  onManageSubscription,
+}) {
   const [view, setView] = useState("summary"); // summary | edit | pwEmail | pwOtp | pwNew
 
   // Profile state (loaded from RTDB)
@@ -662,11 +699,11 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
   // ══ SUMMARY + centered modals ══════════════════════════════════════════════
   return (
     <>
-    <div className="mx-auto mt-[7vh] w-full max-w-7xl">
+    <div className="mx-auto mt-[6vh] w-full max-w-7xl px-2 sm:px-3">
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_44px_rgba(15,23,42,0.14)] md:flex">
 
         {/* ── LEFT PANEL ───────────────────────────────────────────────── */}
-        <div className="relative flex flex-col items-center overflow-hidden bg-[#101a30] px-8 py-10 text-white md:w-72 md:shrink-0">
+        <div className="relative flex flex-col items-center overflow-hidden bg-[#101a30] px-8 py-10 text-white md:w-[19rem] md:shrink-0">
           <div
             className="pointer-events-none absolute -left-12 top-0 h-40 w-40 rounded-full bg-[#16bfa8]/10 blur-3xl"
             aria-hidden
@@ -728,17 +765,21 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
         </div>
 
         {/* ── RIGHT PANEL ──────────────────────────────────────────────── */}
-        <div className="flex flex-1 flex-col bg-white px-8 py-10 md:px-10">
+        <div className="flex flex-1 flex-col bg-white px-7 py-10 md:px-9">
           <h2 className="text-2xl font-bold tracking-tight text-slate-800">Account details</h2>
-          <p className="mt-1 text-sm text-slate-500">Review your information and manage security settings.</p>
+          <p className="mt-1.5 text-sm text-slate-500">Review your information and manage security settings.</p>
 
-          <div className="mt-7 rounded-xl border border-slate-100 bg-[#f8f9fb] px-5">
+          <div className="mt-6 rounded-xl border border-slate-100 bg-[#f8f9fb] px-5">
             <InfoRow label="Email address" value={email ? maskEmail(email) : ""} badge={emailVerified} />
             <InfoRow label="Full name" value={fullName} />
             {canEditUsername && <InfoRow label="Username" value={form.username} />}
             <InfoRow label="Mobile number" value={form.contactNumber} />
             <InfoRow label="Plan" value={planName(tier)} />
           </div>
+
+          {String(tier || "").toLowerCase() === "pro" ? (
+            <ProScanUsageCard subscription={subscription} tier={tier} />
+          ) : null}
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
             <button
@@ -774,11 +815,6 @@ export default function AccountSettingsScreen({ user, tier = "free", onSignOut, 
             </button>
           )}
 
-          {isGoogleAccount && (
-            <p className="mt-4 text-sm leading-relaxed text-slate-500">
-              You sign in with Google. Setting a password is optional and only needed if you also want email login.
-            </p>
-          )}
         </div>
       </div>
     </div>

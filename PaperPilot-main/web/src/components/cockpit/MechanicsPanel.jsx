@@ -7,7 +7,7 @@ import DocumentLoader from "../DocumentLoader.jsx";
 import {
   emptyMechanicsForm,
   formHasAnyRule,
-  formToRules,
+  formToRulesForPlan,
   rulesToForm,
   sampleMechanicsForm,
 } from "../../lib/formatMechanicsForm.js";
@@ -240,7 +240,7 @@ export default function MechanicsPanel({
     }
     return {
       name,
-      rules: formToRules(form),
+      rules: formToRulesForPlan(form, tier),
       source_filename:
         mode === "upload" && extractMeta?.source_filename
           ? extractMeta.source_filename
@@ -276,7 +276,7 @@ export default function MechanicsPanel({
     }
     return {
       name,
-      rules: formToRules(form),
+      rules: formToRulesForPlan(form, tier),
       ignored_fields: ignoredFieldsFromForm(form),
     };
   }
@@ -626,6 +626,7 @@ export default function MechanicsPanel({
                 onChange={setForm}
                 disabled={panelBusy}
                 title="Format Fields (from saved mechanics)"
+                tier={tier}
               />
               <div className="mt-3">
                 <button
@@ -749,6 +750,7 @@ export default function MechanicsPanel({
                 onChange={setForm}
                 disabled={busy || extracting}
                 title="Format Fields (from uploaded guide)"
+                tier={tier}
               />
               <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                 <button
@@ -794,6 +796,7 @@ export default function MechanicsPanel({
             onChange={setForm}
             disabled={busy}
             title="Format Fields"
+            tier={tier}
           />
           <button
             type="button"

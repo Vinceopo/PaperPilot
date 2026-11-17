@@ -4,9 +4,7 @@
  */
 
 import {
-  canonicalBodyNumbering,
   canonicalChapterFirstPage,
-  canonicalChapterMarkers,
   canonicalLandscapePages,
   canonicalPagePosition,
   canonicalPreliminaryStyle,
@@ -264,8 +262,9 @@ export function rulesToForm(rules = {}, name = "") {
       pagination.first_page_of_chapter || rules.pagination_first_page_rule || ""
     ),
     paginationPreliminaryStyle: canonicalPreliminaryStyle(pagination.preliminary_style),
-    paginationBodyNumbering: canonicalBodyNumbering(pagination.body_numbering),
-    paginationChapterMarkers: canonicalChapterMarkers(pagination.chapter_markers),
+    // Body numbering / chapter starts removed — ignore legacy saved keys on load.
+    paginationBodyNumbering: "",
+    paginationChapterMarkers: [],
     pageBreaks: asText(rules.page_break_requirements || rules.page_breaks)
       .split(/\n/)
       .map((part) => part.trim())

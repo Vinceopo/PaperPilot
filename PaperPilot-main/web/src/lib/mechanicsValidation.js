@@ -5,7 +5,7 @@
  * IGNORE is omitted from saved rules and listed in ignored_fields so scans skip it.
  */
 
-import { formToRules } from "./formatMechanicsForm.js";
+import { formToRules, invalidAlignmentPageOverrideLines } from "./formatMechanicsForm.js";
 import { headingHasNoRules } from "./mechanicsOptions.js";
 
 export function isIgnoreFormValue(value) {
@@ -115,7 +115,7 @@ function headingStyleKeysAdded(heading) {
 }
 
 /**
- * Added a style rule but left it on "Choose…" - that is an issue.
+ * Added a style rule but left it on "Choose…" — that is an issue.
  * Not adding the chip at all is IGNORE (optional).
  */
 function incompleteHeadingStyleKeys(heading) {
@@ -166,11 +166,6 @@ function formIgnoresField(form, category, fieldId) {
         return added.every((k) => isIgnoreFormValue(heading?.[k]));
       }
       return false;
-    }
-    if (formKey === "paginationChapterMarkers") {
-      const markers = form?.paginationChapterMarkers;
-      if (isIgnoreFormValue(markers)) return true;
-      return Array.isArray(markers) && markers.length === 1 && isIgnoreFormValue(markers[0]);
     }
     return isIgnoreFormValue(form?.[formKey]);
   });
@@ -236,12 +231,37 @@ function incompleteHeadingStyleIssues(form) {
   return out;
 }
 
+function alignmentPageOverrideIssues(form) {
+  const bad = invalidAlignmentPageOverrideLines(form?.alignmentPageOverrides);
+  if (!bad.length) return [];
+  return [
+    {
+      id: "paper:alignment_page_overrides_invalid",
+      category: "paper",
+      field: "alignment",
+      code: "invalid_value",
+      message: `Alignment page overrides: each row needs a page number and alignment (got: ${bad[0]}).`,
+      severity: "critical",
+      location: {
+        page: 1,
+        line: 1,
+        excerpt: bad[0],
+        severity: "critical",
+        section: "Mechanics",
+      },
+    },
+  ];
+}
+
 /** Drop document issues already resolved by Format Fields values or IGNORE. */
 export function filterValidationForForm(validation, form) {
   const issues = Array.isArray(validation?.issues) ? validation.issues : [];
   const rules = formToRules(form || {});
   const remaining = issues.filter((issue) => !issueCovered(issue, form || {}, rules));
-  const incomplete = incompleteHeadingStyleIssues(form || {});
+  const incomplete = [
+    ...incompleteHeadingStyleIssues(form || {}),
+    ...alignmentPageOverrideIssues(form || {}),
+  ];
   const merged = [...remaining, ...incomplete];
   return { ok: merged.length === 0, issues: merged };
 }
@@ -272,7 +292,7 @@ export function ignoredFieldsFromForm(form) {
 /**
  * After extract: set every empty Format Field to IGNORE so missing guide rules
  * auto-pass (nothing to enforce). Extracted values are left unchanged.
- * Headings stay empty when unset - empty already means skip in the UI.
+ * Headings stay empty when unset — empty already means skip in the UI.
  */
 export function fillEmptyFieldsWithIgnore(form) {
   return applyIgnoredFieldsToForm(form, Object.keys(FIELD_FORM_KEYS));
@@ -281,7 +301,7 @@ export function fillEmptyFieldsWithIgnore(form) {
 /**
  * Re-apply saved ignored_fields as literal "IGNORE" in Format Fields.
  * Rules omit IGNORE on save, so without this Saved Mechanics shows Choose… again.
- * Heading sizes/styles stay empty when ignored - empty already means skip in the UI.
+ * Heading sizes/styles stay empty when ignored — empty already means skip in the UI.
  */
 export function applyIgnoredFieldsToForm(form, ignoredFields) {
   const list = Array.isArray(ignoredFields) ? ignoredFields : [];
@@ -299,15 +319,6 @@ export function applyIgnoredFieldsToForm(form, ignoredFields) {
 
     for (const formKey of formKeys) {
       if (formKey === "headings") continue;
-      if (formKey === "paginationChapterMarkers") {
-        const current = next.paginationChapterMarkers;
-        const empty =
-          current == null ||
-          current === "" ||
-          (Array.isArray(current) && current.length === 0);
-        if (empty) next.paginationChapterMarkers = "IGNORE";
-        continue;
-      }
       if (!String(next[formKey] ?? "").trim()) {
         next[formKey] = "IGNORE";
       }

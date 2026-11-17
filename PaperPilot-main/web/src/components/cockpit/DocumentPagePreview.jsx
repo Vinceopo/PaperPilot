@@ -337,7 +337,7 @@ function PdfFrame({ src, page, frameHeight = 0 }) {
   );
 }
 
-function PdfFilePreview({ file, scrollTarget, highlight, paged }) {
+function PdfFilePreview({ file, scrollTarget, highlight, paged, fillHeight = false }) {
   const [url, setUrl] = useState(() => (paged ? "" : blobUrlForPdfFile(file)));
   const [pagedSource, setPagedSource] = useState(null);
 
@@ -379,6 +379,7 @@ function PdfFilePreview({ file, scrollTarget, highlight, paged }) {
         scrollTarget={scrollTarget}
         highlight={highlight}
         allowNativeFallback={false}
+        fillHeight={fillHeight}
       />
     );
   }
@@ -395,7 +396,7 @@ function PdfFilePreview({ file, scrollTarget, highlight, paged }) {
   return <PdfFrame src={url} page={scrollTarget?.page ?? highlight?.page} />;
 }
 
-function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback = true }) {
+function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback = true, fillHeight = false }) {
   const scrollerRef = useRef(null);
   const pdfRef = useRef(null);
   const lineYsRef = useRef(new Map());
@@ -672,11 +673,19 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     );
   }
 
+  const scrollerHeight = fillHeight
+    ? "100%"
+    : frameHeight > 40
+      ? frameHeight
+      : "min(70vh, 36rem)";
+
   return (
     <div
       ref={scrollerRef}
-      className="pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg bg-[#e8ecf1]"
-      style={{ height: frameHeight > 40 ? frameHeight : "min(70vh, 36rem)" }}
+      className={`pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain rounded-lg bg-[#e8ecf1]${
+        fillHeight ? " h-full max-h-full" : ""
+      }`}
+      style={{ height: scrollerHeight, ...(fillHeight ? { maxHeight: "100%" } : {}) }}
     >
       {busy && !pages.length ? (
         <div className="flex h-48 items-center justify-center gap-2 text-xs text-slate-500">
@@ -1002,7 +1011,7 @@ function paintBoxes(scroller, rects, severity) {
   });
 }
 
-function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint = 0 }) {
+function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint = 0, fillHeight = false }) {
   const hostRef = useRef(null);
   const scrollRef = useRef(null);
   const [busy, setBusy] = useState(true);
@@ -1153,7 +1162,7 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint =
   }, [scrollTarget, highlight, busy, frameHeight, paged, pageCountHint, pagesReady]);
 
   return (
-    <div className="relative min-h-[12rem]">
+    <div className={`relative min-h-[12rem]${fillHeight ? " h-full min-h-0" : ""}`}>
       {busy && (
         <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-[#e8ecf1]/80 text-xs text-slate-500">
           <Spinner className="h-4 w-4 text-[#16bfa8]" />
@@ -1167,10 +1176,19 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint =
         ref={scrollRef}
         className={
           paged
-            ? "pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain"
+            ? `pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain${
+                fillHeight ? " h-full max-h-full" : ""
+              }`
             : "relative"
         }
-        style={paged ? { height: frameHeight || "70vh" } : undefined}
+        style={
+          paged
+            ? {
+                height: fillHeight ? "100%" : frameHeight || "70vh",
+                ...(fillHeight ? { maxHeight: "100%" } : {}),
+              }
+            : undefined
+        }
       >
         <div ref={hostRef} className={paged ? "pp-docx-host pp-docx-host--paged" : "pp-docx-host"} />
       </div>
@@ -1178,7 +1196,7 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint =
   );
 }
 
-function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged }) {
+function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged, fillHeight = false }) {
   const lineRefs = useRef(new Map());
   const scrollerRef = useRef(null);
   const [frameHeight, setFrameHeight] = useState(0);
@@ -1292,8 +1310,13 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
     return (
       <div
         ref={scrollerRef}
-        className="pp-scroll mx-auto w-full overflow-y-auto overscroll-contain"
-        style={{ height: frameHeight || "70vh" }}
+        className={`pp-scroll mx-auto w-full overflow-y-auto overscroll-contain${
+          fillHeight ? " h-full max-h-full" : ""
+        }`}
+        style={{
+          height: fillHeight ? "100%" : frameHeight || "70vh",
+          ...(fillHeight ? { maxHeight: "100%" } : {}),
+        }}
       >
         <div className="flex flex-col gap-5">{articles}</div>
       </div>
@@ -1307,7 +1330,7 @@ function TextPagesPreview({ pages, scrollTarget, highlight, emptyLabel, paged })
   );
 }
 
-function DocxUrlPreview({ url, name, scrollTarget, highlight, paged, pageCountHint = 0 }) {
+function DocxUrlPreview({ url, name, scrollTarget, highlight, paged, pageCountHint = 0, fillHeight = false }) {
   const [file, setFile] = useState(null);
   const [error, setError] = useState("");
 
@@ -1354,6 +1377,7 @@ function DocxUrlPreview({ url, name, scrollTarget, highlight, paged, pageCountHi
       highlight={highlight}
       paged={paged}
       pageCountHint={pageCountHint}
+      fillHeight={fillHeight}
     />
   );
 }
@@ -1373,6 +1397,7 @@ export default function DocumentPagePreview({
   highlight = null,
   emptyLabel = "No preview available yet.",
   paged = false,
+  fillHeight = false,
   loading = false,
   pageCountHint = 0,
 }) {
@@ -1390,7 +1415,13 @@ export default function DocumentPagePreview({
 
   if (kind === "pdf" && file) {
     return (
-      <PdfFilePreview file={file} scrollTarget={scrollTarget} highlight={highlight} paged={paged} />
+      <PdfFilePreview
+        file={file}
+        scrollTarget={scrollTarget}
+        highlight={highlight}
+        paged={paged}
+        fillHeight={fillHeight}
+      />
     );
   }
   if (kind === "pdf" && safeDocumentUrl) {
@@ -1401,6 +1432,7 @@ export default function DocumentPagePreview({
           scrollTarget={scrollTarget}
           highlight={highlight}
           allowNativeFallback={false}
+          fillHeight={fillHeight}
         />
       );
     }
@@ -1414,6 +1446,7 @@ export default function DocumentPagePreview({
         highlight={highlight}
         paged={paged}
         pageCountHint={pageCountHint}
+        fillHeight={fillHeight}
       />
     );
   }
@@ -1426,6 +1459,7 @@ export default function DocumentPagePreview({
         highlight={highlight}
         paged={paged}
         pageCountHint={pageCountHint}
+        fillHeight={fillHeight}
       />
     );
   }
@@ -1438,6 +1472,7 @@ export default function DocumentPagePreview({
       highlight={highlight}
       emptyLabel={emptyLabel}
       paged={paged}
+      fillHeight={fillHeight}
     />
   );
 }

@@ -1,9 +1,10 @@
 import { auth } from "./firebase.js";
 import { uploadToS3 } from "./lib/s3Upload.js";
+import { localManuscriptPreview } from "./lib/localManuscriptPreview.js";
 import { isFatalAuthError } from "./services/auth.js";
 
 /**
- * Production (Vercel): always same-origin `/api` - frontend and serverless share one host.
+ * Production (Vercel): always same-origin `/api` — frontend and serverless share one host.
  * Absolute VITE_API_URL values are ignored in production builds (common stale-dashboard bug).
  *
  * Local Vite: `/api` is proxied by vite.config.js to VITE_API_PROXY_TARGET
@@ -34,7 +35,7 @@ function detailMessage(err, fallback) {
 }
 
 function unreachableMessage(status) {
-  // Note: a failed fetch does NOT mean /api is undeployed - curl often still works.
+  // Note: a failed fetch does NOT mean /api is undeployed — curl often still works.
   // Common causes: Python cold-start, brief network blip, or tab sleep mid-request.
   if (import.meta.env.PROD) {
     if (status === 502 || status === 503 || status === 504) {
@@ -44,7 +45,7 @@ function unreachableMessage(status) {
       return "PaperPilot's server could not finish the request. Try again in a moment.";
     }
     return (
-      "Could not reach PaperPilot. Your connection may have dropped - " +
+      "Could not reach PaperPilot. Your connection may have dropped — " +
       "check your internet connection, then try again."
     );
   }
@@ -81,7 +82,7 @@ function statusMessage(status) {
   if (status === 401) return "Your session has expired. Sign in again, then retry.";
   if (status === 403) return "Your account can't do this yet. Check your plan on the Subscription page.";
   if (status === 404) {
-    return "That item was not found. It may have been deleted on another device - refresh and try again.";
+    return "That item was not found. It may have been deleted on another device — refresh and try again.";
   }
   if (status === 413) {
     return "This file is too large for your plan. Free plans allow 15 MB, Premium 45 MB, and Pro 120 MB.";
@@ -133,8 +134,7 @@ async function authorizedFetch(path, options = {}) {
     headers.set("Content-Type", "application/json");
   }
   try {
-    // Plan/usage must not come from a disk-cached Free snapshot after site-data clears.
-    const res = await fetch(apiUrl(path), { ...options, headers, cache: "no-store" });
+    const res = await fetch(apiUrl(path), { ...options, headers });
     // Backend 401 alone must NOT force logout (misconfigured Admin SDK, etc.).
     // Only sign out when Firebase itself says the token is revoked/invalid.
     if (res.status === 401 && auth?.currentUser) {
@@ -329,15 +329,7 @@ export async function downloadSampleMechanics() {
       const data = await res.json().catch(() => ({}));
       throw new ApiError(detailMessage(data, "Could not download sample mechanics."), res.status, data.detail);
     }
-    const buffer = await res.arrayBuffer();
-    // DOCX is a ZIP (PK…). Reject HTML/text error bodies that would save as a corrupt file.
-    const head = new Uint8Array(buffer.slice(0, 2));
-    if (buffer.byteLength < 64 || head[0] !== 0x50 || head[1] !== 0x4b) {
-      throw new ApiError("Sample format download failed. The server did not return a DOCX file.", res.status || 502);
-    }
-    const blob = new Blob([buffer], {
-      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    });
+    const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -380,15 +372,12 @@ export function deleteManuscriptVersion({ manuscriptId, versionId } = {}) {
   );
 }
 
+/**
+ * Browser-local preview only — no S3 upload and no server parse.
+ * Saving a version still uploads once via uploadManuscriptVersion.
+ */
 export async function previewManuscript(file) {
-  const uploaded = await uploadDocument(file);
-  return authorizedFetch("/manuscripts/preview", {
-    method: "POST",
-    body: JSON.stringify({
-      cloudinary_url: uploaded.url,
-      filename: file.name || uploaded.originalFilename,
-    }),
-  });
+  return localManuscriptPreview(file);
 }
 
 function newRequestId() {
@@ -419,12 +408,13 @@ export async function uploadManuscriptVersion({
   mechanicsId,
   title,
   manuscriptId,
-  /** Reuse S3 URL from previewManuscript to skip a second PUT. */
-  documentUrl = "",
+  documentUrl,
+  cloudinaryUrl,
 }) {
-  const reusedUrl = String(documentUrl || "").trim();
-  const uploaded = reusedUrl
-    ? { url: reusedUrl, originalFilename: file?.name || "document" }
+  // Prefer a URL already uploaded (e.g. reused object). Otherwise one S3 PUT here.
+  const existingUrl = String(documentUrl || cloudinaryUrl || "").trim();
+  const uploaded = existingUrl
+    ? { url: existingUrl, originalFilename: file?.name || "manuscript.pdf" }
     : await uploadDocument(file);
   // Same id on every retry, so a save whose reply was lost is not stored twice.
   const clientRequestId = newRequestId();
@@ -516,7 +506,7 @@ export function subscribeToPlan({ plan, billingPeriod, paymentMethod }) {
   });
 }
 
-/** After PayMongo redirect - verify paid session and activate Premium. */
+/** After PayMongo redirect — verify paid session and activate Premium. */
 export function confirmCheckoutPayment({ checkoutSessionId } = {}) {
   return authorizedFetch("/subscription/confirm", {
     method: "POST",

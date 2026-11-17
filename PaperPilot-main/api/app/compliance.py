@@ -4,7 +4,12 @@ import re
 from collections import Counter, defaultdict
 
 from app.documents import parse_alignment
-from app.gemini_client import enrich_compliance_issues
+
+try:
+    from app.gemini_client import enrich_compliance_issues
+except ImportError:  # machinelearning package uses enrichment.py instead
+    from app.enrichment import enrich_compliance_issues
+
 from app.mechanics_options import (
     BODY_CONTINUOUS,
     BODY_RESTART,
@@ -25,6 +30,7 @@ from app.mechanics_options import (
     page_number_only,
     page_position_parts,
     pagination_omits_all_numbers,
+    parse_alignment_page_overrides,
     rule_is_set,
     rule_unset,
     title_page_rule,
@@ -225,8 +231,7 @@ class CategoryStats:
         self.checked = 0
         self.failed = 0
         # False until a check finds a rule for this category in the mechanics file.
-        # Blank/IGNORE rules still set applicable and pass eligible units (see _pass_all).
-        # Indentation IGNORE leaves applicable False and checked 0 (hidden from score).
+        # Blank / IGNORE / missing rules leave applicable False / checked 0 (not scored).
         self.applicable = False
         # Set by indentation when the PDF cannot be checked reliably.
         self.unreliable = False
@@ -239,7 +244,7 @@ class CategoryStats:
 
 
 def _pass_all(stats: CategoryStats, count: int) -> None:
-    """Blank / IGNORE / missing mechanics: count eligible units as all passed (no issues)."""
+    """Mark every eligible unit passed (used when a real rule requires all-pass, e.g. no page numbers)."""
     stats.applicable = True
     for _ in range(max(0, int(count))):
         stats.observe(True)
@@ -662,6 +667,31 @@ def _document_units(parsed: dict, rules: dict) -> list[dict]:
                         "_sort": (bbox[1] if len(bbox) > 1 else 0, bbox[0] if bbox else 0, 10_000 + image_index),
                     }
                 )
+            # Vector table borders / cell frames (from page.get_drawings).
+            drawing_offset = 20_000
+            for drawing_index, drawing in enumerate(page.get("drawings") or []):
+                bbox = drawing.get("bbox") or [0, 0, 0, 0]
+                page_items.append(
+                    {
+                        "page_index": page_index,
+                        "text": "",
+                        "spans": [],
+                        "bbox": bbox,
+                        "page_width": page.get("width_points"),
+                        "page_height": page.get("height_points"),
+                        "formatting": {},
+                        "style": None,
+                        "source": "figure",
+                        "alignment": None,
+                        "column": column,
+                        "has_drawing": True,
+                        "_sort": (
+                            bbox[1] if len(bbox) > 1 else 0,
+                            bbox[0] if bbox else 0,
+                            drawing_offset + drawing_index,
+                        ),
+                    }
+                )
             page_items.sort(key=lambda item: item["_sort"])
             for line_index, item in enumerate(page_items):
                 item["line_index"] = line_index
@@ -930,14 +960,72 @@ CHAPTER_RE = re.compile(r"^(?:chapter|ch\.?)\s+(?:\d+|[ivxlcdm]+)\b", re.I)
 TABLE_CAPTION_RE = re.compile(r"^\s*table\s+\d+\b", re.I)
 FIGURE_CAPTION_RE = re.compile(r"^\s*figure\s+\d+\b", re.I)
 # "Figure 1 illustrates ..." / "Table 18 presents ..." is prose, not a caption label.
+# Lowercase continuation after the number (legacy signal).
 PROSE_REFERENCE_RE = re.compile(
     r"^\s*(?:[Tt]able|[Ff]igure|TABLE|FIGURE)\s+\d+(?:\.\d+)*\s*(?:[:.\-\u2013]\s*)?(?=[a-z])"
 )
+# Narrative verbs after Table/Figure N (any casing) → body reference, not a caption.
+_CAPTION_NARRATIVE_VERB_RE = re.compile(
+    r"(?i)^\s*(?:table|figure|fig\.?)\s+\d+(?:\.\d+)*\s*[:.\-\u2013]?\s*"
+    r"(?:"
+    r"presents?|shows?|illustrates?|depicts?|displays?|contains?|lists?|"
+    r"summarizes?|provides?|describes?|indicates?|demonstrates?|reveals?|"
+    r"highlights?|outlines?|compares?|reports?|includes?|gives?|explains?|"
+    r"discusses?|examines?|introduces?|represents?|defines?|details?|"
+    r"covers?|follows?|appears?|refers?|corresponds?|depicts?"
+    r")\b"
+)
+_CAPTION_LABEL_HEAD_RE = re.compile(
+    r"(?i)^\s*(?:table|figure|fig\.?)\s+(\d+(?:\.\d+)*)\b\s*[:.\-\u2013]?\s*(.*)$"
+)
+
+
+def _is_caption_prose_reference(text: str) -> bool:
+    """True when a Table/Figure line is body narrative, not a caption label.
+
+    Rule #1: parameterized for any manuscript — no document-specific titles,
+    page numbers, or fixed wording beyond generic narrative patterns.
+
+    Short lowercase titles (e.g. wrong-case captions) still count as caption
+    candidates so case/style rules can flag them; only narrative sentences skip.
+    """
+    raw = " ".join(str(text or "").split()).strip()
+    if not raw:
+        return False
+    if _CAPTION_NARRATIVE_VERB_RE.match(raw):
+        return True
+    match = _CAPTION_LABEL_HEAD_RE.match(raw)
+    if not match:
+        return False
+    remainder = (match.group(2) or "").strip()
+    if not remainder:
+        return False
+    words = remainder.split()
+    # Caption titles stay short labels; narrative continues as a full sentence.
+    if len(words) >= 12:
+        return True
+    if len(remainder) >= 80 and ("," in remainder or "." in remainder[8:]):
+        return True
+    # Legacy lowercase-continuation signal, but only for sentence-length remainders
+    # so short titles like "Table 3. sensor readings" remain caption candidates.
+    if PROSE_REFERENCE_RE.match(raw) and len(words) >= 6:
+        return True
+    return False
 IN_TEXT_NUMERIC_RE = re.compile(r"\[(?:\d+)(?:\s*[-,]\s*\d+)*\]")
 IN_TEXT_APA_RE = re.compile(
     r"\([A-Z][A-Za-z'’-]+(?:\s+(?:et al\.|&\s+[A-Z][A-Za-z'’-]+))?,?\s+\d{4}[a-z]?(?:,\s*p+\.\s*\d+)?\)"
 )
-IN_TEXT_MLA_RE = re.compile(r"\([A-Z][A-Za-z'’-]+(?:\s+and\s+[A-Z][A-Za-z'’-]+)?\s+\d{1,3}\)")
+# Title-Case author surnames only (not tech labels like "Gen 2" / ALL-CAPS codes).
+# Short 3-letter surnames (Lee) still match when the page token has 2+ digits.
+IN_TEXT_MLA_RE = re.compile(
+    r"\("
+    r"(?:"
+    r"[A-Z][a-z]{3,}(?:\s+and\s+[A-Z][a-z]{3,})?\s+\d{1,3}"
+    r"|"
+    r"[A-Z][a-z]{2}\s+\d{2,3}"
+    r")"
+    r"\)"
+)
 REFERENCE_HEADER_RE = re.compile(
     r"^(?:list\s+of\s+)?(?:references|bibliography|works cited|literature cited)\b",
     re.I,
@@ -987,14 +1075,14 @@ def _is_toc_entry_line(text: str) -> bool:
     value = (text or "").strip()
     if not value or value.endswith("."):
         return False
-    # "Chapter I" / "APPENDIX A" alone are section openers, not TOC rows.
-    # TOC rows have dotted leaders and/or an arabic folio after a longer title.
+    # "Chapter I" / "CHAPTER 2" / "APPENDIX A" alone are section openers, not TOC rows.
+    # Arabic chapter numbers look like trailing folios, so require dotted leaders for
+    # any chapter/prelim/back-matter label before treating the line as a TOC entry.
     section_label = bool(
         CHAPTER_RE.match(value) or BACK_MATTER_RE.match(value) or PRELIM_HEADING_RE.match(value)
     )
     has_leaders = bool(re.search(r"\.{2,}|…", value))
-    has_arabic_folio = bool(re.search(r"\s\d{1,4}\s*$", value))
-    if section_label and not has_leaders and not has_arabic_folio:
+    if section_label and not has_leaders:
         return False
     if TOC_LINE_RE.match(value):
         return True
@@ -1048,14 +1136,20 @@ HEADING_STYLE_RE = re.compile(r"heading\s*(\d)")
 # Structure-only limits - not compliance rule values.
 HEADING_MAX_CHARS = 120
 HEADING_MAX_WORDS = 15
-NUMBERED_HEADING_RE = re.compile(r"^\d+(?:\.\d+){0,5}\s+\S")
+# Outline numbers only (1 / 10 / 1.1). Cap first segment at 3 digits so year
+# ranges like "2020 - 2022 Senior High …" are never treated as Heading 1.
+NUMBERED_HEADING_RE = re.compile(r"^\d{1,3}(?:\.\d+){0,5}\s+\S")
+YEAR_RANGE_HEADING_RE = re.compile(r"^(?:19|20)\d{2}\s*[-–—]\s*(?:19|20)\d{2}\b")
 
 
 def _numbered_heading_role(text: str, defined, heading_sizes) -> str | None:
     """Map '1 …' → heading1, '1.1 …' → heading2, clamped to levels that have rules."""
-    if not NUMBERED_HEADING_RE.match(text or ""):
+    value = text or ""
+    if YEAR_RANGE_HEADING_RE.match(value):
         return None
-    prefix = re.sub(r"[^\d.]+$", "", (text or "").split()[0])
+    if not NUMBERED_HEADING_RE.match(value):
+        return None
+    prefix = re.sub(r"[^\d.]+$", "", value.split()[0])
     depth = min(6, max(1, prefix.count(".") + 1))
     for level in range(depth, 0, -1):
         role = f"heading{level}"
@@ -1118,6 +1212,8 @@ def _is_structural_heading_text(text: str) -> bool:
         if re.search(r"[–—:.-]", rest) or TOC_ENTRY_TRAIL_RE.search(value) or len(rest.split()) > 6:
             return False
         return len(rest) <= 48
+    if YEAR_RANGE_HEADING_RE.match(value):
+        return False
     if NUMBERED_HEADING_RE.match(value) and len(value.split()) <= HEADING_MAX_WORDS:
         return True
     return False
@@ -1147,6 +1243,176 @@ def _is_short_standalone_title(text: str) -> bool:
     # Title Case short labels (e.g. "Related Work") - not full sentences.
     return bool(re.match(r"^[A-Z0-9][\w'’\-]*(?:\s+[A-Z0-9][\w'’\-]*){0,7}$", value))
 
+
+# Small words allowed inside Title Case section headings (PDF manuscripts often lack Word styles).
+_TITLE_CASE_SMALL = frozenset(
+    {"a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "at", "by", "vs", "via", "as"}
+)
+
+
+def _looks_like_field_or_chrome_label(text: str) -> bool:
+    """Form/CV/table chrome that must never become Heading 2..N (precision over recall)."""
+    value = (text or "").strip()
+    if not value:
+        return True
+    if "@" in value or re.search(r"https?://|www\.", value, re.I):
+        return True
+    if re.search(r"\b\d{3,4}[-.\s]?\d{3}[-.\s]?\d{3,4}\b", value):
+        return True
+    # "Email Address:", "Civil Status: Single", "Name: Aldrine Bihag"
+    if re.match(r"^[A-Za-z][^:]{0,40}:\s*\S", value) or (
+        value.endswith(":") and len(value.split()) <= 6
+    ):
+        return True
+    # Fragmented table / matrix chrome
+    if re.fullmatch(
+        r"(?i)(?:table|size|scheme|user|pc|opo|duration|dictionary,?|and|cont'?d\.?)",
+        value,
+    ):
+        return True
+    if re.match(r"(?i)^(?:place of birth|civil status|contact number|email address|"
+                r"educational background|personal information|religion|status|"
+                r"date of|address|education|gov\.?)\b", value):
+        return True
+    # Resume / team-bio address and school lines.
+    if re.search(
+        r"(?i)\b(?:high\s+school|elementary|academy|senior\s+high|"
+        r"mandaue\s+city|cebu\s+city|city\s+contact|\d{4}\s+cebu)\b",
+        value,
+    ):
+        return True
+    if re.search(r",\s*\d{3,4}\s+\w+", value) and re.search(r"(?i)\b(?:ave|street|city)\b", value):
+        return True
+    return False
+
+
+def _section_title_confidence(unit: dict, text: str, body_size: float | None) -> float:
+    """0–1 confidence that an unstyled line is a real H2+ section title."""
+    value = (text or "").strip()
+    if not value or _looks_like_field_or_chrome_label(value):
+        return 0.0
+    score = 0.0
+    words = value.split()
+    if 2 <= len(words) <= 8:
+        score += 0.3
+    elif len(words) == 1:
+        score += 0.05
+    letters = [ch for ch in value if ch.isalpha()]
+    all_caps = bool(letters) and all(ch.isupper() for ch in letters) and len(letters) >= 3
+    if all_caps and len(words) >= 2:
+        score += 0.35
+    elif all_caps and len(words) == 1 and len(letters) >= 8:
+        # Standalone section labels (INTRODUCTION, METHODOLOGY).
+        score += 0.35
+    elif _is_section_heading_title(value):
+        score += 0.3
+    if NUMBERED_HEADING_RE.match(value):
+        score += 0.35
+    size = unit.get("dominant_size")
+    if body_size is not None and size is not None and float(size) >= float(body_size) + 0.6:
+        score += 0.2
+    elif body_size is not None and size is not None and abs(float(size) - float(body_size)) <= 0.35:
+        # Same size as body is common for H2/H3; slight doubt only.
+        score -= 0.05
+    alignment = str(
+        unit.get("alignment") or (unit.get("formatting") or {}).get("alignment") or ""
+    ).lower()
+    if alignment in {"center", "centre", "centered"}:
+        score += 0.1
+    return max(0.0, min(1.0, score))
+
+
+def _is_section_heading_title(text: str) -> bool:
+    """Unstyled section title for H2/H3 mapping (does not change Heading 1 style gates)."""
+    if _looks_like_field_or_chrome_label(text):
+        return False
+    if _is_short_standalone_title(text):
+        words = (text or "").split()
+        # Single-token Title Case is too weak (table chrome). Single ALL-CAPS
+        # section labels like INTRODUCTION are allowed when long enough.
+        if len(words) < 2:
+            letters = [ch for ch in text if ch.isalpha()]
+            all_caps = bool(letters) and all(ch.isupper() for ch in letters)
+            return all_caps and len(letters) >= 8
+        return True
+    value = (text or "").strip()
+    if not value:
+        return False
+    words = value.split()
+    if not (2 <= len(words) <= HEADING_MAX_WORDS) or len(value) > HEADING_MAX_CHARS:
+        return False
+    if SENTENCE_END_RE.search(value) or value.endswith(","):
+        return False
+    if re.match(
+        r"^(?:I|We|The|This|It|There|Special|Finally|Without|May|And|But|For|With)\b",
+        value,
+    ):
+        return False
+    for index, word in enumerate(words):
+        core = re.sub(r"[^\w'’-]", "", word)
+        if not core:
+            return False
+        if index > 0 and core.lower() in _TITLE_CASE_SMALL:
+            continue
+        if not re.match(r"^[A-Z0-9]", core):
+            return False
+    return True
+
+
+def _defined_heading_levels_from(defined, heading_sizes, *, start: int = 2) -> list[int]:
+    """Numeric heading levels ≥ start that have size or style rules."""
+    return [
+        int(level[len("heading") :])
+        for level in HEADING_LEVELS
+        if int(level[len("heading") :]) >= start
+        and (level in defined or level in heading_sizes)
+    ]
+
+
+# Configurable threshold: below this, mark Uncertain and do not flag as Heading N.
+SECTION_TITLE_CONFIDENCE_THRESHOLD = 0.32
+
+
+def _resolve_section_title_pending(units: list[dict], defined, heading_sizes, body_size=None) -> None:
+    """Map pending unstyled section titles onto Heading 2..N by measured-size rank.
+
+    Largest distinct size → shallowest defined level (usually H2); next size → next
+    level, and so on. Low-confidence lines become heading_uncertain (not flagged).
+    """
+    levels = _defined_heading_levels_from(defined, heading_sizes, start=2)
+    pending = [unit for unit in units if unit.get("role") == "section_title_pending"]
+    if not pending:
+        return
+    if not levels:
+        for unit in pending:
+            unit["role"] = "heading_other"
+        return
+    size_keys: list[float] = []
+    for unit in pending:
+        size = unit.get("dominant_size")
+        if size is None:
+            continue
+        key = round(float(size), 1)
+        if key not in size_keys:
+            size_keys.append(key)
+    size_keys.sort(reverse=True)
+    size_to_level = {
+        size_keys[index]: levels[min(index, len(levels) - 1)] for index in range(len(size_keys))
+    }
+    fallback = levels[0]
+    for unit in pending:
+        text = (unit.get("text") or "").strip()
+        confidence = _section_title_confidence(unit, text, body_size)
+        if confidence < SECTION_TITLE_CONFIDENCE_THRESHOLD:
+            unit["role"] = "heading_uncertain"
+            unit["heading_confidence"] = confidence
+            continue
+        size = unit.get("dominant_size")
+        if size is None:
+            unit["role"] = f"heading{fallback}"
+        else:
+            unit["role"] = f"heading{size_to_level.get(round(float(size), 1), fallback)}"
+        unit["heading_confidence"] = confidence
 
 def _looks_like_heading_line(unit: dict, text: str) -> bool:
     """Hard gate: prose / wrap continuations must never receive a heading role.
@@ -1266,8 +1532,14 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
     heading_sizes = _heading_sizes(font, include_legacy=False)
     defined = _defined_heading_levels(font)
     lowest_heading = _lowest_defined_heading(defined)
+    h2_plus_rules = any(
+        level in defined or level in heading_sizes
+        for level in HEADING_LEVELS
+        if level != "heading1"
+    )
     # Reuse indentation table detection so cell text is never classified as a heading.
     table_ids = _mark_indent_table_units(units)
+    last_heading_level = 0
     for index, unit in enumerate(units):
         text = (unit.get("text") or "").strip()
         style = str(unit.get("style") or "").lower()
@@ -1284,16 +1556,34 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             continue
         # Table cells are never headings — including cells that mention "Chapter I".
         # Pagination chapter-first uses section detection + numbering-gap inference.
-        if (
+        table_hit = (
             index in table_ids
             or unit.get("source") == "table"
             or unit.get("role") == "table"
             or unit.get("table_row")
             or _looks_like_table_row(unit)
-        ):
+        )
+        if table_hit:
+            # PDF column heuristics often swallow real H2/H3 section titles. Rescue
+            # only as H2/H3 after a chapter — never feed them into H1 / numbered paths.
+            if (
+                h2_plus_rules
+                and last_heading_level >= 1
+                and not unit.get("table_row")
+                and unit.get("source") != "table"
+                and unit.get("role") != "table"
+                and not _looks_like_table_row(unit)
+                and _looks_like_heading_line(unit, text)
+                and _is_section_heading_title(text)
+            ):
+                unit["role"] = "section_title_pending"
+                continue
             unit["role"] = "table"
+            # Keep source/table_row in sync so spacing + indent skip the same cells.
+            unit["source"] = "table"
+            unit["table_row"] = True
             continue
-        if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not PROSE_REFERENCE_RE.match(
+        if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not _is_caption_prose_reference(
             text
         ):
             unit["role"] = "caption"
@@ -1314,6 +1604,7 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             "heading1" in defined or "heading1" in heading_sizes
         ):
             unit["role"] = "heading1"
+            last_heading_level = 1
             continue
         # Trust Word's Heading N style only for genuine title lines (structural,
         # numbered, or short standalone). Ordinary prose under Heading 1 stays body.
@@ -1324,12 +1615,21 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             or NUMBERED_HEADING_RE.match(text)
             or _is_short_standalone_title(text)
         ):
-            role = f"heading{style_level.group(1)}"
+            level_num = int(style_level.group(1))
+            # H2+ only: reject form/CV chrome even when Word style says Heading N.
+            if level_num >= 2 and _looks_like_field_or_chrome_label(text):
+                unit["role"] = "heading_uncertain"
+                continue
+            role = f"heading{level_num}"
             unit["role"] = role if (role in defined or role in heading_sizes) else "heading_other"
+            if _is_heading_role(unit["role"]):
+                last_heading_level = int(unit["role"][len("heading") :])
             continue
         # Numbered titles follow outline depth (1 → H1, 1.1 → H2) when those levels exist.
-        if heading_line and NUMBERED_HEADING_RE.match(text):
+        if heading_line and not YEAR_RANGE_HEADING_RE.match(text) and NUMBERED_HEADING_RE.match(text):
             unit["role"] = _numbered_heading_role(text, defined, heading_sizes) or "heading_other"
+            if _is_heading_role(unit["role"]):
+                last_heading_level = int(unit["role"][len("heading") :])
             continue
         if heading_line and _is_structural_heading_text(text):
             # With defined heading rules, map to the lowest configured level (usually H1).
@@ -1338,13 +1638,25 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
                 unit["role"] = "heading1" if "heading1" in defined else lowest_heading
             else:
                 unit["role"] = "heading_other"
+            if _is_heading_role(unit["role"]):
+                last_heading_level = int(unit["role"][len("heading") :])
             continue
-        # ALL-CAPS / short title without Heading style: never invent Heading N size
-        # checks, but skip body-size comparison via heading_other.
-        if heading_line and _is_short_standalone_title(text):
-            unit["role"] = "heading_other"
+        # Unstyled section titles (PDF): pending until size-rank maps them to H2..N.
+        # Title-page shorts (no chapter yet) stay heading_other. Does not change H1.
+        if heading_line and _is_section_heading_title(text):
+            body_pt = _body_size(font)
+            confidence = _section_title_confidence(unit, text, body_pt)
+            if h2_plus_rules and last_heading_level >= 1 and confidence >= SECTION_TITLE_CONFIDENCE_THRESHOLD:
+                unit["role"] = "section_title_pending"
+                unit["heading_confidence"] = confidence
+            elif h2_plus_rules and last_heading_level >= 1:
+                unit["role"] = "heading_uncertain"
+                unit["heading_confidence"] = confidence
+            else:
+                unit["role"] = "heading_other"
             continue
         unit["role"] = "body"
+    _resolve_section_title_pending(units, defined, heading_sizes, body_size=_body_size(font))
     # Soft-wrapped visual rows of one paragraph share one role (continuations must
     # not fall through to body and pick up body_size against the title's measured pt).
     para_role: dict = {}
@@ -1440,18 +1752,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         re.search(r"black|automatic", color_rule, re.I)
     )
     if not allowed_fonts and not listed_sizes and not role_sizes and not want_black:
-        # Blank / IGNORE font rules: still count prose font units as passed.
-        n = 0
-        for unit in units:
-            role = unit.get("role") or "body"
-            text = (unit.get("text") or "").strip()
-            if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure", "toc"}:
-                continue
-            shown_font, sample_size = _dominant_font_sample(unit)
-            if not shown_font and sample_size is None and not _line_font_samples(unit):
-                continue
-            n += 1
-        _pass_all(stats, n)
+        # Blank / IGNORE font rules: not scored (0 units, leave applicable False).
         return
     stats.applicable = True
     required_families = ", ".join(font_rule.get("families") or [])
@@ -1459,7 +1760,13 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         role = unit.get("role") or "body"
         text = (unit.get("text") or "").strip()
         # Blank / spacing gaps and non-prose lines have nothing meaningful to measure.
-        if not text or not _is_prose_font_text(text) or role in {"empty", "pagination", "figure", "toc"}:
+        if not text or not _is_prose_font_text(text) or role in {
+            "empty",
+            "pagination",
+            "figure",
+            "toc",
+            "heading_uncertain",
+        }:
             continue
         # Table cells still get family checks; size rules apply only to roles with sizes.
         shown_font, sample_size = _dominant_font_sample(unit)
@@ -1477,7 +1784,9 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         # sizes_points is a body-only fallback and must never invent heading sizes.
         expected_size = _expected_size_for_role(role, font_rule)
         # Heading N (or heading_other) with no headingN_size → pass; do not use H2/H3 bag sizes.
-        if role == "heading_other" or (_is_heading_role(role) and expected_size is None):
+        if role in {"heading_other", "heading_uncertain"} or (
+            _is_heading_role(role) and expected_size is None
+        ):
             size_ok = True
         elif expected_size is not None:
             size_ok = _size_matches(shown_size, expected_size)
@@ -1769,10 +2078,7 @@ def _check_margins(parsed: dict, units: list[dict], rules: dict, stats: Category
         # A binding gutter is added to the inside (left) margin.
         expected_margins["left"] = round(expected_margins["left"] + gutter, 3)
     if not expected and not expected_margins:
-        # Blank / IGNORE margins: one passed unit per page side (top/bottom/left/right).
-        is_pdf = (parsed.get("metadata") or {}).get("format") == "pdf"
-        sources = _page_sources(parsed) if is_pdf else _docx_page_sources(parsed, units)
-        _pass_all(stats, len(sources) * 4)
+        # Blank / IGNORE margins: not scored (0 units, leave applicable False).
         return
     stats.applicable = True
 
@@ -1905,14 +2211,57 @@ def _promote_pdf_table_cells(units: list[dict]) -> None:
     Multi-column rows get table_row when cell gaps are wide. Wrapped text in the
     left (or middle) column often has no gap on its own line, so it stayed body
     and falsely failed spacing/indent checks. Grow the table region by repeatedly
-    absorbing nearby narrow column-aligned lines.
+    absorbing nearby narrow column-aligned lines. Vector cell frames
+    (``has_drawing``) also seed table membership.
     """
     by_page: dict[int, list[dict]] = defaultdict(list)
     for unit in units:
         by_page[int(unit.get("page_index") or 0)].append(unit)
     for page_units in by_page.values():
+        drawings = [
+            unit
+            for unit in page_units
+            if unit.get("has_drawing") and _has_box(unit) and not (unit.get("text") or "").strip()
+        ]
+        page_w = float((page_units[0].get("page_width") if page_units else 612.0) or 612.0)
+        page_h = float((page_units[0].get("page_height") if page_units else 792.0) or 792.0)
+        page_area = max(1.0, page_w * page_h)
+        for drawing in drawings:
+            db = drawing["bbox"]
+            draw_w = float(db[2]) - float(db[0])
+            draw_h = float(db[3]) - float(db[1])
+            draw_area = max(0.0, draw_w * draw_h)
+            if draw_area >= 0.55 * page_area or draw_w >= 0.92 * page_w:
+                continue
+            pad = 6.0
+            region = [db[0] - pad, db[1] - pad, db[2] + pad, db[3] + pad]
+            inside = []
+            for unit in page_units:
+                if not _has_box(unit) or not (unit.get("text") or "").strip():
+                    continue
+                if unit.get("source") == "table" or unit.get("table_row"):
+                    continue
+                box = unit["bbox"]
+                if box[0] >= region[0] and box[2] <= region[2] and box[1] >= region[1] and box[3] <= region[3]:
+                    inside.append(unit)
+            if len(inside) >= 2 or (
+                len(inside) == 1 and draw_area < 0.35 * page_area and draw_w < 0.7 * page_w
+            ):
+                for unit in inside:
+                    unit["source"] = "table"
+                    unit["table_row"] = True
+
         if not any(unit.get("table_row") or unit.get("source") == "table" for unit in page_units):
-            continue
+            # Still allow tab/grid seeds below when nothing else marked the page.
+            for unit in page_units:
+                if unit.get("source") == "table" or unit.get("table_row"):
+                    continue
+                text = unit.get("text") or ""
+                if "\t" in text or text.count("  ") >= 3:
+                    unit["source"] = "table"
+                    unit["table_row"] = True
+            if not any(unit.get("table_row") or unit.get("source") == "table" for unit in page_units):
+                continue
         # Grow until nearby wrapped cell lines are absorbed.
         for _ in range(8):
             anchors = [
@@ -1923,6 +2272,8 @@ def _promote_pdf_table_cells(units: list[dict]) -> None:
             if not anchors:
                 break
             lefts = sorted({round(float(unit["bbox"][0]) / 4.0) * 4.0 for unit in anchors})
+            band_top = min(float(unit["bbox"][1]) for unit in anchors) - 8.0
+            band_bottom = max(float(unit["bbox"][3]) for unit in anchors) + 8.0
             changed = False
             for unit in page_units:
                 if unit.get("source") == "table" or unit.get("table_row"):
@@ -1930,21 +2281,22 @@ def _promote_pdf_table_cells(units: list[dict]) -> None:
                 if (unit.get("role") or "body") != "body" or not _has_box(unit):
                     continue
                 bbox = unit["bbox"]
-                page_w = float(unit.get("page_width") or 612.0)
+                page_w_unit = float(unit.get("page_width") or 612.0)
                 width = float(bbox[2]) - float(bbox[0])
                 # Near-full-page prose between tables stays body; wide cells can still join.
-                if width >= 0.85 * page_w:
+                if width >= 0.85 * page_w_unit:
                     continue
                 left = float(bbox[0])
                 if not any(abs(left - edge) <= 10.0 for edge in lefts):
                     continue
-                # Within ~one line of an existing table cell vertically.
-                near = any(
-                    bbox[1] <= anchor["bbox"][3] + 40.0 and bbox[3] >= anchor["bbox"][1] - 40.0
-                    for anchor in anchors
-                )
-                if not near:
-                    continue
+                # Inside the seeded table's vertical band (covers multi-line wraps).
+                if bbox[3] < band_top or bbox[1] > band_bottom:
+                    near = any(
+                        bbox[1] <= anchor["bbox"][3] + 40.0 and bbox[3] >= anchor["bbox"][1] - 40.0
+                        for anchor in anchors
+                    )
+                    if not near:
+                        continue
                 unit["source"] = "table"
                 unit["table_row"] = True
                 changed = True
@@ -2057,7 +2409,7 @@ def _prose_paragraphs(units: list[dict]) -> list[list[dict]]:
 
 
 # Word multiples the checker compares against. PDF gap math often lands a little
-# off these (1.5 is commonly measured as about 1.64).
+# off these (1.5 is commonly measured as about 1.64, and sometimes ~1.88).
 _SPACING_STANDARDS = (1.0, 1.15, 1.5, 2.0, 2.5, 3.0)
 
 
@@ -2065,13 +2417,27 @@ def _spacing_matches(actual: float, expected: float) -> bool:
     """True when a measured multiple is the spacing the mechanics require.
 
     A reading within 0.12 already matches. A slightly noisier reading matches
-    only when it sits on the same standard multiple as the requirement, so
-    1.64 counts as 1.5 while 1.0, 1.15, 1.5, and 2.0 stay different rules.
+    when it sits on the same standard multiple as the requirement (1.64 → 1.5).
+
+    PDF gap/font math also tends to inflate multiples upward (1.5 → ~1.88). Those
+    still match the required standard when they stay clearly below the next higher
+    standard and within a relative upward band — without treating real double
+    spacing as 1.5.
     """
     if abs(actual - expected) <= 0.12:
         return True
     nearest = min(_SPACING_STANDARDS, key=lambda standard: (abs(actual - standard), standard))
-    return abs(actual - nearest) <= 0.16 and abs(nearest - expected) <= 0.05
+    if abs(actual - nearest) <= 0.16 and abs(nearest - expected) <= 0.05:
+        return True
+    # Upward measurement bias only: do not widen downward (1.15 must not pass as 1.5).
+    if actual <= expected:
+        return False
+    higher = [standard for standard in _SPACING_STANDARDS if standard > expected + 0.05]
+    next_up = min(higher) if higher else expected + 1.0
+    # Stay out of the next standard's direct match band (≤0.12 below next_up).
+    if actual > next_up - 0.12:
+        return False
+    return (actual - expected) / max(expected, 0.5) <= 0.30
 
 
 def _allowed_line_spacings(rules: dict) -> list[float]:
@@ -2089,14 +2455,43 @@ def _allowed_line_spacings(rules: dict) -> list[float]:
     return values
 
 
+def _pdf_spacing_multiple(unit: dict, below: dict) -> float | None:
+    """Estimate a Word-style line-spacing multiple from consecutive PDF line boxes.
+
+    Uses font×1.15 (CSS/Word-like single) as the primary divisor. When an
+    under-reported face size would inflate the multiple, also consider the ink
+    box height and a plain font-size divisor, then keep the reading closest to a
+    standard multiple.
+    """
+    if not (_has_box(unit) and _has_box(below)):
+        return None
+    gap = float(below["bbox"][1]) - float(unit["bbox"][1])
+    if gap <= 0:
+        return None
+    font = max(6.0, _unit_font_pt(unit))
+    box_h = max(0.0, float(unit["bbox"][3]) - float(unit["bbox"][1]))
+    candidates = [
+        gap / (font * LINE_HEIGHT_FACTOR),
+        gap / font,
+    ]
+    if box_h >= 6.0:
+        candidates.append(gap / max(box_h, font * 0.85))
+    scored: list[tuple[float, float]] = []
+    for ratio in candidates:
+        if not (0.6 <= ratio <= 3.2):
+            continue
+        nearest = min(_SPACING_STANDARDS, key=lambda standard: abs(ratio - standard))
+        scored.append((abs(ratio - nearest), ratio))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return round(scored[0][1], 2)
+
+
 def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     allowed = _allowed_line_spacings(rules)
     if not allowed:
-        # Blank / IGNORE spacing: count intra-paragraph line pairs as passed.
-        n = 0
-        for paragraph in _prose_paragraphs(units):
-            n += max(0, len(paragraph) - 1)
-        _pass_all(stats, n)
+        # Blank / IGNORE / missing line spacing: not scored (0 units, leave applicable False).
         return
     stats.applicable = True
     primary = allowed[0]
@@ -2105,9 +2500,7 @@ def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collect
         for unit, below in zip(paragraph, paragraph[1:]):
             actual = (unit.get("formatting") or {}).get("line_spacing")
             if actual is None and _has_box(unit) and _has_box(below) and below["page_index"] == unit["page_index"]:
-                gap = below["bbox"][1] - unit["bbox"][1]
-                ratio = gap / (_unit_font_pt(unit) * LINE_HEIGHT_FACTOR)
-                actual = round(ratio, 2) if 0.6 <= ratio <= 3.2 else None
+                actual = _pdf_spacing_multiple(unit, below)
             if actual is None:
                 continue
             measured = float(actual)
@@ -2357,30 +2750,15 @@ def _check_indentation(units: list[dict], rules: dict, stats: CategoryStats, col
 
 def _check_alignment(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     raw = rules.get("alignment")
-    if rule_unset(raw):
-        # Blank / IGNORE: count long body lines as passed (same eligibility as a real rule).
-        n = 0
-        for paragraph in _prose_paragraphs(units):
-            lines = paragraph[:-1] if len(paragraph) > 1 else paragraph
-            for unit in lines:
-                if not _is_body_line(unit) or not _is_alignment_eligible_line(unit, paragraph):
-                    continue
-                n += 1
-        _pass_all(stats, n)
+    page_overrides = parse_alignment_page_overrides(rules.get("alignment_page_overrides"))
+    if rule_unset(raw) and not page_overrides:
+        # Blank / IGNORE / missing alignment: not scored (0 units, leave applicable False).
         return
     # Accept synonyms ("Justified", "flush left", …); exact tokens alone missed legacy rules.
-    expected = parse_alignment(raw)
-    if expected not in {"left", "right", "center", "justify"}:
-        n = 0
-        for paragraph in _prose_paragraphs(units):
-            lines = paragraph[:-1] if len(paragraph) > 1 else paragraph
-            for unit in lines:
-                if not _is_body_line(unit) or not _is_alignment_eligible_line(unit, paragraph):
-                    continue
-                n += 1
-        _pass_all(stats, n)
+    expected = None if rule_unset(raw) else parse_alignment(raw)
+    if expected not in {"left", "right", "center", "justify"} and not page_overrides:
+        # Unparseable alignment with no page overrides: not scored.
         return
-    allowed = {expected}
     stats.applicable = True
     for paragraph in _prose_paragraphs(units):
         # Justified text still ends its last line short, so that line cannot show the alignment.
@@ -2391,6 +2769,12 @@ def _check_alignment(units: list[dict], rules: dict, stats: CategoryStats, colle
                 continue
             if not _is_alignment_eligible_line(unit, paragraph):
                 continue
+            page_one_based = int(unit.get("page_index") or 0) + 1
+            wanted = page_overrides.get(page_one_based) or expected
+            if wanted not in {"left", "right", "center", "justify"}:
+                stats.observe(True)
+                continue
+            allowed = {wanted}
             # PDF gap math often reads justified lines as left; DOCX alignment is explicit.
             pdf_guess = _has_box(unit) and not (unit.get("formatting") or {}).get("alignment")
             ok = actual in allowed or (
@@ -2701,8 +3085,7 @@ def _check_pagination(
         _pass_all(stats, max(0, page_count))
         return
     if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering)):
-        # Blank / IGNORE pagination: one passed unit per page.
-        _pass_all(stats, max(0, page_count))
+        # Blank / IGNORE / missing pagination rules: not scored (0 units, leave applicable False).
         return
     stats.applicable = True
     markers = set(canonical_chapter_markers(pagination.get("chapter_markers"))) or set(DEFAULT_CHAPTER_MARKERS)
@@ -2723,6 +3106,37 @@ def _check_pagination(
         # Soft cover skip: hide the mark but keep counting (matches typical Word title sections).
         title_rule = "hidden_counted"
 
+    # When chapter-first is "no number shown", a blank folio between a higher number and a
+    # restart (10 → blank → 2) is a hidden chapter opener even without a CHAPTER label.
+    # A continuous skip (10 → blank → 12) stays a real missing number.
+    if chapter_rule == "hidden":
+        for index, mark in enumerate(marks):
+            page = mark["page"]
+            if page <= 0 or mark.get("shown") or page in chapter_pages:
+                continue
+            previous = next(
+                (
+                    item
+                    for item in reversed(marks[:index])
+                    if item.get("shown") and isinstance(item.get("value"), int)
+                ),
+                None,
+            )
+            following = next(
+                (
+                    item
+                    for item in marks[index + 1 :]
+                    if item.get("shown") and isinstance(item.get("value"), int)
+                ),
+                None,
+            )
+            if not previous or not following:
+                continue
+            if following["page"] - previous["page"] != 2 or page != previous["page"] + 1:
+                continue
+            if following["value"] < previous["value"]:
+                chapter_pages.add(page)
+
     title_counts = title_rule in {"hidden_counted", "shown"}
     split_blocks = bool(body_start)
 
@@ -2739,27 +3153,22 @@ def _check_pagination(
         expected_style["body"] = "arabic"
 
     def expected_value(page: int) -> int | None:
-        """The number the first numbered page of a block should carry, when the rules pin it down."""
+        """The number the first numbered page of a block should carry, when the rules pin it down.
+
+        Absolute folio pinning requires an explicit body_numbering continuous/restart rule.
+        A title-page hide/count setting alone must not force page N → printed N after chapter gaps.
+        """
         if block_of(page) == "body" and split_blocks:
             if body_numbering == BODY_RESTART:
                 return page - body_start + 1
             if body_numbering == BODY_CONTINUOUS and title_rule:
                 return page + (1 if title_counts else 0)
             return None
-        if title_rule:
+        if body_numbering == BODY_CONTINUOUS and title_rule:
             return page + (1 if title_counts else 0)
-        return None
-        if title_rule and block_of(page) == "prelim":
+        if title_rule and block_of(page) == "prelim" and (prelim_style or split_blocks):
             return page + (1 if title_counts else 0)
-        if title_rule and body_numbering == BODY_CONTINUOUS:
-            return page + (1 if title_counts else 0)
-        if title_rule and not body_numbering:
-            # Absolute folio from page 1 only before any chapter-first boundary.
-            # After a hide-rule chapter gap, last_shown was cleared — do not re-pin
-            # (users restart numbering without always setting body_numbering).
-            if any(chapter_page < page for chapter_page in chapter_pages):
-                return None
-            return page + (1 if title_counts else 0)
+        # body_numbering unset: never absolute-pin from title_page alone.
         return None
 
     last_shown: dict[str, tuple[int, int]] = {}
@@ -2781,6 +3190,11 @@ def _check_pagination(
             want, rule_kind = ("main" if (vertical or horizontal) else None), "page"
         checked = want is not None
         ok = True
+
+        if want == "hidden" and rule_kind == "chapter":
+            # Intentionally hidden chapter-first pages break the prior sequence so a
+            # restart (or fresh count) after the gap is not compared to pre-chapter folios.
+            last_shown.pop(block_of(page), None)
 
         if want == "hidden" and shown:
             ok = False
@@ -2864,8 +3278,12 @@ def _check_pagination(
             # Same printed page can yield two edge tokens; do not invent a sequence jump on itself.
             if previous and previous[0] == page:
                 expected = previous[1]
+            elif body_numbering and previous:
+                # Sequence continuation only when body_numbering is explicitly set.
+                expected = previous[1] + (page - previous[0])
             else:
-                expected = previous[1] + (page - previous[0]) if previous else expected_value(page)
+                # title_page alone must not absolute-pin (avoids page 12→2 false sequence).
+                expected = expected_value(page) if body_numbering else None
             if expected is not None:
                 checked = True
                 if mark["value"] != expected:
@@ -2945,8 +3363,16 @@ def _flag_caption(collector: IssueCollector, issue_type: str, unit: dict, title:
     )
 
 
-def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, collector: IssueCollector) -> None:
+def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, collector: IssueCollector) -> bool:
+    """Check one caption line. Returns True when the caption unit passed."""
     text = (unit.get("text") or "").strip()
+    failed = False
+
+    def flag(issue_type: str, title: str, detail: str, fix: str) -> None:
+        nonlocal failed
+        failed = True
+        _flag_caption(collector, issue_type, unit, title, detail, fix)
+
     if kind == "table":
         title = (match.group(2) or "").strip()
         label = "Table"
@@ -2955,19 +3381,15 @@ def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, col
         title = (match.group(3) or "").strip()
         label = "Figure"
         if prefix.lower().startswith("fig") and not prefix.lower().startswith("figure"):
-            _flag_caption(
-                collector,
+            flag(
                 "figure_caption",
-                unit,
                 "Figure caption prefix differs",
                 f"Found “{text}”; the format expects the caption to start with Figure and a number.",
                 "Rewrite the caption so it starts with Figure and the figure number.",
             )
     if expect["wants_title"] and not title:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption",
-            unit,
             f"{label} caption is missing its title",
             f"Found “{text}”; the format expects a {label.lower()} number and a title.",
             f"Add the {label.lower()} title on the caption line required by the format.",
@@ -2975,51 +3397,42 @@ def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, col
     if title and expect["upper"]:
         letters = [ch for ch in title if ch.isalpha()]
         if letters and not all(ch.isupper() for ch in letters):
-            _flag_caption(
-                collector,
+            flag(
                 f"{kind}_caption",
-                unit,
                 f"{label} title is not in the required caption form",
                 f"Found “{text}”; the format expects the {label.lower()} title in capital letters.",
                 f"Retype the {label.lower()} title in capital letters.",
             )
     elif title and expect["title_case"] and not _is_title_case(title):
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption",
-            unit,
             f"{label} title is not in the required caption form",
             f"Found “{text}”; the format expects the {label.lower()} title in Title Case.",
             f"Retype the {label.lower()} title in Title Case.",
         )
     pieces = _caption_pieces(unit)
     if pieces and expect["bold"] and _share(pieces, "bold") < 0.6:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} caption is not bold",
             f"Found “{text}”; the format expects this {label.lower()} caption in bold.",
             f"Select the {label.lower()} caption and turn on bold.",
         )
     if pieces and (expect["italic"] or expect["title_italic"]) and _share(pieces, "italic") < 0.4:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} caption is not italic",
             f"Found “{text}”; the format expects italic text in this {label.lower()} caption.",
             f"Select the {label.lower()} title and turn on italic.",
         )
     if pieces and expect["number_bold"] and _share(pieces, "bold") < 0.2:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} number is not bold",
             f"Found “{text}”; the format expects the {label.lower()} number in bold.",
             f"Select the {label.lower()} number and turn on bold.",
         )
+    return not failed
 
 
 def _is_table_unit(unit: dict) -> bool:
@@ -3083,7 +3496,7 @@ def _nearest_caption(units: list[dict], cluster: list[int], pattern: re.Pattern,
         text = (unit.get("text") or "").strip()
         if text and not _is_table_unit(unit):
             seen += 1
-            if pattern.match(text) and not PROSE_REFERENCE_RE.match(text):
+            if pattern.match(text) and not _is_caption_prose_reference(text):
                 return index
             if seen >= 4 and len(text) > 80:
                 break
@@ -3100,7 +3513,13 @@ def _is_title_or_cover_page(units: list[dict], page: int | None) -> bool:
     return False
 
 
-def _check_object_placement(units: list[dict], kind: str, expect: dict, collector: IssueCollector) -> None:
+def _check_object_placement(
+    units: list[dict],
+    kind: str,
+    expect: dict,
+    collector: IssueCollector,
+    stats: CategoryStats | None = None,
+) -> None:
     if not expect["above"] and not expect["below"]:
         return
     pattern = TABLE_LABEL_RE if kind == "table" else FIGURE_LABEL_RE
@@ -3122,6 +3541,8 @@ def _check_object_placement(units: list[dict], kind: str, expect: dict, collecto
                 f"This {label.lower()} has no “{label} n” caption; the format requires one {wanted} it.",
                 f"Add a {label} number and title {wanted} this {label.lower()}.",
             )
+            if stats is not None:
+                stats.observe(False)
             continue
         present = before if wanted == "above" else after
         other = after if wanted == "above" else before
@@ -3135,17 +3556,26 @@ def _check_object_placement(units: list[dict], kind: str, expect: dict, collecto
                 f"the format requires it {wanted}.",
                 f"Move the {label.lower()} caption so it sits {wanted} the {label.lower()}.",
             )
+            if stats is not None:
+                stats.observe(False)
+        elif present is not None and stats is not None:
+            stats.observe(True)
 
 
-def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -> None:
-    table_rules = _layout_rule_text(
-        rules.get("table_layout_requirements") or rules.get("table_layout")
-    )
-    figure_rules = _layout_rule_text(
-        rules.get("figure_layout_requirements") or rules.get("figure_layout")
-    )
+def _check_captions(
+    units: list[dict],
+    rules: dict,
+    collector: IssueCollector,
+    stats: CategoryStats | None = None,
+) -> None:
+    table_raw = rules.get("table_layout_requirements") or rules.get("table_layout")
+    figure_raw = rules.get("figure_layout_requirements") or rules.get("figure_layout")
+    table_rules = "" if rule_unset(table_raw) else _layout_rule_text(table_raw)
+    figure_rules = "" if rule_unset(figure_raw) else _layout_rule_text(figure_raw)
     if not table_rules and not figure_rules:
         return
+    if stats is not None:
+        stats.applicable = True
     kinds = []
     if table_rules:
         kinds.append(("table", TABLE_LABEL_RE, _layout_expectations(table_rules)))
@@ -3156,15 +3586,18 @@ def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -
             if (unit.get("source") or "body") in CHROME_SOURCES:
                 continue
             text = (unit.get("text") or "").strip()
-            if not text or PROSE_REFERENCE_RE.match(text):
+            if not text or _is_caption_prose_reference(text):
                 continue
-            # Captions live outside the grid; skip cell text that merely mentions tables.
-            if kind == "table" and _is_table_unit(unit) and not pattern.match(text):
+            # Caption labels sit outside the grid — never score table-cell text as captions.
+            # (In-cell "Table N …" is body/grid content, not a caption line.)
+            if _is_table_unit(unit):
                 continue
             match = pattern.match(text)
             if match:
-                _check_one_caption(unit, kind, match, expect, collector)
-        _check_object_placement(units, kind, expect, collector)
+                ok = _check_one_caption(unit, kind, match, expect, collector)
+                if stats is not None:
+                    stats.observe(ok)
+        _check_object_placement(units, kind, expect, collector, stats)
 
 
 def _expected_citation_families(style: str) -> set[str]:
@@ -3201,24 +3634,13 @@ def _check_citations(
 ) -> None:
     style = str(rules.get("citation_style") or "").upper()
     if not style or rule_unset(rules.get("citation_style")):
-        # Blank / IGNORE citations: pass each line that has a citation marker; invent none.
-        n = 0
-        for unit in units:
-            if _citation_marker_families(unit.get("text") or ""):
-                n += 1
-        if stats is not None:
-            _pass_all(stats, n)
+        # Blank / IGNORE / missing citation style: not scored (0 units, leave applicable False).
         return
     from app.citation_ml import classify_citation
 
     allowed = _expected_citation_families(style)
     if not allowed:
-        n = 0
-        for unit in units:
-            if _citation_marker_families(unit.get("text") or ""):
-                n += 1
-        if stats is not None:
-            _pass_all(stats, n)
+        # Unrecognized citation style: not scored.
         return
 
     numeric = len(IN_TEXT_NUMERIC_RE.findall(text or ""))
@@ -3233,10 +3655,23 @@ def _check_citations(
     if stats is not None:
         stats.applicable = True
 
+    def _skip_citation_unit(unit: dict) -> bool:
+        """Tables / grid cells are not in-text citation targets (avoids 'Gen 2' FPs)."""
+        if unit.get("source") == "table" or unit.get("role") in {"table", "caption", "figure"}:
+            return True
+        if unit.get("table_row") or unit.get("has_drawing"):
+            return True
+        text = unit.get("text") or ""
+        if "\t" in text or text.count("  ") >= 3:
+            return True
+        return False
+
     # Per-marker (per-unit): flag any line that contains a marker family the
     # uploaded style does not allow. Minority wrong citations are no longer
     # hidden by document-level majority vote.
     for unit in units:
+        if _skip_citation_unit(unit):
+            continue
         raw = unit.get("text") or ""
         families = _citation_marker_families(raw)
         if not families:
@@ -3333,6 +3768,8 @@ def _check_citations(
                 current_entry_parts = [raw]
             else:
                 current_entry_parts.append(raw)
+            continue
+        if _skip_citation_unit(unit):
             continue
         matches = IN_TEXT_NUMERIC_RE.findall(raw) + IN_TEXT_APA_RE.findall(raw) + IN_TEXT_MLA_RE.findall(raw)
         if not matches:
@@ -3551,32 +3988,10 @@ def _word_spacing_problem(text: str, rule: str) -> tuple[int, str] | None:
 def _check_word_spacing(
     units: list[dict], parsed: dict, rules: dict, stats: CategoryStats, collector: IssueCollector
 ) -> None:
-    rule = canonical_word_spacing(rules.get("word_spacing"))
+    raw_word = rules.get("word_spacing")
+    rule = canonical_word_spacing(raw_word)
     if rule not in {WORD_SPACING_SINGLE, WORD_SPACING_TWO}:
-        # Blank / IGNORE word spacing: pass eligible body paragraphs.
-        paragraph_text = {
-            paragraph.get("paragraph_index"): str(paragraph.get("text") or "")
-            for paragraph in parsed.get("paragraphs") or []
-        }
-        seen: set = set()
-        n = 0
-        for unit in units:
-            if unit.get("role") not in {"body", "caption"} and not _is_heading_role(unit.get("role")):
-                continue
-            if (unit.get("source") or "body") != "body":
-                continue
-            key = unit.get("paragraph_index")
-            if key is not None:
-                if key in seen:
-                    continue
-                seen.add(key)
-                text = paragraph_text.get(key, unit.get("text") or "")
-            else:
-                text = unit.get("text") or ""
-            if len(text.strip()) < 2 or "\t" in text.strip() or re.search(r"\.{3,}|…", text):
-                continue
-            n += 1
-        _pass_all(stats, n)
+        # Blank / IGNORE / missing word spacing: not scored (0 units, leave applicable False).
         return
     stats.applicable = True
     paragraph_text = {
@@ -3676,7 +4091,7 @@ def run_compliance_scan(
         ("Checking word spacing", lambda: _check_word_spacing(units, parsed, mechanics_rules, stats["Spacing"], collector)),
         ("Checking alignment", lambda: _check_alignment(units, mechanics_rules, stats["Alignment"], collector)),
         ("Checking page numbers", lambda: _check_pagination(units, mechanics_rules, stats["Pagination"], collector, parsed)),
-        ("Checking captions", lambda: _check_captions(units, mechanics_rules, collector)),
+        ("Checking captions", lambda: _check_captions(units, mechanics_rules, collector, stats["Captions"])),
         ("Checking citations", lambda: _check_citations(units, parsed.get("text", ""), mechanics_rules, collector, stats["Citations"])),
     )
     total_checks = len(checks)

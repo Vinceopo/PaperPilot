@@ -69,12 +69,9 @@ def _feature_tier(tier: str) -> str:
 
 
 def _scan_rules(rules: dict, ignored_fields: list[str] | None = None) -> dict:
-    from app.documents import normalize_mechanics_rules
     from app.mechanics_validate import apply_ignored_fields_to_rules
 
-    out = apply_ignored_fields_to_rules(
-        normalize_mechanics_rules(rules or {}), ignored_fields
-    )
+    out = apply_ignored_fields_to_rules(rules or {}, ignored_fields)
     style = str(out.get("citation_style") or "").strip().upper()
     if style == "CHICAGO":
         out["citation_style"] = "APA"
@@ -181,15 +178,7 @@ def hydrate_scan_from_ml(owner_uid: str, scan_id: str) -> dict | None:
             return _fail(owner_uid, scan_id, STALE_SCAN_MESSAGE)
         return scan
 
-    try:
-        result = get_analyze_result(job_id)
-    except MLServiceError as exc:
-        if _is_stale(scan):
-            return _fail(owner_uid, scan_id, STALE_SCAN_MESSAGE)
-        # Keep the scan running so progress polls can retry after a transient
-        # ML result failure (e.g. response validation / cold restart).
-        logger.warning("ML result fetch failed for scan %s: %s", scan_id, exc)
-        raise
+    result = get_analyze_result(job_id)
     if result.get("status") == "failed":
         return _fail(
             owner_uid,
@@ -276,25 +265,9 @@ def scan_progress_payload(owner_uid: str, scan_id: str) -> dict | None:
         }
 
     if progress.get("status") == "done" or progress.get("stage") == "done":
-        try:
-            hydrate_scan_from_ml(owner_uid, scan_id)
-        except MLServiceError as exc:
-            # Progress said done, but result fetch/validation failed. Keep polling
-            # instead of turning a transient ML 5xx into a client-facing 502.
-            logger.warning("Hydrate after done failed for scan %s: %s", scan_id, exc)
-            return {
-                "scan_id": scan_id,
-                "job_id": job_id,
-                "stage": progress.get("stage") or "done",
-                "percent": progress.get("percent") if progress.get("percent") is not None else 99,
-                "message": "Finalizing analysis…",
-                "status": "running",
-            }
+        hydrate_scan_from_ml(owner_uid, scan_id)
     elif (progress.get("status") == "failed" or progress.get("stage") == "failed") or _is_stale(scan):
-        try:
-            hydrate_scan_from_ml(owner_uid, scan_id)
-        except MLServiceError as exc:
-            logger.warning("Hydrate after failed/stale failed for scan %s: %s", scan_id, exc)
+        hydrate_scan_from_ml(owner_uid, scan_id)
         refreshed = get_scan(owner_uid, scan_id) or {}
         if refreshed.get("status") == "failed":
             return {

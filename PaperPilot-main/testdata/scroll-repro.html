@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Upload Manuscript double-scroll repro</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .pp-scroll { scrollbar-width: thin; }
+  </style>
+</head>
+<body class="bg-slate-100 p-5 md:p-8">
+  <!-- Fixed layout: outer overflow-hidden; only page-stack scroller scrolls -->
+  <section class="relative flex w-full flex-col rounded-xl border border-slate-200 bg-white p-8 shadow-sm md:p-10 h-[calc(100dvh-7.5rem)] min-h-0 overflow-hidden">
+    <h2 class="mt-2 shrink-0 text-2xl font-bold text-[#172033]">Upload Manuscript</h2>
+    <p class="mt-2 shrink-0 text-sm text-slate-500">After fix: only file-list / page stack scrolls</p>
+    <div class="mt-5 flex min-h-0 flex-1 flex-col gap-3">
+      <div class="flex shrink-0 flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#18bda9] min-h-[7.5rem] py-3">
+        Drop zone (collapsed when preview shows)
+      </div>
+      <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
+        <div class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Manuscript preview</p>
+        </div>
+        <div id="outer" class="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#e8ecf1] p-3">
+          <div class="min-h-0 flex-1 overflow-hidden">
+            <div id="inner" class="pp-scroll relative mx-auto h-full max-h-full w-full overflow-x-hidden overflow-y-auto overscroll-contain" style="height:100%;max-height:100%;background:#fff;border:1px solid #cbd5e1">
+              <div style="padding:1rem">
+                <p class="font-bold mb-2">Page stack (file-list / pages)</p>
+                <script>
+                  for (let i = 1; i <= 40; i++) {
+                    document.write('<div style="height:120px;margin:0 0 12px;border:1px solid #e2e8f0;display:grid;place-items:center">Page ' + i + '</div>');
+                  }
+                </script>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <p id="out" class="mt-3 text-sm"></p>
+  <script>
+    const outer = document.getElementById('outer');
+    const inner = document.getElementById('inner');
+    const out = document.getElementById('out');
+    function report() {
+      out.textContent =
+        'outer scrollable=' + (outer.scrollHeight > outer.clientHeight + 1) +
+        ' (scrollH=' + outer.scrollHeight + ' clientH=' + outer.clientHeight + '); ' +
+        'inner scrollable=' + (inner.scrollHeight > inner.clientHeight + 1) +
+        ' (scrollH=' + inner.scrollHeight + ' clientH=' + inner.clientHeight + ')';
+    }
+    report();
+    addEventListener('resize', report);
+  </script>
+</body>
+</html>

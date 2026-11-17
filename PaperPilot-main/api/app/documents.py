@@ -39,6 +39,8 @@ from app.mechanics_options import (
     page_number_only,
     page_position_parts,
     pagination_omits_all_numbers,
+    alignment_page_overrides_for_storage,
+    parse_alignment_page_overrides,
     rule_unset,
 )
 
@@ -87,6 +89,166 @@ def parse_document(data: bytes, file_type: str, on_progress=None) -> dict:
         raise
     except Exception as exc:
         raise DocumentError("The document could not be parsed.") from exc
+
+
+def is_deferred_parse(parsed: dict | None) -> bool:
+    """True when create stored a probe stub instead of a full layout tree."""
+    if not isinstance(parsed, dict):
+        return True
+    meta = parsed.get("metadata") if isinstance(parsed.get("metadata"), dict) else {}
+    if str(meta.get("parse_status") or "").strip().lower() == "deferred":
+        return True
+    # Full PDF / DOCX parses always carry pages or paragraphs.
+    return not (parsed.get("pages") or parsed.get("paragraphs"))
+
+
+def probe_document(data: bytes, file_type: str, *, max_probe_pages: int = 2) -> dict:
+    """Fast create-time check: password, page count, extractable text sample.
+
+    Does **not** build the compliance layout tree. Analyse / ML still run
+    ``parse_document`` when scoring.
+    """
+    try:
+        if file_type == "pdf":
+            return _probe_pdf(data, max_probe_pages=max_probe_pages)
+        return _probe_docx(data)
+    except DocumentError:
+        raise
+    except Exception as exc:
+        raise DocumentError("The document could not be read.") from exc
+
+
+def _probe_pdf(data: bytes, max_probe_pages: int = 2) -> dict:
+    with fitz.open(stream=data, filetype="pdf") as document:
+        if document.needs_pass:
+            raise DocumentError("Password-protected PDFs are not supported.")
+        page_count = int(document.page_count or 0)
+        sample_parts: list[str] = []
+        limit = min(page_count, max(1, int(max_probe_pages or 2)))
+        for page_index in range(limit):
+            text = (document.load_page(page_index).get_text("text") or "").strip()
+            if text:
+                sample_parts.append(text)
+            # Enough evidence the PDF has extractable text.
+            if sum(len(part) for part in sample_parts) >= 400:
+                break
+        sample = "\n\n".join(sample_parts).strip()
+    return {
+        "text": sample,
+        "metadata": {
+            "format": "pdf",
+            "page_count": page_count,
+            "parse_status": "deferred",
+        },
+        "pages": [],
+    }
+
+
+def _probe_docx(data: bytes) -> dict:
+    document = Document(io.BytesIO(data))
+    parts: list[str] = []
+    for paragraph in document.paragraphs[:50]:
+        text = (paragraph.text or "").strip()
+        if text:
+            parts.append(text)
+        if sum(len(part) for part in parts) >= 2000:
+            break
+    if sum(len(part) for part in parts) < 200:
+        for table in document.tables[:5]:
+            for row in table.rows[:10]:
+                for cell in row.cells:
+                    text = (cell.text or "").strip()
+                    if text:
+                        parts.append(text)
+                    if sum(len(part) for part in parts) >= 2000:
+                        break
+                if sum(len(part) for part in parts) >= 2000:
+                    break
+            if sum(len(part) for part in parts) >= 2000:
+                break
+    sample = "\n".join(parts).strip()
+    return {
+        "text": sample,
+        "metadata": {
+            "format": "docx",
+            "page_count": 0,
+            "parse_status": "deferred",
+        },
+        "paragraphs": [],
+        "pages": [],
+    }
+
+
+def _pdf_vector_drawing_bboxes(page) -> list[dict]:
+    """Collect vector cell/frame rects from PDF drawings (table borders, boxes).
+
+    Raster images alone are not enough — real manuscripts usually draw table grids
+    with path strokes. Indent / role checks need those rects as ``has_drawing`` units
+    so cell text is not treated as body paragraphs.
+    """
+    page_w = float(page.rect.width)
+    page_h = float(page.rect.height)
+    page_area = max(1.0, page_w * page_h)
+    rects: list[list[float]] = []
+    strokes_h: list[list[float]] = []
+    strokes_v: list[list[float]] = []
+    for drawing in page.get_drawings() or []:
+        raw = drawing.get("rect")
+        if raw is None:
+            continue
+        x0, y0, x1, y1 = float(raw.x0), float(raw.y0), float(raw.x1), float(raw.y1)
+        if x1 < x0:
+            x0, x1 = x1, x0
+        if y1 < y0:
+            y0, y1 = y1, y0
+        width = x1 - x0
+        height = y1 - y0
+        if width < 1.5 and height < 1.5:
+            continue
+        box = [round(x0, 2), round(y0, 2), round(x1, 2), round(y1, 2)]
+        # Closed / filled cell or frame.
+        if width >= 14.0 and height >= 14.0:
+            area = width * height
+            if area >= 0.55 * page_area or width >= 0.92 * page_w:
+                continue
+            rects.append(box)
+            continue
+        # Thin rules — used later to rebuild a grid union when cells are line-drawn.
+        if height <= 3.0 and width >= 40.0:
+            strokes_h.append(box)
+        elif width <= 3.0 and height >= 40.0:
+            strokes_v.append(box)
+
+    if len(strokes_h) >= 2 and len(strokes_v) >= 2:
+        xs0 = [b[0] for b in strokes_h + strokes_v]
+        ys0 = [b[1] for b in strokes_h + strokes_v]
+        xs1 = [b[2] for b in strokes_h + strokes_v]
+        ys1 = [b[3] for b in strokes_h + strokes_v]
+        union = [min(xs0), min(ys0), max(xs1), max(ys1)]
+        union_w = union[2] - union[0]
+        union_h = union[3] - union[1]
+        union_area = max(0.0, union_w * union_h)
+        if (
+            union_w >= 40.0
+            and union_h >= 40.0
+            and union_w < 0.92 * page_w
+            and union_area < 0.55 * page_area
+        ):
+            rects.append([round(value, 2) for value in union])
+
+    # Deduplicate near-identical rects (stroke redraws, overlapping cell paths).
+    unique: list[list[float]] = []
+    for box in rects:
+        if any(
+            abs(box[0] - other[0]) <= 1.5
+            and abs(box[1] - other[1]) <= 1.5
+            and abs(box[2] - other[2]) <= 1.5
+            and abs(box[3] - other[3]) <= 1.5
+            for other in unique
+        ):
+            continue
+        unique.append(box)
+    return [{"bbox": box} for box in unique]
 
 
 def _parse_pdf(data: bytes, on_progress=None) -> dict:
@@ -145,6 +307,7 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                     )
                     line_index += 1
             lines = _merge_pdf_rows(lines, page_index)
+            drawings = _pdf_vector_drawing_bboxes(page)
             page_text = "\n".join(line["text"] for line in lines)
             all_text.append(page_text)
             pages.append(
@@ -155,6 +318,7 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                     "rotation": page.rotation,
                     "image_count": image_count,
                     "images": images,
+                    "drawings": drawings,
                     "lines": lines,
                 }
             )
@@ -1139,8 +1303,11 @@ def parse_length_inches(value) -> float | None:
     text = str(value or "").strip().lower().replace(",", ".")
     if not text:
         return None
-    if re.search(r"\b(?:one\s+)?tab\b", text):
-        return 0.5
+    # "1 tab" / "one tab" — the leading digit is a tab count, not inches.
+    if re.search(r"\btabs?\b", text):
+        from app.indent_check import _parse_indent_inches
+
+        return _parse_indent_inches(text)
     amount = None
     unit_text = text
     mixed = re.search(r"(\d+)\s+(\d+)\s*/\s*(\d+)", text)
@@ -1526,6 +1693,8 @@ def derive_mechanics_rules(text: str) -> dict:
     """
     flat = _flatten_mechanics_text(text)
     rules: dict = {}
+    needs_review: list[dict] = []
+    field_sources: dict[str, str] = {}
     if not flat:
         return rules
 
@@ -1566,8 +1735,9 @@ def derive_mechanics_rules(text: str) -> dict:
             paper["orientation"] = "Portrait"
     elif re.search(r"\blandscape\b(?!\s+(?:pages?|orientation\s*:))", flat, re.I):
         paper["orientation"] = "Landscape"
-    else:
+    elif re.search(r"\bportrait\b", flat, re.I):
         paper["orientation"] = "Portrait"
+    # Never invent Portrait when the guide does not state orientation.
 
     substance = _value_after_label(
         flat, ("Substance", "Paper substance", "Paper weight", "Basis weight", "gsm"), stop
@@ -1612,7 +1782,15 @@ def derive_mechanics_rules(text: str) -> dict:
 
     indent_raw = _value_after_label(
         flat,
-        ("Indention", "Indentation", "First-line indent", "First line indent", "Paragraph indent"),
+        (
+            "Indention",
+            "Indentation",
+            "First-line indent",
+            "First line indent",
+            "First line inset",
+            "First-line inset",
+            "Paragraph indent",
+        ),
         stop,
     )
     # Indentation only: never invent a default (bare "tab" / unclear → omit → IGNORE).
@@ -1620,9 +1798,9 @@ def derive_mechanics_rules(text: str) -> dict:
 
     indent_val = _parse_indent_rule_inches(indent_raw) if indent_raw else None
     if indent_val is None:
-        # Label then measure: "first-line indent: 0.5 inch"
+        # Label then measure: "first-line indent: 0.5 inch" / "first line inset: 1.27 cm"
         indent_match = re.search(
-            r"\b(?:first(?:[\s-]line)?|paragraph)\s+indent(?:ation|ion)?\s*"
+            r"\b(?:first(?:[\s-]line)?|paragraph)\s+(?:indent(?:ation|ion)?|inset)\s*"
             rf"(?:of|:|=|should be|must be)?\s*({MEASURE_PATTERN})",
             flat,
             re.I,
@@ -1630,14 +1808,27 @@ def derive_mechanics_rules(text: str) -> dict:
         if indent_match:
             indent_val = _parse_indent_rule_inches(indent_match.group(1))
         if indent_val is None:
-            # Measure then label (same sentence as spacing): "0.5 inch first-line indent"
+            # "Indent the first line … by 0.5 inch"
+            by_measure = re.search(
+                rf"(?i)\bindent(?:ation|ion)?\b.{{0,80}}?\b(?:first[\s-]?line|paragraph)\b.{{0,40}}?\b(?:by|of|:|=)\s*"
+                rf"({MEASURE_PATTERN})",
+                flat,
+            )
+            if by_measure:
+                indent_val = _parse_indent_rule_inches(by_measure.group(1))
+        if indent_val is None:
+            # Measure then label: "0.5 inch first-line indent" / "half-inch first-line indent"
             measure_then = re.search(
-                rf"(?i)({MEASURE_PATTERN})\s+"
-                r"(?:(?:first[\s-]?line|paragraph)\s+)?indent(?:ation|ion)?\b",
+                rf"(?i)({MEASURE_PATTERN}|half[\s-]?inch|1\s*/\s*2\s*(?:inch(?:es)?)?)\s+"
+                r"(?:(?:first[\s-]?line|paragraph)\s+)?(?:indent(?:ation|ion)?|inset)\b",
                 flat,
             )
             if measure_then:
-                indent_val = _parse_indent_rule_inches(measure_then.group(1))
+                token = measure_then.group(1)
+                if re.search(r"(?i)half|1\s*/\s*2", token):
+                    indent_val = 0.5
+                else:
+                    indent_val = _parse_indent_rule_inches(token)
         # "0.5 inch TAB" / "TAB = 0.5 inch" — only when a measure is stated beside TAB.
         if indent_val is None:
             tab_with_measure = re.search(
@@ -1694,6 +1885,28 @@ def derive_mechanics_rules(text: str) -> dict:
     if alignment:
         rules["alignment"] = alignment
 
+    override_blob = _value_after_label(
+        flat,
+        (
+            "Alignment page overrides",
+            "Page alignment overrides",
+            "Alignment exceptions",
+            "Per-page alignment",
+        ),
+        stop,
+    )
+    if not override_blob:
+        # Free-standing "Page N = center" lines anywhere in the guide.
+        found_lines = re.findall(
+            r"(?i)\bpage\s*\d+\s*[=:]\s*(?:left|right|center|centre|centered|centred|justify|justified|"
+            r"flush\s+left|flush\s+right)\b",
+            text,
+        )
+        override_blob = "\n".join(found_lines)
+    alignment_overrides = parse_alignment_page_overrides(override_blob)
+    if alignment_overrides:
+        rules["alignment_page_overrides"] = alignment_page_overrides_for_storage(alignment_overrides)
+
     fonts = _font_families_in(flat)
     font_type = _value_after_label(flat, ("Font type", "Font", "Typeface", "Type"), stop)
     if font_type:
@@ -1702,11 +1915,29 @@ def derive_mechanics_rules(text: str) -> dict:
             if family in fonts:
                 fonts.remove(family)
             fonts.insert(0, family)
+    # Point sizes that appear only inside an "A or B" / "A–B" range are not a rule.
+    ambiguous_pts: set[float] = set()
+    for match in re.finditer(
+        r"(?i)\b(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\s*(?:or|/|–|-|to)\s*(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b",
+        flat,
+    ):
+        left, right = float(match.group(1)), float(match.group(2))
+        if 6 <= left <= 72:
+            ambiguous_pts.add(left)
+        if 6 <= right <= 72:
+            ambiguous_pts.add(right)
+        needs_review.append(
+            {
+                "fields": ["font.heading_or_body_size"],
+                "reason": "ambiguous_or_contradictory",
+                "source": match.group(0).strip()[:240],
+            }
+        )
     sizes = sorted(
         {
             float(value)
             for value in re.findall(r"\b(\d{1,2}(?:\.\d+)?)\s*(?:pt|point)s?\b", flat, re.I)
-            if 6 <= float(value) <= 72
+            if 6 <= float(value) <= 72 and float(value) not in ambiguous_pts
         }
     )
     def _heading_labels(level: int) -> tuple[str, ...]:
@@ -1727,6 +1958,9 @@ def derive_mechanics_rules(text: str) -> dict:
         "Content Size",
         "Content size",
         "Text size",
+        "Point size for running text",
+        "Running text size",
+        "Running text",
         "Main body",
         "Main text",
         "Body content",
@@ -1893,28 +2127,62 @@ def derive_mechanics_rules(text: str) -> dict:
     if sizes:
         font["sizes_points"] = sizes
     for raw, key, labels in size_sources:
+        # Ambiguous alternatives ("14 or 16", "14–16") → needs review, never invent.
+        if raw and re.search(
+            r"(?i)\b\d{1,2}(?:\.\d+)?\s*(?:pt|points?)?\s*(?:or|/|–|-|to)\s*\d{1,2}(?:\.\d+)?\s*(?:pt|points?)?\b",
+            str(raw),
+        ):
+            needs_review.append(
+                {
+                    "fields": [key],
+                    "reason": "ambiguous_or_contradictory",
+                    "source": str(raw).strip()[:240],
+                }
+            )
+            continue
         value = _explicit_pt(raw)
         if value is None:
             value = _nearby_pt(labels)
         if value is not None:
             font[key] = value
+            field_sources[f"font.{key}"] = str(raw or "").strip()[:240]
             # sizes_points is body fallback only - do not dump headingN sizes into it.
             if key in {"body_size", "heading3_content_size"}:
                 sizes = sorted(set([*sizes, value]))
                 font["sizes_points"] = sizes
     # Shared "Heading N and contents: 11" - apply both rules (same value, separate fields).
+    # Do not overwrite a different explicit body size; conflict → needs review.
+    blocked_font_keys: set[str] = set()
     for key, value in combined_sizes.items():
+        existing = font.get(key)
+        if existing is not None and abs(float(existing) - float(value)) > 0.01:
+            needs_review.append(
+                {
+                    "fields": [key],
+                    "reason": "ambiguous_or_contradictory",
+                    "source": f"combined heading/contents {value:g} pt vs explicit {float(existing):g} pt",
+                }
+            )
+            font.pop(key, None)
+            field_sources.pop(f"font.{key}", None)
+            blocked_font_keys.add(key)
+            if key == "body_size":
+                font.pop("heading3_content_size", None)
+                field_sources.pop("font.heading3_content_size", None)
+                blocked_font_keys.add("heading3_content_size")
+            continue
         font[key] = value
+        field_sources[f"font.{key}"] = f"Heading N and contents/body = {value:g} pt"
         if key == "body_size":
             sizes = sorted(set([*sizes, value]))
             font["sizes_points"] = sizes
-    if "body_size" not in font:
+    if "body_size" not in font and "body_size" not in blocked_font_keys:
         contents_pt = _contents_body_pt()
         if contents_pt is not None:
             font["body_size"] = contents_pt
             sizes = sorted(set([*sizes, contents_pt]))
             font["sizes_points"] = sizes
-    if "body_size" not in font:
+    if "body_size" not in font and "body_size" not in blocked_font_keys:
         # Many guides state a manuscript-wide typeface size and later a different
         # title/cover size. Collect candidates and prefer body/typeface wording
         # over title-only "Font size N" so any school guide works — not one template.
@@ -1947,8 +2215,17 @@ def derive_mechanics_rules(text: str) -> dict:
         def _add_candidate(start: int, end: int, value: float | None, base: int) -> None:
             if value is None or not (6 <= float(value) <= 72):
                 return
+            if float(value) in ambiguous_pts:
+                return
             before, after = _local_context(start, end)
             if _is_title_or_heading_exception(before, after):
+                return
+            # "14 or 16" / range wording near this match → skip inventing a size.
+            window = flat[max(0, start - 30) : min(len(flat), end + 30)]
+            if re.search(
+                r"(?i)\b\d{1,2}(?:\.\d+)?\s*(?:pt|points?)?\s*(?:or|/|–|-|to)\s*\d{1,2}",
+                window,
+            ):
                 return
             window = f"{before}{after}"
             score = base
@@ -2028,10 +2305,12 @@ def derive_mechanics_rules(text: str) -> dict:
             font["body_size"] = number
             sizes = sorted(set([*sizes, number]))
             font["sizes_points"] = sizes
-    if "body_size" in font:
+    if "body_size" in font and "heading3_content_size" not in blocked_font_keys:
         font["heading3_content_size"] = font["body_size"]
         # Keep sizes_points body-only - never leave heading pt values in the bag.
         font["sizes_points"] = [float(font["body_size"])]
+    elif "body_size" not in font and "body_size" in blocked_font_keys:
+        font.pop("sizes_points", None)
     font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
     # Only store color when the guide names it - never invent Black/Automatic.
     if font_color:
@@ -2106,34 +2385,7 @@ def derive_mechanics_rules(text: str) -> dict:
         preliminary = PRELIM_ROMAN
     if preliminary:
         pagination["preliminary_style"] = preliminary
-    body_numbering_raw = _line_value(
-        text, ("Body numbering", "Main body numbering", "Main text numbering", "Body pages")
-    )
-    if not body_numbering_raw:
-        body_sent = re.search(
-            r"(?i)((?:body|main\s+(?:text|body))\s+pages?\b[^.!?\n]{0,120}"
-            r"(?:restart|continuous|continu)[^.!?\n]{0,40})",
-            flat,
-        )
-        body_numbering_raw = body_sent.group(1) if body_sent else ""
-    body_numbering = canonical_body_numbering(body_numbering_raw)
-    if body_numbering:
-        pagination["body_numbering"] = body_numbering
-    markers = canonical_chapter_markers(
-        _line_value(text, ("Chapter starts", "Chapter start pages", "Chapter-like pages"))
-    )
-    if not markers and re.search(
-        r"(?i)\bchapter\s+number\b.{0,50}\b(?:hindu[\s-]?arabic|arabic)\b",
-        flat,
-    ):
-        markers = ["chapter_arabic"]
-    elif not markers and re.search(
-        r"(?i)\bchapter\s+number\b.{0,50}\bromann?\b",
-        flat,
-    ):
-        markers = ["chapter_roman"]
-    if markers:
-        pagination["chapter_markers"] = markers
+    # Body numbering + Chapter starts removed from Format Fields / extraction.
     if pagination:
         rules["pagination"] = pagination
         rules["pagination_requirements"] = [
@@ -2291,6 +2543,20 @@ def derive_mechanics_rules(text: str) -> dict:
             style = re.search(r"\b(APA|MLA|IEEE)\b", citation_raw, re.I)
             if style:
                 rules["citation_style"] = style.group(1).upper()
+
+    if field_sources:
+        rules["field_sources"] = field_sources
+    if needs_review:
+        # De-dupe identical review rows while preserving order.
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for item in needs_review:
+            key = f"{item.get('fields')}|{item.get('source')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        rules["needs_review"] = unique
 
     from app.mechanics_ml import enrich_mechanics_rules
 
@@ -2460,7 +2726,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         indention = ""
     if indention:
         rules["indention"] = indention[:120]
-    # Indentation only: bare "tab" without a stated equivalent must not become 0.5.
+    # "1 tab" / "one tab" → 0.5 in; never treat the tab count digit as inches.
     from app.indent_check import _parse_indent_inches as _parse_indent_rule_inches
 
     indent = _parse_indent_rule_inches(indention) if indention else None
@@ -2480,6 +2746,15 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     alignment = None if rule_unset(alignment_raw) else parse_alignment(alignment_raw)
     if alignment:
         rules["alignment"] = alignment
+
+    alignment_overrides = parse_alignment_page_overrides(
+        raw.get("alignment_page_overrides")
+        or raw.get("alignmentPageOverrides")
+        or raw.get("alignment_page_exceptions")
+    )
+    if alignment_overrides:
+        # Store page_N keys so Firebase RTDB does not coerce {1:…} into an array.
+        rules["alignment_page_overrides"] = alignment_page_overrides_for_storage(alignment_overrides)
 
     margins_in = raw.get("margins_inches") if isinstance(raw.get("margins_inches"), dict) else {}
     margins: dict[str, float] = {}
@@ -2572,7 +2847,6 @@ _SAMPLE_SECTIONS = (
         (
             ("Size", "8.5 x 11"),
             ("Orientation", "Portrait"),
-            ("Substance", "20"),
             ("Spacing", "Double"),
             ("Word spacing", "One space between words and after periods"),
             ("Indention", "0.5 inch"),
@@ -2603,11 +2877,8 @@ _SAMPLE_SECTIONS = (
             ("Page number position", "Top right"),
             ("Title page", "Number shown"),
             ("First page of each chapter", "Same position as other pages"),
-            ("Body numbering", "Arabic, continuous"),
-            ("Chapter starts", "CHAPTER I, CHAPTER II…; Chapter 1, Chapter 2…"),
         ),
     ),
-    ("Page Breaks", "Only to start each new chapter and the reference list"),
     (
         "Table Layout",
         "Table number in bold, with the title in italic title case on the next line, both placed above it",

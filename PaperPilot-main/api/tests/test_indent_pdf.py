@@ -197,7 +197,8 @@ class IndentRuleResolveTests(unittest.TestCase):
             ({"indention": "1.27 cm"}, "first_line", unittest.mock.ANY),
             ({"indention": "36 pt"}, "first_line", 0.5),
             ({"indention": "0.5 inch TAB"}, "first_line", 0.5),
-            ({"indention": "one tab"}, None, None),  # IGNORE
+            ({"indention": "one tab"}, "first_line", 0.5),  # 1 tab = 0.5 in
+            ({"indention": "1 tab"}, "first_line", 0.5),
             ({"indention": "IGNORE"}, None, None),
             ({}, None, None),
             ({"indent_type": "hanging", "first_line_indent_inches": 0.5}, "hanging", 0.5),
@@ -215,10 +216,14 @@ class IndentRuleResolveTests(unittest.TestCase):
                     if expected_val is not unittest.mock.ANY:
                         self.assertAlmostEqual(resolved["value_in"], float(expected_val), places=2)
 
-    def test_normalize_bare_tab_is_ignore(self):
-        rules = normalize_mechanics_rules({"indention": "one tab"})
-        self.assertNotIn("first_line_indent_inches", rules)
-        self.assertIsNone(resolve_indent_rule(rules))
+    def test_normalize_one_tab_is_half_inch(self):
+        """Guides that say '1 tab' mean the standard 0.5 in first-line indent — not 1 inch."""
+        for wording in ("one tab", "1 tab"):
+            rules = normalize_mechanics_rules({"indention": wording})
+            self.assertAlmostEqual(rules["first_line_indent_inches"], 0.5, places=2, msg=wording)
+            resolved = resolve_indent_rule(rules)
+            self.assertIsNotNone(resolved)
+            self.assertAlmostEqual(resolved["value_in"], 0.5, places=2)
 
     def test_normalize_tab_with_equivalent(self):
         rules = normalize_mechanics_rules({"indention": "0.5 inch TAB"})
@@ -551,6 +556,364 @@ def _tiny_png() -> bytes:
     return base64.b64decode(
         b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
     )
+
+
+def _unit(page, y, x0, text, *, x1=None, page_w=PAGE_W, page_h=PAGE_H, source="body", table_row=False, has_drawing=False):
+    right = x1 if x1 is not None else min(page_w - 72.0, x0 + max(120.0, len(text) * 5.5))
+    return {
+        "page_index": page,
+        "line_index": 0,
+        "text": text,
+        "bbox": [x0, y, right, y + 12],
+        "page_width": page_w,
+        "page_height": page_h,
+        "column": (BODY_LEFT, page_w - 72.0),
+        "formatting": {},
+        "source": source,
+        "role": "body",
+        "table_row": table_row,
+        "has_drawing": has_drawing,
+        "spans": [{"size": 11, "text": text, "bbox": [x0, y, right, y + 12]}],
+        "dominant_size": 11,
+    }
+
+
+class IndentFalseNegativeAndFalsePositiveTests(unittest.TestCase):
+    def test_cross_page_table_grow_does_not_swallow_body(self):
+        """TOC/table seeds on page 0 must not mark same-y body lines on page 1 as tables."""
+        from app.indent_check import _mark_indent_table_units
+
+        units = [
+            # Page 0: borderless two-column TOC-like row (table seed).
+            _unit(0, 120, BODY_LEFT, "Chapter One Title Entry", x1=BODY_LEFT + 200),
+            _unit(0, 120, BODY_LEFT + 280, "12", x1=BODY_LEFT + 300),
+            # Page 1: page-top chrome/body line, then a later 0.5" paragraph.
+            # Same y/left as the TOC seed must not be absorbed as a table cell.
+            _unit(
+                1,
+                120,
+                BODY_LEFT,
+                "Page top continuation line that shares the TOC left edge and vertical band.",
+                x1=PAGE_W - 72,
+            ),
+            _unit(
+                1,
+                200,
+                BODY_LEFT + 36,
+                "Body paragraph opening with half inch indent below the page top band.",
+                x1=PAGE_W - 72,
+            ),
+            _unit(
+                1,
+                216,
+                BODY_LEFT,
+                "Continuation of the body paragraph stays flush on the shared column edge here.",
+                x1=PAGE_W - 72,
+            ),
+        ]
+        table_ids = _mark_indent_table_units(units)
+        self.assertIn(0, table_ids)
+        self.assertIn(1, table_ids)
+        self.assertNotIn(2, table_ids)
+        self.assertNotIn(3, table_ids)
+        self.assertNotIn(4, table_ids)
+
+        from app.compliance import _unit_location
+        from app.indent_check import check_pdf_indentation
+
+        # With a 1.0 inch rule, the 0.5 inch body paragraph must be flagged (no FN).
+        stats = CategoryStats()
+        collector = IssueCollector()
+        meta = check_pdf_indentation(
+            units,
+            {"first_line_indent_inches": 1.0, "indention": "1 inch"},
+            stats,
+            collector,
+            unit_location_fn=_unit_location,
+        )
+        self.assertGreaterEqual(meta["eligible"], 1)
+        self.assertGreaterEqual(stats.failed, 1)
+
+    def test_mid_sentence_short_wrap_not_zero_indent_false_positive(self):
+        """Short last wrap + lowercase continuation stays one 0.5 inch paragraph."""
+        from app.compliance import _unit_location
+        from app.indent_check import check_pdf_indentation, indent_prose_paragraphs
+
+        units = [
+            _unit(
+                0,
+                100,
+                BODY_LEFT + 36,
+                "Opening line with the required half inch indent for this body paragraph text.",
+                x1=PAGE_W - 90,
+            ),
+            _unit(
+                0,
+                116,
+                BODY_LEFT,
+                "Full width continuation that nearly reaches the right margin of the page body xx.",
+                x1=PAGE_W - 72,
+            ),
+            _unit(
+                0,
+                132,
+                BODY_LEFT,
+                "Short wrap end,",
+                x1=BODY_LEFT + 110,
+            ),
+            _unit(
+                0,
+                148,
+                BODY_LEFT,
+                "and families for their unconditional love continue the same sentence here.",
+                x1=PAGE_W - 100,
+            ),
+        ]
+        paras = indent_prose_paragraphs(units)
+        self.assertEqual(len(paras), 1)
+        self.assertEqual(len(paras[0]["lines"]), 4)
+
+        stats = CategoryStats()
+        collector = IssueCollector()
+        check_pdf_indentation(
+            units,
+            {"first_line_indent_inches": 0.5},
+            stats,
+            collector,
+            unit_location_fn=_unit_location,
+        )
+        self.assertEqual(collector.result(), [])
+        self.assertEqual(stats.failed, 0)
+
+    def test_bordered_and_single_cell_table_excluded_from_indent(self):
+        """Drawn table cells (including single-cell boxes) must not produce indent FPs."""
+        from app.compliance import _unit_location
+        from app.indent_check import check_pdf_indentation
+
+        units = [
+            # Proper body paragraph with 0.5" indent (control).
+            _unit(
+                0,
+                72,
+                BODY_LEFT + 36,
+                "Body paragraph before the table opens with a correct half inch indent line.",
+                x1=PAGE_W - 72,
+            ),
+            _unit(
+                0,
+                88,
+                BODY_LEFT,
+                "Body continuation stays on the flush left edge of the column for measurement.",
+                x1=PAGE_W - 72,
+            ),
+            # Drawing rectangles for a 2x2 table + one single-cell box.
+            {
+                "page_index": 0,
+                "line_index": 10,
+                "text": "",
+                "bbox": [BODY_LEFT, 140, BODY_LEFT + 200, 162],
+                "page_width": PAGE_W,
+                "page_height": PAGE_H,
+                "source": "figure",
+                "has_drawing": True,
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 11,
+                "text": "",
+                "bbox": [BODY_LEFT + 200, 140, BODY_LEFT + 400, 162],
+                "page_width": PAGE_W,
+                "page_height": PAGE_H,
+                "source": "figure",
+                "has_drawing": True,
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 12,
+                "text": "",
+                "bbox": [BODY_LEFT, 162, BODY_LEFT + 200, 184],
+                "page_width": PAGE_W,
+                "page_height": PAGE_H,
+                "source": "figure",
+                "has_drawing": True,
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 13,
+                "text": "",
+                "bbox": [BODY_LEFT + 200, 162, BODY_LEFT + 400, 184],
+                "page_width": PAGE_W,
+                "page_height": PAGE_H,
+                "source": "figure",
+                "has_drawing": True,
+                "spans": [],
+            },
+            {
+                "page_index": 0,
+                "line_index": 14,
+                "text": "",
+                "bbox": [BODY_LEFT, 200, BODY_LEFT + 220, 230],
+                "page_width": PAGE_W,
+                "page_height": PAGE_H,
+                "source": "figure",
+                "has_drawing": True,
+                "spans": [],
+            },
+            _unit(0, 145, BODY_LEFT + 8, "Cell A1 Gen 2)", x1=BODY_LEFT + 180),
+            _unit(0, 145, BODY_LEFT + 208, "Cell B1 value", x1=BODY_LEFT + 380),
+            _unit(0, 167, BODY_LEFT + 8, "Cell A2 value", x1=BODY_LEFT + 180),
+            _unit(0, 167, BODY_LEFT + 208, "Cell B2 value", x1=BODY_LEFT + 380),
+            _unit(0, 210, BODY_LEFT + 10, "Merged single cell note", x1=BODY_LEFT + 200),
+        ]
+        stats = CategoryStats()
+        collector = IssueCollector()
+        check_pdf_indentation(
+            units,
+            {"first_line_indent_inches": 0.5},
+            stats,
+            collector,
+            unit_location_fn=_unit_location,
+        )
+        locs = [loc for iss in collector.result() for loc in iss["locations"]]
+        for loc in locs:
+            excerpt = (loc.get("excerpt") or "").lower()
+            self.assertNotIn("cell", excerpt)
+            self.assertNotIn("gen 2", excerpt)
+            self.assertNotIn("merged single", excerpt)
+        self.assertEqual(stats.failed, 0)
+
+    def test_real_pdf_vector_table_wraps_excluded_from_indent(self):
+        """Production path: vector borders from get_drawings + multi-line cell wraps.
+
+        Previously drawings were never extracted, so wrapped left-column cell text
+        looked like an unindented body paragraph and falsely failed Indentation.
+        """
+        doc = fitz.open()
+        page = doc.new_page(width=PAGE_W, height=PAGE_H)
+        # Correct body paragraph before the table.
+        page.insert_text(
+            (BODY_LEFT + 36, 72),
+            "Body paragraph before the table opens with a correct half inch indent line.",
+            fontsize=11,
+            fontname="helv",
+        )
+        page.insert_text(
+            (BODY_LEFT, 88),
+            "Body continuation stays on the flush left edge of the column for measurement.",
+            fontsize=11,
+            fontname="helv",
+        )
+        table_top, table_left = 120.0, BODY_LEFT
+        col_w, row_h = 200.0, 48.0
+        # Tall bordered cells; left cell wraps, right cell is a single short line —
+        # the wrap line has no horizontal peer, so cell-gap merge alone cannot save it.
+        for r in range(2):
+            for c in range(2):
+                x0 = table_left + c * col_w
+                y0 = table_top + r * row_h
+                page.draw_rect(fitz.Rect(x0, y0, x0 + col_w, y0 + row_h), color=(0, 0, 0), width=0.8)
+        page.insert_text((table_left + 8, table_top + 14), "Cell A1 first line of wrap", fontsize=10, fontname="helv")
+        page.insert_text((table_left + 8, table_top + 28), "Cell A1 wrap continuation", fontsize=10, fontname="helv")
+        page.insert_text((table_left + col_w + 8, table_top + 14), "Cell B1", fontsize=10, fontname="helv")
+        page.insert_text((table_left + 8, table_top + row_h + 14), "Cell A2 value here", fontsize=10, fontname="helv")
+        page.insert_text(
+            (table_left + col_w + 8, table_top + row_h + 14), "Cell B2 value here", fontsize=10, fontname="helv"
+        )
+        y = table_top + 2 * row_h + 36
+        page.insert_text(
+            (BODY_LEFT + 36, y),
+            "Fresh indented paragraph after the table opens with the required half inch indent.",
+            fontsize=11,
+            fontname="helv",
+        )
+        page.insert_text(
+            (BODY_LEFT, y + 16),
+            "Full width continuation line that reaches near the right margin of the page body.",
+            fontsize=11,
+            fontname="helv",
+        )
+        data = doc.tobytes()
+        doc.close()
+
+        parsed = _parse(data)
+        drawings = (parsed.get("pages") or [{}])[0].get("drawings") or []
+        self.assertGreaterEqual(len(drawings), 4, "vector cell borders must be extracted from the PDF")
+
+        from app.compliance import _annotate_roles, _document_units, _unit_location
+        from app.indent_check import check_pdf_indentation
+
+        units = _document_units(parsed, {"first_line_indent_inches": 0.5})
+        self.assertTrue(any(u.get("has_drawing") for u in units), "drawing units must reach indent checks")
+        _annotate_roles(units, {"first_line_indent_inches": 0.5})
+        for unit in units:
+            text = (unit.get("text") or "").lower()
+            if "cell" in text:
+                self.assertEqual(unit.get("source"), "table")
+                self.assertEqual(unit.get("role"), "table")
+
+        stats = CategoryStats()
+        collector = IssueCollector()
+        check_pdf_indentation(
+            units,
+            {"first_line_indent_inches": 0.5},
+            stats,
+            collector,
+            unit_location_fn=_unit_location,
+        )
+        for issue in collector.result():
+            for loc in issue["locations"]:
+                excerpt = (loc.get("excerpt") or "").lower()
+                self.assertNotIn("cell", excerpt)
+        self.assertEqual(stats.failed, 0)
+
+    def test_multi_expected_indent_values_on_half_inch_body(self):
+        """Same 0.5 inch body: pass at 0.5, fail at 0.7 and 1.0 (parameterized, not one MS)."""
+        from app.compliance import _unit_location
+        from app.indent_check import check_pdf_indentation
+
+        units = []
+        y = 80.0
+        for i in range(4):
+            units.append(
+                _unit(
+                    0,
+                    y,
+                    BODY_LEFT + 36,
+                    f"Half inch opening paragraph {i} that should match a half inch rule exactly.",
+                    x1=PAGE_W - 72,
+                )
+            )
+            y += 16
+            units.append(
+                _unit(
+                    0,
+                    y,
+                    BODY_LEFT,
+                    f"Continuation {i} of that paragraph stays flush on the body edge for measure.",
+                    x1=PAGE_W - 72,
+                )
+            )
+            y += 40
+
+        outcomes = {}
+        for expected in (0.5, 0.7, 1.0):
+            stats = CategoryStats()
+            collector = IssueCollector()
+            meta = check_pdf_indentation(
+                units,
+                {"first_line_indent_inches": expected},
+                stats,
+                collector,
+                unit_location_fn=_unit_location,
+            )
+            outcomes[expected] = (meta["eligible"], stats.failed, len(collector.result()))
+        self.assertGreaterEqual(outcomes[0.5][0], 3)
+        self.assertEqual(outcomes[0.5][1], 0)
+        self.assertGreaterEqual(outcomes[0.7][1], 3)
+        self.assertGreaterEqual(outcomes[1.0][1], 3)
 
 
 class IndentDoesNotChangeMarginsPagination(unittest.TestCase):

@@ -41,7 +41,7 @@ function formatMeta(row) {
   const parts = [];
   const institution = String(row.institution || "").trim();
   if (institution && institution !== "-" && institution !== "—") parts.push(institution);
-  const formatName = String(row.formatMechanicsName || row.citationStyle || "").trim();
+  const formatName = String(row.formatMechanicsName || "").trim();
   if (formatName) parts.push(formatName);
   if (row.versionCount > 0) {
     parts.push(
@@ -57,6 +57,92 @@ function StatCard({ label, value, sub, accent }) {
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
       <p className={`mt-1.5 text-xl font-bold tabular-nums text-[#0F1729] ${accent || ""}`}>{value}</p>
       {sub ? <p className={`mt-1 text-xs font-medium ${sub.className}`}>{sub.text}</p> : null}
+    </div>
+  );
+}
+
+function SkeletonPulse({ className = "" }) {
+  return <div className={`animate-pulse rounded-md bg-slate-200/80 ${className}`} />;
+}
+
+/** Layout-matched placeholder while the manuscript library loads from the API. */
+export function MyManuscriptsSkeleton() {
+  return (
+    <div
+      className="flex min-h-[calc(100dvh-7.5rem)] flex-col"
+      role="status"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-[#0F1729]">Loading your manuscripts…</p>
+          <p className="mt-0.5 text-xs text-slate-500">Retrieving your library and scan history.</p>
+        </div>
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500 shadow-sm">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#16bfa8]" aria-hidden="true" />
+          Syncing
+        </span>
+      </div>
+
+      <div className="mt-4 grid shrink-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div
+            key={i}
+            className="rounded-xl border border-slate-200/80 bg-white px-4 py-3.5 shadow-sm"
+          >
+            <SkeletonPulse className="h-3 w-24" />
+            <SkeletonPulse className="mt-3 h-7 w-14" />
+            <SkeletonPulse className="mt-2 h-3 w-20" />
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-4 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <SkeletonPulse className="h-11 w-full max-w-md rounded-xl" />
+        <div className="flex gap-2">
+          <SkeletonPulse className="h-11 w-28 rounded-xl" />
+          <SkeletonPulse className="h-11 w-32 rounded-xl" />
+        </div>
+      </div>
+
+      <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 bg-[#F8FAFC] px-5 py-3">
+          <div className="flex gap-8">
+            <SkeletonPulse className="h-3 w-16" />
+            <SkeletonPulse className="h-3 w-14" />
+            <SkeletonPulse className="h-3 w-12" />
+            <SkeletonPulse className="h-3 w-14" />
+            <SkeletonPulse className="ml-auto h-3 w-16" />
+          </div>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="flex items-center gap-4 px-5 py-3.5">
+              <div className="min-w-0 flex-1">
+                <SkeletonPulse className="h-4 w-[min(100%,14rem)]" />
+                <SkeletonPulse className="mt-2 h-3 w-[min(100%,10rem)]" />
+              </div>
+              <SkeletonPulse className="hidden h-3 w-20 shrink-0 sm:block" />
+              <SkeletonPulse className="h-6 w-12 shrink-0 rounded-full" />
+              <SkeletonPulse className="hidden h-6 w-24 shrink-0 rounded-full md:block" />
+              <div className="flex shrink-0 gap-2">
+                <SkeletonPulse className="h-8 w-12 rounded-lg" />
+                <SkeletonPulse className="h-8 w-8 rounded-lg" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-auto flex shrink-0 items-center justify-between border-t border-slate-100 bg-[#F8FAFC] px-5 py-3">
+          <SkeletonPulse className="h-3 w-40" />
+          <div className="flex gap-1">
+            <SkeletonPulse className="h-9 w-9 rounded-lg" />
+            <SkeletonPulse className="h-9 w-9 rounded-lg" />
+            <SkeletonPulse className="h-9 w-9 rounded-lg" />
+          </div>
+        </div>
+      </div>
+      <span className="sr-only">Loading your manuscripts. Retrieving your library and scan history.</span>
     </div>
   );
 }

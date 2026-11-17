@@ -1147,7 +1147,9 @@ class NormalizeTests(unittest.TestCase):
                 "font": {"heading_styles": {"heading2": {"bold": "Yes", "alignment": "Left"}}},
             }
         )
-        self.assertEqual(rules["pagination"]["chapter_markers"], ["chapter_roman"])
+        # Body numbering / chapter starts removed — legacy keys must load without error and be dropped.
+        self.assertNotIn("chapter_markers", rules["pagination"])
+        self.assertNotIn("body_numbering", rules["pagination"])
         self.assertEqual(rules["pagination"]["title_page"], "Hidden but counted")
         self.assertEqual(rules["word_spacing"], "Two spaces after periods")
         self.assertEqual(rules["paper"]["landscape_pages"], "Allowed on any page")

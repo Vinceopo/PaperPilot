@@ -5,7 +5,37 @@ import {
   filterValidationForForm,
   ignoredFieldsFromForm,
 } from "./mechanicsValidation.js";
-import { emptyMechanicsForm, formToRules, rulesToForm } from "./formatMechanicsForm.js";
+import {
+  alignmentPageOverrideRowsFromText,
+  alignmentPageOverridesTextFromRows,
+  citationStylesForPlan,
+  clampCitationFormatForPlan,
+  emptyMechanicsForm,
+  formToRules,
+  formToRulesForPlan,
+  rulesToForm,
+} from "./formatMechanicsForm.js";
+
+describe("free plan citation styles", () => {
+  it("exposes only APA for free; MLA/IEEE for premium/pro", () => {
+    expect(citationStylesForPlan("free")).toEqual(["APA"]);
+    expect(citationStylesForPlan("premium")).toEqual(["APA", "MLA", "IEEE"]);
+    expect(citationStylesForPlan("pro")).toEqual(["APA", "MLA", "IEEE"]);
+  });
+
+  it("clamps MLA/IEEE to APA on free, keeps IGNORE", () => {
+    expect(clampCitationFormatForPlan("MLA", "free")).toBe("APA");
+    expect(clampCitationFormatForPlan("IEEE", "free")).toBe("APA");
+    expect(clampCitationFormatForPlan("IGNORE", "free")).toBe("IGNORE");
+    expect(clampCitationFormatForPlan("MLA", "pro")).toBe("MLA");
+  });
+
+  it("formToRulesForPlan refuses MLA/IEEE on free", () => {
+    const form = { ...emptyMechanicsForm("X"), citationFormat: "MLA", marginTop: "1" };
+    expect(formToRulesForPlan(form, "free").citation_style).toBe("APA");
+    expect(formToRulesForPlan(form, "premium").citation_style).toBe("MLA");
+  });
+});
 
 describe("deleted headings mean no rules", () => {
   it("omits heading rules and marks them ignored when headings are removed", () => {
@@ -50,8 +80,6 @@ describe("fillEmptyFieldsWithIgnore", () => {
     expect(form.marginLeft).toBe("IGNORE");
     expect(form.bodySize).toBe("IGNORE");
     expect(form.paginationTitlePage).toBe("IGNORE");
-    // Chapter starts / body numbering were removed from Format Fields.
-    expect(form.paginationChapterMarkers).toEqual([]);
     expect(form.headings).toEqual([]);
   });
 
@@ -120,6 +148,56 @@ describe("filterValidationForForm font coverage", () => {
     const ignored = ignoredFieldsFromForm(form);
     expect(ignored).toContain("font:heading1_size");
     expect(ignored).toContain("font:heading2_size");
+  });
+});
+
+describe("alignment page overrides", () => {
+  it("serializes Page N = alignment lines into alignment_page_overrides", () => {
+    const form = {
+      ...emptyMechanicsForm("Capstone"),
+      alignment: "Left",
+      alignmentPageOverrides: "Page 1 = center\nPage 3 = justify",
+    };
+    const rules = formToRules(form);
+    expect(rules.alignment).toBe("left");
+    expect(rules.alignment_page_overrides).toEqual({ page_1: "center", page_3: "justify" });
+    const roundTrip = rulesToForm(rules, "Capstone");
+    expect(roundTrip.alignmentPageOverrides).toBe("Page 1 = center\nPage 3 = justify");
+  });
+
+  it("recovers Firebase RTDB array overrides when reloading saved mechanics", () => {
+    const form = rulesToForm({
+      alignment: "justify",
+      alignment_page_overrides: [null, "center", "left"],
+    });
+    expect(form.alignmentPageOverrides).toBe("Page 1 = center\nPage 2 = left");
+    expect(formToRules(form).alignment_page_overrides).toEqual({
+      page_1: "center",
+      page_2: "left",
+    });
+  });
+
+  it("round-trips row editor helpers without dropping pages", () => {
+    const text = "Page 1 = center\nPage 3 = justify";
+    const rows = alignmentPageOverrideRowsFromText(text);
+    expect(rows).toEqual([
+      { page: "1", alignment: "center" },
+      { page: "3", alignment: "justify" },
+    ]);
+    expect(alignmentPageOverridesTextFromRows([...rows, { page: "", alignment: "left" }])).toBe(text);
+  });
+
+  it("flags invalid override lines in filterValidationForForm", () => {
+    const form = {
+      ...emptyMechanicsForm("Capstone"),
+      alignment: "Left",
+      alignmentPageOverrides: "title page centered",
+    };
+    const result = filterValidationForForm({ ok: true, issues: [] }, form);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.id === "paper:alignment_page_overrides_invalid")).toBe(
+      true
+    );
   });
 });
 

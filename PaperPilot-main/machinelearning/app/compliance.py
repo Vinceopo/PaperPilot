@@ -987,13 +987,24 @@ def _is_toc_entry_line(text: str) -> bool:
     value = (text or "").strip()
     if not value or value.endswith("."):
         return False
-    # "Chapter I" / "APPENDIX A" alone are section openers, not TOC rows.
+    # "Chapter I" / "CHAPTER 1" / "APPENDIX A" alone are section openers, not TOC rows.
     # TOC rows have dotted leaders and/or an arabic folio after a longer title.
+    # The chapter number itself is not a page folio ("CHAPTER 1" must stay H1).
     section_label = bool(
         CHAPTER_RE.match(value) or BACK_MATTER_RE.match(value) or PRELIM_HEADING_RE.match(value)
     )
     has_leaders = bool(re.search(r"\.{2,}|…", value))
-    has_arabic_folio = bool(re.search(r"\s\d{1,4}\s*$", value))
+    folio_probe = value
+    if CHAPTER_RE.match(value):
+        folio_probe = re.sub(
+            r"^(?:chapter|ch\.?)\s+(?:\d+|[ivxlcdm]+)\b\s*",
+            "",
+            value,
+            flags=re.I,
+        ).strip()
+        if not folio_probe and not has_leaders:
+            return False
+    has_arabic_folio = bool(folio_probe and re.search(r"\s\d{1,4}\s*$", folio_probe))
     if section_label and not has_leaders and not has_arabic_folio:
         return False
     if TOC_LINE_RE.match(value):
@@ -1148,6 +1159,176 @@ def _is_short_standalone_title(text: str) -> bool:
     return bool(re.match(r"^[A-Z0-9][\w'’\-]*(?:\s+[A-Z0-9][\w'’\-]*){0,7}$", value))
 
 
+# Small words allowed inside Title Case section headings (PDF manuscripts often lack Word styles).
+_TITLE_CASE_SMALL = frozenset(
+    {"a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "at", "by", "vs", "via", "as"}
+)
+
+
+def _looks_like_field_or_chrome_label(text: str) -> bool:
+    """Form/CV/table chrome that must never become Heading 2..N (precision over recall)."""
+    value = (text or "").strip()
+    if not value:
+        return True
+    if "@" in value or re.search(r"https?://|www\.", value, re.I):
+        return True
+    if re.search(r"\b\d{3,4}[-.\s]?\d{3}[-.\s]?\d{3,4}\b", value):
+        return True
+    # "Email Address:", "Civil Status: Single", "Name: Aldrine Bihag"
+    if re.match(r"^[A-Za-z][^:]{0,40}:\s*\S", value) or (
+        value.endswith(":") and len(value.split()) <= 6
+    ):
+        return True
+    # Fragmented table / matrix chrome
+    if re.fullmatch(
+        r"(?i)(?:table|size|scheme|user|pc|opo|duration|dictionary,?|and|cont'?d\.?)",
+        value,
+    ):
+        return True
+    if re.match(r"(?i)^(?:place of birth|civil status|contact number|email address|"
+                r"educational background|personal information|religion|status|"
+                r"date of|address|education|gov\.?)\b", value):
+        return True
+    # Resume / team-bio address and school lines.
+    if re.search(
+        r"(?i)\b(?:high\s+school|elementary|academy|senior\s+high|"
+        r"mandaue\s+city|cebu\s+city|city\s+contact|\d{4}\s+cebu)\b",
+        value,
+    ):
+        return True
+    if re.search(r",\s*\d{3,4}\s+\w+", value) and re.search(r"(?i)\b(?:ave|street|city)\b", value):
+        return True
+    return False
+
+
+def _section_title_confidence(unit: dict, text: str, body_size: float | None) -> float:
+    """0–1 confidence that an unstyled line is a real H2+ section title."""
+    value = (text or "").strip()
+    if not value or _looks_like_field_or_chrome_label(value):
+        return 0.0
+    score = 0.0
+    words = value.split()
+    if 2 <= len(words) <= 8:
+        score += 0.3
+    elif len(words) == 1:
+        score += 0.05
+    letters = [ch for ch in value if ch.isalpha()]
+    all_caps = bool(letters) and all(ch.isupper() for ch in letters) and len(letters) >= 3
+    if all_caps and len(words) >= 2:
+        score += 0.35
+    elif all_caps and len(words) == 1 and len(letters) >= 8:
+        # Standalone section labels (INTRODUCTION, METHODOLOGY).
+        score += 0.35
+    elif _is_section_heading_title(value):
+        score += 0.3
+    if NUMBERED_HEADING_RE.match(value):
+        score += 0.35
+    size = unit.get("dominant_size")
+    if body_size is not None and size is not None and float(size) >= float(body_size) + 0.6:
+        score += 0.2
+    elif body_size is not None and size is not None and abs(float(size) - float(body_size)) <= 0.35:
+        # Same size as body is common for H2/H3; slight doubt only.
+        score -= 0.05
+    alignment = str(
+        unit.get("alignment") or (unit.get("formatting") or {}).get("alignment") or ""
+    ).lower()
+    if alignment in {"center", "centre", "centered"}:
+        score += 0.1
+    return max(0.0, min(1.0, score))
+
+
+def _is_section_heading_title(text: str) -> bool:
+    """Unstyled section title for H2/H3 mapping (does not change Heading 1 style gates)."""
+    if _looks_like_field_or_chrome_label(text):
+        return False
+    if _is_short_standalone_title(text):
+        words = (text or "").split()
+        # Single-token Title Case is too weak (table chrome). Single ALL-CAPS
+        # section labels like INTRODUCTION are allowed when long enough.
+        if len(words) < 2:
+            letters = [ch for ch in text if ch.isalpha()]
+            all_caps = bool(letters) and all(ch.isupper() for ch in letters)
+            return all_caps and len(letters) >= 8
+        return True
+    value = (text or "").strip()
+    if not value:
+        return False
+    words = value.split()
+    if not (2 <= len(words) <= HEADING_MAX_WORDS) or len(value) > HEADING_MAX_CHARS:
+        return False
+    if SENTENCE_END_RE.search(value) or value.endswith(","):
+        return False
+    if re.match(
+        r"^(?:I|We|The|This|It|There|Special|Finally|Without|May|And|But|For|With)\b",
+        value,
+    ):
+        return False
+    for index, word in enumerate(words):
+        core = re.sub(r"[^\w'’-]", "", word)
+        if not core:
+            return False
+        if index > 0 and core.lower() in _TITLE_CASE_SMALL:
+            continue
+        if not re.match(r"^[A-Z0-9]", core):
+            return False
+    return True
+
+
+def _defined_heading_levels_from(defined, heading_sizes, *, start: int = 2) -> list[int]:
+    """Numeric heading levels ≥ start that have size or style rules."""
+    return [
+        int(level[len("heading") :])
+        for level in HEADING_LEVELS
+        if int(level[len("heading") :]) >= start
+        and (level in defined or level in heading_sizes)
+    ]
+
+
+# Configurable threshold: below this, mark Uncertain and do not flag as Heading N.
+SECTION_TITLE_CONFIDENCE_THRESHOLD = 0.32
+
+
+def _resolve_section_title_pending(units: list[dict], defined, heading_sizes, body_size=None) -> None:
+    """Map pending unstyled section titles onto Heading 2..N by measured-size rank.
+
+    Largest distinct size → shallowest defined level (usually H2); next size → next
+    level, and so on. Low-confidence lines become heading_uncertain (not flagged).
+    """
+    levels = _defined_heading_levels_from(defined, heading_sizes, start=2)
+    pending = [unit for unit in units if unit.get("role") == "section_title_pending"]
+    if not pending:
+        return
+    if not levels:
+        for unit in pending:
+            unit["role"] = "heading_other"
+        return
+    size_keys: list[float] = []
+    for unit in pending:
+        size = unit.get("dominant_size")
+        if size is None:
+            continue
+        key = round(float(size), 1)
+        if key not in size_keys:
+            size_keys.append(key)
+    size_keys.sort(reverse=True)
+    size_to_level = {
+        size_keys[index]: levels[min(index, len(levels) - 1)] for index in range(len(size_keys))
+    }
+    fallback = levels[0]
+    for unit in pending:
+        text = (unit.get("text") or "").strip()
+        confidence = _section_title_confidence(unit, text, body_size)
+        if confidence < SECTION_TITLE_CONFIDENCE_THRESHOLD:
+            unit["role"] = "heading_uncertain"
+            unit["heading_confidence"] = confidence
+            continue
+        size = unit.get("dominant_size")
+        if size is None:
+            unit["role"] = f"heading{fallback}"
+        else:
+            unit["role"] = f"heading{size_to_level.get(round(float(size), 1), fallback)}"
+        unit["heading_confidence"] = confidence
+
 def _looks_like_heading_line(unit: dict, text: str) -> bool:
     """Hard gate: prose / wrap continuations must never receive a heading role.
 
@@ -1266,8 +1447,14 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
     heading_sizes = _heading_sizes(font, include_legacy=False)
     defined = _defined_heading_levels(font)
     lowest_heading = _lowest_defined_heading(defined)
+    h2_plus_rules = any(
+        level in defined or level in heading_sizes
+        for level in HEADING_LEVELS
+        if level != "heading1"
+    )
     # Reuse indentation table detection so cell text is never classified as a heading.
     table_ids = _mark_indent_table_units(units)
+    last_heading_level = 0
     for index, unit in enumerate(units):
         text = (unit.get("text") or "").strip()
         style = str(unit.get("style") or "").lower()
@@ -1284,14 +1471,32 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             continue
         # Table cells are never headings — including cells that mention "Chapter I".
         # Pagination chapter-first uses section detection + numbering-gap inference.
-        if (
+        table_hit = (
             index in table_ids
             or unit.get("source") == "table"
             or unit.get("role") == "table"
             or unit.get("table_row")
             or _looks_like_table_row(unit)
-        ):
+        )
+        if table_hit:
+            # PDF column heuristics often swallow real H2/H3 section titles. Rescue
+            # only as H2/H3 after a chapter — never feed them into H1 / numbered paths.
+            if (
+                h2_plus_rules
+                and last_heading_level >= 1
+                and not unit.get("table_row")
+                and unit.get("source") != "table"
+                and unit.get("role") != "table"
+                and not _looks_like_table_row(unit)
+                and _looks_like_heading_line(unit, text)
+                and _is_section_heading_title(text)
+            ):
+                unit["role"] = "section_title_pending"
+                continue
             unit["role"] = "table"
+            # Keep source/table_row in sync so spacing + indent skip the same cells.
+            unit["source"] = "table"
+            unit["table_row"] = True
             continue
         if (TABLE_CAPTION_RE.match(text) or FIGURE_CAPTION_RE.match(text)) and not PROSE_REFERENCE_RE.match(
             text
@@ -1314,6 +1519,7 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             "heading1" in defined or "heading1" in heading_sizes
         ):
             unit["role"] = "heading1"
+            last_heading_level = 1
             continue
         # Trust Word's Heading N style only for genuine title lines (structural,
         # numbered, or short standalone). Ordinary prose under Heading 1 stays body.
@@ -1324,12 +1530,21 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
             or NUMBERED_HEADING_RE.match(text)
             or _is_short_standalone_title(text)
         ):
-            role = f"heading{style_level.group(1)}"
+            level_num = int(style_level.group(1))
+            # H2+ only: reject form/CV chrome even when Word style says Heading N.
+            if level_num >= 2 and _looks_like_field_or_chrome_label(text):
+                unit["role"] = "heading_uncertain"
+                continue
+            role = f"heading{level_num}"
             unit["role"] = role if (role in defined or role in heading_sizes) else "heading_other"
+            if _is_heading_role(unit["role"]):
+                last_heading_level = int(unit["role"][len("heading") :])
             continue
         # Numbered titles follow outline depth (1 → H1, 1.1 → H2) when those levels exist.
-        if heading_line and NUMBERED_HEADING_RE.match(text):
+        if heading_line and not YEAR_RANGE_HEADING_RE.match(text) and NUMBERED_HEADING_RE.match(text):
             unit["role"] = _numbered_heading_role(text, defined, heading_sizes) or "heading_other"
+            if _is_heading_role(unit["role"]):
+                last_heading_level = int(unit["role"][len("heading") :])
             continue
         if heading_line and _is_structural_heading_text(text):
             # With defined heading rules, map to the lowest configured level (usually H1).
@@ -1338,13 +1553,25 @@ def _annotate_roles(units: list[dict], rules: dict) -> None:
                 unit["role"] = "heading1" if "heading1" in defined else lowest_heading
             else:
                 unit["role"] = "heading_other"
+            if _is_heading_role(unit["role"]):
+                last_heading_level = int(unit["role"][len("heading") :])
             continue
-        # ALL-CAPS / short title without Heading style: never invent Heading N size
-        # checks, but skip body-size comparison via heading_other.
-        if heading_line and _is_short_standalone_title(text):
-            unit["role"] = "heading_other"
+        # Unstyled section titles (PDF): pending until size-rank maps them to H2..N.
+        # Title-page shorts (no chapter yet) stay heading_other. Does not change H1.
+        if heading_line and _is_section_heading_title(text):
+            body_pt = _body_size(font)
+            confidence = _section_title_confidence(unit, text, body_pt)
+            if h2_plus_rules and last_heading_level >= 1 and confidence >= SECTION_TITLE_CONFIDENCE_THRESHOLD:
+                unit["role"] = "section_title_pending"
+                unit["heading_confidence"] = confidence
+            elif h2_plus_rules and last_heading_level >= 1:
+                unit["role"] = "heading_uncertain"
+                unit["heading_confidence"] = confidence
+            else:
+                unit["role"] = "heading_other"
             continue
         unit["role"] = "body"
+    _resolve_section_title_pending(units, defined, heading_sizes, body_size=_body_size(font))
     # Soft-wrapped visual rows of one paragraph share one role (continuations must
     # not fall through to body and pick up body_size against the title's measured pt).
     para_role: dict = {}
@@ -2713,6 +2940,24 @@ def _check_pagination(
     starts = _section_starts(units)
     chapter_pages = {page for page, kind in starts.items() if kind in markers and page > 0}
     body_start = min((page for page, kind in starts.items() if kind.startswith("chapter_")), default=None)
+    # When chapter-first is "hide number", also treat blank folios that sit in a
+    # restart gap (e.g. 10 → blank → 2) as chapter starts — no CHAPTER label needed.
+    # Continuous gaps (10 → blank → 12) stay ordinary missing-number pages.
+    if chapter_rule == "hidden":
+        shown_marks = [(m["page"], m["value"]) for m in marks if m.get("shown") and m.get("value") is not None]
+        for mark in marks:
+            if mark.get("shown") or mark["page"] in chapter_pages or mark["page"] <= 0:
+                continue
+            page = mark["page"]
+            prev = next(((p, v) for p, v in reversed(shown_marks) if p < page), None)
+            nxt = next(((p, v) for p, v in shown_marks if p > page), None)
+            if not prev or not nxt:
+                continue
+            continuous = nxt[1] == prev[1] + (nxt[0] - prev[0])
+            if continuous:
+                continue
+            if nxt[1] <= prev[1] or nxt[1] < prev[1] + (nxt[0] - prev[0]):
+                chapter_pages.add(page)
     # Cover/title pages usually omit the page number even when mechanics only say "skip first page".
     # Title page stays unset by default: only auto-hide when page 1 looks cover-like, or the field is set.
     cover_like = page_count >= 2 and not _page_has_body_structure(
@@ -2782,28 +3027,33 @@ def _check_pagination(
         checked = want is not None
         ok = True
 
-        if want == "hidden" and shown:
-            ok = False
-            if rule_kind == "title":
-                collector.add(
-                    "pagination_title_page",
-                    "minor",
-                    "Page number shown on the title page",
-                    "The uploaded format hides the page number on page 1 (the title page).",
-                    f"Page 1 shows the page number “{printed}”.",
-                    "Hide the page number on the title page (Word: Different First Page).",
-                    loc,
-                )
-            else:
-                collector.add(
-                    "pagination_chapter_first",
-                    "minor",
-                    "Page number shown on chapter first page",
-                    "The uploaded format hides page numbers on the first page of each chapter.",
-                    f"File page {page + 1} (printed “{printed}”) was treated as a chapter start but shows a page number.",
-                    "Hide the page number on the first page of each chapter (Word: Different First Page).",
-                    loc,
-                )
+        if want == "hidden":
+            if shown:
+                ok = False
+                if rule_kind == "title":
+                    collector.add(
+                        "pagination_title_page",
+                        "minor",
+                        "Page number shown on the title page",
+                        "The uploaded format hides the page number on page 1 (the title page).",
+                        f"Page 1 shows the page number “{printed}”.",
+                        "Hide the page number on the title page (Word: Different First Page).",
+                        loc,
+                    )
+                else:
+                    collector.add(
+                        "pagination_chapter_first",
+                        "minor",
+                        "Page number shown on chapter first page",
+                        "The uploaded format hides page numbers on the first page of each chapter.",
+                        f"File page {page + 1} (printed “{printed}”) was treated as a chapter start but shows a page number.",
+                        "Hide the page number on the first page of each chapter (Word: Different First Page).",
+                        loc,
+                    )
+            # Clear sequence anchor so a restart after a hidden chapter is not a false sequence fail
+            # (works without a Body Numbering rule).
+            if rule_kind == "chapter":
+                last_shown.pop(block_of(page), None)
         elif want in {"main", "bottom_center"}:
             want_v, want_h = (vertical, horizontal) if want == "main" else ("bottom", "center")
             if not shown:

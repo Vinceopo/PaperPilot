@@ -21,6 +21,7 @@ import {
   planName,
   planPrice,
   resetWindow,
+  scanAllowance,
 } from "../../lib/plans.js";
 import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
@@ -130,7 +131,12 @@ export default function SubscriptionScreen({
   // Any paid plan (Premium or Pro).
   const isPremium = isPaidTier(tier);
   const currentPlanName = planName(tier);
-  const limit = Number(subscription?.limit) || planLimit(tier);
+  const {
+    limit,
+    used: scansUsed,
+    remaining: scansRemaining,
+    window: allowanceWindow,
+  } = scanAllowance(subscription, tier);
 
   const [billingPeriod, setBillingPeriod] = useState(
     subscription?.billing_period === "annual" ? "annual" : "monthly"
@@ -519,8 +525,10 @@ export default function SubscriptionScreen({
               <div className="flex justify-between gap-3">
                 <dt className="text-slate-500">Scan allowance</dt>
                 <dd className="text-right font-semibold text-slate-800">
-                  {Math.max(limit - Number(subscription?.used || 0), 0)} of {limit} remaining this{" "}
-                  {resetWindow(tier)}
+                  {scansRemaining} of {limit} remaining this {allowanceWindow}
+                  <span className="block text-[11px] font-medium text-slate-400">
+                    {scansUsed} used · {scansRemaining} left of {limit}
+                  </span>
                   {subscription?.reset_at ? (
                     <span className="block text-[11px] font-medium text-slate-400">
                       Resets {formatDate(subscription.reset_at)}

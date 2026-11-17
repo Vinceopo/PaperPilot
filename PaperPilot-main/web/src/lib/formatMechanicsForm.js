@@ -4,9 +4,7 @@
  */
 
 import {
-  canonicalBodyNumbering,
   canonicalChapterFirstPage,
-  canonicalChapterMarkers,
   canonicalLandscapePages,
   canonicalPagePosition,
   canonicalPreliminaryStyle,
@@ -23,8 +21,10 @@ function starterHeading(values) {
 }
 
 export const CITATION_STYLES = ["APA", "MLA", "IEEE"];
+/** Free plan Format Fields: APA or IGNORE only (MLA/IEEE need Premium/Pro). */
+export const FREE_CITATION_STYLES = ["APA"];
 
-/** Format Fields IGNORE choice - stored in the form, omitted from saved rules. */
+/** Format Fields IGNORE choice — stored in the form, omitted from saved rules. */
 export function isIgnoreFormValue(value) {
   return /^ignore$/i.test(String(value || "").trim());
 }
@@ -40,6 +40,22 @@ export function supportedCitationStyle(value) {
   return CITATION_STYLES.includes(style) ? style : "APA";
 }
 
+/** Citation styles selectable in Format Fields for the user's plan. */
+export function citationStylesForPlan(tier) {
+  const value = String(tier || "free").toLowerCase();
+  if (value === "premium" || value === "pro") return CITATION_STYLES;
+  return FREE_CITATION_STYLES;
+}
+
+/** Clamp a form citation value to what the plan allows (keeps IGNORE / empty). */
+export function clampCitationFormatForPlan(value, tier) {
+  if (isIgnoreFormValue(value)) return "IGNORE";
+  const style = supportedCitationStyle(value);
+  if (!style) return "";
+  const allowed = citationStylesForPlan(tier);
+  return allowed.includes(style) ? style : "APA";
+}
+
 /** APA 7th edition starter values. */
 export function sampleMechanicsForm(name = "APA 7th Edition Format") {
   return {
@@ -52,6 +68,7 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
     wordSpacing: "One space between words and after periods",
     indention: "0.5 inch",
     alignment: "Left",
+    alignmentPageOverrides: "",
     marginTop: "1",
     marginLeft: "1",
     marginBottom: "1",
@@ -67,8 +84,7 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
       starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "left" }),
     ],
     paginationPosition: "Top right",
-    // Leave unset: schools differ on whether page 1 shows a number. Cover-like pages still auto-skip.
-    paginationTitlePage: "",
+    paginationTitlePage: "Number shown",
     paginationFirstPageRule: "Same position as other pages",
     paginationPreliminaryStyle: "",
     // Body numbering / chapter-start markers removed from Format Fields UI.
@@ -83,7 +99,7 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
   };
 }
 
-/** Blank form - used before upload extraction. */
+/** Blank form — used before upload extraction. */
 export function emptyMechanicsForm(name = "") {
   return {
     name: name || "",
@@ -95,6 +111,7 @@ export function emptyMechanicsForm(name = "") {
     wordSpacing: "",
     indention: "",
     alignment: "",
+    alignmentPageOverrides: "",
     marginTop: "",
     marginLeft: "",
     marginBottom: "",
@@ -192,6 +209,7 @@ export function parseLineSpacing(value) {
 }
 
 const ALIGNMENT_LABELS = { justify: "Justified", left: "Left", center: "Center", right: "Right" };
+const PAGE_ALIGNMENT_OVERRIDE_RE = /^\s*page\s+(\d+)\s*[=:]\s*(.+?)\s*$/i;
 
 function alignmentKey(value) {
   const text = String(value ?? "").trim().toLowerCase();
@@ -203,6 +221,115 @@ function alignmentKey(value) {
   return "";
 }
 
+/** Parse lines like `Page 1 = center` into `{ "1": "center" }` (1-based pages). */
+export function parseAlignmentPageOverrides(text) {
+  const overrides = {};
+  const lines = String(text || "")
+    .split(/\n|;/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    const match = line.match(PAGE_ALIGNMENT_OVERRIDE_RE);
+    if (!match) continue;
+    const page = Number(match[1]);
+    const alignment = alignmentKey(match[2]);
+    if (!Number.isInteger(page) || page < 1 || !alignment) continue;
+    overrides[String(page)] = alignment;
+  }
+  return overrides;
+}
+
+/** Serialize `alignment_page_overrides` back to `Page N = center` lines. */
+export function formatAlignmentPageOverrides(overrides) {
+  if (!overrides) return "";
+  const recovered = {};
+
+  // Firebase RTDB may coerce {1:"center",2:"left"} into [null,"center","left"].
+  if (Array.isArray(overrides)) {
+    overrides.forEach((item, index) => {
+      if (item == null || item === "") return;
+      if (typeof item === "object" && !Array.isArray(item)) {
+        const page = Number(item.page ?? item.page_index);
+        const alignment = alignmentKey(item.alignment ?? item.align);
+        if (Number.isInteger(page) && page >= 1 && alignment) recovered[String(page)] = alignment;
+        return;
+      }
+      const asAlign = alignmentKey(item);
+      if (asAlign && index >= 1) {
+        recovered[String(index)] = asAlign;
+        return;
+      }
+      const match = String(item).match(PAGE_ALIGNMENT_OVERRIDE_RE);
+      if (!match) return;
+      const page = Number(match[1]);
+      const alignment = alignmentKey(match[2]);
+      if (Number.isInteger(page) && page >= 1 && alignment) recovered[String(page)] = alignment;
+    });
+  } else if (typeof overrides === "object") {
+    for (const key of Object.keys(overrides)) {
+      const keyMatch = String(key).match(/^(?:page[_-\s]*)?(\d+)$/i);
+      const page = keyMatch ? Number(keyMatch[1]) : Number(key);
+      const alignment = alignmentKey(overrides[key]);
+      if (Number.isInteger(page) && page >= 1 && alignment) recovered[String(page)] = alignment;
+    }
+  } else if (typeof overrides === "string") {
+    return formatAlignmentPageOverrides(parseAlignmentPageOverrides(overrides));
+  } else {
+    return "";
+  }
+
+  return Object.keys(recovered)
+    .map((page) => Number(page))
+    .filter((page) => Number.isInteger(page) && page >= 1)
+    .sort((a, b) => a - b)
+    .map((page) => `Page ${page} = ${recovered[String(page)]}`)
+    .join("\n");
+}
+
+/** Choices for the per-page alignment row editor (display label → stored key). */
+export const PAGE_ALIGNMENT_OPTIONS = [
+  { value: "justify", label: "Justified" },
+  { value: "left", label: "Left" },
+  { value: "center", label: "Center" },
+  { value: "right", label: "Right" },
+];
+
+/** Turn stored override text into editable `{ page, alignment }` rows. */
+export function alignmentPageOverrideRowsFromText(text) {
+  const parsed = parseAlignmentPageOverrides(text);
+  return Object.keys(parsed)
+    .map((page) => Number(page))
+    .filter((page) => Number.isInteger(page) && page >= 1)
+    .sort((a, b) => a - b)
+    .map((page) => ({ page: String(page), alignment: parsed[String(page)] }));
+}
+
+/** Serialize editor rows back to `Page N = center` text (skips incomplete rows). */
+export function alignmentPageOverridesTextFromRows(rows) {
+  const overrides = {};
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const page = Number(String(row?.page ?? "").trim());
+    const alignment = alignmentKey(row?.alignment);
+    if (!Number.isInteger(page) || page < 1 || !alignment) continue;
+    overrides[String(page)] = alignment;
+  }
+  return formatAlignmentPageOverrides(overrides);
+}
+
+/** Non-blank lines that do not match `Page N = left|center|right|justify`. */
+export function invalidAlignmentPageOverrideLines(text) {
+  return String(text || "")
+    .split(/\n|;/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const match = line.match(PAGE_ALIGNMENT_OVERRIDE_RE);
+      if (!match) return true;
+      const page = Number(match[1]);
+      return !Number.isInteger(page) || page < 1 || !alignmentKey(match[2]);
+    });
+}
+
 export function rulesToForm(rules = {}, name = "") {
   const font = rules.font || {};
   const families = Array.isArray(font.families) ? font.families : [];
@@ -210,7 +337,7 @@ export function rulesToForm(rules = {}, name = "") {
   const paper = rules.paper || {};
   const pagination = rules.pagination || {};
 
-  // Do not invent body size from heading sizes / sizes_points - unset means NA.
+  // Do not invent body size from heading sizes / sizes_points — unset means NA.
   const hasHeadingSizes = [1, 2, 3, 4, 5, 6, 7, 8, 9].some(
     (n) => font[`heading${n}_size`] != null && font[`heading${n}_size`] !== ""
   );
@@ -245,6 +372,7 @@ export function rulesToForm(rules = {}, name = "") {
     wordSpacing: canonicalWordSpacing(rules.word_spacing),
     indention,
     alignment: ALIGNMENT_LABELS[alignmentKey(rules.alignment)] || "",
+    alignmentPageOverrides: formatAlignmentPageOverrides(rules.alignment_page_overrides),
     marginTop: margins.top != null ? String(margins.top) : "",
     marginLeft: margins.left != null ? String(margins.left) : "",
     marginBottom: margins.bottom != null ? String(margins.bottom) : "",
@@ -264,8 +392,9 @@ export function rulesToForm(rules = {}, name = "") {
       pagination.first_page_of_chapter || rules.pagination_first_page_rule || ""
     ),
     paginationPreliminaryStyle: canonicalPreliminaryStyle(pagination.preliminary_style),
-    paginationBodyNumbering: canonicalBodyNumbering(pagination.body_numbering),
-    paginationChapterMarkers: canonicalChapterMarkers(pagination.chapter_markers),
+    // Body numbering / chapter starts removed — ignore legacy saved keys on load.
+    paginationBodyNumbering: "",
+    paginationChapterMarkers: [],
     pageBreaks: asText(rules.page_break_requirements || rules.page_breaks)
       .split(/\n/)
       .map((part) => part.trim())
@@ -293,7 +422,7 @@ function formText(value) {
   return isIgnoreFormValue(text) ? "" : text;
 }
 
-export function formToRules(form) {
+export function formToRules(form, tier) {
   const rules = {};
   const paper = {};
   const sizeText = formText(form.paperSize);
@@ -338,6 +467,14 @@ export function formToRules(form) {
   const alignment = alignmentKey(formText(form.alignment));
   if (alignment) rules.alignment = alignment;
 
+  const pageOverrides = parseAlignmentPageOverrides(form.alignmentPageOverrides);
+  if (Object.keys(pageOverrides).length) {
+    // Firebase-safe keys (numeric keys become arrays in RTDB and wipe on reload).
+    rules.alignment_page_overrides = Object.fromEntries(
+      Object.entries(pageOverrides).map(([page, alignment]) => [`page_${page}`, alignment]),
+    );
+  }
+
   const margins = {};
   for (const [key, field] of [
     ["top", "marginTop"],
@@ -363,8 +500,8 @@ export function formToRules(form) {
     font.families = [fontType];
   }
   const fontColor = formText(form.fontColor);
-  // Blank / IGNORE means no color rule - do not invent Black/Automatic.
-  if (fontColor && !/^(na|n\/a|n\.a\.?|none|not checked|-|\u2014)$/i.test(fontColor)) {
+  // Blank / IGNORE means no color rule — do not invent Black/Automatic.
+  if (fontColor && !/^(na|n\/a|n\.a\.?|none|not checked|-|—)$/i.test(fontColor)) {
     font.color = fontColor;
   }
 
@@ -372,7 +509,7 @@ export function formToRules(form) {
   const bodySize = Number(bodyRaw);
   if (!Number.isNaN(bodySize) && bodyRaw !== "") {
     font.body_size = bodySize;
-    // sizes_points is body-only - never copy heading sizes into it (that invents H1 rules).
+    // sizes_points is body-only — never copy heading sizes into it (that invents H1 rules).
     font.sizes_points = [bodySize];
   }
   const headingRules = headingsToRules(form.headings);
@@ -411,10 +548,21 @@ export function formToRules(form) {
 
   const citation = formText(form.citationFormat).toUpperCase();
   if (CITATION_STYLES.includes(citation)) {
-    rules.citation_style = citation;
+    // When tier is passed, Free may only persist APA (MLA/IEEE need Premium/Pro).
+    // Omit tier to keep legacy behavior (all styles) for unit tests / callers.
+    if (tier != null && tier !== "" && !citationStylesForPlan(tier).includes(citation)) {
+      rules.citation_style = "APA";
+    } else {
+      rules.citation_style = citation;
+    }
   }
 
   return rules;
+}
+
+/** Build rules for save, clamping citation style to the user's plan. */
+export function formToRulesForPlan(form, tier) {
+  return formToRules(form, tier);
 }
 
 export function formHasAnyRule(form) {

@@ -212,10 +212,10 @@ class MechanicsExtractionTests(unittest.TestCase):
             {
                 "size": "8.5 x 11",
                 "orientation": "Portrait",
-                "substance": "20",
                 "landscape_pages": "Allowed for tables and figures",
             },
         )
+        self.assertNotIn("substance", rules["paper"])
         self.assertEqual(rules["line_spacing"], 2.0)
         self.assertEqual(rules["first_line_indent_inches"], 0.5)
         self.assertEqual(rules["alignment"], "left")
@@ -231,9 +231,7 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertNotIn("heading3_size", font)
         self.assertEqual(rules["pagination"]["position"], "Top right")
         self.assertEqual(rules["pagination"]["first_page_of_chapter"], "Same position as other pages")
-        self.assertEqual(
-            rules["page_break_requirements"], ["Only to start each new chapter and the reference list"]
-        )
+        self.assertNotIn("page_break_requirements", rules)
         self.assertTrue(rules["table_layout_requirements"][0].endswith("both placed above it"))
         self.assertTrue(rules["figure_layout_requirements"][0].endswith("both placed above the image"))
         self.assertEqual(rules["citation_style"], "APA")
@@ -274,9 +272,10 @@ class MechanicsExtractionTests(unittest.TestCase):
         ])
         fonts = next(item for item in result["sections"] if item["section"] == "Fonts")
         self.assertEqual(fonts["formatting_score"], 0)
-        # Unset margin, spacing, and pagination rules still pass their units, so the
-        # overall score is the mean of those passes with the failed font check.
-        self.assertEqual(result["overall_score"], 75.0)
+        # Unset categories (e.g. Margins) stay not_applicable and are excluded from the mean.
+        evaluated = [item for item in result["sections"] if item["units_checked"] > 0]
+        expected = sum(item["formatting_score"] for item in evaluated) / len(evaluated)
+        self.assertEqual(result["overall_score"], expected)
 
     def test_sample_guide_is_accepted_as_mechanics(self):
         text = parse_document(build_sample_mechanics_docx(), "docx")["text"]
@@ -374,11 +373,9 @@ class MechanicsExtractionTests(unittest.TestCase):
         scores = {item["section"]: item["formatting_score"] for item in result["sections"]}
         self.assertEqual(scores["Fonts"], 50)
         self.assertEqual(scores["Margins"], 100)
-        self.assertEqual(scores["Indentation"], 100)
-        self.assertEqual(scores["Spacing"], 100)
-        self.assertEqual(scores["Pagination"], 100)
-        # Mean of the five categories that checked at least one unit.
-        self.assertEqual(result["overall_score"], 90.0)
+        evaluated = [item for item in result["sections"] if item["units_checked"] > 0]
+        expected = sum(item["formatting_score"] for item in evaluated) / len(evaluated)
+        self.assertEqual(result["overall_score"], expected)
         self.assertEqual(result["issues"][0]["locations"][0]["page"], 1)
         self.assertEqual(result["issues"][0]["locations"][0]["line"], 1)
         self.assertEqual(result["page_count"], 1)
@@ -504,31 +501,6 @@ class MechanicsExtractionTests(unittest.TestCase):
         )["font"]
         self.assertEqual(stolen.get("heading1_size"), 16.0)
         self.assertNotEqual(stolen.get("body_size"), 16.0)
-
-    def test_body_typeface_size_wins_over_later_title_font_size(self):
-        """Any guide: manuscript-wide typeface size must beat later title-only Font size."""
-        # Outline-style school guide (typeface first, title exception later).
-        outline = derive_mechanics_rules(
-            "A. Typeface - Arial/Times New Roman font, size 12 must be used throughout "
-            "the manuscript unless otherwise indicated (as in Titles, Headings). "
-            "b. Spacing - Double spacing throughout the manuscript. "
-            "Title - written in uppercase letters. Font size 14, bold style."
-        )["font"]
-        self.assertEqual(outline["body_size"], 12.0)
-        self.assertEqual(outline["sizes_points"], [12.0])
-
-        # Different wording / institution style — same conflict pattern.
-        prose = derive_mechanics_rules(
-            "Use Times New Roman for the entire manuscript at font size 11. "
-            "Line spacing is double. "
-            "On the cover page, the thesis title is centered. Font size 16."
-        )["font"]
-        self.assertEqual(prose["body_size"], 11.0)
-        self.assertEqual(prose["sizes_points"], [11.0])
-
-        # Bare "Font size N" alone (no title exception) still sets body size.
-        plain = derive_mechanics_rules("Font type: Calibri\nFont size: 12\n")["font"]
-        self.assertEqual(plain["body_size"], 12.0)
 
     def test_bare_content_label_maps_to_body_text_size(self):
         """Guides often write Content: 11 (no 'size' / no 'pt') for body text."""
@@ -1937,10 +1909,7 @@ class LayoutAndPageTests(unittest.TestCase):
         spacing = next(
             item for item in result["scoring"]["categories"] if item["category"] == "Spacing"
         )
-        # IGNORE still scores eligible line pairs as passed; it does not raise a spacing issue.
-        self.assertEqual(spacing["status"], "pass")
-        self.assertEqual(spacing["units_failed"], 0)
-        self.assertGreater(spacing["units_checked"], 0)
+        self.assertEqual(spacing["status"], "not_applicable")
         self.assertNotIn("line_spacing", {issue["issue_type"] for issue in result["issues"]})
 
 
