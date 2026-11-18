@@ -160,10 +160,14 @@ const SCRIPT = String.raw`
       canvas.height = Math.floor(viewport.height * outputScale);
       canvas.style.width = Math.floor(viewport.width) + "px";
       canvas.style.height = Math.floor(viewport.height) + "px";
+      // alpha:false clears to black — fill white so a failed/slow render never sticks black.
+      var ctx = canvas.getContext("2d", { alpha: false });
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       spec.el.insertBefore(canvas, spec.el.firstChild);
       spec.canvas = canvas;
       var transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
-      return page.render({ canvasContext: canvas.getContext("2d", { alpha: false }), viewport: viewport, transform: transform }).promise;
+      return page.render({ canvasContext: ctx, viewport: viewport, transform: transform }).promise;
     }).catch(function () {}).then(function () { spec.rendering = false; });
   }
   function releasePdfPage(spec) {

@@ -20,7 +20,7 @@ export default function VersionHistoryModal({ open, manuscript, versions, tier, 
           {tier === "free" ? (
             <View style={styles.note}>
               <Text style={styles.noteText}>
-                Free accounts can access the current version only. Upgrade to Premium for complete history.
+                Free accounts can access the current version only. Upgrade your plan for complete history.
               </Text>
             </View>
           ) : null}

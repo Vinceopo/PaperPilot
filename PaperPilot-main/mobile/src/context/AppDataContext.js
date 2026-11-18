@@ -34,7 +34,7 @@ import {
 } from "../api";
 import { isServerId, mapComplianceScanToResult, scanTargetIds } from "../lib/scanMapper";
 import { supportedCitationStyle } from "../lib/formatMechanicsForm";
-import { isPaidTier, scanAllowance } from "../lib/plans";
+import { applySuccessfulScanUsage, isPaidTier, scanAllowance } from "../lib/plans";
 import { useScanFlow } from "../hooks/useScanFlow";
 import { latestVersion } from "../lib/scoreBand";
 import {
@@ -377,6 +377,44 @@ export function AppDataProvider({ children }) {
     };
   }, [user?.uid]);
 
+  // Refresh scan allowance as soon as a live scan finishes (stage "done"), not only
+  // after the analyzing animation advances to results — otherwise the header lags.
+  const countedScanRef = useRef("");
+  useEffect(() => {
+    if (!user || !scanFlow.persistScan) return undefined;
+    const stage = String(scanFlow.scanProgress?.stage || "").toLowerCase();
+    const liveDone =
+      Boolean(scanFlow.result) && stage === "done" && scanFlow.step === "analyzing";
+    const onResults = scanFlow.step === "summary" || scanFlow.step === "results";
+    if (!liveDone && !onResults) return undefined;
+
+    const scanKey =
+      String(scanFlow.result?.scanId || scanFlow.result?.id || scanFlow.result?.documentId || "") +
+      ":" +
+      String(scanFlow.result?.versionId || scanFlow.versionNumber || "");
+
+    if (liveDone && scanKey && scanKey !== countedScanRef.current) {
+      countedScanRef.current = scanKey;
+      const optimistic = applySuccessfulScanUsage(subscriptionRef.current);
+      if (optimistic) storeSubscription(optimistic, nextSubscriptionTicket());
+    }
+
+    const ticket = nextSubscriptionTicket();
+    void getSubscription()
+      .then((data) => storeSubscription(data, ticket))
+      .catch(() => {});
+    return undefined;
+  }, [
+    scanFlow.step,
+    scanFlow.result,
+    scanFlow.scanProgress?.stage,
+    scanFlow.versionNumber,
+    scanFlow.persistScan,
+    user,
+    nextSubscriptionTicket,
+    storeSubscription,
+  ]);
+
   useEffect(() => {
     // Only a fresh scan is saved; reopening a stored result must not add a version.
     if (!scanFlow.persistScan) return;
@@ -392,10 +430,6 @@ export function AppDataProvider({ children }) {
       return next;
     });
     appendNotifications(notificationFromScan(scanFlow.result, scanFlow.versionNumber));
-    const ticket = nextSubscriptionTicket();
-    void getSubscription()
-      .then((data) => storeSubscription(data, ticket))
-      .catch(() => {});
   }, [scanFlow.step, scanFlow.result, scanFlow.versionNumber, scanFlow.persistScan, user?.uid, libraryUid]);
 
   // Ensure the API has a database profile the first time it is requested.

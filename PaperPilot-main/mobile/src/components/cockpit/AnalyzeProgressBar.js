@@ -14,29 +14,48 @@ const MAX_HOLD_MS = 2500;
  */
 export default function AnalyzeProgressBar({ progress, resultReady = false, onReveal }) {
   const { height: windowHeight } = useWindowDimensions();
-  const target = Math.min(100, Math.max(0, Number(progress?.percent) || 0));
   const [shown, setShown] = useState(0);
   const shownRef = useRef(0);
+  const progressRef = useRef(progress);
   const [phase, setPhase] = useState("progress");
   const [flightDone, setFlightDone] = useState(false);
   const fade = useRef(new Animated.Value(1)).current;
   const stageDone = String(progress?.stage || "").toLowerCase() === "done";
 
+  progressRef.current = progress;
+
+  // Keep the on-screen percent moving smoothly for the whole analysing phase.
+  // Server updates raise the floor; between updates we still drift so it never stalls.
   useEffect(() => {
     let frame = 0;
-    let value = shownRef.current;
+    let lastTs = Date.now();
     const tick = () => {
-      value =
-        value >= target - 0.15
-          ? target
-          : Math.min(target, value + Math.max(0.35, (target - value) * 0.14));
+      const now = Date.now();
+      const dt = Math.min(0.05, Math.max(0, (now - lastTs) / 1000));
+      lastTs = now;
+      const currentProgress = progressRef.current || {};
+      const server = Math.min(100, Math.max(0, Number(currentProgress.percent) || 0));
+      const done =
+        String(currentProgress.stage || "").toLowerCase() === "done" || server >= 99.5;
+      let value = shownRef.current;
+      if (done) {
+        value = value >= 99.5 ? 100 : Math.min(100, value + Math.max(2.5, (100 - value) * 0.2));
+      } else if (value < server - 0.2) {
+        value = Math.min(server, value + Math.max(0.4, (server - value) * 0.16));
+      } else {
+        const softCap = 97;
+        if (value < softCap) {
+          const driftPerSec = Math.max(3, (softCap - value) * 0.05);
+          value = Math.min(softCap, Math.max(value, server) + driftPerSec * dt);
+        }
+      }
       shownRef.current = value;
       setShown(value);
-      if (value !== target) frame = requestAnimationFrame(tick);
+      frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [target]);
+  }, []);
 
   const reachedFull = shown >= 99.5;
 

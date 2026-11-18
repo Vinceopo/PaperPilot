@@ -83,7 +83,30 @@ export function scanAllowance(subscription, tier) {
     used: syncedUsed,
     remaining: Math.max(limit - syncedUsed, 0),
     window: resetWindow(resolvedTier),
-    resetAt: subscription?.reset_at || subscription?.period_end || "",
+    // Prefer scan-window reset; fall back to billing renewal fields when API omits reset_at.
+    resetAt:
+      subscription?.reset_at ||
+      subscription?.period_end ||
+      subscription?.billing_period_end ||
+      subscription?.renews_at ||
+      "",
+  };
+}
+
+/**
+ * Immediate header update after a successful scan. Server remains source of truth;
+ * replace with GET /subscription as soon as it returns.
+ */
+export function applySuccessfulScanUsage(subscription) {
+  if (!subscription || typeof subscription !== "object") return subscription;
+  const tier = normalizeTier(subscription.tier);
+  const limit = Math.max(0, Number(subscription.limit) || planLimit(tier) || 0);
+  const used = Math.max(0, Number(subscription.used ?? subscription.scans_used) || 0);
+  const nextUsed = limit > 0 ? Math.min(limit, used + 1) : used + 1;
+  return {
+    ...subscription,
+    used: nextUsed,
+    remaining: Math.max(0, limit - nextUsed),
   };
 }
 
@@ -130,8 +153,12 @@ export function hoursMinutesUntilReset(resetAt, now = new Date()) {
   };
 }
 
-/** Human label for Pro scan reset; empty string when resetAt is unavailable. */
-export function scanResetLabel(resetAt, now = new Date()) {
+/**
+ * Human label for the Account usage footer date.
+ * Premium is prepaid access → "Expires…". Free/Pro refresh allowance → "Resets…".
+ * Empty string when the date is unavailable.
+ */
+export function scanResetLabel(resetAt, now = new Date(), tier) {
   const remaining = hoursMinutesUntilReset(resetAt, now);
   if (!remaining) return "";
   const end = new Date(resetAt);
@@ -141,15 +168,21 @@ export function scanResetLabel(resetAt, now = new Date()) {
     day: "numeric",
     timeZone: APP_TIME_ZONE,
   });
-  if (remaining.totalMs <= 0) return `Reset was due on ${dateText}`;
+  const expires = normalizeTier(tier) === "premium";
+  if (remaining.totalMs <= 0) {
+    return expires ? `Expired on ${dateText}` : `Reset was due on ${dateText}`;
+  }
   // Under 24 hours: show hours and minutes (Account Details countdown).
   if (remaining.totalMs < 86_400_000) {
     const { hours, minutes } = remaining;
-    if (hours <= 0) return `Resets in ${pluralUnit(minutes, "minute")}`;
-    if (minutes <= 0) return `Resets in ${pluralUnit(hours, "hour")}`;
-    return `Resets in ${pluralUnit(hours, "hour")} ${pluralUnit(minutes, "minute")}`;
+    const verb = expires ? "Expires" : "Resets";
+    if (hours <= 0) return `${verb} in ${pluralUnit(minutes, "minute")}`;
+    if (minutes <= 0) return `${verb} in ${pluralUnit(hours, "hour")}`;
+    return `${verb} in ${pluralUnit(hours, "hour")} ${pluralUnit(minutes, "minute")}`;
   }
   const days = daysUntilReset(resetAt, now);
-  if (days === 1) return "Resets tomorrow";
-  return `Resets on ${dateText} (in ${days} days)`;
+  if (days === 1) return expires ? "Expires tomorrow" : "Resets tomorrow";
+  return expires
+    ? `Expires on ${dateText} (in ${days} days)`
+    : `Resets on ${dateText} (in ${days} days)`;
 }

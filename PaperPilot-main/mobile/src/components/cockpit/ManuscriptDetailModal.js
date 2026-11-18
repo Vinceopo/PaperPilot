@@ -373,7 +373,7 @@ export default function ManuscriptDetailModal({
     const isLatest = ver.id === latestId;
     if (!isPremium && !isLatest) {
       setUpgradeMessage(
-        "Free plan can only open the most recent scanned version. Upgrade to Premium to access all versions."
+        "Your Free plan can open the latest version only. Upgrade your plan to unlock the full version history."
       );
       return;
     }
@@ -531,7 +531,7 @@ export default function ManuscriptDetailModal({
                         },
                       ]}
                     >
-                      {locked ? "Premium only" : `Score ${formatScore(ver.score, 0)}`}
+                      {locked ? "Upgrade to view" : `Score ${formatScore(ver.score, 0)}`}
                     </Text>
                   </Pressable>
                 );
@@ -541,7 +541,7 @@ export default function ManuscriptDetailModal({
 
           {!isPremium && versionsDesc.length > 1 ? (
             <Text style={styles.freeNote}>
-              Free plan: only the latest version is viewable. Upgrade for full history.
+              Free plan: only the latest version is viewable. Upgrade your plan for full history.
             </Text>
           ) : null}
         </View>

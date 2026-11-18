@@ -18,7 +18,7 @@ import { markPasswordChanged, signOutUser } from "../services/auth";
 import { emailsMatch, maskEmail } from "../lib/maskEmail";
 import { loadNotifications, pushNotification, saveNotifications } from "../lib/notifications";
 import { emailError, nameError, phoneError, usernameError } from "../lib/validation";
-import { isPaidTier, planName, scanAllowance, scanResetLabel } from "../lib/plans";
+import { isPaidTier, normalizeTier, planName, scanAllowance, scanResetLabel } from "../lib/plans";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import AuthFeatureCard from "../components/auth/AuthFeatureCard";
@@ -99,9 +99,14 @@ function PlanBadge({ tier }) {
   );
 }
 
-function ProScanUsageCard({ subscription, tier }) {
+function ScanUsageCard({ subscription, tier }) {
   const { used, remaining, limit, window, resetAt } = scanAllowance(subscription, tier);
-  const resetText = scanResetLabel(resetAt);
+  // Premium: show plan end (prepaid). Free/Pro: show allowance refresh.
+  const endAt =
+    normalizeTier(tier) === "premium"
+      ? subscription?.renews_at || subscription?.billing_period_end || resetAt
+      : resetAt;
+  const resetText = scanResetLabel(endAt, new Date(), tier);
   if (!Number.isFinite(limit) || limit <= 0) return null;
   const pct = Math.min(100, Math.max(0, (used / limit) * 100));
   return (
@@ -777,9 +782,7 @@ export default function AccountScreen({ navigation }) {
             <InfoRow label="Plan" value={planName(tier)} last compact={compact} />
           </View>
 
-          {String(tier || "").toLowerCase() === "pro" ? (
-            <ProScanUsageCard subscription={subscription} tier={tier} />
-          ) : null}
+          <ScanUsageCard subscription={subscription} tier={tier} />
 
           <View style={[styles.actions, compact && styles.actionsCompact]}>
             <Pressable
@@ -812,6 +815,12 @@ export default function AccountScreen({ navigation }) {
               </Text>
             </Pressable>
           </View>
+
+          {isGoogleAccount ? (
+            <Text style={styles.googleNote}>
+              You sign in with Google. Setting a password is optional and only needed if you also want email login.
+            </Text>
+          ) : null}
 
           <Pressable
             onPress={() => navigation.navigate("Subscription")}
@@ -1051,6 +1060,12 @@ const styles = StyleSheet.create({
   },
   manageBtnPressed: { backgroundColor: "#f1f5f9" },
   manageText: { fontSize: 13, fontWeight: "600", color: "#334155" },
+  googleNote: {
+    marginTop: 10,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.muted,
+  },
   errorText: { marginTop: 12, fontSize: 12, color: "#f43f5e" },
   successText: { marginTop: 12, fontSize: 12, fontWeight: "600", color: "#059669" },
   backLink: { marginBottom: 16 },
