@@ -1,5 +1,4 @@
 import Constants from "expo-constants";
-import { allPlanUploadLimitsMessage } from "./lib/formatFileSize";
 import { auth } from "./firebase";
 
 const extra = Constants.expoConfig?.extra || {};
@@ -53,7 +52,7 @@ function statusMessage(status) {
     return "That item was not found. It may have been deleted on another device - refresh and try again.";
   }
   if (status === 413) {
-    return `This file exceeds your plan’s upload limit. ${allPlanUploadLimitsMessage()}`;
+    return "This file is too large for your plan. Free plans allow 15 MB, Premium 45 MB, and Pro 120 MB.";
   }
   if (status === 429) return "Too many requests in a short time. Wait a minute, then try again.";
   if (status === 502 || status === 503 || status === 504) {

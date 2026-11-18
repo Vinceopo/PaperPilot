@@ -41,13 +41,7 @@ import {
   fillEmptyFieldsWithIgnore,
   ignoredFieldsFromForm,
 } from "../lib/mechanicsValidation";
-import {
-  formatFileSize,
-  manuscriptPickerLimitHint,
-  mechanicsPickerLimitHint,
-  namedOversizeFileMessage,
-  oversizeFileMessage,
-} from "../lib/formatFileSize";
+import { formatFileSize, namedOversizeFileMessage, oversizeFileMessage } from "../lib/formatFileSize";
 import {
   MANUSCRIPT_ACCEPTED_EXTENSIONS,
   MANUSCRIPT_ACCEPTED_MIME_TYPES,
@@ -1013,7 +1007,7 @@ export default function UploadScreen({ navigation }) {
                           <Text style={styles.dropSub}>
                             {mechFile
                               ? `${formatFileSize(mechFile.size)} · Confirm extraction to fill Format Fields below`
-                              : `Tap to browse · ${mechanicsPickerLimitHint(tier, maxBytes)}`}
+                              : `Tap to browse · .pdf and .docx · Max ${formatFileSize(maxBytes)}`}
                           </Text>
                           <View style={styles.browsePill}>
                             <Text style={styles.browseText}>Browse files</Text>
@@ -1138,7 +1132,7 @@ export default function UploadScreen({ navigation }) {
                         : msUploading
                           ? `${formatFileSize(msFile.size)} · Uploading - see progress below`
                           : `${formatFileSize(msFile.size)} · Preview appears below - confirm Upload when ready`
-                      : `Tap to browse · ${manuscriptPickerLimitHint(tier, maxBytes)}`}
+                      : `Tap to browse · PDF only · Max ${formatFileSize(maxBytes)}`}
                   </Text>
                   <View style={styles.browsePill}>
                     <Text style={styles.browseText}>Browse files</Text>
@@ -1445,9 +1439,9 @@ export default function UploadScreen({ navigation }) {
 
       <ConfirmDialog
         open={oversizeBytes != null}
-        title="Upload limit reached"
+        title="File Too Large"
         message={oversizeFileMessage(oversizeBytes, maxBytes, tier)}
-        confirmLabel="Choose a smaller file"
+        confirmLabel="OK"
         cancelLabel=""
         onCancel={() => setOversizeBytes(null)}
         onConfirm={() => setOversizeBytes(null)}
@@ -1460,11 +1454,9 @@ export default function UploadScreen({ navigation }) {
             <TriangleAlertIcon size={24} />
           </View>
         }
-        title={rejection?.kind === "type" ? "Unsupported File Type" : "Upload limit reached"}
+        title={rejection?.kind === "type" ? "Unsupported File Type" : "File Too Large"}
         message={rejectionMessage(rejection, rejection?.scope || "manuscript", tier, maxBytes)}
-        confirmLabel={
-          rejection?.kind === "type" ? "Choose Another File" : "Choose a smaller file"
-        }
+        confirmLabel="Choose Another File"
         cancelLabel=""
         onCancel={() => setRejection(null)}
         onConfirm={chooseAnotherFile}

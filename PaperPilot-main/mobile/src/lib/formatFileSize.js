@@ -3,7 +3,7 @@
  * At most one decimal place. `roundUp` never rounds a size down to a smaller value.
  */
 
-import { normalizeTier, planName } from "./plans";
+import { planName } from "./plans";
 import { maxUploadBytesForPlan } from "./uploadLimits";
 
 export function formatFileSize(bytes, { roundUp = false } = {}) {
@@ -21,73 +21,29 @@ export function formatFileSize(bytes, { roundUp = false } = {}) {
   return `${text} ${units[unit]}`;
 }
 
-function resolveUploadLimit(maxBytes, tier) {
-  return Number(maxBytes) > 0 ? Number(maxBytes) : maxUploadBytesForPlan(tier);
-}
-
-/** Plan-only limit line, e.g. "Your Free plan allows uploads up to 15 MB." */
-export function planUploadLimitMessage(tier, maxBytes) {
-  const limit = resolveUploadLimit(maxBytes, tier);
-  return `Your ${planName(tier)} plan allows uploads up to ${formatFileSize(limit)}.`;
-}
-
-/** Optional upgrade nudge for oversize dialogs (Free / Premium only). */
-export function planUploadUpgradeHint(tier) {
-  const value = normalizeTier(tier);
-  if (value === "free") {
-    return " Upgrade to Premium or Pro on the Subscription page for a higher limit.";
-  }
-  if (value === "premium") {
-    return " Upgrade to Pro on the Subscription page for a higher limit.";
-  }
-  return "";
-}
-
-/** When the server rejects size (413) and client tier may be unknown. */
-export function allPlanUploadLimitsMessage() {
-  return "Free plans allow up to 15 MB, Premium 45 MB, and Pro 120 MB.";
-}
-
-export function manuscriptPickerLimitHint(tier, maxBytes) {
-  const limit = resolveUploadLimit(maxBytes, tier);
-  return `${planName(tier)} plan · PDF only · up to ${formatFileSize(limit)}`;
-}
-
-export function mechanicsPickerLimitHint(tier, maxBytes) {
-  const limit = resolveUploadLimit(maxBytes, tier);
-  return `${planName(tier)} plan · .pdf and .docx · up to ${formatFileSize(limit)}`;
-}
-
 /**
- * Modal body when a picked file exceeds the plan upload limit.
  * @param {number} fileBytes
  * @param {number} [maxBytes]
  * @param {string} [tier]
  */
 export function oversizeFileMessage(fileBytes, maxBytes, tier) {
-  const limit = resolveUploadLimit(maxBytes, tier);
+  const limit = Number(maxBytes) > 0 ? Number(maxBytes) : maxUploadBytesForPlan(tier);
   const maxLabel = formatFileSize(limit);
-  const base =
-    tier != null && tier !== ""
-      ? `This file is ${formatFileSize(fileBytes)}. Your ${planName(tier)} plan allows uploads up to ${maxLabel}. Please choose a smaller file to continue.`
-      : `This file is ${formatFileSize(fileBytes)}, but the maximum allowed size is ${maxLabel}. Please choose a smaller file to continue.`;
-  return tier != null && tier !== "" ? base + planUploadUpgradeHint(tier) : base;
+  if (tier != null && tier !== "") {
+    return `Your file is ${formatFileSize(fileBytes)}, but ${planName(tier)} plans can upload up to ${maxLabel}. Please upload a smaller file.`;
+  }
+  return `Your file is ${formatFileSize(fileBytes)}, but the maximum allowed file size is ${maxLabel}. Please upload a smaller file.`;
 }
 
 /**
- * Named-file rejection used by manuscript / mechanics pickers (modal copy).
  * @param {{ name: string, size: number }} rejection
  * @param {string} [tier]
  * @param {number} [maxBytes]
  */
 export function namedOversizeFileMessage(rejection, tier, maxBytes) {
-  const limit = resolveUploadLimit(maxBytes, tier);
+  const limit = Number(maxBytes) > 0 ? Number(maxBytes) : maxUploadBytesForPlan(tier);
   const max = formatFileSize(limit);
   let actual = formatFileSize(rejection.size);
   if (actual === max) actual = formatFileSize(rejection.size, { roundUp: true });
-  const name = String(rejection?.name || "This file").trim() || "This file";
-  const base =
-    `"${name}" is ${actual}. Your ${planName(tier)} plan allows uploads up to ${max}. ` +
-    `Please choose a smaller file to continue.`;
-  return base + planUploadUpgradeHint(tier);
+  return `Your file '${rejection.name}' is ${actual}, but ${planName(tier)} plans can upload up to ${max}. Please choose a smaller file and try again.`;
 }
