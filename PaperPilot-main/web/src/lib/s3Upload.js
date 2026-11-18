@@ -3,9 +3,8 @@
  * AWS credentials never leave the API - clients only receive a short-lived upload URL.
  */
 
-import { formatFileSize } from "./formatFileSize.js";
+import { formatFileSize, planUploadLimitMessage } from "./formatFileSize.js";
 import { MAX_FILE_SIZE_BYTES, maxUploadBytesForPlan } from "./uploadLimits.js";
-import { planName } from "./plans.js";
 
 /**
  * Upload a PDF/DOCX (or any file) to S3.
@@ -39,7 +38,7 @@ export async function uploadToS3(file, options = {}) {
   if (file.size > maxBytes) {
     const label =
       options.tier != null && String(options.tier).trim() !== ""
-        ? `${planName(options.tier)} plans can upload up to ${formatFileSize(maxBytes)}.`
+        ? planUploadLimitMessage(options.tier, maxBytes)
         : `File must be ${formatFileSize(maxBytes)} or smaller.`;
     throw new Error(label);
   }

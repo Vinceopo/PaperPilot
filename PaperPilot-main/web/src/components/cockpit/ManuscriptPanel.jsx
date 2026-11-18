@@ -7,7 +7,11 @@ import {
   getFileRejection,
   maxUploadBytesForPlan,
 } from "../../lib/uploadLimits.js";
-import { formatFileSize, namedOversizeFileMessage } from "../../lib/formatFileSize.js";
+import {
+  formatFileSize,
+  manuscriptPickerLimitHint,
+  namedOversizeFileMessage,
+} from "../../lib/formatFileSize.js";
 import ConfirmDialog from "../ConfirmDialog.jsx";
 import Spinner from "../Spinner.jsx";
 import DocumentLoader from "../DocumentLoader.jsx";
@@ -329,7 +333,7 @@ export default function ManuscriptPanel({
                     : previewUploading
                       ? `${formatFileSize(file.size)} · Uploading - see progress in the preview`
                       : `${formatFileSize(file.size)} · Confirm Upload when ready`
-                  : `Drag & drop or browse · PDF only · Max ${formatFileSize(maxBytes)}`}
+                  : `Drag & drop or browse · ${manuscriptPickerLimitHint(tier, maxBytes)}`}
               </p>
               <span
                 className={`rounded-full border border-[#16bfa8] bg-white px-6 py-2 text-sm font-semibold text-[#109b89] ${
@@ -619,9 +623,9 @@ export default function ManuscriptPanel({
             <TriangleAlert className="h-6 w-6" aria-hidden="true" />
           </span>
         }
-        title={rejection?.kind === "type" ? "Unsupported File Type" : "File Too Large"}
+        title={rejection?.kind === "type" ? "Unsupported File Type" : "Upload limit reached"}
         message={rejectionMessage(rejection, tier, maxBytes)}
-        confirmLabel="Choose Another File"
+        confirmLabel={rejection?.kind === "type" ? "Choose Another File" : "Choose a smaller file"}
         cancelLabel=""
         onCancel={() => setRejection(null)}
         onConfirm={chooseAnotherFile}
