@@ -7,9 +7,10 @@ class Settings(BaseSettings):
     ml_service_key: str = ""
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
-    # Match API Pro upload ceiling (120 MB) so plan-sized manuscripts can analyze.
+    # Absolute ceiling (must be ≥ Pro). Plan limits below enforce Free/Premium/Pro.
     max_document_bytes: int = 120 * 1024 * 1024
     # PDF pages processed per analysis chunk (progress + memory-friendly batches).
+    # Large Pro manuscripts (up to 120 MB) are parsed/checked in these page chunks.
     analysis_page_chunk: int = 20
     job_ttl_seconds: int = 3600
     job_store_dir: str = "/tmp/paperpilot-jobs"
@@ -18,3 +19,20 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Plan analyze ceilings (binary MiB). Unknown tier → Free.
+PLAN_UPLOAD_LIMITS_BYTES = {
+    "free": 15 * 1024 * 1024,
+    "premium": 45 * 1024 * 1024,
+    "pro": 120 * 1024 * 1024,
+}
+
+
+def plan_upload_byte_limit(tier: str | None) -> int:
+    """Bytes allowed for analysis for this subscription tier."""
+    key = str(tier or "free").lower()
+    if key not in PLAN_UPLOAD_LIMITS_BYTES:
+        key = "free"
+    # Never exceed the process absolute ceiling (env / default).
+    ceiling = max(int(settings.max_document_bytes or 0), PLAN_UPLOAD_LIMITS_BYTES["pro"])
+    return min(PLAN_UPLOAD_LIMITS_BYTES[key], ceiling)

@@ -43,8 +43,8 @@ class MLGatewayClientTests(unittest.TestCase):
 
     @patch("app.ml_service_client.httpx.Client")
     @patch("app.ml_service_client.settings")
-    def test_create_analyze_job_maps_pro_to_premium(self, settings, client_cls):
-        """ML schema historically rejected tier=pro; gateway must send premium."""
+    def test_create_analyze_job_preserves_pro_tier(self, settings, client_cls):
+        """Pro must reach ML as pro so the 120 MB plan limit applies (not Premium 45 MB)."""
         settings.ml_service_url = "https://ml.example.com"
         settings.ml_service_key = "test-key"
         response = MagicMock()
@@ -67,7 +67,7 @@ class MLGatewayClientTests(unittest.TestCase):
             tier="pro",
         )
         body = client.request.call_args.kwargs["json"]
-        self.assertEqual(body["tier"], "premium")
+        self.assertEqual(body["tier"], "pro")
 
     @patch("app.ml_service_client.settings")
     def test_request_without_config_raises(self, settings):

@@ -80,10 +80,12 @@ def _request(method: str, path: str, *, json_body: dict | None = None) -> dict[s
     return response.json()
 
 
-def _ml_feature_tier(tier: str) -> str:
-    """ML analyze schema only accepts free|premium; Pro uses Premium analysis features."""
+def _ml_analyze_tier(tier: str) -> str:
+    """Pass the real plan so ML can enforce Free 15 / Premium 45 / Pro 120 MB limits."""
     value = str(tier or "free").lower()
-    return "premium" if value in ("premium", "pro") else "free"
+    if value in ("premium", "pro"):
+        return value
+    return "free"
 
 
 def create_analyze_job(
@@ -99,7 +101,7 @@ def create_analyze_job(
         "job_id": job_id,
         "filename": filename,
         "mechanics": {"rules": mechanics_rules},
-        "tier": _ml_feature_tier(tier),
+        "tier": _ml_analyze_tier(tier),
     }
     if document_url:
         payload["document_url"] = document_url

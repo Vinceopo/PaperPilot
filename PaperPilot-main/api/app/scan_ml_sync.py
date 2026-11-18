@@ -13,7 +13,6 @@ from app.compliance_db import (
     get_scan,
     get_version_document_url,
     get_version_full,
-    is_paid_tier,
     mark_scan_ml_requeued,
     subscription_snapshot,
 )
@@ -64,10 +63,6 @@ def _within_lost_grace(scan: dict) -> bool:
     return bool(created and _now() - created <= LOST_GRACE)
 
 
-def _feature_tier(tier: str) -> str:
-    return "premium" if is_paid_tier(tier) else "free"
-
-
 def _scan_rules(rules: dict, ignored_fields: list[str] | None = None) -> dict:
     from app.mechanics_validate import apply_ignored_fields_to_rules
 
@@ -114,7 +109,8 @@ def _try_requeue_ml_job(owner_uid: str, scan: dict) -> bool:
         logger.warning("Requeue fetch failed for scan %s: %s", scan_id, exc)
         return False
 
-    tier = _feature_tier(subscription_snapshot(owner_uid).get("tier") or "free")
+    # Real tier so ML enforces Free 15 / Premium 45 / Pro 120 MB (not collapsed paid).
+    tier = subscription_snapshot(owner_uid).get("tier") or "free"
     if not mark_scan_ml_requeued(owner_uid, scan_id):
         return False
     try:
