@@ -863,7 +863,8 @@ def compliance_scan_create(
                 mechanics_rules=_scan_rules(
                     mechanics["rules"], mechanics.get("ignored_fields")
                 ),
-                tier=_feature_tier(subscription["tier"]),
+                # Real tier (not collapsed) so ML applies Pro 120 MB / Premium 45 MB limits.
+                tier=subscription["tier"],
             )
         except MLServiceError as exc:
             # Unreachable / 5xx: fall through to in-process scan so analysis still works.

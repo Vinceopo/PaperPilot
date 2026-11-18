@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from app.compliance import run_compliance_scan
-from app.config import settings
+from app.config import plan_upload_byte_limit, settings
 from app.documents import DocumentError, normalize_mechanics_rules, parse_document, validate_document
 from app.schemas import JobStage
 
@@ -223,7 +223,8 @@ def run_analyze_job(
         job_store.set_stage(job_id, JobStage.parsing, 4, "Downloading document")
         raw = _load_document_bytes(document_url, document_base64)
         job_store.set_stage(job_id, JobStage.parsing, 12, "Checking the file")
-        file_type = validate_document(filename, raw, settings.max_document_bytes)
+        # Free 15 MB · Premium 45 MB · Pro 120 MB (parsed in page chunks below).
+        file_type = validate_document(filename, raw, plan_upload_byte_limit(tier))
 
         page_chunk = max(1, int(getattr(settings, "analysis_page_chunk", 20) or 20))
 

@@ -25,7 +25,8 @@ class AnalyzeCreateRequest(BaseModel):
     document_base64: str | None = Field(default=None, description="Base64-encoded PDF or DOCX bytes")
     filename: str = "document.pdf"
     mechanics: MechanicsPayload
-    # Pro is accepted and treated like Premium for analysis features.
+    # Used for plan file-size limits (Free 15 / Premium 45 / Pro 120 MB).
+    # Paid tiers still share Premium analysis features (e.g. Gemini enrichment).
     tier: Literal["free", "premium", "pro"] = "free"
 
     @model_validator(mode="after")
