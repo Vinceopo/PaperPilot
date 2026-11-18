@@ -6,33 +6,35 @@ import { normalizeTier } from "../../lib/plans";
 export default function UpgradePrompt({ message, tier, onClose, onUpgrade }) {
   if (!message) return null;
   const current = normalizeTier(tier);
-  const target = current === "free" ? "premium" : "pro";
   const atTop = current === "pro";
+  const heading = atTop
+    ? "Scan limit reached"
+    : current === "premium"
+      ? "Upgrade to Pro"
+      : "Upgrade your plan";
   return (
     <Modal transparent animationType="fade" visible onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          <Text style={styles.badge}>{target === "pro" ? "Pro" : "Premium"}</Text>
-          <Text style={styles.title}>
-            {atTop ? "Scan limit reached" : target === "pro" ? "Upgrade to Pro" : "Upgrade to Premium"}
-          </Text>
+          <Text style={styles.badge}>{atTop ? "Pro" : current === "premium" ? "Pro" : "Plans"}</Text>
+          <Text style={styles.title}>{heading}</Text>
           <Text style={styles.body}>{message}</Text>
-          {atTop ? null : target === "pro" ? (
+          {atTop ? null : current === "premium" ? (
             <Text style={styles.bullet}>✓ Up to 75 compliance scans every week</Text>
           ) : (
             <>
-              <Text style={styles.bullet}>✓ Up to 50 compliance scans each month</Text>
-              <Text style={styles.bullet}>✓ Complete manuscript version history</Text>
-              <Text style={styles.bullet}>✓ Deeper AI explanations and recommendations</Text>
+              <Text style={styles.bullet}>✓ More compliance scans each month or week</Text>
+              <Text style={styles.bullet}>✓ Full manuscript version history</Text>
+              <Text style={styles.bullet}>✓ APA, MLA, and IEEE citation styles</Text>
             </>
           )}
           <View style={styles.row}>
             <Pressable style={styles.secondary} onPress={onClose}>
-              <Text style={styles.secondaryText}>Not now</Text>
+              <Text style={styles.secondaryText}>Cancel</Text>
             </Pressable>
             <View style={styles.flex}>
               <PrimaryButton
-                title={atTop ? "View plans" : "Upgrade with PayMongo"}
+                title="Upgrade plan"
                 onPress={() => {
                   onClose?.();
                   onUpgrade?.();

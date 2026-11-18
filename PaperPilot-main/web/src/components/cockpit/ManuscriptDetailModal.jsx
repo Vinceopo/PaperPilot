@@ -231,7 +231,7 @@ export default function ManuscriptDetailModal({
     const isLatest = ver.id === latestId;
     if (!isPremium && !isLatest) {
       onUpgrade?.(
-        "Free plan can only open the most recent scanned version. Upgrade to Premium to access all versions."
+        "Your Free plan can open the latest version only. Upgrade your plan to unlock the full version history."
       );
       return;
     }
@@ -332,7 +332,7 @@ export default function ManuscriptDetailModal({
                       {formatDateTime(ver.scannedAt || ver.scannedDate)}
                     </p>
                     <p className={`mt-1 text-xs font-semibold ${active ? "text-[#16bfa8]" : locked ? "text-slate-400" : vb.textClass}`}>
-                      {locked ? "Premium only" : `Score ${formatScore(ver.score, 0)}`}
+                      {locked ? "Upgrade to view" : `Score ${formatScore(ver.score, 0)}`}
                     </p>
                   </button>
                   {onDeleteVersion ? (
@@ -352,7 +352,7 @@ export default function ManuscriptDetailModal({
           </ul>
           {!isPremium && versionsDesc.length > 1 ? (
             <p className="shrink-0 border-t border-slate-200/80 px-4 py-2.5 text-xs leading-relaxed text-slate-500">
-              Free plan: only the latest version is viewable. Upgrade for full history.
+              Free plan: only the latest version is viewable. Upgrade your plan for full history.
             </p>
           ) : null}
         </aside>

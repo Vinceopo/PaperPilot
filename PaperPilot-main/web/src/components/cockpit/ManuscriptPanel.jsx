@@ -512,6 +512,20 @@ export default function ManuscriptPanel({
                 <button
                   type="button"
                   onClick={() => {
+                    setTitleMode("new");
+                    setTitleError("");
+                  }}
+                  className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                    titleMode === "new"
+                      ? "bg-[#e7f8f5] text-[#0f766e] ring-1 ring-[#16bfa8]"
+                      : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  New title
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setTitleMode("existing");
                     setTitleError("");
                     if (!existingId) setExistingId(manuscripts[0]?.id || "");
@@ -523,20 +537,6 @@ export default function ManuscriptPanel({
                   }`}
                 >
                   Use an existing title
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTitleMode("new");
-                    setTitleError("");
-                  }}
-                  className={`rounded-lg px-3 py-2 text-xs font-semibold ${
-                    titleMode === "new"
-                      ? "bg-[#e7f8f5] text-[#0f766e] ring-1 ring-[#16bfa8]"
-                      : "bg-slate-50 text-slate-500 hover:bg-slate-100"
-                  }`}
-                >
-                  New title
                 </button>
               </div>
             )}

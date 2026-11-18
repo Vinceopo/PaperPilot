@@ -1031,6 +1031,20 @@ def is_current_version(owner_uid: str, manuscript_id: str, version_id: str) -> b
     return manuscript.get("current_version_id") == version_id
 
 
+def assert_version_readable(owner_uid: str, manuscript_id: str, version_id: str) -> None:
+    """Free users may read the current version or a pending upload; older history needs Premium/Pro."""
+    manuscript = _reference(f"{ROOT}/manuscripts/{owner_uid}/{manuscript_id}").get()
+    version = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
+    if not isinstance(manuscript, dict) or not isinstance(version, dict):
+        raise LookupError("Manuscript version not found.")
+    sub = subscription_snapshot(owner_uid)
+    if is_paid_tier(sub["tier"]):
+        return
+    if manuscript.get("current_version_id") == version_id or bool(version.get("pending")):
+        return
+    raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"], feature=True)
+
+
 def _subscription_row(owner_uid: str) -> dict:
     now, now_text = _now(), _iso(_now())
     ref = _reference(f"{ROOT}/subscriptions/{owner_uid}")
@@ -1830,7 +1844,10 @@ def check_scan_eligibility(
     current = is_current_version(owner_uid, manuscript_id, version_id)
     if current is None:
         raise LookupError("Manuscript not found.")
-    if not is_paid_tier(sub["tier"]) and not current:
+    # Pending uploads are the version about to be scanned, not older history.
+    version = _reference(f"{ROOT}/manuscript_versions/{owner_uid}/{manuscript_id}/{version_id}").get()
+    scanning_current = bool(current) or (isinstance(version, dict) and bool(version.get("pending")))
+    if not is_paid_tier(sub["tier"]) and not scanning_current:
         raise UpgradeRequired(sub["tier"], sub["limit"], sub["used"], feature=True)
     if not is_paid_tier(sub["tier"]) and citation_style and citation_style != "APA":
         raise UpgradeRequired(

@@ -22,7 +22,7 @@ import AuthFeatureCard from "../auth/AuthFeatureCard.jsx";
 import OtpStep from "../auth/OtpStep.jsx";
 import { emailError, nameError, phoneError, usernameError } from "../auth/validation.js";
 import { emailsMatch, maskEmail } from "../../lib/maskEmail.js";
-import { isPaidTier, planName, scanAllowance, scanResetLabel } from "../../lib/plans.js";
+import { isPaidTier, normalizeTier, planName, scanAllowance, scanResetLabel } from "../../lib/plans.js";
 import {
   loadNotifications,
   saveNotifications,
@@ -113,7 +113,12 @@ function PlanBadge({ tier }) {
 
 function ProScanUsageCard({ subscription, tier }) {
   const { used, remaining, limit, window, resetAt } = scanAllowance(subscription, tier);
-  const resetText = scanResetLabel(resetAt);
+  // Premium: show plan end (prepaid). Free/Pro: show allowance refresh.
+  const endAt =
+    normalizeTier(tier) === "premium"
+      ? subscription?.renews_at || subscription?.billing_period_end || resetAt
+      : resetAt;
+  const resetText = scanResetLabel(endAt, new Date(), tier);
   if (!Number.isFinite(limit) || limit <= 0) return null;
   const pct = Math.min(100, Math.max(0, (used / limit) * 100));
   return (
@@ -777,9 +782,7 @@ export default function AccountSettingsScreen({
             <InfoRow label="Plan" value={planName(tier)} />
           </div>
 
-          {String(tier || "").toLowerCase() === "pro" ? (
-            <ProScanUsageCard subscription={subscription} tier={tier} />
-          ) : null}
+          <ProScanUsageCard subscription={subscription} tier={tier} />
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
             <button
@@ -804,6 +807,12 @@ export default function AccountSettingsScreen({
               {isGoogleAccount && !hasPasswordProvider ? "Set login password" : "Change password"}
             </button>
           </div>
+
+          {isGoogleAccount ? (
+            <p className="mt-3 text-sm leading-relaxed text-slate-500">
+              You sign in with Google. Setting a password is optional and only needed if you also want email login.
+            </p>
+          ) : null}
 
           {onManageSubscription && (
             <button

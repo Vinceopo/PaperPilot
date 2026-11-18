@@ -18,7 +18,7 @@ import { markPasswordChanged, signOutUser } from "../services/auth";
 import { emailsMatch } from "../lib/maskEmail";
 import { loadNotifications, pushNotification, saveNotifications } from "../lib/notifications";
 import { emailError, nameError, phoneError, usernameError } from "../lib/validation";
-import { isPaidTier, planName } from "../lib/plans";
+import { isPaidTier, planName, scanAllowance, scanResetLabel } from "../lib/plans";
 import { colors } from "../theme";
 import AppShell from "../components/shell/AppShell";
 import OtpStep from "../components/auth/OtpStep";
@@ -89,6 +89,32 @@ function PlanBadge({ tier }) {
       <Text style={[styles.planBadgeText, isPremium ? styles.planBadgeTextPremium : styles.planBadgeTextFree]}>
         {isPremium ? `★ ${planName(tier)} plan` : "Free plan"}
         </Text>
+    </View>
+  );
+}
+
+function ScanUsageCard({ subscription, tier }) {
+  const { used, remaining, limit, window, resetAt } = scanAllowance(subscription, tier);
+  const endAt =
+    String(tier || "").toLowerCase() === "premium"
+      ? subscription?.renews_at || subscription?.billing_period_end || resetAt
+      : resetAt;
+  const resetText = scanResetLabel(endAt, new Date(), tier);
+  if (!Number.isFinite(limit) || limit <= 0) return null;
+  const pct = Math.min(100, Math.max(0, (used / limit) * 100));
+  return (
+    <View style={styles.usageCard}>
+      <Text style={styles.usageEyebrow}>Scan usage</Text>
+      <Text style={styles.usageTitle}>
+        {remaining} of {limit} scans remaining this {window}
+      </Text>
+      <Text style={styles.usageMeta}>
+        {used} used · {remaining} left of {limit}
+      </Text>
+      <View style={styles.usageTrack}>
+        <View style={[styles.usageFill, { width: `${pct}%` }]} />
+      </View>
+      {resetText ? <Text style={styles.usageReset}>{resetText}</Text> : null}
     </View>
   );
 }
@@ -168,7 +194,7 @@ function BackLink({ onPress, label = "Back to account" }) {
 }
 
 export default function AccountScreen({ navigation }) {
-  const { user, tier } = useAppData();
+  const { user, tier, subscription } = useAppData();
   const [view, setView] = useState("summary"); // summary | edit | pwEmail | pwOtp | pwNew
 
   const [loading, setLoading] = useState(true);
@@ -693,8 +719,11 @@ export default function AccountScreen({ navigation }) {
           <View style={styles.infoCard}>
             <InfoRow label="Email address" value={email} badge={emailVerified} />
             {canEditUsername ? <InfoRow label="Username" value={form.username} /> : null}
-            <InfoRow label="Mobile number" value={form.contactNumber} last />
+            <InfoRow label="Mobile number" value={form.contactNumber} />
+            <InfoRow label="Plan" value={planName(tier)} last />
           </View>
+
+          <ScanUsageCard subscription={subscription} tier={tier} />
 
           <View style={styles.actions}>
       <Pressable
@@ -856,6 +885,33 @@ const styles = StyleSheet.create({
   infoEmpty: { fontStyle: "italic", color: colors.muted },
   verifiedBadge: { borderRadius: 999, backgroundColor: "#d1fae5", paddingHorizontal: 10, paddingVertical: 2 },
   verifiedText: { fontSize: 10, fontWeight: "600", color: "#047857" },
+  usageCard: {
+    marginTop: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#f1f5f9",
+    backgroundColor: "#f8f9fb",
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+  usageEyebrow: {
+    fontSize: 11,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    color: colors.muted,
+  },
+  usageTitle: { marginTop: 8, fontSize: 15, fontWeight: "700", color: "#1e293b" },
+  usageMeta: { marginTop: 4, fontSize: 12, color: colors.muted },
+  usageTrack: {
+    marginTop: 12,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: "#e2e8f0",
+    overflow: "hidden",
+  },
+  usageFill: { height: "100%", borderRadius: 999, backgroundColor: colors.accent },
+  usageReset: { marginTop: 12, fontSize: 13, fontWeight: "600", color: "#475569" },
   actions: { marginTop: 28, gap: 12 },
   editBtn: {
     flexDirection: "row",

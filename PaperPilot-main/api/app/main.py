@@ -49,6 +49,7 @@ from app.compliance_db import (
     get_version_document_url,
     get_version_full,
     init_db as init_compliance_db,
+    assert_version_readable,
     is_current_version,
     is_paid_tier,
     latest_pending_checkout_id,
@@ -788,11 +789,12 @@ def manuscript_version_detail(
     version = get_version(uid, manuscript_id, version_id)
     if not version:
         raise HTTPException(status_code=404, detail="Manuscript version not found.")
-    if not is_current_version(uid, manuscript_id, version_id):
-        try:
-            require_premium(uid)
-        except UpgradeRequired as exc:
-            _raise_upgrade(exc)
+    try:
+        assert_version_readable(uid, manuscript_id, version_id)
+    except UpgradeRequired as exc:
+        _raise_upgrade(exc)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Manuscript version not found.") from None
     return version
 
 
@@ -955,6 +957,13 @@ def compliance_scan_document(scan_id: str, uid: str = Depends(authenticated_uid)
         raise HTTPException(status_code=404, detail="Compliance scan not found.")
     manuscript_id = scan.get("manuscript_id") or ""
     version_id = scan.get("manuscript_version_id") or ""
+    if manuscript_id and version_id:
+        try:
+            assert_version_readable(uid, manuscript_id, version_id)
+        except UpgradeRequired as exc:
+            _raise_upgrade(exc)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="Compliance scan not found.") from None
     version = get_version(uid, manuscript_id, version_id) if manuscript_id and version_id else None
     url = get_version_document_url(uid, manuscript_id, version_id) if version else None
     public = (url or "").strip()
@@ -970,8 +979,18 @@ def compliance_scan_document(scan_id: str, uid: str = Depends(authenticated_uid)
 
 @app.get("/scans/{scan_id}")
 def compliance_scan_detail(scan_id: str, uid: str = Depends(authenticated_uid)):
-    if not get_scan(uid, scan_id):
+    existing = get_scan(uid, scan_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Compliance scan not found.")
+    manuscript_id = existing.get("manuscript_id") or ""
+    version_id = existing.get("manuscript_version_id") or ""
+    if manuscript_id and version_id:
+        try:
+            assert_version_readable(uid, manuscript_id, version_id)
+        except UpgradeRequired as exc:
+            _raise_upgrade(exc)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="Compliance scan not found.") from None
     try:
         scan = hydrate_scan_from_ml(uid, scan_id)
     except MLServiceError as exc:

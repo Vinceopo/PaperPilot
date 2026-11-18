@@ -63,7 +63,7 @@ import { loadCachedMechanics, saveCachedMechanics } from "./lib/mechanicsCache.j
 import { latestVersion } from "./lib/scoreBand.js";
 import { formatFileSize } from "./lib/formatFileSize.js";
 import { supportedCitationStyle } from "./lib/formatMechanicsForm.js";
-import { isPaidTier, planName, scanAllowance } from "./lib/plans.js";
+import { applySuccessfulScanUsage, isPaidTier, planName, scanAllowance } from "./lib/plans.js";
 import {
   loadNotifications,
   saveNotifications,
@@ -520,6 +520,7 @@ export default function App() {
   const revealSummaryRef = useRef(null);
   const resultReadyRef = useRef(false);
   const flightFinishedRef = useRef(false);
+  const scanProgressRef = useRef({ percent: 0, stage: "queued" });
   const [pageHidden, setPageHidden] = useState(() => document.visibilityState === "hidden");
   const titleBeforeDoneRef = useRef(null);
 
@@ -557,27 +558,43 @@ export default function App() {
     };
   }, [notificationsOpen]);
 
+  scanProgressRef.current = scanFlow.scanProgress;
+
+  // Keep the on-screen percent moving smoothly for the whole analysing phase.
+  // Server updates raise the floor; between updates we still drift so it never stalls.
   useEffect(() => {
     if (scanFlow.step !== "analyzing") {
       setAnalysisShown(0);
       return undefined;
     }
-    const target = Math.min(100, Math.max(0, Number(scanFlow.scanProgress.percent) || 0));
-    const ceiling = target >= 100 ? 100 : Math.min(97, target + 8);
     let frame = 0;
-    const tick = () => {
+    let lastTs = performance.now();
+    const tick = (now) => {
+      const dt = Math.min(0.05, Math.max(0, (now - lastTs) / 1000));
+      lastTs = now;
+      const progress = scanProgressRef.current || {};
+      const server = Math.min(100, Math.max(0, Number(progress.percent) || 0));
+      const done =
+        String(progress.stage || "").toLowerCase() === "done" || server >= 99.5;
       setAnalysisShown((current) => {
-        if (current < target - 0.15) {
-          return Math.min(target, current + Math.max(0.35, (target - current) * 0.14));
+        if (done) {
+          if (current >= 99.5) return 100;
+          return Math.min(100, current + Math.max(2.5, (100 - current) * 0.2));
         }
-        if (target >= 100) return 100;
-        return current < ceiling ? Math.min(ceiling, Math.max(current, target) + 0.02) : current;
+        if (current < server - 0.2) {
+          return Math.min(server, current + Math.max(0.4, (server - current) * 0.16));
+        }
+        const softCap = 97;
+        if (current >= softCap) return current;
+        // ~3–6% per second so the bar keeps counting through long plateaus.
+        const driftPerSec = Math.max(3, (softCap - current) * 0.05);
+        return Math.min(softCap, Math.max(current, server) + driftPerSec * dt);
       });
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, [scanFlow.step, scanFlow.scanProgress.percent]);
+  }, [scanFlow.step]);
 
   useEffect(() => {
     if (scanFlow.step !== "analyzing") {
@@ -622,8 +639,28 @@ export default function App() {
     }
   }, [pageHidden]);
 
+  // Refresh scan allowance as soon as a live scan finishes (stage "done"), not only
+  // after the analyzing animation advances to results — otherwise the header lags.
+  const countedScanRef = useRef("");
   useEffect(() => {
-    if (!user || (scanFlow.step !== "summary" && scanFlow.step !== "results")) return undefined;
+    if (!user) return undefined;
+    const stage = String(scanFlow.scanProgress.stage || "").toLowerCase();
+    const liveDone =
+      Boolean(scanFlow.result) && stage === "done" && scanFlow.step === "analyzing";
+    const onResults = scanFlow.step === "summary" || scanFlow.step === "results";
+    if (!liveDone && !onResults) return undefined;
+
+    const scanKey =
+      String(scanFlow.result?.scanId || scanFlow.result?.id || scanFlow.result?.documentId || "") +
+      ":" +
+      String(scanFlow.result?.versionId || scanFlow.result?.versionNumber || "");
+
+    if (liveDone && scanKey && scanKey !== countedScanRef.current) {
+      countedScanRef.current = scanKey;
+      const optimistic = applySuccessfulScanUsage(subscriptionRef.current);
+      if (optimistic) storeSubscription(optimistic, nextSubscriptionTicket());
+    }
+
     let cancelled = false;
     const ticket = nextSubscriptionTicket();
     getSubscription()
@@ -634,7 +671,14 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [scanFlow.step, user, nextSubscriptionTicket, storeSubscription]);
+  }, [
+    scanFlow.step,
+    scanFlow.result,
+    scanFlow.scanProgress.stage,
+    user,
+    nextSubscriptionTicket,
+    storeSubscription,
+  ]);
 
   useEffect(() => {
     if (!fileDetailsFocusKey || !manuscriptReady) return;
@@ -2066,7 +2110,7 @@ export default function App() {
             onUpgrade={(message) =>
               setUpgradeMessage(
                 message ||
-                  "Older manuscript versions are available on Premium. Upgrade to view full version history."
+                  "Older manuscript versions unlock when you upgrade. Choose a plan to open full version history."
               )
             }
             onUploadNew={beginFreshUpload}

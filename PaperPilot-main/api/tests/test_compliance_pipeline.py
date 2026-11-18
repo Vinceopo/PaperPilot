@@ -2092,6 +2092,51 @@ class PersistenceTests(FirebaseTestCase):
         with self.assertRaises(compliance_db.UpgradeRequired):
             compliance_db.check_scan_eligibility("owner", version["manuscript_id"], version["id"])
 
+    def test_free_can_scan_pending_upload_under_existing_title(self):
+        parsed, mechanics = self.parsed(), self.mechanics()
+        first, _ = compliance_db.create_version(
+            "owner", "Thesis", mechanics["id"], "a.docx", "docx", "Text", parsed, None
+        )
+        compliance_db.persist_scan(
+            "owner",
+            first["manuscript_id"],
+            first["id"],
+            mechanics["id"],
+            90.0,
+            [],
+            [{"section": "General", "formatting_score": 90.0, "issue_count": 0, "issues": []}],
+        )
+        second, created = compliance_db.create_version(
+            "owner",
+            "Thesis",
+            mechanics["id"],
+            "b.docx",
+            "docx",
+            "Text",
+            parsed,
+            first["manuscript_id"],
+        )
+        self.assertFalse(created)
+        self.assertTrue(second["pending"])
+        self.assertFalse(
+            compliance_db.is_current_version("owner", first["manuscript_id"], second["id"])
+        )
+        # Free may scan the pending new upload even though current_version_id is still v1.
+        compliance_db.check_scan_eligibility("owner", first["manuscript_id"], second["id"])
+
+    def test_free_cannot_read_older_committed_version_but_premium_can(self):
+        mechanics = self.mechanics()
+        v1, _ = self._version_with_scan(mechanics, "a.docx")
+        v2, _ = self._version_with_scan(mechanics, "b.docx")
+        mid = v1["manuscript_id"]
+        self.assertTrue(compliance_db.is_current_version("owner", mid, v2["id"]))
+        compliance_db.assert_version_readable("owner", mid, v2["id"])
+        with self.assertRaises(compliance_db.UpgradeRequired):
+            compliance_db.assert_version_readable("owner", mid, v1["id"])
+        self._activate()
+        compliance_db.assert_version_readable("owner", mid, v1["id"])
+        compliance_db.assert_version_readable("owner", mid, v2["id"])
+
     def _version_with_scan(self, mechanics, filename):
         version, _ = compliance_db.create_version(
             "owner", "Thesis", mechanics["id"], filename, "docx", "text", self.parsed(), None,

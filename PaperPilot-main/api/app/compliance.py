@@ -1250,6 +1250,18 @@ _TITLE_CASE_SMALL = frozenset(
 )
 
 
+def _is_all_caps_colon_title(text: str) -> bool:
+    """Thesis titles like 'PAPERPILOT: AN AI-POWERED…' — not form 'Email: x' chrome."""
+    value = (text or "").strip()
+    if ":" not in value:
+        return False
+    letters = [ch for ch in value if ch.isalpha()]
+    if len(letters) < 8 or not all(ch.isupper() for ch in letters):
+        return False
+    _, _, after = value.partition(":")
+    return len(after.split()) >= 2
+
+
 def _looks_like_field_or_chrome_label(text: str) -> bool:
     """Form/CV/table chrome that must never become Heading 2..N (precision over recall)."""
     value = (text or "").strip()
@@ -1260,8 +1272,11 @@ def _looks_like_field_or_chrome_label(text: str) -> bool:
     if re.search(r"\b\d{3,4}[-.\s]?\d{3}[-.\s]?\d{3,4}\b", value):
         return True
     # "Email Address:", "Civil Status: Single", "Name: Aldrine Bihag"
-    if re.match(r"^[A-Za-z][^:]{0,40}:\s*\S", value) or (
-        value.endswith(":") and len(value.split()) <= 6
+    # Do NOT treat ALL-CAPS research titles with a subtitle after ":" as chrome —
+    # those were falling through to body and getting false body-size findings.
+    if not _is_all_caps_colon_title(value) and (
+        re.match(r"^[A-Za-z][^:]{0,40}:\s*\S", value)
+        or (value.endswith(":") and len(value.split()) <= 6)
     ):
         return True
     # Fragmented table / matrix chrome
@@ -1299,19 +1314,25 @@ def _section_title_confidence(unit: dict, text: str, body_size: float | None) ->
         score += 0.05
     letters = [ch for ch in value if ch.isalpha()]
     all_caps = bool(letters) and all(ch.isupper() for ch in letters) and len(letters) >= 3
+    size = unit.get("dominant_size")
+    body_sized = (
+        body_size is not None
+        and size is not None
+        and abs(float(size) - float(body_size)) <= 0.35
+    )
     if all_caps and len(words) >= 2:
         score += 0.35
     elif all_caps and len(words) == 1 and len(letters) >= 8:
-        # Standalone section labels (INTRODUCTION, METHODOLOGY).
-        score += 0.35
+        # Standalone section labels (INTRODUCTION) at larger-than-body size.
+        # Body-sized one-word ALL CAPS is usually table/figure chrome.
+        score += 0.05 if body_sized else 0.35
     elif _is_section_heading_title(value):
         score += 0.3
     if NUMBERED_HEADING_RE.match(value):
         score += 0.35
-    size = unit.get("dominant_size")
     if body_size is not None and size is not None and float(size) >= float(body_size) + 0.6:
         score += 0.2
-    elif body_size is not None and size is not None and abs(float(size) - float(body_size)) <= 0.35:
+    elif body_sized:
         # Same size as body is common for H2/H3; slight doubt only.
         score -= 0.05
     alignment = str(
@@ -1374,10 +1395,13 @@ SECTION_TITLE_CONFIDENCE_THRESHOLD = 0.32
 
 
 def _resolve_section_title_pending(units: list[dict], defined, heading_sizes, body_size=None) -> None:
-    """Map pending unstyled section titles onto Heading 2..N by measured-size rank.
+    """Map pending unstyled section titles onto Heading 2..N by document size rank.
 
-    Largest distinct size → shallowest defined level (usually H2); next size → next
-    level, and so on. Low-confidence lines become heading_uncertain (not flagged).
+    Largest distinct measured size → shallowest defined level (usually H2); next size →
+    next level (H3, H4, …). Assignment does NOT require matching the user's headingN_size
+    values — those rules are applied later in font/style checks so a changed rule can
+    still detect the heading and flag the mismatch. Extra size ranks beyond defined
+    levels → heading_uncertain (never dump leftovers onto Heading 3).
     """
     levels = _defined_heading_levels_from(defined, heading_sizes, start=2)
     pending = [unit for unit in units if unit.get("role") == "section_title_pending"]
@@ -1387,32 +1411,44 @@ def _resolve_section_title_pending(units: list[dict], defined, heading_sizes, bo
         for unit in pending:
             unit["role"] = "heading_other"
         return
-    size_keys: list[float] = []
-    for unit in pending:
-        size = unit.get("dominant_size")
-        if size is None:
-            continue
-        key = round(float(size), 1)
-        if key not in size_keys:
-            size_keys.append(key)
-    size_keys.sort(reverse=True)
-    size_to_level = {
-        size_keys[index]: levels[min(index, len(levels) - 1)] for index in range(len(size_keys))
-    }
-    fallback = levels[0]
+
+    eligible: list[dict] = []
     for unit in pending:
         text = (unit.get("text") or "").strip()
         confidence = _section_title_confidence(unit, text, body_size)
+        unit["heading_confidence"] = confidence
         if confidence < SECTION_TITLE_CONFIDENCE_THRESHOLD:
             unit["role"] = "heading_uncertain"
-            unit["heading_confidence"] = confidence
             continue
         size = unit.get("dominant_size")
         if size is None:
-            unit["role"] = f"heading{fallback}"
-        else:
-            unit["role"] = f"heading{size_to_level.get(round(float(size), 1), fallback)}"
-        unit["heading_confidence"] = confidence
+            # Style-only / size-missing lines still join the shallowest H2+ checks.
+            unit["role"] = f"heading{levels[0]}"
+            continue
+        eligible.append(unit)
+
+    if not eligible:
+        return
+
+    size_keys: list[float] = []
+    for unit in eligible:
+        key = round(float(unit["dominant_size"]), 1)
+        if key not in size_keys:
+            size_keys.append(key)
+    size_keys.sort(reverse=True)
+    # One document-size rank per defined level — do NOT clamp leftovers onto Heading 3.
+    size_to_level = {
+        size_keys[index]: levels[index]
+        for index in range(min(len(size_keys), len(levels)))
+    }
+    for unit in eligible:
+        key = round(float(unit["dominant_size"]), 1)
+        level = size_to_level.get(key)
+        if level is None:
+            unit["role"] = "heading_uncertain"
+            continue
+        unit["role"] = f"heading{level}"
+
 
 def _looks_like_heading_line(unit: dict, text: str) -> bool:
     """Hard gate: prose / wrap continuations must never receive a heading role.

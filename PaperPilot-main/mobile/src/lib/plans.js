@@ -3,6 +3,8 @@
  * Prices must match api/app/paymongo.py. Annual = 11 × monthly (one month free).
  */
 
+import { APP_TIME_ZONE } from "./timeZone";
+
 export const PAID_TIERS = ["premium", "pro"];
 
 export const PLAN_PRICES = {
@@ -64,4 +66,98 @@ export function planPrice(tier, billingPeriod) {
 /** "week" for Pro (7-day reset), "month" for Free and Premium. */
 export function resetWindow(tier) {
   return normalizeTier(tier) === "pro" ? "week" : "month";
+}
+
+/**
+ * Single source of truth for header "scans remaining" and Account "scan usage".
+ * Always keeps used + remaining === limit (clamped).
+ */
+export function scanAllowance(subscription, tier) {
+  const resolvedTier = normalizeTier(tier || subscription?.tier || "free");
+  const limit = Math.max(
+    0,
+    Number(subscription?.limit) || planLimit(resolvedTier) || 0
+  );
+  const rawUsed = Number(subscription?.used ?? subscription?.scans_used ?? 0);
+  const used = Number.isFinite(rawUsed) ? Math.max(0, Math.min(limit, rawUsed)) : 0;
+  const rawRemaining = Number(subscription?.remaining);
+  const remaining = Number.isFinite(rawRemaining)
+    ? Math.max(0, Math.min(limit, rawRemaining))
+    : Math.max(limit - used, 0);
+  const syncedUsed = Number.isFinite(rawRemaining)
+    ? Math.max(0, limit - remaining)
+    : used;
+  return {
+    tier: resolvedTier,
+    limit,
+    used: syncedUsed,
+    remaining: Math.max(limit - syncedUsed, 0),
+    window: resetWindow(resolvedTier),
+    resetAt:
+      subscription?.reset_at ||
+      subscription?.period_end ||
+      subscription?.billing_period_end ||
+      subscription?.renews_at ||
+      "",
+  };
+}
+
+function pluralUnit(count, singular) {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
+
+export function daysUntilReset(resetAt, now = new Date()) {
+  if (!resetAt) return null;
+  const end = new Date(resetAt);
+  if (Number.isNaN(end.getTime())) return null;
+  const startLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endLocal = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.round((endLocal.getTime() - startLocal.getTime()) / 86_400_000);
+}
+
+export function hoursMinutesUntilReset(resetAt, now = new Date()) {
+  if (!resetAt) return null;
+  const end = new Date(resetAt);
+  if (Number.isNaN(end.getTime())) return null;
+  const ms = end.getTime() - now.getTime();
+  if (ms <= 0) return { hours: 0, minutes: 0, totalMs: ms };
+  const totalMinutes = Math.max(1, Math.ceil(ms / 60_000));
+  return {
+    hours: Math.floor(totalMinutes / 60),
+    minutes: totalMinutes % 60,
+    totalMs: ms,
+  };
+}
+
+/**
+ * Human label for the Account usage footer date.
+ * Premium is prepaid access → "Expires…". Free/Pro refresh allowance → "Resets…".
+ * Empty string when the date is unavailable.
+ */
+export function scanResetLabel(resetAt, now = new Date(), tier) {
+  const remaining = hoursMinutesUntilReset(resetAt, now);
+  if (!remaining) return "";
+  const end = new Date(resetAt);
+  const dateText = end.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: APP_TIME_ZONE,
+  });
+  const expires = normalizeTier(tier) === "premium";
+  if (remaining.totalMs <= 0) {
+    return expires ? `Expired on ${dateText}` : `Reset was due on ${dateText}`;
+  }
+  if (remaining.totalMs < 86_400_000) {
+    const { hours, minutes } = remaining;
+    const verb = expires ? "Expires" : "Resets";
+    if (hours <= 0) return `${verb} in ${pluralUnit(minutes, "minute")}`;
+    if (minutes <= 0) return `${verb} in ${pluralUnit(hours, "hour")}`;
+    return `${verb} in ${pluralUnit(hours, "hour")} ${pluralUnit(minutes, "minute")}`;
+  }
+  const days = daysUntilReset(resetAt, now);
+  if (days === 1) return expires ? "Expires tomorrow" : "Resets tomorrow";
+  return expires
+    ? `Expires on ${dateText} (in ${days} days)`
+    : `Resets on ${dateText} (in ${days} days)`;
 }

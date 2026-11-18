@@ -510,8 +510,9 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     if (!pdf || !pages.length) return undefined;
     let cancelled = false;
     let paintToken = 0;
+    let activeTask = null;
 
-    async function paint() {
+    async function paint({ force = false } = {}) {
       // Background tabs often leave alpha:false canvases black after pdf.js render.
       // Wait until the tab is visible, then paint (and re-paint on return).
       if (document.visibilityState === "hidden") return;
@@ -527,30 +528,62 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
         );
         if (!canvas) continue;
         const outputScale = Math.min(window.devicePixelRatio || 1, 2);
+        const nextW = Math.floor(viewport.width * outputScale);
+        const nextH = Math.floor(viewport.height * outputScale);
+        // Incremental pages updates re-run this effect. Re-clearing an already-good
+        // opaque canvas flashes black; skip those unless a forced visibility re-paint.
+        if (
+          !force &&
+          canvas.dataset.painted === "1" &&
+          canvas.width === nextW &&
+          canvas.height === nextH
+        ) {
+          continue;
+        }
         const context = canvas.getContext("2d", { alpha: false });
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
+        canvas.width = nextW;
+        canvas.height = nextH;
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
+        // alpha:false clears to black — fill white first so a cancelled/aborted
+        // render never leaves the Issue Tracing panel stuck on a black page.
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        canvas.dataset.painted = "0";
         const transform =
           outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
+        try {
+          activeTask?.cancel?.();
+        } catch {
+          /* ignore */
+        }
         const task = page.render({ canvasContext: context, viewport, transform });
+        activeTask = task;
         try {
           await task.promise;
+          if (!cancelled && token === paintToken) canvas.dataset.painted = "1";
         } catch {
           if (cancelled || token !== paintToken) return;
+        } finally {
+          if (activeTask === task) activeTask = null;
         }
       }
     }
 
     const onVisibility = () => {
-      if (document.visibilityState === "visible") void paint();
+      if (document.visibilityState === "visible") void paint({ force: true });
     };
     document.addEventListener("visibilitychange", onVisibility);
     void paint();
     return () => {
       cancelled = true;
       paintToken += 1;
+      try {
+        activeTask?.cancel?.();
+      } catch {
+        /* ignore */
+      }
+      activeTask = null;
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [pages]);
