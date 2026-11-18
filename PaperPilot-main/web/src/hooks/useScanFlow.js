@@ -13,8 +13,7 @@
 import { useCallback, useRef, useState } from "react";
 import { analyzeDocument, downloadReport as downloadReportFn } from "../lib/mockAnalysis";
 import { MANUSCRIPT_ACCEPTED_EXTENSIONS, maxUploadBytesForPlan } from "../lib/uploadLimits.js";
-import { formatFileSize } from "../lib/formatFileSize.js";
-import { planName } from "../lib/plans.js";
+import { oversizeFileMessage } from "../lib/formatFileSize.js";
 import { isServerId } from "../lib/scanMapper";
 
 function validateFile(file, tier) {
@@ -23,8 +22,7 @@ function validateFile(file, tier) {
   const ext = `.${(file.name.split(".").pop() ?? "").toLowerCase()}`;
   if (!MANUSCRIPT_ACCEPTED_EXTENSIONS.includes(ext))
     return "Only PDF files are accepted for manuscripts.";
-  if (file.size > maxBytes)
-    return `${planName(tier)} plans can upload up to ${formatFileSize(maxBytes)}.`;
+  if (file.size > maxBytes) return oversizeFileMessage(file.size, maxBytes, tier);
   return "";
 }
 
@@ -87,9 +85,7 @@ export function useScanFlow({
     const tooBig = Boolean(f && f.size > maxBytes);
     const err = f && !tooBig ? validateFile(f, plan) : "";
     setFileInner(tooBig ? null : (f ?? null));
-    setFileError(
-      tooBig ? `${planName(plan)} plans can upload up to ${formatFileSize(maxBytes)}.` : err
-    );
+    setFileError(tooBig ? oversizeFileMessage(f.size, maxBytes, plan) : err);
     setError("");
     setStep(!tooBig && f && !err ? "fileSelected" : "idle");
   }, []);

@@ -1,4 +1,5 @@
 import { auth } from "./firebase.js";
+import { allPlanUploadLimitsMessage } from "./lib/formatFileSize.js";
 import { uploadToS3 } from "./lib/s3Upload.js";
 import { localManuscriptPreview } from "./lib/localManuscriptPreview.js";
 import { isFatalAuthError } from "./services/auth.js";
@@ -85,7 +86,7 @@ function statusMessage(status) {
     return "That item was not found. It may have been deleted on another device — refresh and try again.";
   }
   if (status === 413) {
-    return "This file is too large for your plan. Free plans allow 15 MB, Premium 45 MB, and Pro 120 MB.";
+    return `This file exceeds your plan’s upload limit. ${allPlanUploadLimitsMessage()}`;
   }
   if (status === 429) return "Too many requests in a short time. Wait a minute, then try again.";
   return unreachableMessage(status);

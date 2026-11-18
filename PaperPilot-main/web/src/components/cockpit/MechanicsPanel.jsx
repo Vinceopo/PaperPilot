@@ -18,7 +18,11 @@ import {
 } from "../../lib/mechanicsValidation.js";
 import { downloadSampleMechanics } from "../../api.js";
 import { maxUploadBytesForPlan } from "../../lib/uploadLimits.js";
-import { formatFileSize, oversizeFileMessage } from "../../lib/formatFileSize.js";
+import {
+  formatFileSize,
+  mechanicsPickerLimitHint,
+  oversizeFileMessage,
+} from "../../lib/formatFileSize.js";
 import { ShowStepsRow } from "./UploadJourneyModal.jsx";
 
 const ACCEPTED = [".pdf", ".docx"];
@@ -689,7 +693,7 @@ export default function MechanicsPanel({
                   <span className="mt-2 text-sm text-slate-500">
                     {file
                       ? `${formatFileSize(file.size)} · Confirm extraction to fill Format Fields beside this panel`
-                      : `Drag & drop or browse · .pdf and .docx · Max ${formatFileSize(maxBytes)}`}
+                      : `Drag & drop or browse · ${mechanicsPickerLimitHint(tier, maxBytes)}`}
                   </span>
                   <span className="mt-4 rounded-full border border-[#16bfa8] bg-white px-6 py-2 text-sm font-semibold text-[#109b89]">
                     Browse files
@@ -846,9 +850,9 @@ export default function MechanicsPanel({
       />
       <ConfirmDialog
         open={oversizeBytes != null}
-        title="File Too Large"
+        title="Upload limit reached"
         message={oversizeFileMessage(oversizeBytes, maxBytes, tier)}
-        confirmLabel="OK"
+        confirmLabel="Choose a smaller file"
         cancelLabel=""
         onCancel={() => setOversizeBytes(null)}
         onConfirm={() => setOversizeBytes(null)}
