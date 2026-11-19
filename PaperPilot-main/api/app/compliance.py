@@ -4111,7 +4111,11 @@ def _filter_unset_heading_font_issues(issues: list[dict], mechanics_rules: dict)
 
 
 def run_compliance_scan(
-    parsed: dict, mechanics_rules: dict, tier: str = "free", on_progress=None
+    parsed: dict,
+    mechanics_rules: dict,
+    tier: str = "free",
+    on_progress=None,
+    assist_items: list | None = None,
 ) -> dict:
     units = _document_units(parsed, mechanics_rules)
     _annotate_roles(units, mechanics_rules)
@@ -4146,12 +4150,27 @@ def run_compliance_scan(
         page_count = max(page_count, len(parsed.get("pages") or []))
     pagination = _pagination_meta(parsed, mechanics_rules)
     result = build_scoring_payload(stats, issues)
+    # Visual/image assist is independent of scoring — never merge into issues or units.
+    assist_findings: list = []
+    marked = [
+        item
+        for item in (assist_items or [])
+        if isinstance(item, dict) and item.get("assist_required") is not False
+    ]
+    if marked:
+        try:
+            from app.mechanics_gemini import assist_visual_mechanics
+
+            assist_findings = assist_visual_mechanics(marked, parsed, mechanics_rules)
+        except Exception:
+            assist_findings = []
     result.update(
         {
             "issues": issues,
             "sections": build_sections(result["scoring"]),
             "page_count": page_count,
             "pagination": pagination,
+            "assist_findings": assist_findings,
         }
     )
     return result

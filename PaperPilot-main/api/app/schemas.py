@@ -82,6 +82,7 @@ class MechanicsUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     rules: dict | None = None
     ignored_fields: list[str] | None = None
+    assist_items: list[dict] | None = None
 
 
 class MechanicsSaveRequest(BaseModel):
@@ -92,6 +93,8 @@ class MechanicsSaveRequest(BaseModel):
     extracted_text: str | None = Field(default=None, max_length=200_000)
     # Format Fields set to IGNORE — clears matching document-validation issues on save.
     ignored_fields: list[str] | None = None
+    # Non-schema visual/image/style rules checked with Gemini assist on scan (never scored).
+    assist_items: list[dict] | None = None
 
 
 class CloudinaryDocumentRequest(BaseModel):

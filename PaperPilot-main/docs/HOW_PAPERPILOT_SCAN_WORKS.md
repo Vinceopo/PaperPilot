@@ -1,6 +1,6 @@
 # How PaperPilot checks a paper
 
-This explains the three helpers behind a scan in everyday language: the **rule checker**, the **machine learning helpers**, and **Gemini**.
+This explains the helpers behind a scan in everyday language: the **rule checker**, the **machine learning helpers**, and **Gemini**.
 
 ---
 
@@ -10,7 +10,7 @@ Think of PaperPilot like a teacher grading format:
 
 1. **Rule checker** — opens a checklist (your Format Mechanics) and marks each item right or wrong. This is the main worker. It decides the score.
 2. **Machine learning helpers** — small assistants that help with citations and with reading a style guide. They do **not** decide the score.
-3. **Gemini** — a writing assistant that makes the “why” and “how to fix” easier to read. It may slightly change how serious an issue looks, but it does **not** invent new mistakes and does **not** change the score.
+3. **Gemini** — helps in three assisted ways: (a) reading your format guide into Format Fields, (b) polishing “why / how to fix” wording on scored issues, and (c) visual / image assist findings that stay **outside** the score.
 
 ---
 
@@ -43,7 +43,7 @@ Think of PaperPilot like a teacher grading format:
 
 **What they do:**
 
-- **When you upload a format / style guide** — they help fill Format Mechanics fields so you do less typing by hand.
+- **When you upload a format / style guide** — they help fill Format Mechanics fields so you do less typing by hand (alongside Gemini when available).
 - **When checking citations** — they can flag citation problems with extra confidence, on top of the normal citation rules.
 
 **What they do *not* do:**
@@ -58,21 +58,22 @@ There is also a **machine learning service** (a separate background worker). For
 
 ## 3. Gemini
 
-**What it is:** Google’s AI used as a helper **after** the checklist finds issues.
+**What it is:** Google’s AI used as an assisted helper — never as the score owner.
 
 **What it does:**
 
-- Rewrites explanations so they are clearer (“Why”)
-- Suggests clearer fixes (“Fix”)
-- May move how serious an issue looks by **one step** only (for example from moderate to minor)
+1. **Reading a format guide (mechanics extract)** — after the normal text extract + regex/ML fill, Gemini can map more of your guide into the existing Format Fields schema. Rules it cannot map (visual layout, alt-text, image style, and similar) become `assist_items` marked for AI assist on scan. You may edit Format Fields afterward, but **Save & use as-is** is fine.
+2. **Issue wording** — rewrites explanations (“Why”) and fixes (“Fix”) for issues the rule checker already found. It may move how serious an issue looks by **one step** only.
+3. **Visual / image assist on scan** — for marked `assist_items`, Gemini reviews captions / image-related snippets and returns **assist findings**. These appear separately from scored issues.
 
 **What it does *not* do:**
 
-- Add brand-new issues that the rules never found
+- Invent new **score-affecting** checklist issue types
 - Change how many units passed or failed
 - Change Right / Incorrect % or the overall score
+- Feed assist findings into scoring or unit counts
 
-If Gemini is turned off or unavailable, you still get a full scan — just with the original rule wording.
+If Gemini is turned off or unavailable, extract and scan still work: Format Fields come from regex/ML only, issue wording stays as the rules wrote it, and the assist section shows unavailable.
 
 ---
 
@@ -82,9 +83,9 @@ If Gemini is turned off or unavailable, you still get a full scan — just with 
 2. PaperPilot opens the document.
 3. The **rule checker** walks through every format check and marks pass / fail.
 4. **Machine learning helpers** may help a bit with citations (and earlier, with reading a style guide).
-5. **Gemini** (if available) polishes the wording of the issues it already found.
+5. **Gemini** (if available) polishes the wording of scored issues and may add separate visual assist findings.
 6. PaperPilot adds up the pass / fail units into your score and percentages.
-7. You see Scan Results, and you can download the report.
+7. You see Scan Results (scored issues + optional assist findings), and you can download the report.
 
 ---
 
@@ -94,10 +95,12 @@ If Gemini is turned off or unavailable, you still get a full scan — just with 
 |--------|-----|--------------------|
 | Rule checker | Finds format problems and measures pass / fail | **Yes** — this is the score |
 | Machine learning helpers | Help with style guides and citations | **No** |
-| Gemini | Makes issue explanations easier to read | **No** (may only tweak how serious a label looks) |
+| Gemini (mechanics understander) | Helps fill Format Fields + marks visual assist items | **No** |
+| Gemini (issue wording) | Makes scored issue explanations easier to read | **No** (may only tweak how serious a label looks) |
+| Gemini (visual assist) | Separate findings for visual / image / style gaps | **No** |
 
 ---
 
 ## One sentence to remember
 
-**Rules find and score the problems; machine learning helps a little on the side; Gemini explains the problems more clearly.**
+**Rules find and score; Gemini understands guides and assists on visual gaps; you may edit Format Fields but do not have to.**

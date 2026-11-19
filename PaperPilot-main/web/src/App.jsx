@@ -1336,6 +1336,7 @@ export default function App() {
         fileType: payload.file_type,
         extractedText: payload.extracted_text,
         ignoredFields: payload.ignored_fields,
+        assistItems: payload.assist_items,
       });
       mechanicsChangeRef.current += 1;
       if (created?.id) {

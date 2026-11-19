@@ -369,6 +369,9 @@ export default function UploadScreen({ navigation }) {
         text_preview: data.text_preview || "",
         page_count: data.page_count || (data.pages || []).length || 0,
         pages: Array.isArray(data.pages) ? data.pages : [],
+        assist_items: Array.isArray(data.assist_items) ? data.assist_items : [],
+        gemini_available: data.gemini_available !== false,
+        gemini_used: Boolean(data.gemini_used),
       });
       // Fill found rules; any field the guide omits becomes IGNORE (auto-pass).
       setUploadForm(
@@ -376,7 +379,9 @@ export default function UploadScreen({ navigation }) {
           rulesToForm(data.rules || {}, data.name || file.name.replace(/\.(pdf|docx)$/i, ""))
         )
       );
-      setMechSuccess("Format fields extracted from your guide - review and edit below, then save.");
+      setMechSuccess(
+        "Format fields filled from your guide. Editing is optional — you can Save & use as-is."
+      );
     } catch (err) {
       setMechError(err.message || "Extraction failed.");
     } finally {
@@ -402,7 +407,7 @@ export default function UploadScreen({ navigation }) {
     }
     setConfirm({
       title: "Extract format fields?",
-      message: `PaperPilot will analyze “${file.name}” and fill Format Fields from the rules in that guide. You can edit any value before saving.`,
+      message: `PaperPilot will analyze “${file.name}” and fill Format Fields from the rules in that guide. Editing afterward is optional — you can save as-is.`,
       confirmLabel: "Extract fields",
       onConfirm: () => {
         void runExtract(file);
@@ -441,6 +446,8 @@ export default function UploadScreen({ navigation }) {
       file_type: fromUpload && extractMeta?.file_type ? extractMeta.file_type : "docx",
       extracted_text: fromUpload ? extractMeta?.extracted_text || "" : "",
       ignored_fields: ignoredFieldsFromForm(form),
+      assist_items:
+        fromUpload && Array.isArray(extractMeta?.assist_items) ? extractMeta.assist_items : undefined,
     };
   }
 
@@ -451,9 +458,9 @@ export default function UploadScreen({ navigation }) {
     if (!payload) return;
     const savingMode = mode;
     setConfirm({
-      title: "Save format mechanics?",
-      message: `Save “${payload.name}” to Saved Mechanics and continue to Upload Manuscript?`,
-      confirmLabel: "Save and Continue",
+      title: "Save & use as-is?",
+      message: `Save “${payload.name}” with the current Format Fields (editing is optional) and continue to Upload Manuscript?`,
+      confirmLabel: "Save & use as-is",
       onConfirm: async () => {
         try {
           await onSaveMechanicsProfile(payload);
@@ -1035,6 +1042,9 @@ export default function UploadScreen({ navigation }) {
 
                     {extractMeta ? (
                       <View style={{ marginTop: 16 }}>
+                        <Text style={[styles.muted, { marginBottom: 10 }]}>
+                          Review (optional) — primary action is to save the extracted fields as-is.
+                        </Text>
                         <FormatMechanicsFields
                           form={uploadForm}
                           onChange={updateForm}
@@ -1043,9 +1053,35 @@ export default function UploadScreen({ navigation }) {
                           nameError={nameError}
                           nameInputRef={nameInputRef}
                         />
+                        {Array.isArray(extractMeta.assist_items) && extractMeta.assist_items.length > 0 ? (
+                          <View style={styles.assistBox}>
+                            <Text style={styles.assistLabel}>Checked with AI assist on scan</Text>
+                            <View style={styles.assistChips}>
+                              {extractMeta.assist_items.map((item) => (
+                                <View
+                                  key={item.id || item.requirement_text}
+                                  style={styles.assistChip}
+                                >
+                                  <Text style={styles.assistKind}>
+                                    {String(item.kind || "other").toUpperCase()}
+                                  </Text>
+                                  <Text style={styles.assistText} numberOfLines={2}>
+                                    {item.requirement_text}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                            {extractMeta.gemini_available === false ? (
+                              <Text style={styles.assistWarn}>
+                                Gemini assist is unavailable — these items will show as unchecked on
+                                scan.
+                              </Text>
+                            ) : null}
+                          </View>
+                        ) : null}
                         <View style={styles.editorActions}>
                           <PrimaryButton
-                            title={mechanicsBusy ? "Saving…" : "Save and Continue"}
+                            title={mechanicsBusy ? "Saving…" : "Save & use as-is"}
                             onPress={requestSaveProfile}
                             busy={mechanicsBusy}
                             disabled={mechBusy}
@@ -1845,6 +1881,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   clearBtnText: { fontSize: 12, fontWeight: "600", color: colors.slate },
+  assistBox: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  assistLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: colors.muted,
+  },
+  assistChips: { marginTop: 8, gap: 6 },
+  assistChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  assistKind: {
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    color: colors.muted,
+    marginBottom: 2,
+  },
+  assistText: { fontSize: 12, color: colors.slate, fontWeight: "500" },
+  assistWarn: { marginTop: 8, fontSize: 11, color: "#b45309" },
   detailsHead: {
     marginTop: 4,
     paddingBottom: 14,

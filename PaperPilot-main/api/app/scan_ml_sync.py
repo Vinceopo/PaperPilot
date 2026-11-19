@@ -182,6 +182,30 @@ def hydrate_scan_from_ml(owner_uid: str, scan_id: str) -> dict | None:
             str(result.get("error") or result.get("message") or FAILED_SCAN_MESSAGE),
         )
 
+    # Visual assist is independent of the ML checklist score.
+    mechanics_id = str(scan.get("mechanics_id") or "")
+    if mechanics_id and not result.get("assist_findings"):
+        try:
+            from app.mechanics_gemini import assist_visual_mechanics
+
+            mechanics = get_mechanics(owner_uid, mechanics_id) or {}
+            assist_items = mechanics.get("assist_items") or []
+            if assist_items:
+                version = get_version_full(
+                    owner_uid,
+                    str(scan.get("manuscript_id") or ""),
+                    str(scan.get("manuscript_version_id") or ""),
+                ) or {}
+                parsed = version.get("parsed_data") if isinstance(version, dict) else {}
+                result = dict(result)
+                result["assist_findings"] = assist_visual_mechanics(
+                    assist_items,
+                    parsed if isinstance(parsed, dict) else {},
+                    mechanics.get("rules") or {},
+                )
+        except Exception:
+            pass
+
     return finalize_scan_from_ml(owner_uid, scan_id, result)
 
 

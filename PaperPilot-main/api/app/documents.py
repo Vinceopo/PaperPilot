@@ -1590,7 +1590,13 @@ MECHANICS_GUIDE_SIGNAL_RE = re.compile(
     r"margin(?:s)?|font\s*size|line\s*spacing|heading\s*[1-9]|page\s*number|"
     r"paper\s*size|typeface|format\s*mechanics|indent(?:ion|ation)?|"
     r"citation\s*style|times\s*new\s*roman|body\s*(?:text|font)\s*size|"
-    r"layout\s+for\s+(?:tables|figures)|pagination"
+    r"layout\s+for\s+(?:tables|figures)|pagination|"
+    # Template-as-guide vocabulary (publisher-agnostic; not ACM-specific).
+    r"submission\s+template|manuscript\s+template|author\s+guidelines?|"
+    r"camera[\s-]?ready|figure\s+caption|table\s+caption|alt[\s-]?text|"
+    r"figure\s+description|styles?\s+gallery|document\s+styles?|"
+    r"formatting\s+(?:requirements?|guidelines?|instructions?)|"
+    r"prepare\s+your\s+(?:manuscript|submission)|word\s+styles?"
     r")\b",
     re.I,
 )
@@ -1621,6 +1627,26 @@ def _mechanics_rule_count(rules: dict | None) -> int:
         elif value not in (None, "", [], {}):
             count += 1
     return count
+
+
+def _looks_like_font_color(value: str) -> bool:
+    """True when text looks like a named/hex font color, not figure-accessibility prose."""
+    text = str(value or "").strip()
+    if not text or len(text) > 48:
+        return False
+    if re.search(r"(?i)\b(?:vision|figures?|grayscale|chart|graph|pattern|indicated)\b", text):
+        return False
+    if re.fullmatch(r"#?[0-9A-Fa-f]{3,8}", text):
+        return True
+    if re.fullmatch(r"(?i)rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)", text):
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?i)(?:black(?:\s*/\s*automatic)?|automatic|white|red|blue|green|navy|"
+            r"gray|grey|dark\s+blue|dark\s+gray|dark\s+grey)",
+            text,
+        )
+    )
 
 
 def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
@@ -1669,10 +1695,20 @@ def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
     if rule_count >= 3 and guide_hits >= 2:
         return
 
+    # Template-as-guide docs: long Word/PDF templates with instruction + style
+    # vocabulary (figure captions, submission template, document styles, …).
+    # Accept when format signals are strong even if manuscript section words appear
+    # in example content — still reject sparse manuscript-only uploads below.
+    template_as_guide = guide_hits >= 4 and (rule_count >= 1 or categories_present >= 1)
+    if template_as_guide and guide_hits >= manuscript_hits:
+        return
+    if template_as_guide and words >= 400 and guide_hits >= 6:
+        return
+
     # Long thesis/paper bodies - deny unless the guide signals are strong.
     if manuscript_hits >= 2 and words >= 400 and (guide_hits < 2 or rule_count < 3):
         raise DocumentError(manuscript_msg)
-    if words >= 1200 and manuscript_hits >= 1 and guide_hits < 3:
+    if words >= 1200 and manuscript_hits >= 1 and guide_hits < 3 and not template_as_guide:
         raise DocumentError(manuscript_msg)
 
     if guide_hits < 2 and rule_count < 2:
@@ -1829,10 +1865,11 @@ def derive_mechanics_rules(text: str) -> dict:
                     indent_val = 0.5
                 else:
                     indent_val = _parse_indent_rule_inches(token)
-        # "0.5 inch TAB" / "TAB = 0.5 inch" — only when a measure is stated beside TAB.
+        # "0.5 inch TAB" / "TAB = 0.5 inch" — only when a measure is stated beside the
+        # whole word TAB (never match "Table" / "TableCaption" from template style lists).
         if indent_val is None:
             tab_with_measure = re.search(
-                rf"(?i)(?:({MEASURE_PATTERN})\s*TAB)"
+                rf"(?i)(?:({MEASURE_PATTERN})\s*\bTAB\b)"
                 rf"|\bTAB\b[^.]{{0,40}}?({MEASURE_PATTERN})"
                 rf"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{{0,40}}?({MEASURE_PATTERN})",
                 flat,
@@ -1844,6 +1881,9 @@ def derive_mechanics_rules(text: str) -> dict:
                         if indent_val is not None:
                             break
         # Bare "one tab" / "indent of one tab" with no equivalent → leave unset (IGNORE).
+    # Reject absurd first-line values (template noise / unit-less digits).
+    if indent_val is not None and not (0 < float(indent_val) <= 1.5):
+        indent_val = None
     if indent_val is not None:
         rules["first_line_indent_inches"] = indent_val
         rules["indention"] = f"{indent_val} inch" if indent_val != 1 else "1 inch"
@@ -1872,13 +1912,19 @@ def derive_mechanics_rules(text: str) -> dict:
     ):
         alignment = "justify"
     elif alignment is None:
+        # Body alignment only. Submission templates often say "flush left" for
+        # display formulas / style tables — those must not become body alignment.
         phrase = re.search(
-            r"\b(?:fully\s+|full[\s-])?justified\b|\bflush[\s-]left\b|\bleft[\s-](?:aligned|justified)\b"
-            r"|\bragged[\s-]right\b",
+            r"(?i)(?:body\s+text|main\s+text|running\s+text|manuscript\s+text)"
+            r"\b[^.]{0,60}\b(?:(?:fully\s+|full[\s-])?justified|flush[\s-]left|"
+            r"left[\s-](?:aligned|justified)|ragged[\s-]right)\b"
+            r"|\b(?:text|paragraph)\s+alignment\b[^.]{0,40}\b(?:justified|left|right|center)\b"
+            r"|\bjustified\s+(?:format|alignment)\b",
             flat,
-            re.I,
         )
-        if phrase:
+        if phrase and not re.search(
+            r"(?i)\b(?:display\s*formula|equation|caption\s+style)\b", phrase.group(0)
+        ):
             alignment = "justify" if re.search(r"justified", phrase.group(0), re.I) and not re.search(
                 r"left", phrase.group(0), re.I
             ) else "left"
@@ -2311,9 +2357,17 @@ def derive_mechanics_rules(text: str) -> dict:
         font["sizes_points"] = [float(font["body_size"])]
     elif "body_size" not in font and "body_size" in blocked_font_keys:
         font.pop("sizes_points", None)
-    font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
-    # Only store color when the guide names it - never invent Black/Automatic.
-    if font_color:
+    # Prefer explicit font/text color labels. Bare "Color" matches prose like
+    # "color vision differences" in figure-accessibility instructions.
+    font_color = _value_after_label(flat, ("Font color", "Text color", "Font colour", "Text colour"), stop)
+    if not font_color:
+        labeled = re.search(
+            r"(?i)\b(?:font|text)\s+colou?r\s*(?::|=)\s*([A-Za-z][A-Za-z /\-]{1,40})",
+            flat,
+        )
+        font_color = labeled.group(1).strip() if labeled else ""
+    # Only store color when the guide names a real color token - never invent Black/Automatic.
+    if font_color and _looks_like_font_color(font_color):
         if re.search(r"black|automatic", font_color, re.I):
             font["color"] = "Black/Automatic"
         else:
@@ -2527,19 +2581,26 @@ def derive_mechanics_rules(text: str) -> dict:
     if figure_layout and len(figure_layout) > 3:
         rules["figure_layout_requirements"] = [figure_layout[:300]]
 
+    # Require citation/style language near APA/MLA/IEEE. Bare org names in sample
+    # bibliography lines (common in submission templates) must not become citation_style.
     citation = re.search(
-        r"\b(APA|MLA|IEEE)\b"
-        r"(?:\s*(?:7th|6th|style|format|citation|referencing))?",
+        r"(?i)(?:\b(?:citation|reference|referencing|bibliography)\s+(?:style|format|system)\b"
+        r"|\bcite\s+(?:using|in|with)\b|\bin\s+(?:APA|MLA|IEEE)\s+(?:style|format)\b)"
+        r".{0,40}\b(APA|MLA|IEEE)\b"
+        r"|\b(APA|MLA|IEEE)\b\s*(?:7th|6th)?\s*(?:edition\s+)?(?:style|format|citation|referencing)\b",
         flat,
-        re.I,
     )
     if citation:
-        rules["citation_style"] = citation.group(1).upper()
+        style_name = next((g for g in citation.groups() if g), None)
+        if style_name:
+            rules["citation_style"] = style_name.upper()
     else:
         citation_raw = _value_after_label(
             flat, ("Citation format", "Citation style", "Citation", "Reference style"), stop
         )
-        if citation_raw:
+        if citation_raw and not re.search(
+            r"(?i)\b(?:doi\.org|proceedings of|in proceedings|retrieved from)\b", citation_raw
+        ):
             style = re.search(r"\b(APA|MLA|IEEE)\b", citation_raw, re.I)
             if style:
                 rules["citation_style"] = style.group(1).upper()

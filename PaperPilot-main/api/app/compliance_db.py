@@ -184,6 +184,35 @@ def init_db() -> None:
     firebase_admin_app()
 
 
+def _sanitize_assist_items(raw) -> list[dict]:
+    """Keep only assist_items shaped for visual/image Gemini assist (never scored)."""
+    if not isinstance(raw, list):
+        return []
+    cleaned: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        requirement = str(entry.get("requirement_text") or "").strip()
+        if not requirement:
+            continue
+        kind = str(entry.get("kind") or "other").strip().lower()
+        if kind not in {"visual", "image", "style", "other"}:
+            kind = "other"
+        item_id = str(entry.get("id") or "").strip() or f"assist_{len(cleaned) + 1}"
+        cleaned.append(
+            {
+                "id": item_id[:80],
+                "category": str(entry.get("category") or kind).strip()[:80] or kind,
+                "requirement_text": requirement[:500],
+                "kind": kind,
+                "assist_required": True,
+            }
+        )
+        if len(cleaned) >= 40:
+            break
+    return cleaned
+
+
 def _mechanics_public(item: dict) -> dict:
     out = {
         "id": item["id"],
@@ -196,6 +225,9 @@ def _mechanics_public(item: dict) -> dict:
     ignored = item.get("ignored_fields")
     if isinstance(ignored, list) and ignored:
         out["ignored_fields"] = [str(value) for value in ignored if str(value or "").strip()]
+    assist = _sanitize_assist_items(item.get("assist_items"))
+    if assist:
+        out["assist_items"] = assist
     return out
 
 
@@ -227,6 +259,7 @@ def create_mechanics(
     parsed: dict,
     rules: dict,
     ignored_fields: list[str] | None = None,
+    assist_items: list[dict] | None = None,
 ) -> dict:
     item_id, created, clean_name = str(uuid.uuid4()), _iso(_now()), name.strip()
     key = _name_key(clean_name)
@@ -251,11 +284,18 @@ def create_mechanics(
         item["ignored_fields"] = [
             str(value).strip() for value in ignored_fields if str(value or "").strip()
         ]
+    cleaned_assist = _sanitize_assist_items(assist_items)
+    if cleaned_assist:
+        item["assist_items"] = cleaned_assist
     # Prefer S3 sidecars so RTDB list/get of mechanics never pulls multi-MB parse trees.
     if artifacts_enabled():
         url = try_upload_json_artifact(
             mechanics_public_id(owner_uid, item_id),
-            {"extracted_text": text, "parsed_data": parsed or {}},
+            {
+                "extracted_text": text,
+                "parsed_data": parsed or {},
+                "assist_items": cleaned_assist,
+            },
         )
         if url:
             item["mechanics_json_url"] = url
@@ -283,6 +323,7 @@ def update_mechanics(
     name: str | None = None,
     rules: dict | None = None,
     ignored_fields: list[str] | None = None,
+    assist_items: list[dict] | None = None,
 ) -> dict | None:
     ref = _reference(f"{ROOT}/mechanics/{owner_uid}/{mechanics_id}")
     row = ref.get()
@@ -324,6 +365,8 @@ def update_mechanics(
         updates["ignored_fields"] = [
             str(value).strip() for value in ignored_fields if str(value or "").strip()
         ]
+    if assist_items is not None:
+        updates["assist_items"] = _sanitize_assist_items(assist_items)
     ref.update(updates)
     updated = ref.get() or {**row, **updates}
     return _mechanics_public(updated)
@@ -1966,6 +2009,8 @@ SCAN_RESULT_FIELDS = (
     "units_passed",
     "units_failed",
     "scoring",
+    # Non-scoring Gemini visual assist (never fed into checklist math).
+    "assist_findings",
 )
 _SECTION_COUNT_FIELDS = ("units_checked", "units_passed", "units_failed")
 

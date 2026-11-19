@@ -93,6 +93,7 @@ from app.mechanics_validate import (
 from app.emailer import email_delivery_configured, send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
+from app.mechanics_gemini import understand_mechanics_with_gemini
 from app.otp import (
     PURPOSES,
     can_send,
@@ -486,6 +487,18 @@ async def mechanics_extract(
             )
         rules = _clamp_citation_style_for_plan(derive_mechanics_rules(text), uid)
         assert_mechanics_guide(text, rules)
+        style_names = sorted(
+            {
+                str(para.get("style") or "").strip()
+                for para in (parsed.get("paragraphs") or [])
+                if isinstance(para, dict) and str(para.get("style") or "").strip()
+            }
+        )
+        understood = understand_mechanics_with_gemini(text, rules, style_names=style_names)
+        rules = _clamp_citation_style_for_plan(
+            normalize_mechanics_rules(understood.get("rules") or rules), uid
+        )
+        assist_items = understood.get("assist_items") or []
         pages = _document_preview_pages(parsed, text)
         return {
             "name": Path(filename).stem[:200],
@@ -498,6 +511,11 @@ async def mechanics_extract(
             or len(pages),
             "pages": pages,
             "rules": rules,
+            "assist_items": assist_items,
+            "guide_kind": understood.get("guide_kind") or "unknown",
+            "confidence": understood.get("confidence") or 0,
+            "gemini_used": bool(understood.get("gemini_used")),
+            "gemini_available": bool(understood.get("gemini_available")),
         }
     except S3StorageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
@@ -543,6 +561,7 @@ def mechanics_save(body: MechanicsSaveRequest, uid: str = Depends(authenticated_
             parsed,
             rules,
             ignored_fields=body.ignored_fields,
+            assist_items=body.assist_items,
         )
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
@@ -583,8 +602,26 @@ async def mechanics_create(
             raise DocumentError("A mechanics name is required.")
         rules = _clamp_citation_style_for_plan(derive_mechanics_rules(text), uid)
         assert_mechanics_guide(text, rules)
+        style_names = sorted(
+            {
+                str(para.get("style") or "").strip()
+                for para in (parsed.get("paragraphs") or [])
+                if isinstance(para, dict) and str(para.get("style") or "").strip()
+            }
+        )
+        understood = understand_mechanics_with_gemini(text, rules, style_names=style_names)
+        rules = _clamp_citation_style_for_plan(
+            normalize_mechanics_rules(understood.get("rules") or rules), uid
+        )
         item = create_mechanics(
-            uid, item_name[:200], filename, file_type, text, parsed, rules
+            uid,
+            item_name[:200],
+            filename,
+            file_type,
+            text,
+            parsed,
+            rules,
+            assist_items=understood.get("assist_items") or [],
         )
         return item
     except S3StorageError as exc:
@@ -601,7 +638,12 @@ def mechanics_update(
     body: MechanicsUpdateRequest,
     uid: str = Depends(authenticated_uid),
 ):
-    if body.name is None and body.rules is None and body.ignored_fields is None:
+    if (
+        body.name is None
+        and body.rules is None
+        and body.ignored_fields is None
+        and body.assist_items is None
+    ):
         raise HTTPException(status_code=400, detail="Provide a name and/or rules to update.")
     name = body.name.strip() if body.name is not None else None
     rules = (
@@ -623,6 +665,7 @@ def mechanics_update(
             name=name,
             rules=rules,
             ignored_fields=body.ignored_fields,
+            assist_items=body.assist_items,
         )
     except MechanicsNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
@@ -897,6 +940,7 @@ def compliance_scan_create(
         parsed_for_scan,
         _scan_rules(mechanics["rules"], mechanics.get("ignored_fields")),
         _feature_tier(subscription["tier"]),
+        assist_items=mechanics.get("assist_items") or [],
     )
     extra = {
         "page_count": result.get("page_count") or 0,

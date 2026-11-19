@@ -390,6 +390,7 @@ export function saveMechanicsProfile({
   fileType,
   extractedText,
   ignoredFields,
+  assistItems,
 }) {
   return authorizedFetch("/mechanics/save", {
     method: "POST",
@@ -400,6 +401,7 @@ export function saveMechanicsProfile({
       file_type: fileType || undefined,
       extracted_text: extractedText || undefined,
       ignored_fields: Array.isArray(ignoredFields) ? ignoredFields : undefined,
+      assist_items: Array.isArray(assistItems) ? assistItems : undefined,
     }),
   });
 }

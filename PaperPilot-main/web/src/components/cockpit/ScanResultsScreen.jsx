@@ -184,6 +184,7 @@ export default function ScanResultsScreen({
     unitsPassed,
     unitsFailed,
     scoringConsistency = null,
+    assistFindings = [],
   } = result;
 
   const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
@@ -420,6 +421,41 @@ export default function ScanResultsScreen({
         documentLoading={documentLoading}
         issueTotal={nonCompliantUnits}
       />
+
+      {Array.isArray(assistFindings) && assistFindings.length > 0 ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <h3 className="text-lg font-bold text-slate-900">AI assist findings</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Visual / image / style checks from your guide. These do not change the score.
+          </p>
+          <ul className="mt-4 space-y-3">
+            {assistFindings.map((item) => (
+              <li
+                key={item.id}
+                className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                    {item.kind || "other"}
+                  </span>
+                  <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    {String(item.status || "unclear").replace(/_/g, " ")}
+                  </span>
+                  <span className="text-sm font-semibold text-slate-800">{item.title}</span>
+                </div>
+                {item.summary ? (
+                  <p className="mt-1.5 text-sm text-slate-600">{item.summary}</p>
+                ) : null}
+                {item.recommendation ? (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Suggestion: {item.recommendation}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }
