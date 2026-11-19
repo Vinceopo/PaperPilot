@@ -247,7 +247,10 @@ def run_analyze_job(
 
         parsed = parse_document(raw, file_type, on_progress=on_page)
 
-        rules = normalize_mechanics_rules(mechanics_rules)
+        # Custom mechanics payloads must be dict-shaped before normalize/scan.
+        rules = normalize_mechanics_rules(
+            mechanics_rules if isinstance(mechanics_rules, dict) else {}
+        )
 
         def on_check(done: int, total: int, label: str) -> None:
             percent = 48 + int(36 * done / max(total, 1))

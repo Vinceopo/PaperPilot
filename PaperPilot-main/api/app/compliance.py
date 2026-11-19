@@ -4110,6 +4110,11 @@ def _filter_unset_heading_font_issues(issues: list[dict], mechanics_rules: dict)
     return kept
 
 
+def _coerce_mechanics_rules(mechanics_rules) -> dict:
+    """Custom/partial mechanics must always be a dict — never crash scan startup."""
+    return mechanics_rules if isinstance(mechanics_rules, dict) else {}
+
+
 def run_compliance_scan(
     parsed: dict,
     mechanics_rules: dict,
@@ -4117,6 +4122,8 @@ def run_compliance_scan(
     on_progress=None,
     assist_items: list | None = None,
 ) -> dict:
+    mechanics_rules = _coerce_mechanics_rules(mechanics_rules)
+    parsed = parsed if isinstance(parsed, dict) else {"text": "", "metadata": {}, "pages": []}
     units = _document_units(parsed, mechanics_rules)
     _annotate_roles(units, mechanics_rules)
     _mark_title_page(units, mechanics_rules)
