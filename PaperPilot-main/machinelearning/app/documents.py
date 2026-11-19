@@ -1928,13 +1928,19 @@ def derive_mechanics_rules(text: str) -> dict:
     ):
         alignment = "justify"
     elif alignment is None:
+        # Body alignment only. Submission templates often say "flush left" for
+        # display formulas / style tables — those must not become body alignment.
         phrase = re.search(
-            r"\b(?:fully\s+|full[\s-])?justified\b|\bflush[\s-]left\b|\bleft[\s-](?:aligned|justified)\b"
-            r"|\bragged[\s-]right\b",
+            r"(?i)(?:body\s+text|main\s+text|running\s+text|manuscript\s+text)"
+            r"\b[^.]{0,60}\b(?:(?:fully\s+|full[\s-])?justified|flush[\s-]left|"
+            r"left[\s-](?:aligned|justified)|ragged[\s-]right)\b"
+            r"|\b(?:text|paragraph)\s+alignment\b[^.]{0,40}\b(?:justified|left|right|center)\b"
+            r"|\bjustified\s+(?:format|alignment)\b",
             flat,
-            re.I,
         )
-        if phrase:
+        if phrase and not re.search(
+            r"(?i)\b(?:display\s*formula|equation|caption\s+style)\b", phrase.group(0)
+        ):
             alignment = "justify" if re.search(r"justified", phrase.group(0), re.I) and not re.search(
                 r"left", phrase.group(0), re.I
             ) else "left"
@@ -2583,21 +2589,32 @@ def derive_mechanics_rules(text: str) -> dict:
     if figure_layout and len(figure_layout) > 3:
         rules["figure_layout_requirements"] = [figure_layout[:300]]
 
+    # Require citation/style language near APA/MLA/IEEE. Venue names like IEEE 802.11
+    # or sample bibliography publishers must not become citation_style.
     citation = re.search(
-        r"\b(APA|MLA|IEEE)\b"
-        r"(?:\s*(?:7th|6th|style|format|citation|referencing))?",
+        r"(?i)(?:\b(?:citation|reference|referencing|bibliography)\s+(?:style|format|system)\b"
+        r"|\bcite\s+(?:using|in|with)\b|\bin\s+(?:APA|MLA|IEEE)\s+(?:style|format)\b)"
+        r".{0,40}\b(APA|MLA|IEEE)\b"
+        r"|\b(APA|MLA|IEEE)\b\s*(?:7th|6th)?\s*(?:edition\s+)?(?:style|format|citation|referencing)\b",
         flat,
-        re.I,
     )
     if citation:
-        rules["citation_style"] = citation.group(1).upper()
+        style_name = next((g for g in citation.groups() if g), None)
+        if style_name:
+            rules["citation_style"] = style_name.upper()
     else:
         citation_raw = _value_after_label(
             flat, ("Citation format", "Citation style", "Citation", "Reference style"), stop
         )
-        if citation_raw:
+        if citation_raw and not re.search(
+            r"(?i)\b(?:doi\.org|proceedings of|in proceedings|retrieved from|"
+            r"ieee\s+\d|ieee\s+transactions|ieee\s+802)\b",
+            citation_raw,
+        ):
             style = re.search(r"\b(APA|MLA|IEEE)\b", citation_raw, re.I)
-            if style:
+            if style and re.search(
+                r"(?i)\b(?:style|format|citation|referencing|apa|mla)\b", citation_raw
+            ):
                 rules["citation_style"] = style.group(1).upper()
 
     if field_sources:

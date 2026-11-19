@@ -77,6 +77,7 @@ from app.paymongo import (
 from app.paymongo_events import fulfill_checkout_paid, handle_paymongo_event
 from app.documents import (
     DocumentError,
+    apply_template_extract_guards,
     assert_mechanics_guide,
     build_sample_mechanics_docx,
     derive_mechanics_rules,
@@ -485,19 +486,24 @@ async def mechanics_extract(
                 "No extractable text was found in the document. "
                 "Use a text-based PDF or DOCX (not a scanned image-only PDF)."
             )
-        rules = _clamp_citation_style_for_plan(derive_mechanics_rules(text), uid)
+        paragraphs = parsed.get("paragraphs") if isinstance(parsed.get("paragraphs"), list) else []
+        rules = apply_template_extract_guards(derive_mechanics_rules(text), text, paragraphs)
+        rules = _clamp_citation_style_for_plan(rules, uid)
         assert_mechanics_guide(text, rules)
         style_names = sorted(
             {
                 str(para.get("style") or "").strip()
-                for para in (parsed.get("paragraphs") or [])
+                for para in paragraphs
                 if isinstance(para, dict) and str(para.get("style") or "").strip()
             }
         )
         understood = understand_mechanics_with_gemini(text, rules, style_names=style_names)
-        rules = _clamp_citation_style_for_plan(
-            normalize_mechanics_rules(understood.get("rules") or rules), uid
+        rules = apply_template_extract_guards(
+            normalize_mechanics_rules(understood.get("rules") or rules),
+            text,
+            paragraphs,
         )
+        rules = _clamp_citation_style_for_plan(rules, uid)
         assist_items = understood.get("assist_items") or []
         conflicts = understood.get("conflicts") or []
         pages = _document_preview_pages(parsed, text)
@@ -602,19 +608,24 @@ async def mechanics_create(
         item_name = (body.name or Path(filename).stem).strip()
         if not item_name:
             raise DocumentError("A mechanics name is required.")
-        rules = _clamp_citation_style_for_plan(derive_mechanics_rules(text), uid)
+        paragraphs = parsed.get("paragraphs") if isinstance(parsed.get("paragraphs"), list) else []
+        rules = apply_template_extract_guards(derive_mechanics_rules(text), text, paragraphs)
+        rules = _clamp_citation_style_for_plan(rules, uid)
         assert_mechanics_guide(text, rules)
         style_names = sorted(
             {
                 str(para.get("style") or "").strip()
-                for para in (parsed.get("paragraphs") or [])
+                for para in paragraphs
                 if isinstance(para, dict) and str(para.get("style") or "").strip()
             }
         )
         understood = understand_mechanics_with_gemini(text, rules, style_names=style_names)
-        rules = _clamp_citation_style_for_plan(
-            normalize_mechanics_rules(understood.get("rules") or rules), uid
+        rules = apply_template_extract_guards(
+            normalize_mechanics_rules(understood.get("rules") or rules),
+            text,
+            paragraphs,
         )
+        rules = _clamp_citation_style_for_plan(rules, uid)
         item = create_mechanics(
             uid,
             item_name[:200],

@@ -187,8 +187,17 @@ class MechanicsGeminiAssistTests(unittest.TestCase):
         color = str(font.get("color") or "").lower()
         self.assertNotIn("vision", color)
         self.assertNotIn("first_line_indent_inches", normalized)
-        # Body alignment must not come from DisplayFormula "flush left" style notes.
+        # Narrative alone must not invent left from DisplayFormula "flush left".
         self.assertNotIn("alignment", normalized)
+
+        from app.documents import apply_template_extract_guards
+
+        guarded = apply_template_extract_guards(
+            normalized, text, parsed.get("paragraphs") or []
+        )
+        # Embodied Para jc=both wins over any narrative left guess.
+        self.assertEqual(guarded.get("alignment"), "justify")
+        self.assertNotIn("citation_style", guarded)
 
         assist = harvest_assist_items_from_guide(text)
         ids = {item["id"] for item in assist}

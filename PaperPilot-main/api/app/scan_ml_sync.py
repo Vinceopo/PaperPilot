@@ -198,11 +198,26 @@ def hydrate_scan_from_ml(owner_uid: str, scan_id: str) -> dict | None:
                 ) or {}
                 parsed = version.get("parsed_data") if isinstance(version, dict) else {}
                 result = dict(result)
-                result["assist_findings"] = assist_visual_mechanics(
-                    assist_items,
-                    parsed if isinstance(parsed, dict) else {},
-                    mechanics.get("rules") or {},
-                )
+                try:
+                    result["assist_findings"] = assist_visual_mechanics(
+                        assist_items,
+                        parsed if isinstance(parsed, dict) else {},
+                        mechanics.get("rules") or {},
+                    )
+                except Exception:
+                    result["assist_findings"] = [
+                        {
+                            "assist_item_id": item.get("id") if isinstance(item, dict) else None,
+                            "kind": (item.get("kind") if isinstance(item, dict) else None) or "other",
+                            "title": "AI assist unavailable",
+                            "summary": "Gemini assist could not run for this requirement.",
+                            "recommendation": "Review this visual/image requirement manually.",
+                            "confidence": 0.0,
+                            "status": "unavailable",
+                        }
+                        for item in assist_items[:40]
+                        if isinstance(item, dict)
+                    ]
         except Exception:
             pass
 

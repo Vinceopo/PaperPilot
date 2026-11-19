@@ -87,10 +87,14 @@ into assist_items.
 
 Template-as-guide caution:
 - Do NOT set citation_style from publisher names that appear only in sample references.
+- Do NOT set citation_style from venue / standard names (e.g. IEEE 802.11, IEEE Transactions)
+  unless the guide explicitly says citation style APA, MLA, or IEEE.
 - Do NOT set font.color from accessibility prose about color vision / grayscale figures.
 - Do NOT invent margins, font sizes, or indentation the guide never states numerically.
 - Prefer assist_items for figure/table caption placement, alt-text / figure descriptions,
   float-element placement, and Word style instructions that the rule checker cannot score.
+- Prefer embodied DOCX body alignment (e.g. Para justify) over narrative \"flush left\"
+  examples that apply only to formulas or style tables.
 
 Return ONLY valid JSON with keys:
   rules (object — schema fields only),
@@ -746,6 +750,49 @@ def assist_visual_mechanics(
             )
             if len(findings) >= 40:
                 break
+        # Never silent when assist_items exist: cover unmarked items + empty Gemini replies.
+        covered = {
+            str(entry.get("assist_item_id") or "").strip()
+            for entry in findings
+            if entry.get("assist_item_id")
+        }
+        for item in items[:40]:
+            item_id = str(item.get("id") or "").strip()
+            if item_id and item_id in covered:
+                continue
+            req = str(item.get("requirement_text") or item.get("category") or "Visual/image rule").strip()
+            findings.append(
+                {
+                    "assist_item_id": item_id or None,
+                    "kind": item.get("kind") or "other",
+                    "title": (req[:120] if req else "Assist finding"),
+                    "summary": (
+                        "AI assist reviewed this marked guide rule and did not flag a specific issue."
+                        if findings_raw
+                        else "AI assist returned no finding for this marked guide rule."
+                    ),
+                    "recommendation": "Review this visual/image requirement manually if unsure.",
+                    "confidence": 0.2,
+                    "status": "looks_ok" if findings_raw else "unclear",
+                }
+            )
+            if len(findings) >= 40:
+                break
+        if not findings:
+            findings = [
+                {
+                    "assist_item_id": None,
+                    "kind": "other",
+                    "title": "No assist issues flagged",
+                    "summary": (
+                        "Custom guide assist items were present; AI assist did not flag "
+                        "specific visual/image issues for this manuscript."
+                    ),
+                    "recommendation": "Review marked visual/image guide rules manually if needed.",
+                    "confidence": 0.2,
+                    "status": "looks_ok",
+                }
+            ]
         return findings
     except Exception:
         return [

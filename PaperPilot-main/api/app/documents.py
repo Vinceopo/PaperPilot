@@ -1378,6 +1378,97 @@ def parse_alignment(value) -> str | None:
     return None
 
 
+# Explicit citation-style naming only — venue strings like "IEEE 802.11" must not fill this.
+_CITATION_STYLE_EXPLICIT_RE = re.compile(
+    r"(?i)(?:\b(?:citation|reference|referencing|bibliography)\s+(?:style|format|system)\b"
+    r"|\bcite\s+(?:using|in|with)\b|\bin\s+(?:APA|MLA|IEEE)\s+(?:style|format)\b)"
+    r".{0,40}\b(APA|MLA|IEEE)\b"
+    r"|\b(APA|MLA|IEEE)\b\s*(?:7th|6th)?\s*(?:edition\s+)?(?:style|format|citation|referencing)\b"
+)
+
+_BODY_STYLE_NAMES = frozenset(
+    {
+        "para",
+        "normal",
+        "body text",
+        "bodytext",
+        "paracontinue",
+        "postheadpara",
+        "body",
+        "manuscript",
+        "text body",
+        "plaintext",
+    }
+)
+
+
+def citation_style_explicitly_named(text: str | None) -> str | None:
+    """Return APA/MLA/IEEE only when the guide explicitly names a citation style."""
+    flat = _flatten_mechanics_text(text or "")
+    if not flat:
+        return None
+    match = _CITATION_STYLE_EXPLICIT_RE.search(flat)
+    if not match:
+        return None
+    style = next((g for g in match.groups() if g), None)
+    return style.upper() if style else None
+
+
+def embodied_body_alignment_from_paragraphs(paragraphs: list | None) -> str | None:
+    """Majority body-paragraph alignment from DOCX styles (e.g. Para jc=both → justify)."""
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    for para in paragraphs or []:
+        if not isinstance(para, dict):
+            continue
+        style = str(para.get("style") or "").strip().lower()
+        if style not in _BODY_STYLE_NAMES and not style.startswith("para"):
+            continue
+        formatting = para.get("formatting") if isinstance(para.get("formatting"), dict) else {}
+        align = str(formatting.get("alignment") or "").strip().lower()
+        if align in {"left", "right", "center", "justify"}:
+            counts[align] += 1
+    if not counts:
+        return None
+    total = sum(counts.values())
+    # Prefer embodied justify when it is a real body signal (template-as-guide DOCX).
+    if counts.get("justify", 0) >= max(3, total // 3):
+        return "justify"
+    winner, n = counts.most_common(1)[0]
+    if n >= 3 and n * 2 >= total:
+        return winner
+    return None
+
+
+def apply_template_extract_guards(
+    rules: dict | None,
+    text: str | None = None,
+    paragraphs: list | None = None,
+) -> dict:
+    """Publisher-agnostic guards for template-as-guide extracts.
+
+    - Leave citation_style blank unless the guide explicitly names APA/MLA/IEEE
+      (do not keep venue inferences like IEEE 802.11).
+    - When DOCX body styles embody justify, prefer that over a narrative \"left\" guess.
+    """
+    out = dict(rules or {})
+    explicit = citation_style_explicitly_named(text)
+    if explicit:
+        out["citation_style"] = explicit
+    else:
+        out.pop("citation_style", None)
+
+    embodied = embodied_body_alignment_from_paragraphs(paragraphs)
+    current = str(out.get("alignment") or "").strip().lower() or None
+    if embodied == "justify" and current in {None, "left"}:
+        # Conflict or empty: embodied Para/body justify wins over a narrative left guess.
+        out["alignment"] = "justify"
+    elif embodied and current is None:
+        out["alignment"] = embodied
+    return out
+
+
 def _parse_spacing(value: str) -> float | None:
     return parse_line_spacing(value)
 
@@ -2640,28 +2731,24 @@ def derive_mechanics_rules(text: str) -> dict:
     if figure_layout and len(figure_layout) > 3:
         rules["figure_layout_requirements"] = [figure_layout[:300]]
 
-    # Require citation/style language near APA/MLA/IEEE. Bare org names in sample
-    # bibliography lines (common in submission templates) must not become citation_style.
-    citation = re.search(
-        r"(?i)(?:\b(?:citation|reference|referencing|bibliography)\s+(?:style|format|system)\b"
-        r"|\bcite\s+(?:using|in|with)\b|\bin\s+(?:APA|MLA|IEEE)\s+(?:style|format)\b)"
-        r".{0,40}\b(APA|MLA|IEEE)\b"
-        r"|\b(APA|MLA|IEEE)\b\s*(?:7th|6th)?\s*(?:edition\s+)?(?:style|format|citation|referencing)\b",
-        flat,
-    )
-    if citation:
-        style_name = next((g for g in citation.groups() if g), None)
-        if style_name:
-            rules["citation_style"] = style_name.upper()
+    # Require citation/style language near APA/MLA/IEEE. Bare org / venue names
+    # (IEEE 802.11, IEEE Transactions, sample bibliography lines) must not fill this.
+    explicit_citation = citation_style_explicitly_named(flat)
+    if explicit_citation:
+        rules["citation_style"] = explicit_citation
     else:
         citation_raw = _value_after_label(
             flat, ("Citation format", "Citation style", "Citation", "Reference style"), stop
         )
         if citation_raw and not re.search(
-            r"(?i)\b(?:doi\.org|proceedings of|in proceedings|retrieved from)\b", citation_raw
+            r"(?i)\b(?:doi\.org|proceedings of|in proceedings|retrieved from|"
+            r"ieee\s+\d|ieee\s+transactions|ieee\s+802)\b",
+            citation_raw,
         ):
             style = re.search(r"\b(APA|MLA|IEEE)\b", citation_raw, re.I)
-            if style:
+            if style and re.search(
+                r"(?i)\b(?:style|format|citation|referencing|apa|mla)\b", citation_raw
+            ):
                 rules["citation_style"] = style.group(1).upper()
 
     if field_sources:

@@ -414,6 +414,9 @@ export default function ManuscriptDetailModal({
                     {band.label}
                   </span>
                 </div>
+                <p className="mt-3 text-[11px] leading-snug text-slate-500">
+                  Based on filled Format Fields only — not a full publisher-template match.
+                </p>
               </div>
 
               <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,41,0.04)]">

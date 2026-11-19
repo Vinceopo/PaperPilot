@@ -385,6 +385,12 @@ export function mapComplianceScanToResult(scan, meta = {}) {
           confidence: numberOrNull(item.confidence),
         }))
       : [],
+    // Custom uploads with assist_items must never look silent on results/PDF.
+    assistExpected: Boolean(
+      meta.assistExpected
+        || (Array.isArray(meta.assistItems) && meta.assistItems.length > 0)
+        || (Array.isArray(scan?.assist_findings) && scan.assist_findings.length > 0)
+    ),
     pageCount: Number(scan?.page_count || meta.pageCount || maxIssuePage || 0),
     pagination: scan?.pagination || meta.pagination || null,
     scanId: scan?.id,

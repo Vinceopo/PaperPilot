@@ -6,8 +6,13 @@ import json
 import unittest
 from unittest.mock import patch
 
-from app.documents import derive_mechanics_rules, normalize_mechanics_rules
+from app.documents import (
+    apply_template_extract_guards,
+    derive_mechanics_rules,
+    normalize_mechanics_rules,
+)
 from app.mechanics_gemini import (
+    assist_visual_mechanics,
     expand_sideless_margins,
     finalize_understood_mechanics,
     harvest_assist_items_from_guide,
@@ -221,6 +226,53 @@ class AssistRoutingTests(unittest.TestCase):
         self.assertIn("assist_figure_grayscale_usable", ids)
         normalized = normalize_mechanics_rules({"assist_items": items})
         self.assertNotIn("assist_items", normalized)
+
+
+class TemplateExtractGuardTests(unittest.TestCase):
+    def test_ieee_venue_does_not_set_citation_style(self):
+        guide = (
+            "Author guidelines / manuscript template.\n"
+            "Sample reference: Smith, IEEE 802.11 wireless networks, IEEE Transactions on X, 2020.\n"
+            "Margins: 1 inch on all sides.\n"
+        )
+        rules = derive_mechanics_rules(guide)
+        guarded = apply_template_extract_guards(rules, guide, [])
+        self.assertNotIn("citation_style", guarded)
+
+    def test_explicit_citation_style_is_kept(self):
+        guide = "Citation style: APA. Margins: 1 inch on all sides."
+        rules = derive_mechanics_rules(guide)
+        guarded = apply_template_extract_guards(rules, guide, [])
+        self.assertEqual(guarded.get("citation_style"), "APA")
+
+    def test_embodied_para_justify_beats_narrative_left(self):
+        guide = "Flush left for display formulas. Alignment: left."
+        paragraphs = [
+            {
+                "style": "Para",
+                "formatting": {"alignment": "justify"},
+                "text": "Body paragraph " + str(i),
+            }
+            for i in range(8)
+        ]
+        rules = {"alignment": "left", "citation_style": "IEEE"}
+        guarded = apply_template_extract_guards(rules, guide, paragraphs)
+        self.assertEqual(guarded.get("alignment"), "justify")
+        self.assertNotIn("citation_style", guarded)
+
+    def test_assist_findings_never_silent_when_items_exist(self):
+        items = [
+            {
+                "id": "assist_figure_alt_text",
+                "kind": "image",
+                "requirement_text": "Provide alt-text for figures",
+                "assist_required": True,
+            }
+        ]
+        with patch("app.mechanics_gemini._gemini_ready", return_value=False):
+            findings = assist_visual_mechanics(items, {"text": "Figure 1: x"}, {})
+        self.assertGreaterEqual(len(findings), 1)
+        self.assertEqual(findings[0]["status"], "unavailable")
 
 
 if __name__ == "__main__":

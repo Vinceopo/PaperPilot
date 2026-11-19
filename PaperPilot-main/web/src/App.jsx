@@ -500,6 +500,7 @@ export default function App() {
     const mechanicsId = selectedMechanicsIdRef.current;
     const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
     const citationStyle = supportedCitationStyle(profile?.rules?.citation_style);
+    const assistItems = Array.isArray(profile?.assist_items) ? profile.assist_items : [];
     return {
       manuscriptId,
       versionId,
@@ -507,6 +508,8 @@ export default function App() {
       formatMechanicsName: String(profile?.name || "").trim(),
       mechanicsRules:
         profile?.rules && typeof profile.rules === "object" ? profile.rules : null,
+      assistItems,
+      assistExpected: assistItems.length > 0,
       pageCount: version?.page_count,
       versionNumber: version?.version_number,
       cloudinaryUrl: version?.cloudinary_url || version?.cloudinaryUrl || "",
@@ -1265,6 +1268,7 @@ export default function App() {
       const profile = mechanicsId
         ? mechanicsRef.current.find((item) => item.id === mechanicsId)
         : null;
+      const assistItems = Array.isArray(profile?.assist_items) ? profile.assist_items : [];
       const full = mapComplianceScanToResult(scan, {
         documentId: manuscript?.id,
         documentTitle: manuscript?.title,
@@ -1277,6 +1281,8 @@ export default function App() {
         mechanicsRules:
           version.scanResult?.mechanicsRules ||
           (profile?.rules && typeof profile.rules === "object" ? profile.rules : null),
+        assistItems,
+        assistExpected: assistItems.length > 0,
         mechanicsId,
         versionId: version.versionId || version.scanResult?.versionId,
         documentName: version.scanResult?.documentName,

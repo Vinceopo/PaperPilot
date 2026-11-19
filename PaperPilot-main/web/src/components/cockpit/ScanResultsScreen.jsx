@@ -185,6 +185,7 @@ export default function ScanResultsScreen({
     unitsFailed,
     scoringConsistency = null,
     assistFindings = [],
+    assistExpected = false,
   } = result;
 
   const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
@@ -334,6 +335,9 @@ export default function ScanResultsScreen({
             >
               {band.label}
             </span>
+            <p className="mt-3 max-w-xs text-[11px] leading-snug text-slate-500">
+              Based on filled Format Fields only — not a full publisher-template match.
+            </p>
           </div>
 
           <div className="space-y-4">
@@ -426,7 +430,7 @@ export default function ScanResultsScreen({
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
           <h3 className="text-lg font-bold text-slate-900">AI assist findings</h3>
           <p className="mt-1 text-xs text-slate-500">
-            Visual / image / style checks from your guide. These do not change the score.
+            Visual / image / style checks from your custom guide. These do not change the score.
           </p>
           <ul className="mt-4 space-y-3">
             {assistFindings.map((item) => (
@@ -454,6 +458,17 @@ export default function ScanResultsScreen({
               </li>
             ))}
           </ul>
+        </div>
+      ) : assistExpected ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <h3 className="text-lg font-bold text-slate-900">AI assist findings</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Visual / image / style checks from your custom guide. These do not change the score.
+          </p>
+          <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            No assist findings were returned for this scan (none flagged, or assist unavailable).
+            Re-run the scan if you expected visual notes here.
+          </p>
         </div>
       ) : null}
     </div>
