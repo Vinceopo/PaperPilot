@@ -153,10 +153,9 @@ export function useScanFlow({
   /** After analyzing UI finishes, go straight to the full results page (no summary modal). */
   const revealSummary = useCallback(() => {
     if (!resultRef.current) return;
-    // Keep the local picker file until a remote URL exists — clearing it early left
-    // Issue Tracing & XAI with nothing to render while cloudinaryUrl was still backfilling.
-    const hasRemote = Boolean(String(resultRef.current.cloudinaryUrl || "").trim());
-    if (hasRemote) setFileInner(null);
+    // Keep the local picker file for Issue Tracing & XAI — re-downloading the remote
+    // URL after analyse made the preview blank for a long time (base64 bridge).
+    // My Manuscripts → Results still clears the file in showSavedResult.
     setStep((current) => (current === "analyzing" ? "results" : current));
   }, []);
 

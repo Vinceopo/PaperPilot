@@ -281,16 +281,17 @@ export default function IssueTracingSection({
         <DocumentDisplayFrame height={previewHeight} style={styles.previewBorder}>
           {/* Same TraceDocumentViewer as upload manuscript preview; highlight only when an issue is selected. */}
           <TraceDocumentViewer
+            // Prefer a stable local key after analyse so we do not remount onto a slow remote download.
             key={
-              result?.cloudinaryUrl
-                ? `remote:${result.cloudinaryUrl}`
-                : file?.uri
-                  ? `local:${file.uri}`
+              file?.uri
+                ? `local:${file.uri}`
+                : result?.cloudinaryUrl
+                  ? `remote:${result.cloudinaryUrl}`
                   : "preview"
             }
-            file={result?.cloudinaryUrl ? null : file}
+            file={file}
             documentLoading={documentLoading}
-            documentUrl={result?.cloudinaryUrl || ""}
+            documentUrl={file?.uri ? "" : result?.cloudinaryUrl || ""}
             documentName={result?.documentName || file?.name || ""}
             preview={result?.documentPreview}
             pageCount={pageCount}

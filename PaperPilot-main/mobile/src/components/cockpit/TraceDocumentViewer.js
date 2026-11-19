@@ -86,7 +86,12 @@ async function base64FromLocalUri(uri) {
 }
 
 async function readDocumentBase64({ file, url, name }) {
-  // Prefer remote download when available — same reliable path as Issue Tracing.
+  // Prefer the local picker/cache file first — remote download + base64 bridge is slow
+  // on Android and was leaving Issue Tracing blank for a long time after analyse.
+  if (file?.uri) {
+    const local = await base64FromLocalUri(file.uri);
+    if (local) return local;
+  }
   if (url) {
     try {
       const safe = String(name || "document").replace(/[^\w.-]+/g, "_");
@@ -95,10 +100,9 @@ async function readDocumentBase64({ file, url, name }) {
       const remote = await downloaded.base64();
       if (remote) return remote;
     } catch {
-      // Fall through to local file when the download path fails.
+      // Remote path failed; nothing else to try.
     }
   }
-  if (file?.uri) return base64FromLocalUri(file.uri);
   return "";
 }
 
@@ -258,6 +262,7 @@ export default function TraceDocumentViewer({
   const [ready, setReady] = useState(false);
   const webRef = useRef(null);
   const sendingRef = useRef(false);
+  const nativeFallbackRef = useRef(false);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
 
@@ -265,12 +270,15 @@ export default function TraceDocumentViewer({
     setFailed(!canRender);
     setReady(false);
     sendingRef.current = false;
+    nativeFallbackRef.current = false;
   }, [canRender, file?.uri, documentUrl, kind]);
 
-  // CDN script tags can hang without WebView onError — fail closed so parents unlock Upload.
+  // CDN / large-file load can exceed 12s on mobile — give remote downloads more time,
+  // but still fail closed so Upload / Results are not stuck forever.
   useEffect(() => {
     if (!canRender || ready || failed) return undefined;
-    const timer = setTimeout(() => setFailed(true), 12000);
+    const waitMs = file?.uri ? 20000 : 60000;
+    const timer = setTimeout(() => setFailed(true), waitMs);
     return () => clearTimeout(timer);
   }, [canRender, ready, failed, file?.uri, documentUrl, kind]);
 
@@ -292,18 +300,33 @@ export default function TraceDocumentViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, highlight, scrollToken]);
 
+  async function sendDocumentViaBase64(web) {
+    const b64 = await readDocumentBase64({ file, url: documentUrl, name: documentName });
+    if (!b64 || !web) throw new Error("empty");
+    web.injectJavaScript(`PP.begin(${JSON.stringify(kind)}); true;`);
+    for (let i = 0; i < b64.length; i += CHUNK) {
+      web.injectJavaScript(`PP.chunk("${b64.slice(i, i + CHUNK)}"); true;`);
+    }
+    web.injectJavaScript("PP.end(); true;");
+  }
+
   async function sendDocument() {
     if (sendingRef.current) return;
     sendingRef.current = true;
     try {
-      const b64 = await readDocumentBase64({ file, url: documentUrl, name: documentName });
       const web = webRef.current;
-      if (!b64 || !web) throw new Error("empty");
-      web.injectJavaScript(`PP.begin(${JSON.stringify(kind)}); true;`);
-      for (let i = 0; i < b64.length; i += CHUNK) {
-        web.injectJavaScript(`PP.chunk("${b64.slice(i, i + CHUNK)}"); true;`);
+      if (!web) throw new Error("empty");
+
+      // Remote-only: let the WebView fetch the URL itself (no RN↔WebView base64 bridge).
+      // Local file still uses the base64 path (file:// / content:// are not reliably fetchable in WV).
+      if (!file?.uri && documentUrl && !nativeFallbackRef.current) {
+        web.injectJavaScript(
+          `window.PP && PP.openUrl(${JSON.stringify(documentUrl)}, ${JSON.stringify(kind || "pdf")}); true;`
+        );
+        return;
       }
-      web.injectJavaScript("PP.end(); true;");
+
+      await sendDocumentViaBase64(web);
     } catch {
       setFailed(true);
     } finally {
@@ -324,6 +347,29 @@ export default function TraceDocumentViewer({
     } else if (msg?.type === "ready") {
       setReady(true);
     } else if (msg?.type === "error") {
+      // WebView CORS/fetch failed — fall back to native download + base64 once.
+      if (
+        String(msg?.reason || "").startsWith("fetch") &&
+        documentUrl &&
+        !file?.uri &&
+        !nativeFallbackRef.current
+      ) {
+        nativeFallbackRef.current = true;
+        sendingRef.current = false;
+        void (async () => {
+          try {
+            const web = webRef.current;
+            if (!web) throw new Error("empty");
+            sendingRef.current = true;
+            await sendDocumentViaBase64(web);
+          } catch {
+            setFailed(true);
+          } finally {
+            sendingRef.current = false;
+          }
+        })();
+        return;
+      }
       setFailed(true);
     }
   }

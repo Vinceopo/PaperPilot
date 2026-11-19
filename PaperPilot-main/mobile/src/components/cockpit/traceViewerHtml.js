@@ -3,7 +3,8 @@
  * DocumentPagePreview: pdf.js renders PDFs, docx-preview renders Word files,
  * and an issue target paints a severity box (or margin band) and scrolls to it.
  *
- * Messages in (injected JS): PP.begin(kind), PP.chunk(base64), PP.end(), PP.trace(target)
+ * Messages in (injected JS): PP.begin(kind), PP.chunk(base64), PP.end(),
+ *   PP.openUrl(url, kind), PP.trace(target)
  * Messages out (postMessage JSON): booted | ready | error
  */
 
@@ -712,6 +713,26 @@ const SCRIPT = String.raw`
       if (state.kind === "pdf") openPdf(data);
       else if (state.kind === "docx") openDocx(data);
       else fail("kind");
+    },
+    /** Fetch the manuscript URL inside the WebView (avoids slow RN base64 bridging). */
+    openUrl: function (url, kind) {
+      state.kind = kind || "pdf";
+      state.parts = [];
+      state.ready = false;
+      if (statusEl) statusEl.style.display = "";
+      if (!url) return fail("url");
+      fetch(String(url), { mode: "cors", credentials: "omit" })
+        .then(function (res) {
+          if (!res.ok) throw new Error("http " + res.status);
+          return res.arrayBuffer();
+        })
+        .then(function (buf) {
+          var data = new Uint8Array(buf);
+          if (state.kind === "pdf") return openPdf(data);
+          if (state.kind === "docx") return openDocx(data);
+          fail("kind");
+        })
+        .catch(function () { fail("fetch"); });
     },
     trace: trace
   };

@@ -197,8 +197,8 @@ function ScanResultBody({ navigation }) {
           cloudinaryUrl: url,
           documentName: documentName || doc?.source_filename || "",
         });
-        // Remote URL is ready — drop the picker file so tracing uses the same path as My Manuscripts.
-        scanFlow.clearPickerFile?.();
+        // Keep any local picker file so Issue Tracing can render immediately.
+        // Clearing it forced a slow remote re-download and left the pane blank.
       })
       .catch(() => {})
       .finally(() => {
