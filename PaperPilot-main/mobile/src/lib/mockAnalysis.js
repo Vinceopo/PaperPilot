@@ -94,7 +94,12 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
       opts.mechanicsRules && typeof opts.mechanicsRules === "object" ? opts.mechanicsRules : null,
     pageCount: opts.pageCount,
     mechanicsId,
-    cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || uploadedUrl || "",
+    cloudinaryUrl:
+      scan?.cloudinary_url ||
+      scan?.document_url ||
+      opts.cloudinaryUrl ||
+      uploadedUrl ||
+      "",
     documentPreview: opts.documentPreview,
     versionId,
     documentName: opts.documentName || file?.name || "",

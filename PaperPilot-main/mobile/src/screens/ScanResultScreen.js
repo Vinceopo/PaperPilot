@@ -178,12 +178,15 @@ function ScanResultBody({ navigation }) {
     return () => clearTimeout(t);
   }, [result, navigation]);
 
-  // Same URL backfill as My Manuscripts → full results (openSavedResult), so post-analyse
-  // Issue Tracing & XAI can use the working cloudinaryUrl path when the upload file is cleared.
+  // Backfill the manuscript URL when Results open without a local file / cloudinaryUrl.
+  // Without this, TraceDocumentViewer had nothing to render and fell back to TextTrace
+  // placeholders ("Page text preview is unavailable on mobile…").
   useEffect(() => {
     const scanId = String(result?.scanId || "").trim();
     const hasUrl = Boolean(String(result?.cloudinaryUrl || "").trim());
-    if (!scanId || hasUrl || !isServerId(scanId) || backfillRef.current === scanId) return undefined;
+    const hasLocal = Boolean(scanFlow.file?.uri);
+    if (hasUrl || hasLocal) return undefined;
+    if (!scanId || !isServerId(scanId) || backfillRef.current === scanId) return undefined;
     backfillRef.current = scanId;
     let cancelled = false;
     const documentName = result?.documentName || "";
@@ -191,14 +194,12 @@ function ScanResultBody({ navigation }) {
     void getScanDocument(scanId)
       .then((doc) => {
         if (cancelled) return;
-        const url = String(doc?.cloudinary_url || "").trim();
+        const url = String(doc?.cloudinary_url || doc?.download_url || "").trim();
         if (!url) return;
         scanFlow.patchResult?.({
           cloudinaryUrl: url,
           documentName: documentName || doc?.source_filename || "",
         });
-        // Keep any local picker file so Issue Tracing can render immediately.
-        // Clearing it forced a slow remote re-download and left the pane blank.
       })
       .catch(() => {})
       .finally(() => {
@@ -208,7 +209,7 @@ function ScanResultBody({ navigation }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result?.scanId, result?.cloudinaryUrl, result?.documentName]);
+  }, [result?.scanId, result?.cloudinaryUrl, result?.documentName, scanFlow.file?.uri]);
 
   const focusPreview = useCallback(() => {
     scrollRef.current?.scrollTo({ y: Math.max(0, tracingY.current - 8), animated: true });

@@ -73,6 +73,7 @@ export default function DocumentPreview({
       ? `remote:${remoteUrl}`
       : "empty";
 
+  const previewHeight = useDocumentPreviewHeight();
   return (
     <TraceDocumentViewer
       key={viewerKey}
@@ -84,6 +85,7 @@ export default function DocumentPreview({
       onReady={onReady}
       preview={preview}
       pageCount={preview?.page_count}
+      height={previewHeight}
       emptyLabel={emptyLabel}
     />
   );

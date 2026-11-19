@@ -291,13 +291,15 @@ export default function IssueTracingSection({
             }
             file={file}
             documentLoading={documentLoading}
-            documentUrl={file?.uri ? "" : result?.cloudinaryUrl || ""}
+            // Keep remote URL as fallback when local read fails.
+            documentUrl={result?.cloudinaryUrl || ""}
             documentName={result?.documentName || file?.name || ""}
             preview={result?.documentPreview}
             pageCount={pageCount}
             formatChecks={formatChecks}
             scrollTarget={scrollTarget}
             highlight={highlight}
+            height={previewHeight}
             emptyLabel="Preview unavailable for this version."
           />
         </DocumentDisplayFrame>

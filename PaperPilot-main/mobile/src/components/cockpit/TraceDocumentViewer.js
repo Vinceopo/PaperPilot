@@ -7,8 +7,12 @@ import { buildDocumentPages, lineMatchesHighlight } from "../../lib/documentPage
 import DocumentLoader from "../ui/DocumentLoader";
 import { TRACE_VIEWER_HTML } from "./traceViewerHtml";
 
-/** Base64 slice size; a multiple of 4 so every chunk decodes on its own. */
-const CHUNK = 1 << 20;
+/** Base64 slice size (multiple of 4). Smaller chunks + yields keep the Android bridge alive. */
+const CHUNK = 256 * 1024;
+
+function yieldBridge() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 const HIT = {
   critical: { bg: "rgba(244, 63, 94, 0.42)", edge: "#e11d48" },
@@ -251,33 +255,43 @@ export default function TraceDocumentViewer({
   highlight,
   scrollTarget = null,
   documentLoading = false,
+  /** Pixel height required — WebView inside ScrollView collapses with flex-only sizing on Android. */
+  height,
   /** When true, parent shows the loading UI — avoid a second DocumentLoader blink. */
   suppressLoader = false,
   onReady,
   emptyLabel,
 }) {
-  const kind = kindOf(file?.name || documentName, documentUrl);
+  const kind = kindOf(file?.name || documentName, documentUrl) || (file?.uri || documentUrl ? "pdf" : "");
   const canRender = Boolean(kind && (file?.uri || documentUrl));
-  const [failed, setFailed] = useState(!canRender);
+  // Never start in TextTrace — wait for URL/file backfill, then try WebView.
+  const [failed, setFailed] = useState(false);
   const [ready, setReady] = useState(false);
   const webRef = useRef(null);
   const sendingRef = useRef(false);
   const nativeFallbackRef = useRef(false);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  const frameHeight = Math.max(160, Number(height) || 320);
 
   useEffect(() => {
-    setFailed(!canRender);
+    setFailed(false);
     setReady(false);
     sendingRef.current = false;
     nativeFallbackRef.current = false;
   }, [canRender, file?.uri, documentUrl, kind]);
 
-  // CDN / large-file load can exceed 12s on mobile — give remote downloads more time,
-  // but still fail closed so Upload / Results are not stuck forever.
+  // Waiting for URL/file backfill — do not sit on the loader forever.
+  useEffect(() => {
+    if (canRender || documentLoading || failed) return undefined;
+    const timer = setTimeout(() => setFailed(true), 4000);
+    return () => clearTimeout(timer);
+  }, [canRender, documentLoading, failed]);
+
+  // Large manuscripts need a long window; only fail after a real attempt with a source.
   useEffect(() => {
     if (!canRender || ready || failed) return undefined;
-    const waitMs = file?.uri ? 20000 : 60000;
+    const waitMs = file?.uri ? 90000 : 120000;
     const timer = setTimeout(() => setFailed(true), waitMs);
     return () => clearTimeout(timer);
   }, [canRender, ready, failed, file?.uri, documentUrl, kind]);
@@ -303,9 +317,11 @@ export default function TraceDocumentViewer({
   async function sendDocumentViaBase64(web) {
     const b64 = await readDocumentBase64({ file, url: documentUrl, name: documentName });
     if (!b64 || !web) throw new Error("empty");
-    web.injectJavaScript(`PP.begin(${JSON.stringify(kind)}); true;`);
+    web.injectJavaScript(`PP.begin(${JSON.stringify(kind || "pdf")}); true;`);
     for (let i = 0; i < b64.length; i += CHUNK) {
       web.injectJavaScript(`PP.chunk("${b64.slice(i, i + CHUNK)}"); true;`);
+      // Yield so Android's JS bridge does not drop the document mid-transfer.
+      if (i > 0 && i % (CHUNK * 4) === 0) await yieldBridge();
     }
     web.injectJavaScript("PP.end(); true;");
   }
@@ -317,8 +333,7 @@ export default function TraceDocumentViewer({
       const web = webRef.current;
       if (!web) throw new Error("empty");
 
-      // Remote-only: let the WebView fetch the URL itself (no RN↔WebView base64 bridge).
-      // Local file still uses the base64 path (file:// / content:// are not reliably fetchable in WV).
+      // Prefer local file bytes. Remote-only: try in-WebView fetch first (fast), then native.
       if (!file?.uri && documentUrl && !nativeFallbackRef.current) {
         web.injectJavaScript(
           `window.PP && PP.openUrl(${JSON.stringify(documentUrl)}, ${JSON.stringify(kind || "pdf")}); true;`
@@ -349,9 +364,8 @@ export default function TraceDocumentViewer({
     } else if (msg?.type === "error") {
       // WebView CORS/fetch failed — fall back to native download + base64 once.
       if (
-        String(msg?.reason || "").startsWith("fetch") &&
+        String(msg?.reason || "").includes("fetch") &&
         documentUrl &&
-        !file?.uri &&
         !nativeFallbackRef.current
       ) {
         nativeFallbackRef.current = true;
@@ -374,42 +388,56 @@ export default function TraceDocumentViewer({
     }
   }
 
-  // Wait for a source with our default document loader (no circle spinners).
-  if (documentLoading && !canRender) {
-    if (suppressLoader) return <View style={styles.webHost} />;
-    return <CenteredDocumentLoader />;
+  // No source yet (URL still backfilling) — keep the loader, never the TextTrace placeholders.
+  if (!canRender) {
+    if (suppressLoader) return <View style={[styles.webHost, { height: frameHeight }]} />;
+    return (
+      <View style={[styles.webHost, { height: frameHeight }]}>
+        <CenteredDocumentLoader />
+      </View>
+    );
   }
 
   if (failed) {
     return (
-      <TextTrace
-        preview={preview}
-        pageCount={pageCount}
-        formatChecks={formatChecks}
-        highlight={highlight}
-        scrollTarget={scrollTarget}
-        emptyLabel={emptyLabel}
-      />
+      <View style={{ height: frameHeight }}>
+        <TextTrace
+          preview={preview}
+          pageCount={pageCount}
+          formatChecks={formatChecks}
+          highlight={highlight}
+          scrollTarget={scrollTarget}
+          emptyLabel={emptyLabel}
+        />
+      </View>
     );
   }
 
-  // Parent can keep a single "Opening manuscript preview…" overlay until onReady.
+  // Explicit pixel size — flex:1 WebViews inside Results ScrollView often paint at 0 height on Android.
+  const webStyle = { width: "100%", height: frameHeight, backgroundColor: "#e8ecf1" };
+
   return (
-    <View style={styles.webHost}>
+    <View style={[styles.webHost, { height: frameHeight }]}>
       <WebView
         ref={webRef}
-        source={{ html: TRACE_VIEWER_HTML, baseUrl: "https://paperpilot.local/" }}
+        source={{ html: TRACE_VIEWER_HTML, baseUrl: "https://cdnjs.cloudflare.com/" }}
         originWhitelist={["*"]}
         onMessage={onMessage}
         onError={() => setFailed(true)}
+        onHttpError={() => setFailed(true)}
         onContentProcessDidTerminate={() => webRef.current?.reload()}
         javaScriptEnabled
         domStorageEnabled
+        allowFileAccess
+        allowUniversalAccessFromFileURLs
+        mixedContentMode="always"
+        androidLayerType="hardware"
+        setSupportMultipleWindows={false}
         scrollEnabled={false}
         bounces={false}
         nestedScrollEnabled
-        style={[styles.web, !ready && styles.webHidden]}
-        containerStyle={styles.web}
+        style={[webStyle, !ready && styles.webHidden]}
+        containerStyle={webStyle}
       />
       {!ready && !suppressLoader ? (
         <CenteredDocumentLoader style={styles.loaderOverlay} />
@@ -419,8 +447,7 @@ export default function TraceDocumentViewer({
 }
 
 const styles = StyleSheet.create({
-  webHost: { flex: 1, width: "100%", height: "100%", backgroundColor: "#e8ecf1" },
-  web: { flex: 1, width: "100%", height: "100%", backgroundColor: "#e8ecf1" },
+  webHost: { width: "100%", backgroundColor: "#e8ecf1", overflow: "hidden" },
   webHidden: { opacity: 0 },
   loaderPane: {
     flex: 1,
