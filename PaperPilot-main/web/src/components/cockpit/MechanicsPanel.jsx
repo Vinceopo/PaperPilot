@@ -191,6 +191,9 @@ export default function MechanicsPanel({
         text_preview: data.text_preview || "",
         page_count: data.page_count || (data.pages || []).length || 0,
         pages: Array.isArray(data.pages) ? data.pages : [],
+        assist_items: Array.isArray(data.assist_items) ? data.assist_items : [],
+        gemini_available: data.gemini_available !== false,
+        gemini_used: Boolean(data.gemini_used),
       });
       // Fill found rules; any field the guide omits becomes IGNORE (auto-pass).
       setUploadForm(
@@ -198,7 +201,9 @@ export default function MechanicsPanel({
           rulesToForm(data.rules || {}, data.name || nextFile.name.replace(/\.(pdf|docx)$/i, ""))
         )
       );
-      setSuccess("Format fields extracted from your guide - review and edit below, then save.");
+      setSuccess(
+        "Format fields filled from your guide. Editing is optional — you can Save & use as-is."
+      );
     } catch (err) {
       setError(err.message || "Extraction failed.");
     } finally {
@@ -221,7 +226,7 @@ export default function MechanicsPanel({
     setConfirmAction({
       id: "extract",
       title: "Extract format fields?",
-      message: `PaperPilot will analyze “${nextFile.name}” and fill Format Fields from the rules in that guide. You can edit any value before saving.`,
+      message: `PaperPilot will analyze “${nextFile.name}” and fill Format Fields from the rules in that guide. Editing afterward is optional — you can save as-is.`,
       confirmLabel: "Extract fields",
       tone: "primary",
       file: nextFile,
@@ -253,6 +258,10 @@ export default function MechanicsPanel({
       extracted_text: mode === "upload" ? extractMeta?.extracted_text || "" : "",
       // IGNORE Format Fields (including unset headings) must not become scan rules.
       ignored_fields: ignoredFieldsFromForm(form),
+      assist_items:
+        mode === "upload" && Array.isArray(extractMeta?.assist_items)
+          ? extractMeta.assist_items
+          : undefined,
     };
   }
 
@@ -293,9 +302,9 @@ export default function MechanicsPanel({
     if (!payload) return;
     setConfirmAction({
       id: "save",
-      title: "Save format mechanics?",
-      message: `Save “${payload.name}” to Saved Mechanics and continue to Upload Manuscript?`,
-      confirmLabel: "Save and Continue",
+      title: "Save & use as-is?",
+      message: `Save “${payload.name}” with the current Format Fields (editing is optional) and continue to Upload Manuscript?`,
+      confirmLabel: "Save & use as-is",
       tone: "primary",
       payload,
     });
@@ -749,6 +758,9 @@ export default function MechanicsPanel({
 
           {showUploadEditor && (
             <div>
+              <p className="mb-2 text-xs text-slate-500">
+                Review (optional) — primary action is to save the extracted fields as-is.
+              </p>
               <FormatMechanicsFields
                 form={form}
                 onChange={setForm}
@@ -756,6 +768,32 @@ export default function MechanicsPanel({
                 title="Format Fields (from uploaded guide)"
                 tier={tier}
               />
+              {Array.isArray(extractMeta?.assist_items) && extractMeta.assist_items.length > 0 && (
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Checked with AI assist on scan
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {extractMeta.assist_items.map((item) => (
+                      <span
+                        key={item.id || item.requirement_text}
+                        className="inline-flex max-w-full items-center rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600"
+                        title={item.requirement_text}
+                      >
+                        <span className="mr-1.5 rounded bg-slate-100 px-1 py-0.5 text-[9px] uppercase tracking-wide text-slate-500">
+                          {item.kind || "other"}
+                        </span>
+                        <span className="truncate">{item.requirement_text}</span>
+                      </span>
+                    ))}
+                  </div>
+                  {extractMeta.gemini_available === false && (
+                    <p className="mt-2 text-[11px] text-amber-700">
+                      Gemini assist is unavailable — these items will show as unchecked on scan.
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                 <button
                   type="button"
@@ -768,7 +806,7 @@ export default function MechanicsPanel({
                       <Spinner /> Saving…
                     </>
                   ) : (
-                    "Save and Continue"
+                    "Save & use as-is"
                   )}
                 </button>
                 <button

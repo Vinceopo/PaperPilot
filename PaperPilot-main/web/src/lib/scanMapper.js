@@ -373,6 +373,18 @@ export function mapComplianceScanToResult(scan, meta = {}) {
       ? { ok: scoring.consistency.ok !== false, errors: scoring.consistency.errors || [] }
       : null,
     formatChecks,
+    // Non-scoring Gemini visual assist — never merged into formatChecks / units.
+    assistFindings: Array.isArray(scan?.assist_findings)
+      ? scan.assist_findings.map((item, index) => ({
+          id: item.assist_item_id || `assist-${index}`,
+          kind: item.kind || "other",
+          title: item.title || "Assist finding",
+          summary: item.summary || "",
+          recommendation: item.recommendation || "",
+          status: item.status || "unclear",
+          confidence: numberOrNull(item.confidence),
+        }))
+      : [],
     pageCount: Number(scan?.page_count || meta.pageCount || maxIssuePage || 0),
     pagination: scan?.pagination || meta.pagination || null,
     scanId: scan?.id,

@@ -3,7 +3,7 @@
     "name": "PaperPilot",
     "slug": "paperpilot",
     "owner": "paperpilot",
-    "version": "0.2.3",
+    "version": "10.0.1",
     "scheme": "paperpilot",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

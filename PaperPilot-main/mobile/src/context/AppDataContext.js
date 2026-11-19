@@ -606,6 +606,7 @@ export function AppDataProvider({ children }) {
         fileType: payload.file_type || payload.fileType,
         extractedText: payload.extracted_text || payload.extractedText,
         ignoredFields: payload.ignored_fields || payload.ignoredFields,
+        assistItems: payload.assist_items || payload.assistItems,
       });
       mechanicsChangeRef.current += 1;
       if (created?.id) {
