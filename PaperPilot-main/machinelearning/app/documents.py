@@ -1418,6 +1418,56 @@ def _simple_margin_amount(value: str) -> float | None:
     return amount
 
 
+_CORE_MARGIN_SIDES = ("top", "bottom", "left", "right")
+
+
+def iter_uniform_margin_mentions(text: str) -> list[tuple[int, float]]:
+    """Document-ordered (start, inches) for side-less / all-sides margin phrases.
+
+    Used for all-sides fill and later-wins conflict detection. Side-specific
+    phrases ("1.5 inch on the left") are intentionally excluded.
+    """
+    flat = _normalize_inch_marks(str(text or ""))
+    if not flat.strip():
+        return []
+    measure = _MEASURE_WITH_UNIT
+    patterns = (
+        rf"\ball\s+(?:four\s+|the\s+)?(?:page\s+)?margins?\b[^.]{{0,80}}?({measure})",
+        rf"\bmargins?\s+on\s+(?:all|every|each)\s+sides?\b[^.]{{0,40}}?({measure})",
+        rf"({measure})\s+margins?\s+on\s+(?:all|every|each)\s+sides?\b",
+        rf"({measure})\s+on\s+(?:all|every|each)\s+sides?\b",
+        rf"\bset\s+margins?\s+to\s+({measure})",
+        rf"\bmargins?\s+(?:should\s+be|must\s+be|shall\s+be|are|is)\s+({measure})"
+        rf"(?:\s+on\s+(?:all|every|each)\s+sides?)?",
+        # "Margins 1 inch" / "Margins: 1 inch" / "margins of 1\"" (of/:/= optional).
+        rf"\bmargins?\s*(?:of|:|=)?\s*({MEASURE_PATTERN})(?:\s+on\s+(?:all|every|each)\s+sides?)?",
+        rf"({measure})\s+(?:on\s+all\s+sides\s+)?margins?\b",
+    )
+    found: list[tuple[int, float]] = []
+    seen: set[tuple[int, float]] = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, flat, re.I):
+            raw = next((group for group in match.groups() if group), None)
+            amount = parse_length_inches(raw) if raw else None
+            if amount is None:
+                continue
+            # Skip when this match is clearly tied to a named side only
+            # (e.g. "left margins: 1 inch") — those are handled elsewhere.
+            span = flat[max(0, match.start() - 24) : match.end() + 8]
+            if re.search(
+                rf"(?i)\b(?:{_MARGIN_SIDE_ALT})\s+margins?\b",
+                span,
+            ) and not re.search(r"(?i)\b(?:all|every|each|other|remaining)\b", span):
+                continue
+            key = (match.start(), round(float(amount), 4))
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append((match.start(), float(amount)))
+    found.sort(key=lambda item: item[0])
+    return found
+
+
 def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]:
     """Labeled 'Top: 1' and prose '1.5 inch on the left, 1 inch on the right, top and bottom'."""
     margins: dict[str, float] = {}
@@ -1439,7 +1489,7 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
     if all_sides:
         amount = parse_length_inches(next(group for group in all_sides.groups() if group))
         if amount is not None:
-            for side in ("top", "bottom", "left", "right"):
+            for side in _CORE_MARGIN_SIDES:
                 margins[side] = amount
 
     # "Top, Right and Bottom: 1.00\"" / "(left, right, top and bottom) should be 1.5 inches".
@@ -1514,19 +1564,28 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
     if others and margins:
         amount = parse_length_inches(others.group(1))
         if amount is not None:
-            for side in ("top", "bottom", "left", "right"):
+            for side in _CORE_MARGIN_SIDES:
                 margins.setdefault(side, amount)
 
-    if not any(side in margins for side in ("top", "bottom", "left", "right")):
-        uniform = re.search(
-            rf"\b({MEASURE_PATTERN})\s+(?:on\s+all\s+sides\s+)?margins?\b"
-            rf"|\bmargins?\s*(?:of|:|=)?\s*({MEASURE_PATTERN})\s*(?:on\s+all\s+sides)?",
-            flat,
-            re.I,
-        )
-        amount = parse_length_inches(next((group for group in uniform.groups() if group), "")) if uniform else None
-        if amount:
-            margins = {side: amount for side in ("top", "bottom", "left", "right")}
+    # Side-less / uniform phrases ("Margins should be 1 inch", "Set margins to 1.25 inches").
+    # When several uniform amounts appear, the later mention wins.
+    mentions = iter_uniform_margin_mentions(flat)
+    if mentions:
+        later = mentions[-1][1]
+        core_present = [side for side in _CORE_MARGIN_SIDES if side in margins]
+        if not core_present:
+            for side in _CORE_MARGIN_SIDES:
+                margins[side] = later
+        else:
+            core_values = {margins[side] for side in core_present}
+            # Uniform block already filled all four equally — prefer later conflicting amount.
+            if (
+                len(core_present) == 4
+                and len(core_values) == 1
+                and len({round(amount, 4) for _, amount in mentions}) > 1
+            ):
+                for side in _CORE_MARGIN_SIDES:
+                    margins[side] = later
     return margins
 
 
