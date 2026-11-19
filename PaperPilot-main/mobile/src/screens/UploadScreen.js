@@ -1268,36 +1268,6 @@ export default function UploadScreen({ navigation }) {
                   </View>
                 </Pressable>
 
-                {msError ? <Text style={styles.fieldError}>{msError}</Text> : null}
-                {msSuccess && !msError ? (
-                  <Text style={styles.fieldSuccess}>{msSuccess}</Text>
-                ) : null}
-
-                {/* Actions stay under the dropzone so Cancel / Upload never require scrolling. */}
-                <View style={styles.msActions}>
-                  <Pressable
-                    style={[styles.msCancelBtn, msUploading && styles.disabled]}
-                    onPress={onCancelManuscript}
-                    disabled={msUploading}
-                  >
-                    <Text style={styles.secondaryBtnText}>Cancel</Text>
-                  </Pressable>
-                  <PrimaryButton
-                    title={
-                      msUploading
-                        ? "Uploading…"
-                        : msOpeningPreview
-                          ? "Preparing preview…"
-                          : "Upload manuscript"
-                    }
-                    onPress={requestManuscriptUpload}
-                    busy={msUploading || msOpeningPreview}
-                    showBusySpinner={false}
-                    disabled={!mechanicsSelected || !msFile || msPanelBusy}
-                    style={{ flex: 1 }}
-                  />
-                </View>
-
                 {showMsPreview ? (
                   <PreviewPanel
                     compact
@@ -1348,6 +1318,36 @@ export default function UploadScreen({ navigation }) {
                     ) : null}
                   </PreviewPanel>
                 ) : null}
+
+                {msError ? <Text style={styles.fieldError}>{msError}</Text> : null}
+                {msSuccess && !msError ? (
+                  <Text style={styles.fieldSuccess}>{msSuccess}</Text>
+                ) : null}
+
+                {/* Same order as before: dropzone → preview → Cancel / Upload (compact preview keeps them on-screen). */}
+                <View style={styles.msActions}>
+                  <Pressable
+                    style={[styles.msCancelBtn, msUploading && styles.disabled]}
+                    onPress={onCancelManuscript}
+                    disabled={msUploading}
+                  >
+                    <Text style={styles.secondaryBtnText}>Cancel</Text>
+                  </Pressable>
+                  <PrimaryButton
+                    title={
+                      msUploading
+                        ? "Uploading…"
+                        : msOpeningPreview
+                          ? "Preparing preview…"
+                          : "Upload manuscript"
+                    }
+                    onPress={requestManuscriptUpload}
+                    busy={msUploading || msOpeningPreview}
+                    showBusySpinner={false}
+                    disabled={!mechanicsSelected || !msFile || msPanelBusy}
+                    style={{ flex: 1 }}
+                  />
+                </View>
               </View>
             )}
 

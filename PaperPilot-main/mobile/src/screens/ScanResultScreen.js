@@ -197,6 +197,8 @@ function ScanResultBody({ navigation }) {
           cloudinaryUrl: url,
           documentName: documentName || doc?.source_filename || "",
         });
+        // Remote URL is ready — drop the picker file so tracing uses the same path as My Manuscripts.
+        scanFlow.clearPickerFile?.();
       })
       .catch(() => {})
       .finally(() => {

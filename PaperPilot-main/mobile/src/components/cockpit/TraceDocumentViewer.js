@@ -373,8 +373,8 @@ export default function TraceDocumentViewer({
 }
 
 const styles = StyleSheet.create({
-  webHost: { flex: 1, backgroundColor: "#e8ecf1" },
-  web: { flex: 1, backgroundColor: "#e8ecf1" },
+  webHost: { flex: 1, width: "100%", height: "100%", backgroundColor: "#e8ecf1" },
+  web: { flex: 1, width: "100%", height: "100%", backgroundColor: "#e8ecf1" },
   webHidden: { opacity: 0 },
   loaderPane: {
     flex: 1,

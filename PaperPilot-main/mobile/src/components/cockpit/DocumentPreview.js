@@ -14,8 +14,9 @@ export const DOCUMENT_PREVIEW_HEIGHT = 400;
 export function useDocumentPreviewHeight({ compact = false } = {}) {
   const { height } = useWindowDimensions();
   if (compact) {
-    const scaled = Math.round(height * 0.22);
-    return Math.max(150, Math.min(200, scaled || 180));
+    // Keep Cancel / Upload below the preview without forcing page scroll on typical phones.
+    const scaled = Math.round(height * 0.2);
+    return Math.max(140, Math.min(180, scaled || 160));
   }
   const scaled = Math.round(height * 0.42);
   return Math.max(240, Math.min(480, scaled || DOCUMENT_PREVIEW_HEIGHT));
@@ -97,7 +98,10 @@ export function DocumentDisplayFrame({ height, compact = false, children, style 
   const frameHeight = height ?? responsiveHeight;
   return (
     <View style={[styles.displayWrap, style]}>
-      <View style={[styles.displayFrame, { height: frameHeight }]}>{children}</View>
+      {/* Explicit height + flex so WebView / TraceDocumentViewer fill the pane (not 0-height). */}
+      <View style={[styles.displayFrame, { height: frameHeight, minHeight: frameHeight }]}>
+        {children}
+      </View>
     </View>
   );
 }
@@ -185,6 +189,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     borderRadius: 12,
     backgroundColor: "#e8ecf1",
+    // Flex column so flex:1 WebView children actually receive the frame height.
+    flexDirection: "column",
   },
   previewFill: { flex: 1 },
   previewLocked: { flex: 1, overflow: "hidden" },

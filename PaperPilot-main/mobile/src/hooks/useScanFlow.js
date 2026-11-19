@@ -153,9 +153,10 @@ export function useScanFlow({
   /** After analyzing UI finishes, go straight to the full results page (no summary modal). */
   const revealSummary = useCallback(() => {
     if (!resultRef.current) return;
-    // Match My Manuscripts → full results: drop the picker file so Issue Tracing & XAI
-    // uses result.cloudinaryUrl (the path that already works on full results).
-    setFileInner(null);
+    // Keep the local picker file until a remote URL exists — clearing it early left
+    // Issue Tracing & XAI with nothing to render while cloudinaryUrl was still backfilling.
+    const hasRemote = Boolean(String(resultRef.current.cloudinaryUrl || "").trim());
+    if (hasRemote) setFileInner(null);
     setStep((current) => (current === "analyzing" ? "results" : current));
   }, []);
 
@@ -237,6 +238,11 @@ export function useScanFlow({
     setDocumentLoading(Boolean(loading));
   }, []);
 
+  /** Drop the local picker file without leaving the results step (used after remote URL is ready). */
+  const clearPickerFile = useCallback(() => {
+    setFileInner(null);
+  }, []);
+
   const patchResult = useCallback((patch) => {
     if (!patch) return;
     setResult((prev) => {
@@ -287,6 +293,7 @@ export function useScanFlow({
     backToDashboard,
     showSavedResult,
     setDocumentLoading: setDocumentLoadingState,
+    clearPickerFile,
     patchResult,
     revealSummary,
     backToSummary,

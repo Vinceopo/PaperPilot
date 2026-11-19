@@ -281,8 +281,14 @@ export default function IssueTracingSection({
         <DocumentDisplayFrame height={previewHeight} style={styles.previewBorder}>
           {/* Same TraceDocumentViewer as upload manuscript preview; highlight only when an issue is selected. */}
           <TraceDocumentViewer
-            key={file?.uri || result?.cloudinaryUrl || "preview"}
-            file={file}
+            key={
+              result?.cloudinaryUrl
+                ? `remote:${result.cloudinaryUrl}`
+                : file?.uri
+                  ? `local:${file.uri}`
+                  : "preview"
+            }
+            file={result?.cloudinaryUrl ? null : file}
             documentLoading={documentLoading}
             documentUrl={result?.cloudinaryUrl || ""}
             documentName={result?.documentName || file?.name || ""}
