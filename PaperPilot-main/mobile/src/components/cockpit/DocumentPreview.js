@@ -6,9 +6,17 @@ import TraceDocumentViewer from "./TraceDocumentViewer";
 /** Fallback when a screen cannot read window size. */
 export const DOCUMENT_PREVIEW_HEIGHT = 400;
 
-/** Scale the document pane to the phone height so it stays usable on small and tall screens. */
-export function useDocumentPreviewHeight() {
+/**
+ * Scale the document pane to the phone height.
+ * Upload Manuscript uses a compact height so Cancel / Upload stay above the fold.
+ * Issue Tracing / full results keep the larger pane.
+ */
+export function useDocumentPreviewHeight({ compact = false } = {}) {
   const { height } = useWindowDimensions();
+  if (compact) {
+    const scaled = Math.round(height * 0.22);
+    return Math.max(150, Math.min(200, scaled || 180));
+  }
   const scaled = Math.round(height * 0.42);
   return Math.max(240, Math.min(480, scaled || DOCUMENT_PREVIEW_HEIGHT));
 }
@@ -84,8 +92,8 @@ export default function DocumentPreview({
  * Display frame matching Issue Tracing’s document pane (gray pad + rounded viewport).
  * No findings / XAI — only the manuscript view.
  */
-export function DocumentDisplayFrame({ height, children, style }) {
-  const responsiveHeight = useDocumentPreviewHeight();
+export function DocumentDisplayFrame({ height, compact = false, children, style }) {
+  const responsiveHeight = useDocumentPreviewHeight({ compact });
   const frameHeight = height ?? responsiveHeight;
   return (
     <View style={[styles.displayWrap, style]}>
@@ -103,9 +111,10 @@ export function PreviewPanel({
   overlayBody,
   footer,
   height,
+  compact = false,
   children,
 }) {
-  const responsiveHeight = useDocumentPreviewHeight();
+  const responsiveHeight = useDocumentPreviewHeight({ compact });
   const frameHeight = height ?? responsiveHeight;
   return (
     <View style={styles.panel}>
@@ -116,7 +125,7 @@ export function PreviewPanel({
         ) : null}
       </View>
       <View style={styles.panelBody} pointerEvents={overlayTitle ? "box-none" : "auto"}>
-        <DocumentDisplayFrame height={frameHeight}>
+        <DocumentDisplayFrame height={frameHeight} compact={compact}>
           <View
             style={overlayTitle ? styles.previewLocked : styles.previewFill}
             pointerEvents={overlayTitle ? "none" : "auto"}
@@ -125,7 +134,7 @@ export function PreviewPanel({
           </View>
           {overlayTitle ? (
             <View style={styles.overlay} pointerEvents="auto">
-              <DocumentLoader size={112} />
+              <DocumentLoader size={compact ? 72 : 112} />
               <Text style={styles.overlayTitle}>{overlayTitle}</Text>
               {overlayBody ? <Text style={styles.overlayBody}>{overlayBody}</Text> : null}
             </View>

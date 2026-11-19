@@ -94,6 +94,6 @@ export async function waitForScanResult(scanId, onProgress) {
       return fetchFinishedScan(id);
     }
 
-    await sleep(1000);
+    await sleep(500);
   }
 }

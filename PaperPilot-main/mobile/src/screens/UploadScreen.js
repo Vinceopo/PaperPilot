@@ -1238,14 +1238,20 @@ export default function UploadScreen({ navigation }) {
                 </Text>
 
                 <Pressable
-                  style={[styles.dropzone, !mechanicsSelected && styles.dropzoneDisabled]}
+                  style={[
+                    styles.dropzone,
+                    showMsPreview && styles.dropzoneCompact,
+                    !mechanicsSelected && styles.dropzoneDisabled,
+                  ]}
                   onPress={pickManuscript}
                   disabled={!canPickManuscript}
                 >
-                  <View style={styles.dropIcon}>
-                    <Text style={styles.dropIconText}>↑</Text>
-                  </View>
-                  <Text style={styles.dropTitle}>
+                  {!showMsPreview ? (
+                    <View style={styles.dropIcon}>
+                      <Text style={styles.dropIconText}>↑</Text>
+                    </View>
+                  ) : null}
+                  <Text style={[styles.dropTitle, showMsPreview && styles.dropTitleCompact]}>
                     {msFile?.name || "Drop your manuscript here"}
                   </Text>
                   <Text style={styles.dropSub}>
@@ -1254,16 +1260,47 @@ export default function UploadScreen({ navigation }) {
                         ? `${formatFileSize(msFile.size)} · Preparing document preview below…`
                         : msUploading
                           ? `${formatFileSize(msFile.size)} · Uploading — see progress below`
-                          : `${formatFileSize(msFile.size)} · Preview appears below — confirm Upload when ready`
+                          : `${formatFileSize(msFile.size)} · Confirm Upload when ready`
                       : `Tap to browse · ${manuscriptPickerLimitHint(tier, maxBytes)}`}
                   </Text>
-                  <View style={styles.browsePill}>
+                  <View style={[styles.browsePill, showMsPreview && styles.browsePillCompact]}>
                     <Text style={styles.browseText}>Browse files</Text>
                   </View>
                 </Pressable>
 
+                {msError ? <Text style={styles.fieldError}>{msError}</Text> : null}
+                {msSuccess && !msError ? (
+                  <Text style={styles.fieldSuccess}>{msSuccess}</Text>
+                ) : null}
+
+                {/* Actions stay under the dropzone so Cancel / Upload never require scrolling. */}
+                <View style={styles.msActions}>
+                  <Pressable
+                    style={[styles.msCancelBtn, msUploading && styles.disabled]}
+                    onPress={onCancelManuscript}
+                    disabled={msUploading}
+                  >
+                    <Text style={styles.secondaryBtnText}>Cancel</Text>
+                  </Pressable>
+                  <PrimaryButton
+                    title={
+                      msUploading
+                        ? "Uploading…"
+                        : msOpeningPreview
+                          ? "Preparing preview…"
+                          : "Upload manuscript"
+                    }
+                    onPress={requestManuscriptUpload}
+                    busy={msUploading || msOpeningPreview}
+                    showBusySpinner={false}
+                    disabled={!mechanicsSelected || !msFile || msPanelBusy}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+
                 {showMsPreview ? (
                   <PreviewPanel
+                    compact
                     label="Manuscript preview"
                     status={
                       msUploading
@@ -1294,7 +1331,7 @@ export default function UploadScreen({ navigation }) {
                         ? "Uploading in progress — stay on this page until it completes."
                         : msOpeningPreview
                           ? "Preparing live preview of your academic document…"
-                          : "Live preview of your uploaded manuscript — scroll to see pages below."
+                          : "Live preview — scroll inside to read pages."
                     }
                   >
                     {/* Load under the same overlay so DocumentLoader never restarts after prepare. */}
@@ -1311,35 +1348,6 @@ export default function UploadScreen({ navigation }) {
                     ) : null}
                   </PreviewPanel>
                 ) : null}
-
-                {msError ? <Text style={styles.fieldError}>{msError}</Text> : null}
-                {msSuccess && !msError ? (
-                  <Text style={styles.fieldSuccess}>{msSuccess}</Text>
-                ) : null}
-
-                <View style={styles.msActions}>
-                  <Pressable
-                    style={[styles.msCancelBtn, msUploading && styles.disabled]}
-                    onPress={onCancelManuscript}
-                    disabled={msUploading}
-                  >
-                    <Text style={styles.secondaryBtnText}>Cancel</Text>
-                  </Pressable>
-                  <PrimaryButton
-                    title={
-                      msUploading
-                        ? "Uploading…"
-                        : msOpeningPreview
-                          ? "Preparing preview…"
-                          : "Upload manuscript"
-                    }
-                    onPress={requestManuscriptUpload}
-                    busy={msUploading || msOpeningPreview}
-                    showBusySpinner={false}
-                    disabled={!mechanicsSelected || !msFile || msPanelBusy}
-                    style={{ flex: 1 }}
-                  />
-                </View>
               </View>
             )}
 
@@ -1776,6 +1784,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 16,
   },
+  dropzoneCompact: {
+    minHeight: 96,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
   dropIcon: {
     width: 44,
     height: 44,
@@ -1792,6 +1805,7 @@ const styles = StyleSheet.create({
     color: "#334155",
     textAlign: "center",
   },
+  dropTitleCompact: { marginTop: 0 },
   dropSub: { marginTop: 4, fontSize: 11, color: colors.muted },
   browsePill: {
     marginTop: 12,
@@ -1802,6 +1816,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 6,
   },
+  browsePillCompact: { marginTop: 8 },
   browseText: { fontSize: 11, fontWeight: "600", color: colors.accentText },
   fieldError: { marginTop: 8, fontSize: 12, color: colors.rose },
   fieldSuccess: { marginTop: 8, fontSize: 12, color: colors.emerald },

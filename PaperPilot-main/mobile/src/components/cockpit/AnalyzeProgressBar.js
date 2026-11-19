@@ -6,7 +6,7 @@ import AnalysisProgress from "./AnalysisProgress";
 import PaperCarryAway, { PAPER_CARRY_HOLD_MS, PAPER_CARRY_TOTAL_MS } from "./PaperCarryAway";
 
 /** If the bar never visibly reaches 100%, start the flight anyway after this long. */
-const MAX_HOLD_MS = 2500;
+const MAX_HOLD_MS = 700;
 
 /**
  * "Analysing your document" screen: paper-roll animation and step progress, then the
@@ -39,13 +39,14 @@ export default function AnalyzeProgressBar({ progress, resultReady = false, onRe
         String(currentProgress.stage || "").toLowerCase() === "done" || server >= 99.5;
       let value = shownRef.current;
       if (done) {
-        value = value >= 99.5 ? 100 : Math.min(100, value + Math.max(2.5, (100 - value) * 0.2));
+        // Snap to 100 quickly once the server finishes — do not linger on the bar.
+        value = value >= 99.5 ? 100 : Math.min(100, value + Math.max(8, (100 - value) * 0.45));
       } else if (value < server - 0.2) {
-        value = Math.min(server, value + Math.max(0.4, (server - value) * 0.16));
+        value = Math.min(server, value + Math.max(0.8, (server - value) * 0.28));
       } else {
         const softCap = 97;
         if (value < softCap) {
-          const driftPerSec = Math.max(3, (softCap - value) * 0.05);
+          const driftPerSec = Math.max(8, (softCap - value) * 0.12);
           value = Math.min(softCap, Math.max(value, server) + driftPerSec * dt);
         }
       }
@@ -61,14 +62,16 @@ export default function AnalyzeProgressBar({ progress, resultReady = false, onRe
 
   useEffect(() => {
     if (!stageDone || phase !== "progress") return undefined;
-    const timer = setTimeout(() => setPhase("fly"), reachedFull ? PAPER_CARRY_HOLD_MS : MAX_HOLD_MS);
+    // Result already in hand: leave the progress screen after a short beat.
+    const hold = resultReady && reachedFull ? PAPER_CARRY_HOLD_MS : reachedFull ? PAPER_CARRY_HOLD_MS : MAX_HOLD_MS;
+    const timer = setTimeout(() => setPhase("fly"), hold);
     return () => clearTimeout(timer);
-  }, [stageDone, reachedFull, phase]);
+  }, [stageDone, reachedFull, phase, resultReady]);
 
   // The reveal must not depend on the animation's own callbacks firing.
   useEffect(() => {
     if (phase !== "fly") return undefined;
-    const timer = setTimeout(() => setFlightDone(true), PAPER_CARRY_TOTAL_MS + 600);
+    const timer = setTimeout(() => setFlightDone(true), PAPER_CARRY_TOTAL_MS + 120);
     return () => clearTimeout(timer);
   }, [phase]);
 

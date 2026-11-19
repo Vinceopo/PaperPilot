@@ -3,10 +3,10 @@ import { Animated, Easing, StyleSheet, Text, View, useWindowDimensions } from "r
 import Svg, { Path, Rect } from "react-native-svg";
 
 /** Pause on 100% before the page jumps onto the plane. */
-export const PAPER_CARRY_HOLD_MS = 420;
+export const PAPER_CARRY_HOLD_MS = 320;
 
-const JUMP_MS = 1780;
-const FLY_MS = 3000;
+const JUMP_MS = 1100;
+const FLY_MS = 1800;
 /** Full jump + flight length. */
 export const PAPER_CARRY_TOTAL_MS = JUMP_MS + FLY_MS;
 const PLANE_W = 320;
