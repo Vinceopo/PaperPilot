@@ -499,6 +499,7 @@ async def mechanics_extract(
             normalize_mechanics_rules(understood.get("rules") or rules), uid
         )
         assist_items = understood.get("assist_items") or []
+        conflicts = understood.get("conflicts") or []
         pages = _document_preview_pages(parsed, text)
         return {
             "name": Path(filename).stem[:200],
@@ -512,6 +513,7 @@ async def mechanics_extract(
             "pages": pages,
             "rules": rules,
             "assist_items": assist_items,
+            "conflicts": conflicts,
             "guide_kind": understood.get("guide_kind") or "unknown",
             "confidence": understood.get("confidence") or 0,
             "gemini_used": bool(understood.get("gemini_used")),

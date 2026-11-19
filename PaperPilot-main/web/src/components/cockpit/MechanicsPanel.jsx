@@ -56,6 +56,22 @@ function formFromSaved(item) {
   return mapped;
 }
 
+/** Friendly notice when the guide said two different things for the same field. */
+function conflictNoticeFromExtract(conflicts) {
+  if (!Array.isArray(conflicts) || !conflicts.length) return null;
+  const messages = conflicts
+    .map((item) => (typeof item?.message === "string" ? item.message.trim() : ""))
+    .filter(Boolean);
+  if (!messages.length) return null;
+  return {
+    title:
+      messages.length === 1
+        ? "We noticed conflicting rules"
+        : "We noticed a few conflicting rules",
+    message: messages.join("\n\n"),
+  };
+}
+
 export default function MechanicsPanel({
   items,
   selectedId,
@@ -89,6 +105,7 @@ export default function MechanicsPanel({
   );
   const [extractMeta, setExtractMeta] = useState(null);
   const [extracting, setExtracting] = useState(false);
+  const [conflictNotice, setConflictNotice] = useState(null);
   const [confirmAction, setConfirmAction] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [sampleBusy, setSampleBusy] = useState(false);
@@ -121,6 +138,7 @@ export default function MechanicsPanel({
   function clearUploadDraft() {
     setFile(null);
     setExtractMeta(null);
+    setConflictNotice(null);
     setUploadForm(emptyMechanicsForm());
     if (inputRef.current) inputRef.current.value = "";
   }
@@ -130,6 +148,7 @@ export default function MechanicsPanel({
     setMode(next);
     setError("");
     setSuccess("");
+    setConflictNotice(null);
     setEditing(false);
     // Keep upload/customize drafts when switching tabs - only clear on save or refresh.
   }
@@ -150,6 +169,7 @@ export default function MechanicsPanel({
   function rejectOversize(nextFile) {
     setFile(null);
     setExtractMeta(null);
+    setConflictNotice(null);
     setError("");
     setSuccess("");
     if (inputRef.current) inputRef.current.value = "";
@@ -169,6 +189,7 @@ export default function MechanicsPanel({
     }
     setError(issue === "oversize" ? "" : issue);
     setSuccess("");
+    setConflictNotice(null);
     const fileChanged = file !== nextFile;
     setFile(nextFile);
     // Keep the previous preview mounted while a new extract runs so the PDF/DOCX
@@ -196,6 +217,7 @@ export default function MechanicsPanel({
         gemini_used: Boolean(data.gemini_used),
       });
       // Fill found rules; any field the guide omits becomes IGNORE (auto-pass).
+      // Chosen conflict values are already in data.rules, so they stay filled (not ignored).
       setUploadForm(
         fillEmptyFieldsWithIgnore(
           rulesToForm(data.rules || {}, data.name || nextFile.name.replace(/\.(pdf|docx)$/i, ""))
@@ -204,6 +226,7 @@ export default function MechanicsPanel({
       setSuccess(
         "Format fields filled from your guide. Editing is optional — you can Save & use as-is."
       );
+      setConflictNotice(conflictNoticeFromExtract(data.conflicts));
     } catch (err) {
       setError(err.message || "Extraction failed.");
     } finally {
@@ -872,6 +895,16 @@ export default function MechanicsPanel({
           {success}
         </p>
       )}
+
+      <ConfirmDialog
+        open={Boolean(conflictNotice) && !error && !confirmAction}
+        title={conflictNotice?.title || ""}
+        message={conflictNotice?.message || ""}
+        confirmLabel="Got it"
+        cancelLabel={null}
+        onConfirm={() => setConflictNotice(null)}
+        onCancel={() => setConflictNotice(null)}
+      />
 
       <ConfirmDialog
         open={Boolean(confirmAction)}

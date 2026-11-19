@@ -40,7 +40,10 @@ export default function ConfirmDialog({
           {title}
         </h3>
         {message ? (
-          <p id="confirm-dialog-message" className="mt-2 text-sm leading-relaxed text-slate-500">
+          <p
+            id="confirm-dialog-message"
+            className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-500"
+          >
             {message}
           </p>
         ) : null}

@@ -15,8 +15,43 @@ from typing import Any
 import google.generativeai as genai
 
 from app.config import settings
+from app.documents import (
+    _CORE_MARGIN_SIDES,
+    iter_uniform_margin_mentions,
+    parse_length_inches,
+)
 
 ASSIST_KINDS = frozenset({"visual", "image", "style", "other"})
+
+# Top-level Format Fields keys only. Anything else from Gemini becomes assist_items.
+_SCHEMA_TOP_KEYS = frozenset(
+    {
+        "font",
+        "paper",
+        "paper_size",
+        "margins_inches",
+        "spacing",
+        "line_spacing",
+        "line_spacings",
+        "indention",
+        "first_line_indent_inches",
+        "indent_type",
+        "indent_tolerance_inches",
+        "alignment",
+        "alignment_page_overrides",
+        "pagination",
+        "citation_style",
+        "word_spacing",
+        "heading_requirements",
+        "pagination_requirements",
+        "page_break_requirements",
+        "table_layout_requirements",
+        "figure_layout_requirements",
+        "field_sources",
+        "needs_review",
+        "ignored_fields",
+    }
+)
 
 # Schema-shaped keys Gemini may fill. Anything else becomes assist_items.
 _SCHEMA_HINT = """
@@ -26,6 +61,9 @@ Known Format Fields schema (fill only when the guide clearly states a value):
 - paper: { size, orientation, substance, landscape_pages }
 - paper_size: { name (A4|LETTER|LEGAL), width_inches, height_inches }
 - margins_inches: { top, bottom, left, right, gutter, header, footer } (inches)
+  IMPORTANT: If the guide gives one margin amount without naming sides
+  ("Margins 1 inch", "margins should be 1 inch"), set top, bottom, left, AND right
+  to that same value. Do not leave sides empty.
 - spacing / line_spacing (e.g. Double, 2.0, Single)
 - indention / first_line_indent_inches
 - alignment (left|center|right|justify)
@@ -33,7 +71,8 @@ Known Format Fields schema (fill only when the guide clearly states a value):
 - citation_style (APA|MLA|IEEE)
 - table_layout_requirements[] / figure_layout_requirements[]
 - page_break_requirements[]
-Do NOT invent values. Prefer seed_rules when already filled.
+Do NOT invent values for fields the guide never mentions. Prefer seed_rules when already filled.
+If the same field is stated twice with different values, prefer the later mention in the guide.
 """
 
 UNDERSTAND_SYSTEM = f"""You are PaperPilot's format-guide reader.
@@ -61,6 +100,7 @@ Return ONLY valid JSON with keys:
 kind must be one of: visual, image, style, other.
 assist_required must be true for every assist_item.
 id should be a short snake_case slug.
+Never put visual/image/style-only requirements into rules — assist_items only.
 """
 
 ASSIST_SYSTEM = """You are PaperPilot's visual/format assist helper.
@@ -93,7 +133,10 @@ def _merge_fill(base: dict, extra: dict) -> dict:
     """Keep seed/regex values; fill only empty schema keys from Gemini."""
     out = dict(base or {})
     for key, value in (extra or {}).items():
-        if key in {"field_sources", "needs_review", "assist_items"}:
+        if key in {"field_sources", "needs_review", "assist_items", "conflicts"}:
+            continue
+        # Non-schema keys are routed to assist_items in finalize — skip here.
+        if key not in _SCHEMA_TOP_KEYS:
             continue
         if isinstance(value, dict):
             current = out.get(key) if isinstance(out.get(key), dict) else {}
@@ -179,6 +222,180 @@ def _merge_assist_items(*groups: list[dict]) -> list[dict]:
             if len(merged) >= 40:
                 return merged
     return merged
+
+
+def _margin_dict_all_sides(amount: float) -> dict[str, float]:
+    return {side: float(amount) for side in _CORE_MARGIN_SIDES}
+
+
+def _format_inches_phrase(amount: float) -> str:
+    value = float(amount)
+    if abs(value - round(value)) < 1e-9:
+        whole = int(round(value))
+        unit = "inch" if whole == 1 else "inches"
+        return f"{whole} {unit}"
+    text = f"{value:.4g}".rstrip("0").rstrip(".")
+    return f"{text} inches"
+
+
+def _format_margins_phrase(margins: dict) -> str:
+    core = {side: margins[side] for side in _CORE_MARGIN_SIDES if side in margins}
+    if len(core) == 4 and len(set(round(float(v), 4) for v in core.values())) == 1:
+        return f"{_format_inches_phrase(next(iter(core.values())))} on all sides"
+    parts = [
+        f"{_format_inches_phrase(margins[side])} {side}"
+        for side in _CORE_MARGIN_SIDES
+        if side in margins
+    ]
+    return ", ".join(parts) if parts else "the later margin value"
+
+
+def expand_sideless_margins(rules: dict | None, text: str | None = None) -> dict:
+    """Expand scalar / all / value margin cues into all four sides.
+
+    When the guide states a side-less uniform amount, missing sides are filled so
+    UI Ignore cannot wipe scoring. Named single-side rules are left alone unless
+    the guide also has a uniform / all-sides phrase.
+    """
+    out = dict(rules or {})
+    raw = out.get("margins_inches")
+    amount: float | None = None
+    extras: dict[str, Any] = {}
+    had_explicit_uniform_key = False
+
+    if isinstance(raw, (int, float, str)):
+        amount = parse_length_inches(raw)
+        had_explicit_uniform_key = amount is not None
+    elif isinstance(raw, dict):
+        extras = {
+            key: value
+            for key, value in raw.items()
+            if key not in _CORE_MARGIN_SIDES
+            and key not in {"all", "value", "uniform", "amount"}
+        }
+        for key in ("all", "value", "uniform", "amount"):
+            if key in raw and amount is None:
+                amount = parse_length_inches(raw.get(key))
+                if amount is not None:
+                    had_explicit_uniform_key = True
+        core = {
+            side: parse_length_inches(raw.get(side))
+            for side in _CORE_MARGIN_SIDES
+            if parse_length_inches(raw.get(side)) is not None
+        }
+        mentions = iter_uniform_margin_mentions(text or "")
+        if amount is None and mentions and len(core) < 4:
+            # Guide said a uniform amount — fill any sides Gemini/regex left empty.
+            amount = mentions[-1][1]
+        if amount is None and core:
+            out["margins_inches"] = {**{side: core[side] for side in core}, **extras}
+            return out
+        if amount is not None and core and not had_explicit_uniform_key and not mentions:
+            # Keep named sides; do not invent the rest from a lone side value.
+            out["margins_inches"] = {**{side: core[side] for side in core}, **extras}
+            return out
+    else:
+        return out
+
+    if amount is None:
+        # No margins object yet, but guide has a side-less phrase → fill all sides.
+        mentions = iter_uniform_margin_mentions(text or "")
+        if mentions and "margins_inches" not in out:
+            amount = mentions[-1][1]
+        else:
+            return out
+    out["margins_inches"] = {**_margin_dict_all_sides(amount), **extras}
+    return out
+
+
+def _strip_non_schema_into_assist(
+    rules: dict | None,
+    assist_items: list[dict] | None,
+) -> tuple[dict, list[dict]]:
+    """Move unknown top-level keys out of rules into assist_items (never scored)."""
+    cleaned = dict(rules or {})
+    spilled: list[dict] = []
+    for key in list(cleaned.keys()):
+        if key in _SCHEMA_TOP_KEYS:
+            continue
+        value = cleaned.pop(key)
+        if isinstance(value, dict) and value.get("requirement_text"):
+            spilled.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    spilled.append(item)
+                else:
+                    text = str(item or "").strip()
+                    if text:
+                        spilled.append(
+                            {
+                                "id": f"assist_{re.sub(r'[^a-z0-9]+', '_', key.lower())[:40]}",
+                                "category": key,
+                                "requirement_text": text,
+                                "kind": "other",
+                                "assist_required": True,
+                            }
+                        )
+        else:
+            text = str(value or "").strip()
+            if text:
+                spilled.append(
+                    {
+                        "id": f"assist_{re.sub(r'[^a-z0-9]+', '_', key.lower())[:40]}",
+                        "category": key,
+                        "requirement_text": text,
+                        "kind": "other",
+                        "assist_required": True,
+                    }
+                )
+    return cleaned, _merge_assist_items(assist_items or [], spilled)
+
+
+def resolve_guide_conflicts(text: str, rules: dict | None) -> tuple[dict, list[dict]]:
+    """Prefer later duplicate mentions; return friendly conflicts for the UI modal.
+
+    Messages never say SOT/SOC — plain language only.
+    """
+    out = expand_sideless_margins(rules, text)
+    conflicts: list[dict] = []
+    mentions = iter_uniform_margin_mentions(text)
+    if len(mentions) >= 2:
+        distinct: list[float] = []
+        for _, amount in mentions:
+            if not distinct or round(distinct[-1], 4) != round(amount, 4):
+                distinct.append(amount)
+        if len(distinct) >= 2:
+            chosen_amount = distinct[-1]
+            rejected_amount = distinct[-2]
+            chosen = _margin_dict_all_sides(chosen_amount)
+            rejected = _margin_dict_all_sides(rejected_amount)
+            existing = out.get("margins_inches") if isinstance(out.get("margins_inches"), dict) else {}
+            out["margins_inches"] = {**existing, **chosen}
+            conflicts.append(
+                {
+                    "field": "margins_inches",
+                    "chosen": chosen,
+                    "rejected": rejected,
+                    "message": (
+                        "We found two different margin rules. We're using the later one: "
+                        f"{_format_margins_phrase(chosen)}. You can change this before saving."
+                    ),
+                }
+            )
+    return out, conflicts
+
+
+def finalize_understood_mechanics(
+    text: str,
+    rules: dict | None,
+    assist_items: list[dict] | None = None,
+) -> tuple[dict, list[dict], list[dict]]:
+    """Expand known fills, route unknown keys to assist, detect later-wins conflicts."""
+    cleaned, assist = _strip_non_schema_into_assist(rules, assist_items)
+    cleaned = expand_sideless_margins(cleaned, text)
+    cleaned, conflicts = resolve_guide_conflicts(text, cleaned)
+    return cleaned, assist, conflicts
 
 
 def harvest_assist_items_from_guide(text: str) -> list[dict]:
@@ -331,21 +548,48 @@ def understand_mechanics_with_gemini(
     seed_rules: dict | None = None,
     style_names: list[str] | None = None,
 ) -> dict:
-    """Fill Format Fields + assist_items from a guide. Falls back when Gemini is off."""
+    """Fill Format Fields + assist_items from a guide. Falls back when Gemini is off.
+
+    Always runs local finalize: side-less margins → all sides, later-wins conflicts,
+    and non-schema keys → assist_items. Unmentioned schema fields stay empty.
+    """
     seed = dict(seed_rules or {})
     harvested = harvest_assist_items_from_guide(text)
     guessed_kind = _guess_guide_kind(text, style_names)
-    empty = {
-        "rules": seed,
-        "assist_items": harvested,
-        "confidence": 0.35 if harvested else 0.0,
-        "guide_kind": guessed_kind,
-        "gemini_used": False,
-        "gemini_available": _gemini_ready(),
-    }
+    body = str(text or "").strip()
+
+    def _pack(
+        rules: dict,
+        assist: list[dict],
+        *,
+        confidence: float,
+        guide_kind: str,
+        gemini_used: bool,
+        gemini_available: bool,
+    ) -> dict:
+        finalized_rules, finalized_assist, conflicts = finalize_understood_mechanics(
+            body, rules, assist
+        )
+        return {
+            "rules": finalized_rules,
+            "assist_items": finalized_assist,
+            "conflicts": conflicts,
+            "confidence": confidence,
+            "guide_kind": guide_kind,
+            "gemini_used": gemini_used,
+            "gemini_available": gemini_available,
+        }
+
+    empty = _pack(
+        seed,
+        harvested,
+        confidence=0.35 if harvested else 0.0,
+        guide_kind=guessed_kind,
+        gemini_used=False,
+        gemini_available=_gemini_ready(),
+    )
     if not _gemini_ready():
         return empty
-    body = str(text or "").strip()
     if not body:
         return empty
     styles = [str(name) for name in (style_names or []) if str(name).strip()][:80]
@@ -364,8 +608,12 @@ def understand_mechanics_with_gemini(
         response = model.generate_content(prompt)
         data = _parse_json_response(response.text or "")
         gemini_rules = data.get("rules") if isinstance(data.get("rules"), dict) else {}
-        merged = _merge_fill(seed, gemini_rules)
-        assist_items = _merge_assist_items(harvested, data.get("assist_items") or [])
+        # Non-schema Gemini keys become assist_items (never scored).
+        schema_rules, spilled_assist = _strip_non_schema_into_assist(gemini_rules, [])
+        merged = _merge_fill(seed, schema_rules)
+        assist_items = _merge_assist_items(
+            harvested, data.get("assist_items") or [], spilled_assist
+        )
         try:
             confidence = float(data.get("confidence") or 0)
         except (TypeError, ValueError):
@@ -374,14 +622,14 @@ def understand_mechanics_with_gemini(
         guide_kind = str(data.get("guide_kind") or guessed_kind).strip().lower()
         if guide_kind not in {"explicit_rulebook", "template_as_guide", "hybrid", "unknown"}:
             guide_kind = guessed_kind
-        return {
-            "rules": merged,
-            "assist_items": assist_items,
-            "confidence": confidence,
-            "guide_kind": guide_kind,
-            "gemini_used": True,
-            "gemini_available": True,
-        }
+        return _pack(
+            merged,
+            assist_items,
+            confidence=confidence,
+            guide_kind=guide_kind,
+            gemini_used=True,
+            gemini_available=True,
+        )
     except Exception:
         return empty
 
