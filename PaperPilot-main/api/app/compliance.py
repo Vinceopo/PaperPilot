@@ -4170,7 +4170,19 @@ def run_compliance_scan(
 
             assist_findings = assist_visual_mechanics(marked, parsed, mechanics_rules)
         except Exception:
-            assist_findings = []
+            # Never silent when custom assist_items exist — surface unavailable explicitly.
+            assist_findings = [
+                {
+                    "assist_item_id": item.get("id"),
+                    "kind": item.get("kind") or "other",
+                    "title": "AI assist unavailable",
+                    "summary": "Gemini assist could not run for this requirement.",
+                    "recommendation": "Review this visual/image requirement manually.",
+                    "confidence": 0.0,
+                    "status": "unavailable",
+                }
+                for item in marked[:40]
+            ]
     result.update(
         {
             "issues": issues,

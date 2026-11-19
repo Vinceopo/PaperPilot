@@ -81,6 +81,8 @@ export async function analyzeDocument(file, mechanicsId, documentId, opts = {}) 
     formatMechanicsName: opts.formatMechanicsName || "",
     mechanicsRules:
       opts.mechanicsRules && typeof opts.mechanicsRules === "object" ? opts.mechanicsRules : null,
+    assistItems: Array.isArray(opts.assistItems) ? opts.assistItems : undefined,
+    assistExpected: Boolean(opts.assistExpected),
     pageCount: opts.pageCount,
     mechanicsId,
     cloudinaryUrl: scan?.cloudinary_url || opts.cloudinaryUrl || uploadedUrl || "",
@@ -119,6 +121,8 @@ export async function downloadReport(result, opts = {}) {
     unitsChecked,
     unitsPassed,
     unitsFailed,
+    assistFindings = [],
+    assistExpected = false,
   } = result;
 
   const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
@@ -340,18 +344,25 @@ export async function downloadReport(result, opts = {}) {
 
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(226, 232, 240);
-  doc.roundedRect(ML, Y, CW, 42, 2, 2, "FD");
+  doc.roundedRect(ML, Y, CW, 48, 2, 2, "FD");
 
   doc.setFontSize(6.5).setFont("helvetica", "bold").setTextColor(...SLATE);
   doc.text("OVERALL COMPLIANCE SCORE", ML + 5, Y + 8);
   const scoreStr = formatScore(scoreValue, 0);
   doc.setFontSize(22).setFont("helvetica", "bold").setTextColor(...bandColor);
-  doc.text(scoreStr, ML + 5, Y + 22);
+  doc.text(scoreStr, ML + 5, Y + 20);
   const scoreW = doc.getTextWidth(scoreStr);
   doc.setFontSize(12).setFont("helvetica", "bold").setTextColor(...bandColor);
-  doc.text("%", ML + 5 + scoreW + 1, Y + 22);
+  doc.text("%", ML + 5 + scoreW + 1, Y + 20);
   doc.setFontSize(7).setFont("helvetica", "bold").setTextColor(...bandColor);
-  doc.text(band, ML + 5, Y + 30);
+  doc.text(band, ML + 5, Y + 28);
+  doc.setFontSize(5.5).setFont("helvetica", "normal").setTextColor(...SLATE);
+  doc.text(
+    "Filled Format Fields only — not a full publisher-template match.",
+    ML + 5,
+    Y + 34,
+    { maxWidth: 52 }
+  );
 
   // Compliant / Non-Compliant labels + thin stacked bar (no percent numbers)
   const barX = ML + 58;
@@ -396,7 +407,7 @@ export async function downloadReport(result, opts = {}) {
     doc.text(s.label, bx + boxW / 2, by + 11.5, { align: "center" });
   });
 
-  Y += 48;
+  Y += 54;
 
   // ══════════════════════════════════════════════════════════════════════════
   // SECTION: SCORE BREAKDOWN (oval rings — same layout language as full results)
@@ -537,6 +548,68 @@ export async function downloadReport(result, opts = {}) {
   Y = (doc.lastAutoTable?.finalY ?? Y) + 8;
 
   // ══════════════════════════════════════════════════════════════════════════
+  // SECTION: AI ASSIST FINDINGS (custom uploads — never silent when expected)
+  // ══════════════════════════════════════════════════════════════════════════
+  const assistRows = Array.isArray(assistFindings) ? assistFindings : [];
+  if (assistRows.length > 0 || assistExpected) {
+    checkPageBreak(24);
+    doc.setFontSize(10).setFont("helvetica", "bold").setTextColor(0, 0, 0);
+    doc.text("AI Assist Findings", ML, Y);
+    Y += 4;
+    doc.setFontSize(7).setFont("helvetica", "normal").setTextColor(...SLATE);
+    doc.text(
+      "Visual / image / style checks from your custom guide. These do not change the score.",
+      ML,
+      Y,
+      { maxWidth: CW }
+    );
+    Y += 6;
+    if (assistRows.length > 0) {
+      autoTable(doc, {
+        startY: Y,
+        margin: { left: ML, right: MR },
+        head: [["Status", "Finding", "Suggestion"]],
+        body: assistRows.map((item) => [
+          String(item.status || "unclear").replace(/_/g, " "),
+          `${item.title || "Assist finding"}\n${item.summary || ""}`.trim(),
+          item.recommendation || "-",
+        ]),
+        styles: {
+          fontSize: 8,
+          cellPadding: 3,
+          lineColor: [226, 232, 240],
+          lineWidth: 0.3,
+          fillColor: 255,
+        },
+        headStyles: {
+          fillColor: [248, 250, 252],
+          textColor: SLATE,
+          fontStyle: "bold",
+          fontSize: 7.5,
+        },
+        columnStyles: {
+          0: { cellWidth: 28, fontStyle: "bold" },
+          1: { cellWidth: "auto", textColor: [71, 85, 105] },
+          2: { cellWidth: 55, textColor: [100, 116, 139], fontSize: 7 },
+        },
+        didAddPage: () => {
+          Y = MT;
+        },
+      });
+      Y = (doc.lastAutoTable?.finalY ?? Y) + 8;
+    } else {
+      doc.setFontSize(8).setFont("helvetica", "normal").setTextColor(71, 85, 105);
+      doc.text(
+        "No assist findings were returned for this scan (none flagged, or assist unavailable).",
+        ML,
+        Y,
+        { maxWidth: CW }
+      );
+      Y += 10;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   // FOOTER NOTE (last page)
   // ══════════════════════════════════════════════════════════════════════════
   checkPageBreak(18);
@@ -546,12 +619,14 @@ export async function downloadReport(result, opts = {}) {
   doc.setFontSize(7).setFont("helvetica", "normal").setTextColor(...SLATE);
   doc.text(
     "This report covers formatting mechanics only: fonts, margins, spacing, indentation, " +
-    "alignment, pagination, and citation format.",
+    "alignment, pagination, and citation format. The overall score reflects filled Format Fields only — " +
+    "not a full publisher-template match.",
     ML, Y, { maxWidth: CW }
   );
-  Y += 5;
+  Y += 8;
   doc.text(
-    "It does not evaluate grammar, writing quality, plagiarism, or the accuracy of cited content.",
+    "It does not evaluate grammar, writing quality, plagiarism, or the accuracy of cited content. " +
+    "AI assist findings (when present) never change the numeric score.",
     ML, Y, { maxWidth: CW }
   );
 

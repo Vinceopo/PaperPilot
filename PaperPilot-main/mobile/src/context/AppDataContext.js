@@ -242,10 +242,13 @@ export function AppDataProvider({ children }) {
     const mechanicsId = selectedMechanicsIdRef.current;
     const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
     const citationStyle = supportedCitationStyle(profile?.rules?.citation_style);
+    const assistItems = Array.isArray(profile?.assist_items) ? profile.assist_items : [];
     return {
       manuscriptId,
       versionId,
       citationStyle,
+      assistItems,
+      assistExpected: assistItems.length > 0,
       pageCount: version?.page_count,
       versionNumber: version?.version_number,
       cloudinaryUrl: version?.cloudinary_url || "",

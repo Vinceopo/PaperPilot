@@ -208,6 +208,8 @@ function ScanResultBody({ navigation }) {
     unitsPassed,
     unitsFailed,
     scoringConsistency = null,
+    assistFindings = [],
+    assistExpected = false,
   } = result;
 
   const issueTypes = formatChecks.filter((c) => c.result === "FAIL" || c.result === "REVIEW").length;
@@ -378,6 +380,9 @@ function ScanResultBody({ navigation }) {
           <Text style={[styles.bandText, { color: overallBand.text }]}>{overallBand.label}</Text>
         </View>
         <Text style={[styles.circleHint, { textAlign: "left", marginTop: 8 }]}>
+          Based on filled Format Fields only — not a full publisher-template match.
+        </Text>
+        <Text style={[styles.circleHint, { textAlign: "left", marginTop: 4 }]}>
           {evaluatedCards.length
             ? `Average of the ${evaluatedCards.length} measured ${plural(evaluatedCards.length, "category", "categories")}`
             : Array.isArray(overallCategories) && overallCategories.length
@@ -417,6 +422,51 @@ function ScanResultBody({ navigation }) {
           ))}
         </View>
       </View>
+
+      {Array.isArray(assistFindings) && assistFindings.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.cardKicker}>AI assist findings</Text>
+          <Text style={[styles.circleHint, { textAlign: "left", marginTop: 4 }]}>
+            Visual / image / style checks from your custom guide. These do not change the score.
+          </Text>
+          <View style={{ marginTop: 12, gap: 10 }}>
+            {assistFindings.map((item) => (
+              <View
+                key={item.id}
+                style={{
+                  borderWidth: 1,
+                  borderColor: "#e2e8f0",
+                  backgroundColor: "#f8fafc",
+                  borderRadius: 12,
+                  padding: 12,
+                }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: "700", color: "#1e293b" }}>
+                  {item.title}
+                </Text>
+                <Text style={{ marginTop: 4, fontSize: 11, color: "#64748b", textTransform: "uppercase" }}>
+                  {item.kind || "other"} · {String(item.status || "unclear").replace(/_/g, " ")}
+                </Text>
+                {item.summary ? (
+                  <Text style={{ marginTop: 6, fontSize: 13, color: "#475569" }}>{item.summary}</Text>
+                ) : null}
+                {item.recommendation ? (
+                  <Text style={{ marginTop: 4, fontSize: 12, color: "#64748b" }}>
+                    Suggestion: {item.recommendation}
+                  </Text>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : assistExpected ? (
+        <View style={styles.card}>
+          <Text style={styles.cardKicker}>AI assist findings</Text>
+          <Text style={[styles.circleHint, { textAlign: "left", marginTop: 8 }]}>
+            No assist findings were returned for this scan (none flagged, or assist unavailable).
+          </Text>
+        </View>
+      ) : null}
 
       <View style={styles.previewCard}>
         <View style={styles.previewHead}>
