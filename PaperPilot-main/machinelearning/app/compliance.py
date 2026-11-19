@@ -1059,14 +1059,20 @@ HEADING_STYLE_RE = re.compile(r"heading\s*(\d)")
 # Structure-only limits - not compliance rule values.
 HEADING_MAX_CHARS = 120
 HEADING_MAX_WORDS = 15
-NUMBERED_HEADING_RE = re.compile(r"^\d+(?:\.\d+){0,5}\s+\S")
+# Outline numbers only (1 / 10 / 1.1). Cap first segment at 3 digits so year
+# ranges like "2020 - 2022 Senior High …" are never treated as Heading 1.
+NUMBERED_HEADING_RE = re.compile(r"^\d{1,3}(?:\.\d+){0,5}\s+\S")
+YEAR_RANGE_HEADING_RE = re.compile(r"^(?:19|20)\d{2}\s*[-–—]\s*(?:19|20)\d{2}\b")
 
 
 def _numbered_heading_role(text: str, defined, heading_sizes) -> str | None:
     """Map '1 …' → heading1, '1.1 …' → heading2, clamped to levels that have rules."""
-    if not NUMBERED_HEADING_RE.match(text or ""):
+    value = text or ""
+    if YEAR_RANGE_HEADING_RE.match(value):
         return None
-    prefix = re.sub(r"[^\d.]+$", "", (text or "").split()[0])
+    if not NUMBERED_HEADING_RE.match(value):
+        return None
+    prefix = re.sub(r"[^\d.]+$", "", value.split()[0])
     depth = min(6, max(1, prefix.count(".") + 1))
     for level in range(depth, 0, -1):
         role = f"heading{level}"
@@ -1129,6 +1135,8 @@ def _is_structural_heading_text(text: str) -> bool:
         if re.search(r"[–—:.-]", rest) or TOC_ENTRY_TRAIL_RE.search(value) or len(rest.split()) > 6:
             return False
         return len(rest) <= 48
+    if YEAR_RANGE_HEADING_RE.match(value):
+        return False
     if NUMBERED_HEADING_RE.match(value) and len(value.split()) <= HEADING_MAX_WORDS:
         return True
     return False
@@ -3945,9 +3953,16 @@ def _filter_unset_heading_font_issues(issues: list[dict], mechanics_rules: dict)
     return kept
 
 
+def _coerce_mechanics_rules(mechanics_rules) -> dict:
+    """Custom/partial mechanics must always be a dict — never crash scan startup."""
+    return mechanics_rules if isinstance(mechanics_rules, dict) else {}
+
+
 def run_compliance_scan(
     parsed: dict, mechanics_rules: dict, tier: str = "free", on_progress=None
 ) -> dict:
+    mechanics_rules = _coerce_mechanics_rules(mechanics_rules)
+    parsed = parsed if isinstance(parsed, dict) else {"text": "", "metadata": {}, "pages": []}
     units = _document_units(parsed, mechanics_rules)
     _annotate_roles(units, mechanics_rules)
     _mark_title_page(units, mechanics_rules)
