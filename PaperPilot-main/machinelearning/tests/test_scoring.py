@@ -119,12 +119,12 @@ class ScoringFormulaTests(ScoringAssertions):
     def test_unchecked_category_is_not_a_false_100(self):
         stats = {name: Stats() for name in BREAKDOWN_ORDER}
         stats["Fonts"] = Stats(10, 5)
-        stats["Spacing"] = Stats(0, 0, applicable=False)
+        stats["Line Spacing"] = Stats(0, 0, applicable=False)
         payload = build_scoring_payload(stats, [])
         cats = {c["category"]: c for c in payload["scoring"]["categories"]}
-        self.assertEqual(cats["Spacing"]["status"], "not_applicable")
+        self.assertEqual(cats["Line Spacing"]["status"], "not_applicable")
         self.assertEqual(cats["Margins"]["status"], "not_evaluated")
-        self.assertIsNone(cats["Spacing"]["score"]["value"])
+        self.assertIsNone(cats["Line Spacing"]["score"]["value"])
         self.assertEqual(payload["overall_score"], 50.0)
         self.assertEqual(payload["scoring"]["overall"]["categories"], ["Fonts"])
 
@@ -202,7 +202,7 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
 
     def test_01_empty_manuscript(self):
         result = self.scan([])
-        for name in ("Fonts", "Indentation", "Spacing", "Alignment"):
+        for name in ("Fonts", "Indentation", "Line Spacing", "Alignment"):
             self.assertEqual(by_category(result)[name]["status"], "not_evaluated")
             self.assertIsNone(by_category(result)[name]["score"]["value"])
         # Only the page setup exists, so only Margins is measured and the overall score says so.
@@ -237,9 +237,10 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
         self.assertEqual(result["wrong_pct"], 0.0)
         self.assertEqual(result["overall_score"], 100.0)
         statuses = {c["category"]: c["status"] for c in result["scoring"]["categories"]}
-        # RULES has no pagination / citation_style, so those categories stay not applicable.
+        # RULES has no pagination / citation_style / caption layout, so those stay not applicable.
         self.assertEqual(statuses.pop("Pagination"), "not_applicable")
         self.assertEqual(statuses.pop("Citations"), "not_applicable")
+        self.assertEqual(statuses.pop("Captions"), "not_applicable")
         self.assertTrue(all(status == "pass" for status in statuses.values()))
         self.assertTrue(all(row["wrong_pct"] is None for row in result["category_wrong_pct"]))
 
@@ -259,7 +260,7 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
             "Fonts": ({"font": "Arial"}, 1.0),
             "Margins": ({}, 0.4),
             "Indentation": ({"indent": 0.0}, 1.0),
-            "Spacing": ({"spacing": 1.0}, 1.0),
+            "Line Spacing": ({"spacing": 1.0}, 1.0),
             "Alignment": ({"align": "center"}, 1.0),
         }
         for category, (overrides, margin) in cases.items():
@@ -274,17 +275,17 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
     def test_12_mixed_violations(self):
         paragraphs = [para(0, font="Arial"), para(1, spacing=1.0), para(2)]
         result = self.scan(paragraphs)
-        self.assertEqual(self.failed_categories(result), {"Fonts", "Spacing"})
+        self.assertEqual(self.failed_categories(result), {"Fonts", "Line Spacing"})
         shares = [row["wrong_pct"] for row in result["category_wrong_pct"] if row["wrong_pct"] is not None]
         self.assertAlmostEqual(sum(shares), 100.0, places=9)
 
     def test_13_category_not_applicable(self):
         rules = {key: value for key, value in RULES.items() if key != "line_spacing"}
         result = self.scan([para(i) for i in range(3)], rules=rules)
-        spacing = by_category(result)["Spacing"]
+        spacing = by_category(result)["Line Spacing"]
         self.assertEqual(spacing["status"], "not_applicable")
         self.assertIsNone(spacing["score"]["value"])
-        self.assertNotIn("Spacing", result["scoring"]["overall"]["categories"])
+        self.assertNotIn("Line Spacing", result["scoring"]["overall"]["categories"])
 
     def test_14_multiple_pages(self):
         result = self.scan([para(i, lines=6) for i in range(30)])
@@ -298,7 +299,21 @@ class AnalyzerEdgeCaseTests(ScoringAssertions):
     def test_15_multiple_sections(self):
         paragraphs = []
         for chapter in range(3):
-            paragraphs.append(para(len(paragraphs), lines=1, style="Heading 1", indent=0.0))
+            # Short title lines keep the Heading 1 role (long prose under Heading style stays body).
+            paragraphs.append(
+                {
+                    "paragraph_index": len(paragraphs),
+                    "style": "Heading 1",
+                    "text": f"Chapter {chapter + 1}",
+                    "lines": [{"line_index": 0, "text": f"Chapter {chapter + 1}"}],
+                    "runs": [{"text": f"Chapter {chapter + 1}", "font": "Times New Roman", "size": 12}],
+                    "formatting": {
+                        "line_spacing": 2.0,
+                        "alignment": "justify",
+                        "first_line_indent_inches": 0.0,
+                    },
+                }
+            )
             paragraphs.extend(para(len(paragraphs) + k, font="Arial" if chapter == 1 else "Times New Roman") for k in range(2))
         result = self.scan(paragraphs)
         self.assertEqual(self.failed_categories(result), {"Fonts"})

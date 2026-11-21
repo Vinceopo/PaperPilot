@@ -40,13 +40,40 @@ NON_PROSE_SOURCES = {"table", "header", "footer", "footnote", "endnote", "textbo
 
 
 def _font_key(value: str) -> str:
-    value = value.split("+")[-1]
-    return re.sub(r"[^a-z0-9]", "", value.lower()).replace("psmt", "").replace("mt", "")
+    """Normalize a font id for comparison (no sample allow-list — any family is valid)."""
+    value = str(value or "").split("+")[-1]
+    key = re.sub(r"[^a-z0-9]", "", value.lower())
+    # Peel PostScript / face suffixes from the end only. Never strip "black"/"roman"
+    # (those are part of family names like Arial Black / Times New Roman).
+    peeled = True
+    while peeled and key:
+        peeled = False
+        for suffix in (
+            "psmt",
+            "bolditalic",
+            "bold",
+            "italic",
+            "oblique",
+            "regular",
+            "medium",
+            "light",
+            "mt",
+            "ps",
+        ):
+            if key.endswith(suffix) and len(key) > len(suffix) + 2:
+                key = key[: -len(suffix)]
+                peeled = True
+                break
+    return key
 
 
 # Longer names first so "Arial Black" wins over "Arial" when matching PostScript names.
+# Suggestions only — custom families still display via spacing of the raw id.
 _COMMON_FONT_NAMES = (
     "Times New Roman",
+    "Linux Biolinum O",
+    "Linux Libertine O",
+    "Linux Libertine",
     "Arial Narrow",
     "Arial Black",
     "Courier New",
@@ -75,10 +102,35 @@ def _font_display_name(value: str | None) -> str:
         name_key = _font_key(name)
         if key == name_key or (len(name_key) >= 4 and key.startswith(name_key)):
             return name
-    stem = re.sub(r"(?i)(psmt|mt|regular|bold|italic|oblique|medium|light|black)$", "", raw)
-    stem = re.sub(r"(?i)(psmt|mt)$", "", stem)
+    # Reuse _font_key peeling, then re-space the original camel-case stem for unknowns.
+    stem = raw
+    for suffix in (
+        "PSMT",
+        "BoldItalic",
+        "Bold",
+        "Italic",
+        "Oblique",
+        "Regular",
+        "Medium",
+        "Light",
+        "MT",
+        "PS",
+    ):
+        if stem.lower().endswith(suffix.lower()) and len(stem) > len(suffix) + 2:
+            stem = stem[: -len(suffix)]
     spaced = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", stem)
     return re.sub(r"\s+", " ", spaced).strip() or raw
+
+
+def _font_measured_label(value: str | None) -> str:
+    """Human label plus raw embedded id when it differs (PDF PostScript names)."""
+    display = _font_display_name(value)
+    raw = str(value or "").split("+")[-1].strip()
+    if not display:
+        return raw
+    if raw and _font_key(raw) != _font_key(display):
+        return f"{display} (embedded as {raw})"
+    return display
 
 
 DECORATIVE_FONT_RE = re.compile(
@@ -259,7 +311,14 @@ def _location(page: int | None, line: int | None, category: str) -> dict:
     return loc
 
 
-def _unit_location(unit: dict, category: str) -> dict:
+def _unit_location(
+    unit: dict,
+    category: str,
+    *,
+    measured=None,
+    expected=None,
+    element: str | None = None,
+) -> dict:
     loc = _location(unit.get("page_index"), unit.get("line_index"), category)
     excerpt = " ".join(str(unit.get("text") or "").split())[:100]
     if excerpt:
@@ -274,6 +333,13 @@ def _unit_location(unit: dict, category: str) -> dict:
     page_height = unit.get("page_height") or unit.get("page_height_points")
     if page_height:
         loc["page_height"] = page_height
+    role = element or unit.get("role")
+    if role:
+        loc["element"] = str(role)
+    if measured is not None and measured != "":
+        loc["measured_value"] = measured
+    if expected is not None and expected != "":
+        loc["expected_value"] = expected
     return loc
 
 
@@ -933,6 +999,53 @@ FIGURE_CAPTION_RE = re.compile(r"^\s*figure\s+\d+\b", re.I)
 PROSE_REFERENCE_RE = re.compile(
     r"^\s*(?:[Tt]able|[Ff]igure|TABLE|FIGURE)\s+\d+(?:\.\d+)*\s*(?:[:.\-\u2013]\s*)?(?=[a-z])"
 )
+# Narrative verbs after Table/Figure N (any casing) → body reference, not a caption.
+_CAPTION_NARRATIVE_VERB_RE = re.compile(
+    r"(?i)^\s*(?:table|figure|fig\.?)\s+\d+(?:\.\d+)*\s*[:.\-\u2013]?\s*"
+    r"(?:"
+    r"presents?|shows?|illustrates?|depicts?|displays?|contains?|lists?|"
+    r"summarizes?|provides?|describes?|indicates?|demonstrates?|reveals?|"
+    r"highlights?|outlines?|compares?|reports?|includes?|gives?|explains?|"
+    r"discusses?|examines?|introduces?|represents?|defines?|details?|"
+    r"covers?|follows?|appears?|refers?|corresponds?|depicts?"
+    r")\b"
+)
+_CAPTION_LABEL_HEAD_RE = re.compile(
+    r"(?i)^\s*(?:table|figure|fig\.?)\s+(\d+(?:\.\d+)*)\b\s*[:.\-\u2013]?\s*(.*)$"
+)
+
+
+def _is_caption_prose_reference(text: str) -> bool:
+    """True when a Table/Figure line is body narrative, not a caption label.
+
+    Rule #1: parameterized for any manuscript — no document-specific titles,
+    page numbers, or fixed wording beyond generic narrative patterns.
+
+    Short lowercase titles (e.g. wrong-case captions) still count as caption
+    candidates so case/style rules can flag them; only narrative sentences skip.
+    """
+    raw = " ".join(str(text or "").split()).strip()
+    if not raw:
+        return False
+    if _CAPTION_NARRATIVE_VERB_RE.match(raw):
+        return True
+    match = _CAPTION_LABEL_HEAD_RE.match(raw)
+    if not match:
+        return False
+    remainder = (match.group(2) or "").strip()
+    if not remainder:
+        return False
+    words = remainder.split()
+    # Caption titles stay short labels; narrative continues as a full sentence.
+    if len(words) >= 12:
+        return True
+    if len(remainder) >= 80 and ("," in remainder or "." in remainder[8:]):
+        return True
+    # Legacy lowercase-continuation signal, but only for sentence-length remainders
+    # so short titles like "Table 3. sensor readings" remain caption candidates.
+    if PROSE_REFERENCE_RE.match(raw) and len(words) >= 6:
+        return True
+    return False
 IN_TEXT_NUMERIC_RE = re.compile(r"\[(?:\d+)(?:\s*[-,]\s*\d+)*\]")
 IN_TEXT_APA_RE = re.compile(
     r"\([A-Z][A-Za-z'’-]+(?:\s+(?:et al\.|&\s+[A-Z][A-Za-z'’-]+))?,?\s+\d{4}[a-z]?(?:,\s*p+\.\s*\d+)?\)"
@@ -1782,17 +1895,25 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 loc,
             )
         if not family_ok:
-            detected = _font_display_name(shown_font)
+            detected = _font_measured_label(shown_font)
+            loc = _unit_location(
+                unit,
+                "Fonts",
+                measured=detected,
+                expected=required_families,
+                element=unit.get("role") or "body",
+            )
             collector.add(
                 "font_family",
                 "critical",
                 "Font family differs",
                 "Text uses a font family not listed by the uploaded format mechanics.",
                 (
-                    f"The detected font is {detected}, but the uploaded format mechanics require "
-                    f"{required_families} for the manuscript text."
+                    f"This manuscript measures as {detected}, but the Format Fields require "
+                    f"{required_families}. (PDF text fonts come from what is embedded in the file — "
+                    f"if Word showed a different typeface, re-export the PDF with that font embedded.)"
                 ),
-                "Apply the format-mechanics font family to this text.",
+                "Re-export or retype this text using the Format Fields font family, then scan again.",
                 loc,
             )
         if not size_ok and shown_size is not None:
@@ -1812,6 +1933,10 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
             # Separate issue types per role so Heading 1/2/body findings are not merged
             # into one card that reuses the first page's explanation.
             size_issue_type = f"font_size_{role}" if role and role != "body" else "font_size"
+            size_loc = dict(loc)
+            size_loc["measured_value"] = f"{shown_size:g} pt"
+            size_loc["expected_value"] = f"{expected_text} pt"
+            size_loc["element"] = role or "body"
             collector.add(
                 size_issue_type,
                 "critical",
@@ -1822,7 +1947,7 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                     f"require {expected_text} pt for the {role_label}."
                 ),
                 f"Select this line’s text and set the font size to {expected_text} pt.",
-                loc,
+                size_loc,
             )
 
 
@@ -2360,32 +2485,113 @@ def _allowed_line_spacings(rules: dict) -> list[float]:
     return values
 
 
+def _pdf_spacing_multiple(unit: dict, below: dict) -> float | None:
+    """Estimate a Word-style line-spacing multiple from consecutive PDF line boxes.
+
+    Uses font×1.15 (CSS/Word-like single) as the primary divisor. When an
+    under-reported face size would inflate the multiple, also consider the ink
+    box height and a plain font-size divisor, then keep the reading closest to a
+    standard multiple.
+    """
+    if not (_has_box(unit) and _has_box(below)):
+        return None
+    gap = float(below["bbox"][1]) - float(unit["bbox"][1])
+    if gap <= 0:
+        return None
+    font = max(6.0, _unit_font_pt(unit))
+    box_h = max(0.0, float(unit["bbox"][3]) - float(unit["bbox"][1]))
+    candidates = [
+        gap / (font * LINE_HEIGHT_FACTOR),
+        gap / font,
+    ]
+    if box_h >= 6.0:
+        candidates.append(gap / max(box_h, font * 0.85))
+    scored: list[tuple[float, float]] = []
+    for ratio in candidates:
+        if not (0.6 <= ratio <= 3.2):
+            continue
+        nearest = min(_SPACING_STANDARDS, key=lambda standard: abs(ratio - standard))
+        scored.append((abs(ratio - nearest), ratio))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return round(scored[0][1], 2)
+
+
+def _spacing_eligible_unit(unit: dict) -> bool:
+    """Lines that participate in line-spacing checks (body, headings, captions, lists)."""
+    if (unit.get("source") or "body") in {"header", "footer", "footnote", "endnote"}:
+        return False
+    role = unit.get("role") or "body"
+    if role in {"empty", "pagination", "table", "figure", "toc"}:
+        return False
+    if unit.get("source") == "table" or unit.get("table_row") or unit.get("has_drawing"):
+        return False
+    text = (unit.get("text") or "").strip()
+    return bool(text)
+
+
+def _pair_line_spacing_multiple(unit: dict, below: dict) -> float | None:
+    """Measured line-spacing multiple between two consecutive eligible lines.
+
+    PDF: gap between line boxes. DOCX: declared paragraph multiple, plus
+    space_before/space_after when the pair crosses a paragraph boundary.
+    """
+    if unit.get("page_index") != below.get("page_index"):
+        return None
+    if _has_box(unit) and _has_box(below):
+        return _pdf_spacing_multiple(unit, below)
+    formatting = unit.get("formatting") or {}
+    declared = formatting.get("line_spacing")
+    if declared is None:
+        return None
+    try:
+        base = float(declared)
+    except (TypeError, ValueError):
+        return None
+    same_para = (
+        unit.get("paragraph_index") is not None
+        and unit.get("paragraph_index") == below.get("paragraph_index")
+    )
+    if same_para:
+        return base
+    below_fmt = below.get("formatting") or {}
+    try:
+        after = float(formatting.get("space_after_points") or 0.0)
+        before = float(below_fmt.get("space_before_points") or 0.0)
+    except (TypeError, ValueError):
+        after = before = 0.0
+    font = max(6.0, _unit_font_pt(unit))
+    extra = (after + before) / (font * LINE_HEIGHT_FACTOR)
+    return round(base + extra, 2)
+
+
 def _check_spacing(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     allowed = _allowed_line_spacings(rules)
     if not allowed:
-        # Blank / IGNORE spacing: count intra-paragraph line pairs as passed.
-        n = 0
-        for paragraph in _prose_paragraphs(units):
-            n += max(0, len(paragraph) - 1)
-        _pass_all(stats, n)
+        # Blank / IGNORE / missing line spacing: not scored (0 units, leave applicable False).
         return
     stats.applicable = True
     primary = allowed[0]
-    for paragraph in _prose_paragraphs(units):
-        # A paragraph's last line has no line below it to measure against in a PDF, so skip it in both formats.
-        for unit, below in zip(paragraph, paragraph[1:]):
-            actual = (unit.get("formatting") or {}).get("line_spacing")
-            if actual is None and _has_box(unit) and _has_box(below) and below["page_index"] == unit["page_index"]:
-                gap = below["bbox"][1] - unit["bbox"][1]
-                ratio = gap / (_unit_font_pt(unit) * LINE_HEIGHT_FACTOR)
-                actual = round(ratio, 2) if 0.6 <= ratio <= 3.2 else None
-            if actual is None:
-                continue
-            measured = float(actual)
-            if any(_spacing_matches(measured, value) for value in allowed):
-                stats.observe(True)
-                continue
-            _observe_spacing(unit, measured, primary, stats, collector)
+    eligible = [unit for unit in units if _spacing_eligible_unit(unit)]
+    for index, unit in enumerate(eligible):
+        below = None
+        for candidate in eligible[index + 1 :]:
+            if candidate.get("page_index") != unit.get("page_index"):
+                break
+            below = candidate
+            break
+        if below is None:
+            # No measurable pair (page end) — do not invent an issue.
+            continue
+        actual = _pair_line_spacing_multiple(unit, below)
+        if actual is None:
+            continue
+        measured = float(actual)
+        if any(_spacing_matches(measured, value) for value in allowed):
+            stats.observe(True)
+            continue
+        _observe_spacing(unit, measured, primary, stats, collector)
 
 
 def _observe_spacing(unit: dict, actual: float, expected: float, stats: CategoryStats, collector: IssueCollector) -> None:
@@ -2399,7 +2605,13 @@ def _observe_spacing(unit: dict, actual: float, expected: float, stats: Category
             "Line spacing does not match the mechanics.",
             f"This line uses {actual:g} line spacing; the mechanics specifies {expected:g}.",
             "Set the paragraph line spacing to the mechanics-specified value.",
-            _unit_location(unit, "Spacing"),
+            _unit_location(
+                unit,
+                "Line Spacing",
+                measured=f"{actual:g}",
+                expected=f"{expected:g}",
+                element=unit.get("role") or "body",
+            ),
         )
 
 
@@ -2972,8 +3184,7 @@ def _check_pagination(
         _pass_all(stats, max(0, page_count))
         return
     if not any((vertical, horizontal, chapter_rule, title_rule, prelim_style, body_numbering)):
-        # Blank / IGNORE pagination: one passed unit per page.
-        _pass_all(stats, max(0, page_count))
+        # Blank / IGNORE / missing pagination rules: not scored (0 units, leave applicable False).
         return
     stats.applicable = True
     markers = set(canonical_chapter_markers(pagination.get("chapter_markers"))) or set(DEFAULT_CHAPTER_MARKERS)
@@ -3193,8 +3404,137 @@ TABLE_LABEL_RE = re.compile(r"^\s*table\s+(\d+(?:\.\d+)*)\b\s*[:.\-\u2013]?\s*(.
 FIGURE_LABEL_RE = re.compile(r"^\s*(figure|fig\.?)\s+(\d+(?:\.\d+)*)\b\s*[:.\-\u2013]?\s*(.*)$", re.I)
 
 
-def _layout_expectations(rule_text: str) -> dict:
+CAPTION_LINE_ONE = "one_line"
+CAPTION_LINE_LABEL_TITLE = "label_then_title"
+CAPTION_LINE_TITLE_LABEL = "title_then_label"
+
+_CAPTION_STRUCTURE_LABELS = {
+    CAPTION_LINE_ONE: "label+number and title on one line",
+    CAPTION_LINE_LABEL_TITLE: "label+number on line 1, title on line 2",
+    CAPTION_LINE_TITLE_LABEL: "title on line 1, label+number on line 2",
+}
+
+# Template forms like: Table <name[1..n]>  /  Figure <n>  /  Table [1..n]
+# Do not treat prose "Table number …" as a template (bare "n" must not match inside "number").
+_TEMPLATE_CAPTION_LABEL_RE = re.compile(
+    r"(?i)^\s*(table|figure|fig\.?)\s+"
+    r"(?:<[^>\n]+>|\[[^\]]+\]|\{\{[^}]+\}\}|#|\d+(?:\.\d+)*|\(\s*n\s*\)|(?<![A-Za-z])n(?![A-Za-z]))"
+    r"\s*[:.\-\u2013]?\s*(.*)$"
+)
+
+
+def _caption_template_label_match(line: str) -> re.Match | None:
+    text = (line or "").strip()
+    if not text:
+        return None
+    return (
+        _TEMPLATE_CAPTION_LABEL_RE.match(text)
+        or TABLE_LABEL_RE.match(text)
+        or FIGURE_LABEL_RE.match(text)
+    )
+
+
+def _caption_template_inline_title(match: re.Match) -> str:
+    """Title text on the same line as the Table/Figure label, if any."""
+    if match.re is FIGURE_LABEL_RE:
+        return (match.group(3) or "").strip()
+    return (match.group(2) or "").strip()
+
+
+def _structure_from_template_lines(lines: list[str]) -> str | None:
+    """A/B/C from a layout template that uses separate lines (or a split Format Field list)."""
+    parts = [str(line or "").strip() for line in lines if str(line or "").strip()]
+    if len(parts) < 2:
+        return None
+    first_m = _caption_template_label_match(parts[0])
+    second_m = _caption_template_label_match(parts[1])
+    if first_m and not second_m:
+        # "Table <name[1..n]>" then "TABLE TITLE"
+        if not _caption_template_inline_title(first_m):
+            return CAPTION_LINE_LABEL_TITLE
+        return CAPTION_LINE_ONE
+    if second_m and not first_m:
+        # "TABLE TITLE" then "Table <name[1..n]>"
+        return CAPTION_LINE_TITLE_LABEL
+    return None
+
+
+def _structure_from_single_template_line(line: str) -> str | None:
+    """One-line template: 'Table <name[1..n]>TABLE TITLE' (title glued or spaced after label)."""
+    match = _caption_template_label_match(line)
+    if not match:
+        return None
+    if _caption_template_inline_title(match):
+        return CAPTION_LINE_ONE
+    return None
+
+
+def _parse_caption_line_structure(rule_value) -> str | None:
+    """Return A/B/C line-structure mode from the user's layout wording, or None if unset.
+
+    Accepts a string (possibly with newlines) or a list of strings (Format Fields that
+    were split on newlines). Template forms like ``Table <name[1..n]>`` are supported.
+    """
+    if isinstance(rule_value, list):
+        parts = [str(item).strip() for item in rule_value if str(item).strip()]
+        templ = _structure_from_template_lines(parts)
+        if templ:
+            return templ
+        rule_text = "\n".join(parts)
+    else:
+        rule_text = str(rule_value or "")
+
+    raw = rule_text.replace("\r\n", "\n").replace("\r", "\n")
+    raw_lines = [line.strip() for line in raw.split("\n") if line.strip()]
+    templ = _structure_from_template_lines(raw_lines)
+    if templ:
+        return templ
+    if len(raw_lines) == 1:
+        single = _structure_from_single_template_line(raw_lines[0])
+        if single:
+            return single
+
+    text = " ".join(raw.split()).lower()
+    if not text:
+        return None
+    has_next_line = bool(
+        re.search(
+            r"\b(?:on\s+(?:the\s+)?(?:next|following|second|2nd)\s+line|two[\s-]lines?|separate\s+lines?)\b",
+            text,
+        )
+    )
+    has_one_line = bool(
+        re.search(
+            r"\b(?:on\s+(?:the\s+)?(?:same|one|a\s+single)\s+line|single[\s-]line|one[\s-]line)\b",
+            text,
+        )
+    )
+    # C: title first, then label+number (do not treat "above the table" as title-first).
+    title_first = bool(
+        re.search(r"\btitle\b.{0,40}\bon\s+(?:the\s+)?(?:first|1st|top)\s+line\b", text)
+        or re.search(r"\btitle\s+first\b", text)
+        or re.search(
+            r"\btitle\b.{0,40}\b(?:first|before)\b.{0,40}\b(?:label|number|table|figure|fig\.?)\b",
+            text,
+        )
+    )
+    title_on_next = bool(
+        re.search(r"\btitle\b.{0,20}\bon\s+(?:the\s+)?(?:next|following|second|2nd)\s+line\b", text)
+    )
+    if title_first and not title_on_next:
+        return CAPTION_LINE_TITLE_LABEL
+    # B wins when a next/second-line cue is present (even if "one line" names the label alone).
+    if has_next_line:
+        return CAPTION_LINE_LABEL_TITLE
+    # A: one/same line with no two-line cue
+    if has_one_line:
+        return CAPTION_LINE_ONE
+    return None
+
+
+def _layout_expectations(rule_raw) -> dict:
     """What a table or figure rule actually requires, read from the saved wording."""
+    rule_text = _layout_rule_text(rule_raw)
     text = " ".join(str(rule_text or "").split()).lower()
     upper = bool(re.search(r"\b(all[\s-]?caps|uppercase|capital letters|in caps)\b", text))
     title_case = "title case" in text and not upper
@@ -3210,6 +3550,7 @@ def _layout_expectations(rule_text: str) -> dict:
     number_bold = bool(re.search(r"number.{0,40}\bbold\b|\bbold\b.{0,40}number", text))
     title_italic = bool(re.search(r"title.{0,40}\bitalic\b|\bitalic\b.{0,30}title", text))
     title_bold = bool(re.search(r"title.{0,30}\bbold\b|\bbold\b.{0,20}title", text)) and not title_italic
+    # Keep raw list / newlines so template line-structure is not collapsed away.
     return {
         "upper": upper,
         "title_case": title_case,
@@ -3219,7 +3560,8 @@ def _layout_expectations(rule_text: str) -> dict:
         "italic": ("italic" in text) and not title_italic,
         "number_bold": number_bold,
         "title_italic": title_italic,
-        "wants_title": "title" in text or "caption" in text,
+        "wants_title": "title" in text or "caption" in text or bool(_parse_caption_line_structure(rule_raw)),
+        "line_structure": _parse_caption_line_structure(rule_raw),
     }
 
 
@@ -3227,7 +3569,30 @@ def _caption_pieces(unit: dict) -> list[dict]:
     return list(unit.get("line_runs") or unit.get("spans") or unit.get("runs") or [])
 
 
-def _flag_caption(collector: IssueCollector, issue_type: str, unit: dict, title: str, detail: str, fix: str) -> None:
+def _flag_caption(
+    collector: IssueCollector,
+    issue_type: str,
+    unit: dict,
+    title: str,
+    detail: str,
+    fix: str,
+    *,
+    measured=None,
+    expected=None,
+    excerpt: str | None = None,
+) -> None:
+    loc = _unit_location(
+        unit,
+        "Captions",
+        measured=measured,
+        expected=expected,
+        element=unit.get("role") or "caption",
+    )
+    # Prefer a caption-specific excerpt (label + title) so later Figure N issues
+    # do not collapse onto the first matching "Figure" / line estimate.
+    hint = " ".join(str(excerpt or "").split()).strip()
+    if hint:
+        loc["excerpt"] = hint[:140]
     collector.add(
         issue_type,
         "minor",
@@ -3235,85 +3600,171 @@ def _flag_caption(collector: IssueCollector, issue_type: str, unit: dict, title:
         "This table or figure does not follow the layout saved in format mechanics.",
         detail,
         fix,
-        _unit_location(unit, "Captions"),
+        loc,
     )
 
 
-def _check_one_caption(unit: dict, kind: str, match: re.Match, expect: dict, collector: IssueCollector) -> None:
-    text = (unit.get("text") or "").strip()
+def _caption_title_candidate(text: str, pattern: re.Pattern) -> bool:
+    """True when a nearby line can be a caption title (not another label / prose)."""
+    value = " ".join(str(text or "").split()).strip()
+    if not value or len(value) > 180:
+        return False
+    if pattern.match(value) or TABLE_LABEL_RE.match(value) or FIGURE_LABEL_RE.match(value):
+        return False
+    if _is_caption_prose_reference(value):
+        return False
+    return True
+
+
+def _detect_caption_line_structure(
+    units: list[dict], index: int, kind: str, pattern: re.Pattern, match: re.Match
+) -> tuple[str, str, dict | None]:
+    """Return (structure, title_text, title_unit) for the caption at units[index]."""
+    unit = units[index]
     if kind == "table":
-        title = (match.group(2) or "").strip()
+        inline_title = (match.group(2) or "").strip()
+    else:
+        inline_title = (match.group(3) or "").strip()
+    if inline_title:
+        return CAPTION_LINE_ONE, inline_title, None
+    prev_unit = units[index - 1] if index > 0 else None
+    next_unit = units[index + 1] if index + 1 < len(units) else None
+    if (
+        prev_unit is not None
+        and prev_unit.get("page_index") == unit.get("page_index")
+        and _caption_title_candidate(prev_unit.get("text") or "", pattern)
+    ):
+        return CAPTION_LINE_TITLE_LABEL, (prev_unit.get("text") or "").strip(), prev_unit
+    if (
+        next_unit is not None
+        and next_unit.get("page_index") == unit.get("page_index")
+        and _caption_title_candidate(next_unit.get("text") or "", pattern)
+    ):
+        return CAPTION_LINE_LABEL_TITLE, (next_unit.get("text") or "").strip(), next_unit
+    return CAPTION_LINE_ONE, "", None
+
+
+def _check_one_caption(
+    units: list[dict],
+    index: int,
+    kind: str,
+    match: re.Match,
+    expect: dict,
+    collector: IssueCollector,
+) -> bool:
+    """Check one caption (with optional adjacent title line). Returns True when it passed."""
+    unit = units[index]
+    text = (unit.get("text") or "").strip()
+    failed = False
+    pattern = TABLE_LABEL_RE if kind == "table" else FIGURE_LABEL_RE
+    structure, title, title_unit = _detect_caption_line_structure(units, index, kind, pattern, match)
+    # Unique locate hint: "Figure 3 System Overview" beats bare "Figure 3" when lines drift.
+    locate_excerpt = text if not title else (text if title in text else f"{text} {title}".strip())
+
+    def flag(issue_type: str, title_text: str, detail: str, fix: str, *, measured=None, expected=None) -> None:
+        nonlocal failed
+        failed = True
+        _flag_caption(
+            collector,
+            issue_type,
+            unit,
+            title_text,
+            detail,
+            fix,
+            measured=measured,
+            expected=expected,
+            excerpt=locate_excerpt,
+        )
+
+    if kind == "table":
         label = "Table"
     else:
         prefix = match.group(1) or ""
-        title = (match.group(3) or "").strip()
         label = "Figure"
         if prefix.lower().startswith("fig") and not prefix.lower().startswith("figure"):
-            _flag_caption(
-                collector,
+            flag(
                 "figure_caption",
-                unit,
                 "Figure caption prefix differs",
                 f"Found “{text}”; the format expects the caption to start with Figure and a number.",
                 "Rewrite the caption so it starts with Figure and the figure number.",
+                measured=text,
+                expected="Figure N …",
             )
+
+    wanted_structure = expect.get("line_structure")
+    if wanted_structure:
+        if structure != wanted_structure:
+            flag(
+                f"{kind}_caption_line_structure",
+                f"{label} caption line structure differs",
+                (
+                    f"Detected {_CAPTION_STRUCTURE_LABELS.get(structure, structure)}; "
+                    f"the format requires {_CAPTION_STRUCTURE_LABELS.get(wanted_structure, wanted_structure)}."
+                ),
+                f"Rewrite this {label.lower()} caption so its line layout matches the format rule.",
+                measured=_CAPTION_STRUCTURE_LABELS.get(structure, structure),
+                expected=_CAPTION_STRUCTURE_LABELS.get(wanted_structure, wanted_structure),
+            )
+
     if expect["wants_title"] and not title:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption",
-            unit,
             f"{label} caption is missing its title",
             f"Found “{text}”; the format expects a {label.lower()} number and a title.",
             f"Add the {label.lower()} title on the caption line required by the format.",
+            measured=text,
+            expected=f"{label} N + title",
         )
     if title and expect["upper"]:
         letters = [ch for ch in title if ch.isalpha()]
         if letters and not all(ch.isupper() for ch in letters):
-            _flag_caption(
-                collector,
+            flag(
                 f"{kind}_caption",
-                unit,
                 f"{label} title is not in the required caption form",
-                f"Found “{text}”; the format expects the {label.lower()} title in capital letters.",
+                f"Found “{title}”; the format expects the {label.lower()} title in capital letters.",
                 f"Retype the {label.lower()} title in capital letters.",
+                measured=title,
+                expected="ALL CAPS title",
             )
     elif title and expect["title_case"] and not _is_title_case(title):
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption",
-            unit,
             f"{label} title is not in the required caption form",
-            f"Found “{text}”; the format expects the {label.lower()} title in Title Case.",
+            f"Found “{title}”; the format expects the {label.lower()} title in Title Case.",
             f"Retype the {label.lower()} title in Title Case.",
+            measured=title,
+            expected="Title Case",
         )
     pieces = _caption_pieces(unit)
+    title_pieces = _caption_pieces(title_unit) if title_unit is not None else pieces
     if pieces and expect["bold"] and _share(pieces, "bold") < 0.6:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} caption is not bold",
             f"Found “{text}”; the format expects this {label.lower()} caption in bold.",
             f"Select the {label.lower()} caption and turn on bold.",
+            measured="not bold",
+            expected="bold",
         )
-    if pieces and (expect["italic"] or expect["title_italic"]) and _share(pieces, "italic") < 0.4:
-        _flag_caption(
-            collector,
+    if title_pieces and (expect["italic"] or expect["title_italic"]) and _share(title_pieces, "italic") < 0.4:
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} caption is not italic",
-            f"Found “{text}”; the format expects italic text in this {label.lower()} caption.",
+            f"Found “{title or text}”; the format expects italic text in this {label.lower()} caption.",
             f"Select the {label.lower()} title and turn on italic.",
+            measured="not italic",
+            expected="italic",
         )
     if pieces and expect["number_bold"] and _share(pieces, "bold") < 0.2:
-        _flag_caption(
-            collector,
+        flag(
             f"{kind}_caption_style",
-            unit,
             f"{label} number is not bold",
             f"Found “{text}”; the format expects the {label.lower()} number in bold.",
             f"Select the {label.lower()} number and turn on bold.",
+            measured="number not bold",
+            expected="bold number",
         )
+    return not failed
 
 
 def _is_table_unit(unit: dict) -> bool:
@@ -3377,7 +3828,7 @@ def _nearest_caption(units: list[dict], cluster: list[int], pattern: re.Pattern,
         text = (unit.get("text") or "").strip()
         if text and not _is_table_unit(unit):
             seen += 1
-            if pattern.match(text) and not PROSE_REFERENCE_RE.match(text):
+            if pattern.match(text) and not _is_caption_prose_reference(text):
                 return index
             if seen >= 4 and len(text) > 80:
                 break
@@ -3394,7 +3845,13 @@ def _is_title_or_cover_page(units: list[dict], page: int | None) -> bool:
     return False
 
 
-def _check_object_placement(units: list[dict], kind: str, expect: dict, collector: IssueCollector) -> None:
+def _check_object_placement(
+    units: list[dict],
+    kind: str,
+    expect: dict,
+    collector: IssueCollector,
+    stats: CategoryStats | None = None,
+) -> None:
     if not expect["above"] and not expect["below"]:
         return
     pattern = TABLE_LABEL_RE if kind == "table" else FIGURE_LABEL_RE
@@ -3416,6 +3873,8 @@ def _check_object_placement(units: list[dict], kind: str, expect: dict, collecto
                 f"This {label.lower()} has no “{label} n” caption; the format requires one {wanted} it.",
                 f"Add a {label} number and title {wanted} this {label.lower()}.",
             )
+            if stats is not None:
+                stats.observe(False)
             continue
         present = before if wanted == "above" else after
         other = after if wanted == "above" else before
@@ -3429,36 +3888,49 @@ def _check_object_placement(units: list[dict], kind: str, expect: dict, collecto
                 f"the format requires it {wanted}.",
                 f"Move the {label.lower()} caption so it sits {wanted} the {label.lower()}.",
             )
+            if stats is not None:
+                stats.observe(False)
+        elif present is not None and stats is not None:
+            stats.observe(True)
 
 
-def _check_captions(units: list[dict], rules: dict, collector: IssueCollector) -> None:
-    table_rules = _layout_rule_text(
-        rules.get("table_layout_requirements") or rules.get("table_layout")
-    )
-    figure_rules = _layout_rule_text(
-        rules.get("figure_layout_requirements") or rules.get("figure_layout")
-    )
-    if not table_rules and not figure_rules:
+def _check_captions(
+    units: list[dict],
+    rules: dict,
+    collector: IssueCollector,
+    stats: CategoryStats | None = None,
+) -> None:
+    table_raw = rules.get("table_layout_requirements") or rules.get("table_layout")
+    figure_raw = rules.get("figure_layout_requirements") or rules.get("figure_layout")
+    # Keep raw list/newlines so template line-structure (one-line vs two-line) is preserved.
+    table_rules = None if rule_unset(table_raw) else table_raw
+    figure_rules = None if rule_unset(figure_raw) else figure_raw
+    if not _layout_rule_text(table_rules or "") and not _layout_rule_text(figure_rules or ""):
         return
+    if stats is not None:
+        stats.applicable = True
     kinds = []
-    if table_rules:
+    if _layout_rule_text(table_rules or ""):
         kinds.append(("table", TABLE_LABEL_RE, _layout_expectations(table_rules)))
-    if figure_rules:
+    if _layout_rule_text(figure_rules or ""):
         kinds.append(("figure", FIGURE_LABEL_RE, _layout_expectations(figure_rules)))
     for kind, pattern, expect in kinds:
-        for unit in units:
+        for index, unit in enumerate(units):
             if (unit.get("source") or "body") in CHROME_SOURCES:
                 continue
             text = (unit.get("text") or "").strip()
-            if not text or PROSE_REFERENCE_RE.match(text):
+            if not text or _is_caption_prose_reference(text):
                 continue
-            # Captions live outside the grid; skip cell text that merely mentions tables.
-            if kind == "table" and _is_table_unit(unit) and not pattern.match(text):
+            # Caption labels sit outside the grid — never score table-cell text as captions.
+            # (In-cell "Table N …" is body/grid content, not a caption line.)
+            if _is_table_unit(unit):
                 continue
             match = pattern.match(text)
             if match:
-                _check_one_caption(unit, kind, match, expect, collector)
-        _check_object_placement(units, kind, expect, collector)
+                ok = _check_one_caption(units, index, kind, match, expect, collector)
+                if stats is not None:
+                    stats.observe(ok)
+        _check_object_placement(units, kind, expect, collector, stats)
 
 
 def _expected_citation_families(style: str) -> set[str]:
@@ -3495,24 +3967,13 @@ def _check_citations(
 ) -> None:
     style = str(rules.get("citation_style") or "").upper()
     if not style or rule_unset(rules.get("citation_style")):
-        # Blank / IGNORE citations: pass each line that has a citation marker; invent none.
-        n = 0
-        for unit in units:
-            if _citation_marker_families(unit.get("text") or ""):
-                n += 1
-        if stats is not None:
-            _pass_all(stats, n)
+        # Blank / IGNORE / missing citation style: not scored (0 units, leave applicable False).
         return
     from app.citation_ml import classify_citation
 
     allowed = _expected_citation_families(style)
     if not allowed:
-        n = 0
-        for unit in units:
-            if _citation_marker_families(unit.get("text") or ""):
-                n += 1
-        if stats is not None:
-            _pass_all(stats, n)
+        # Unrecognized citation style: not scored.
         return
 
     numeric = len(IN_TEXT_NUMERIC_RE.findall(text or ""))
@@ -3845,32 +4306,10 @@ def _word_spacing_problem(text: str, rule: str) -> tuple[int, str] | None:
 def _check_word_spacing(
     units: list[dict], parsed: dict, rules: dict, stats: CategoryStats, collector: IssueCollector
 ) -> None:
-    rule = canonical_word_spacing(rules.get("word_spacing"))
+    raw_word = rules.get("word_spacing")
+    rule = canonical_word_spacing(raw_word)
     if rule not in {WORD_SPACING_SINGLE, WORD_SPACING_TWO}:
-        # Blank / IGNORE word spacing: pass eligible body paragraphs.
-        paragraph_text = {
-            paragraph.get("paragraph_index"): str(paragraph.get("text") or "")
-            for paragraph in parsed.get("paragraphs") or []
-        }
-        seen: set = set()
-        n = 0
-        for unit in units:
-            if unit.get("role") not in {"body", "caption"} and not _is_heading_role(unit.get("role")):
-                continue
-            if (unit.get("source") or "body") != "body":
-                continue
-            key = unit.get("paragraph_index")
-            if key is not None:
-                if key in seen:
-                    continue
-                seen.add(key)
-                text = paragraph_text.get(key, unit.get("text") or "")
-            else:
-                text = unit.get("text") or ""
-            if len(text.strip()) < 2 or "\t" in text.strip() or re.search(r"\.{3,}|…", text):
-                continue
-            n += 1
-        _pass_all(stats, n)
+        # Blank / IGNORE / missing word spacing: not scored (0 units, leave applicable False).
         return
     stats.applicable = True
     paragraph_text = {
@@ -3898,9 +4337,15 @@ def _check_word_spacing(
         if problem is None:
             continue
         offset, what = problem
-        loc = _unit_location(unit, "Spacing")
-        loc["excerpt"] = " ".join(text[max(0, offset - 40): offset + 40].split())
         expected = "one space between words" if rule == WORD_SPACING_SINGLE else "two spaces after each sentence"
+        loc = _unit_location(
+            unit,
+            "Line Spacing",
+            measured=what,
+            expected=expected,
+            element=unit.get("role") or "body",
+        )
+        loc["excerpt"] = " ".join(text[max(0, offset - 40): offset + 40].split())
         collector.add(
             "word_spacing",
             "minor",
@@ -3973,11 +4418,11 @@ def run_compliance_scan(
         ("Checking heading styles", lambda: _check_heading_styles(units, mechanics_rules, stats["Fonts"], collector)),
         ("Checking margins", lambda: _check_margins(parsed, units, mechanics_rules, stats["Margins"], collector)),
         ("Checking indentation", lambda: _check_indentation(units, mechanics_rules, stats["Indentation"], collector)),
-        ("Checking spacing", lambda: _check_spacing(units, mechanics_rules, stats["Spacing"], collector)),
-        ("Checking word spacing", lambda: _check_word_spacing(units, parsed, mechanics_rules, stats["Spacing"], collector)),
+        ("Checking line spacing", lambda: _check_spacing(units, mechanics_rules, stats["Line Spacing"], collector)),
+        ("Checking word spacing", lambda: _check_word_spacing(units, parsed, mechanics_rules, stats["Line Spacing"], collector)),
         ("Checking alignment", lambda: _check_alignment(units, mechanics_rules, stats["Alignment"], collector)),
         ("Checking page numbers", lambda: _check_pagination(units, mechanics_rules, stats["Pagination"], collector, parsed)),
-        ("Checking captions", lambda: _check_captions(units, mechanics_rules, collector)),
+        ("Checking captions", lambda: _check_captions(units, mechanics_rules, collector, stats["Captions"])),
         ("Checking citations", lambda: _check_citations(units, parsed.get("text", ""), mechanics_rules, collector, stats["Citations"])),
     )
     total_checks = len(checks)

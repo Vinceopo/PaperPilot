@@ -1119,7 +1119,7 @@ class UnsetRulesAreSkippedTests(unittest.TestCase):
         """Unset categories still show checked units that all pass on Score Breakdown."""
         result = run_compliance_scan(self._body_doc(align=WD_ALIGN_PARAGRAPH.LEFT), {})
         by_cat = {item["category"]: item for item in result["scoring"]["categories"]}
-        for name in ("Alignment", "Spacing"):
+        for name in ("Alignment", "Line Spacing"):
             self.assertEqual(by_cat[name]["units_failed"], 0, name)
             self.assertGreater(by_cat[name]["units_checked"], 0, name)
             self.assertEqual(by_cat[name]["status"], "pass", name)
