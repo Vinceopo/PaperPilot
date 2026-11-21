@@ -356,13 +356,6 @@ export async function downloadReport(result, opts = {}) {
   doc.text("%", ML + 5 + scoreW + 1, Y + 20);
   doc.setFontSize(7).setFont("helvetica", "bold").setTextColor(...bandColor);
   doc.text(band, ML + 5, Y + 28);
-  doc.setFontSize(5.5).setFont("helvetica", "normal").setTextColor(...SLATE);
-  doc.text(
-    "Filled Format Fields only — not a full publisher-template match.",
-    ML + 5,
-    Y + 34,
-    { maxWidth: 52 }
-  );
 
   // Compliant / Non-Compliant labels + thin stacked bar (no percent numbers)
   const barX = ML + 58;
@@ -619,8 +612,7 @@ export async function downloadReport(result, opts = {}) {
   doc.setFontSize(7).setFont("helvetica", "normal").setTextColor(...SLATE);
   doc.text(
     "This report covers formatting mechanics only: fonts, margins, spacing, indentation, " +
-    "alignment, pagination, and citation format. The overall score reflects filled Format Fields only — " +
-    "not a full publisher-template match.",
+    "alignment, pagination, and citation format.",
     ML, Y, { maxWidth: CW }
   );
   Y += 8;

@@ -224,7 +224,7 @@ export default function MechanicsPanel({
         )
       );
       setSuccess(
-        "Format fields filled from your guide. Editing is optional — you can Save & use as-is."
+        "Format fields filled from your guide. Editing is optional — save to keep this format, then upload another or continue from Saved."
       );
       setConflictNotice(conflictNoticeFromExtract(data.conflicts));
     } catch (err) {
@@ -323,11 +323,22 @@ export default function MechanicsPanel({
     setSuccess("");
     const payload = buildCreatePayload();
     if (!payload) return;
+    if (mode === "upload") {
+      setConfirmAction({
+        id: "save-upload-stay",
+        title: "Save this format?",
+        message: `Save “${payload.name}” and keep uploading guides? To analyze a manuscript, choose a saved format and continue from there.`,
+        confirmLabel: "Save & upload another",
+        tone: "primary",
+        payload,
+      });
+      return;
+    }
     setConfirmAction({
-      id: "save",
-      title: "Save & use as-is?",
-      message: `Save “${payload.name}” with the current Format Fields (editing is optional) and continue to Upload Manuscript?`,
-      confirmLabel: "Save & use as-is",
+      id: "save-customize-stay",
+      title: "Save this format?",
+      message: `Save “${payload.name}”? Choose it under Use a Saved Format when you are ready to continue.`,
+      confirmLabel: "Save format",
       tone: "primary",
       payload,
     });
@@ -341,9 +352,9 @@ export default function MechanicsPanel({
     if (!payload) return;
     setConfirmAction({
       id: "update-saved",
-      title: "Use this format?",
-      message: `Select “${payload.name}” and continue to Upload Manuscript? Any edits to the Format Fields will be saved to this format.`,
-      confirmLabel: "Select and Continue",
+      title: "Continue with this format?",
+      message: `Use “${payload.name}” and continue to Upload Manuscript? Any edits to Format Fields will be saved.`,
+      confirmLabel: "Select & Continue to Analyze",
       tone: "primary",
       payload,
     });
@@ -399,17 +410,21 @@ export default function MechanicsPanel({
         await runExtract(nextFile);
         return;
       }
-      if (confirmAction.id === "save") {
+      if (confirmAction.id === "save-upload-stay" || confirmAction.id === "save-customize-stay") {
         try {
           await onSaveProfile(confirmAction.payload);
-          setSuccess("Format mechanics saved.");
-          if (mode === "upload") {
+          if (confirmAction.id === "save-upload-stay") {
             clearUploadDraft();
-          } else if (mode === "customize") {
+            setSuccess(
+              "Format mechanics saved. Upload another guide, or open Use a Saved Format and select one to continue."
+            );
+          } else {
             setCustomizeForm(sampleMechanicsForm("My Custom Format"));
+            setSuccess(
+              "Format mechanics saved. Open Use a Saved Format, select it, then Select & Continue to Analyze."
+            );
           }
           setConfirmAction(null);
-          onContinue?.();
         } catch (err) {
           setConfirmAction(null);
           setError(err.message || "Could not save format mechanics. Please try again.");
@@ -676,7 +691,7 @@ export default function MechanicsPanel({
                       <Spinner /> Saving…
                     </>
                   ) : (
-                    "Select and Continue"
+                    "Select & Continue to Analyze"
                   )}
                 </button>
               </div>
@@ -829,7 +844,7 @@ export default function MechanicsPanel({
                       <Spinner /> Saving…
                     </>
                   ) : (
-                    "Save & use as-is"
+                    "Save format"
                   )}
                 </button>
                 <button
@@ -874,7 +889,7 @@ export default function MechanicsPanel({
                 <Spinner /> Saving…
               </>
             ) : (
-              "Save customized format & continue"
+              "Save customized format"
             )}
           </button>
         </div>

@@ -198,7 +198,7 @@ function CompliancePreview() {
             <ul className="mt-3 space-y-2.5">
               {[
                 { label: "Margins", tone: "warn", tag: "Moderate" },
-                { label: "Spacing", tone: "issue", tag: "Critical" },
+                { label: "Line Spacing", tone: "issue", tag: "Critical" },
                 { label: "Citations", tone: "ok", tag: "Passed" },
               ].map((row) => (
                 <li key={row.label} className="flex items-center justify-between gap-3 text-sm">

@@ -611,17 +611,26 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     const bboxY =
       bbox && Number.isFinite(Number(bbox.y)) ? Number(bbox.y) * pageHeight : null;
     const indentIssue = isIndentationIssue(target);
-    // Indentation: paint only from the stored measurement bbox (paragraph anchor).
-    // Line number is display-only and must not recompute the highlight.
-    const y = indentIssue && bboxY != null
-      ? bboxY
-      : resolvePdfMarkY({
-          line: target.line,
-          ys,
-          bboxY,
-          pageHeight,
-          preferBbox: false,
-        });
+    const hasInkBox =
+      bbox &&
+      Number.isFinite(Number(bbox.x)) &&
+      Number.isFinite(Number(bbox.w)) &&
+      Number(bbox.w) > 0.015 &&
+      Number.isFinite(Number(bbox.y));
+    // Prefer scanner ink bbox whenever present (fonts, captions, figures, indent).
+    // Line-only Y drifts when pdf.js text rows disagree with PyMuPDF line_index
+    // (drawings counted as lines) and paints the wrong cell — e.g. "2 Weeks".
+    const preferBbox = indentIssue || hasInkBox;
+    const y =
+      preferBbox && bboxY != null
+        ? bboxY
+        : resolvePdfMarkY({
+            line: target.line,
+            ys,
+            bboxY,
+            pageHeight,
+            preferBbox,
+          });
     if (isMarginTarget(target) || shouldUsePaginationEdge(target)) {
       const side = isMarginTarget(target) ? resolveEdgeSide(target) : pageRegion(target);
       const align = shouldUsePaginationEdge(target) ? pageAlign(target) : "";
@@ -635,18 +644,6 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
       scrollToPageRegion(scroller, pageEl, side);
       return;
     }
-    const lineIdx = Number(target.line);
-    const usedLine =
-      !indentIssue &&
-      Number.isFinite(lineIdx) &&
-      lineIdx >= 1 &&
-      ys[Math.min(ys.length, Math.max(1, Math.round(lineIdx))) - 1] != null &&
-      Math.abs(y - Number(ys[Math.min(ys.length, Math.max(1, Math.round(lineIdx))) - 1])) < 1;
-    const hasInkBox =
-      bbox &&
-      Number.isFinite(Number(bbox.x)) &&
-      Number.isFinite(Number(bbox.w)) &&
-      Number(bbox.w) > 0.015;
     let markHeight;
     if (hasInkBox) {
       const boxH = Math.max(0.012, Number(bbox.h) || 0.022);
@@ -655,11 +652,7 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
         page: pageNumber,
         kind: "box",
         severity: target.severity,
-        top: indentIssue
-          ? `${Number(bbox.y) * 100}%`
-          : usedLine
-            ? `${y}px`
-            : `${Number(bbox.y) * 100}%`,
+        top: `${Number(bbox.y) * 100}%`,
         left: `${Number(bbox.x) * 100}%`,
         width: `${Math.max(0.02, Number(bbox.w)) * 100}%`,
         height: `${boxH * 100}%`,
@@ -1002,8 +995,18 @@ function locateDocxBox(
     if (boxed) {
       // Indent: keep the start-of-paragraph excerpt even when the line estimate drifted.
       if (paragraphStart) return boxed;
-      // Line pin wins when excerpt still lands far from the estimated line.
-      if (hasLine && estimate && Math.abs(boxed.top - estimate.top) > Math.max(28, estimate.height * 2)) {
+      // Unique excerpt on this page (e.g. "Figure 3 …") beats a drifted line estimate —
+      // later caption issues were snapping to the wrong row when DOCX line indices drifted.
+      const uniqueExcerpt =
+        bestNeedle.length === 1 ||
+        (reportedHits.length > 0 &&
+          reportedHits.filter((item) => item.needleLen === maxLen).length === 1);
+      if (
+        hasLine &&
+        estimate &&
+        !uniqueExcerpt &&
+        Math.abs(boxed.top - estimate.top) > Math.max(28, estimate.height * 2)
+      ) {
         return estimate;
       }
       return boxed;

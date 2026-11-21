@@ -24,7 +24,7 @@ export default function ConfirmDialog({
       : "bg-[#16bfa8] text-white shadow-[0_6px_16px_rgba(22,191,168,0.28)] hover:bg-[#12ae99] disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none";
 
   const btnBase =
-    "inline-flex h-11 min-w-[7.5rem] items-center justify-center rounded-lg px-6 text-sm font-bold transition disabled:opacity-40";
+    "inline-flex min-h-11 min-w-[7.5rem] items-center justify-center rounded-lg px-5 py-2.5 text-sm font-semibold leading-snug transition disabled:opacity-40";
 
   return (
     <div

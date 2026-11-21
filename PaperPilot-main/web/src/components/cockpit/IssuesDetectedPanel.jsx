@@ -40,7 +40,7 @@ const CATEGORY_ORDER = [
   "Fonts",
   "Margins",
   "Indentation",
-  "Spacing",
+  "Line Spacing",
   "Alignment",
   "Pagination",
   "Captions",
@@ -51,6 +51,7 @@ const CATEGORY_ORDER = [
 export function categoryForIssue(entry = {}) {
   const section = String(entry.section || entry.category || "").trim();
   if (section) {
+    if (section.toLowerCase() === "spacing") return "Line Spacing";
     const known = CATEGORY_ORDER.find((name) => name.toLowerCase() === section.toLowerCase());
     return known || section;
   }
@@ -61,7 +62,7 @@ export function categoryForIssue(entry = {}) {
   }
   if (type.includes("indent")) return "Indentation";
   if (type.includes("spacing") || type.includes("line_spacing") || type.includes("word_spacing")) {
-    return "Spacing";
+    return "Line Spacing";
   }
   if (type.includes("align")) return "Alignment";
   if (type.includes("pagination") || type.includes("page_number") || type.includes("page_token")) {

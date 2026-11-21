@@ -335,9 +335,6 @@ export default function ScanResultsScreen({
             >
               {band.label}
             </span>
-            <p className="mt-3 max-w-xs text-[11px] leading-snug text-slate-500">
-              Based on filled Format Fields only — not a full publisher-template match.
-            </p>
           </div>
 
           <div className="space-y-4">

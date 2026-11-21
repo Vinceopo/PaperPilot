@@ -150,14 +150,48 @@ function Field({ label, children, hint }) {
   );
 }
 
-/** Free-text input with a dropdown that always lists every preset, whatever is typed. */
-function ComboInput({ value, onChange, options, disabled }) {
+/**
+ * Free-text field with optional suggestions. Presets are shortcuts only —
+ * any value may be typed (dynamic school / thesis mechanics).
+ */
+function ComboInput({
+  value,
+  onChange,
+  options,
+  disabled,
+  includeIgnore = false,
+  ignoreLabel = "IGNORE",
+  placeholder = "Type any value…",
+}) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const rootRef = useRef(null);
   const inputRef = useRef(null);
   const listId = useId();
-  const current = String(value ?? "").trim().toLowerCase();
+  const currentRaw = String(value ?? "");
+  const current = currentRaw.trim().toLowerCase();
+
+  const items = (() => {
+    const base = (options || []).map((option) =>
+      typeof option === "string" ? { value: option } : option
+    );
+    const list = [];
+    if (includeIgnore) list.push({ value: "IGNORE", label: ignoreLabel });
+    for (const item of base) {
+      if (!list.some((entry) => entry.value === item.value)) list.push(item);
+    }
+    if (
+      currentRaw &&
+      currentRaw !== "IGNORE" &&
+      !list.some((entry) => entry.value.toLowerCase() === current)
+    ) {
+      list.push({ value: currentRaw, label: `${currentRaw} (custom)` });
+    }
+    return list;
+  })();
+
+  const matched = items.find((o) => o.value.toLowerCase() === current);
+  const displayValue = matched?.label || currentRaw;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -169,7 +203,7 @@ function ComboInput({ value, onChange, options, disabled }) {
   }, [open]);
 
   function openList() {
-    setActive(options.findIndex((o) => o.value.toLowerCase() === current));
+    setActive(items.findIndex((o) => o.value.toLowerCase() === current));
     setOpen(true);
   }
 
@@ -179,15 +213,23 @@ function ComboInput({ value, onChange, options, disabled }) {
     inputRef.current?.focus();
   }
 
+  function commitTyped(typed) {
+    const trimmed = typed.trim().toLowerCase();
+    const byLabel = items.find(
+      (o) => (o.label || o.value).toLowerCase() === trimmed
+    );
+    onChange(byLabel ? byLabel.value : typed);
+  }
+
   function onKeyDown(e) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (!open) return openList();
       const step = e.key === "ArrowDown" ? 1 : -1;
-      setActive((i) => (i + step + options.length) % options.length);
+      setActive((i) => (i + step + items.length) % items.length);
     } else if (e.key === "Enter" && open && active >= 0) {
       e.preventDefault();
-      choose(options[active]);
+      choose(items[active]);
     } else if (e.key === "Escape" && open) {
       e.preventDefault();
       setOpen(false);
@@ -199,8 +241,9 @@ function ComboInput({ value, onChange, options, disabled }) {
       <input
         ref={inputRef}
         disabled={disabled}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={displayValue}
+        placeholder={placeholder}
+        onChange={(e) => commitTyped(e.target.value)}
         onKeyDown={onKeyDown}
         role="combobox"
         aria-expanded={open}
@@ -212,7 +255,7 @@ function ComboInput({ value, onChange, options, disabled }) {
         type="button"
         tabIndex={-1}
         disabled={disabled}
-        aria-label="Show choices"
+        aria-label="Show suggestions"
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           e.preventDefault();
@@ -230,11 +273,11 @@ function ComboInput({ value, onChange, options, disabled }) {
           role="listbox"
           className="pp-scroll absolute left-0 right-0 z-20 mt-1 max-h-48 overflow-y-auto overscroll-contain rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
         >
-          {options.map((option, index) => {
+          {items.map((option, index) => {
             const selected = option.value.toLowerCase() === current;
             return (
               <li
-                key={option.value}
+                key={`${option.value}-${index}`}
                 role="option"
                 aria-selected={selected}
                 onMouseDown={(e) => e.preventDefault()}
@@ -257,23 +300,17 @@ function ComboInput({ value, onChange, options, disabled }) {
   );
 }
 
-/** Select with an IGNORE (no rule) choice; a saved value outside the list stays selectable. */
+/** Suggestions + IGNORE + free text (same as ComboInput — not a closed select). */
 function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "IGNORE" }) {
-  const items = options.map((option) => (typeof option === "string" ? { value: option } : option));
-  const current = String(value ?? "");
-  if (current && current !== "IGNORE" && !items.some((item) => item.value === current)) {
-    items.push({ value: current, label: `${current} (custom)` });
-  }
   return (
-    <select disabled={disabled} value={current} onChange={(e) => onChange(e.target.value)} className={inputClass}>
-      {current === "" ? <option value="">Choose…</option> : null}
-      <option value="IGNORE">{emptyLabel}</option>
-      {items.map((item) => (
-        <option key={item.value} value={item.value}>
-          {item.label || item.value}
-        </option>
-      ))}
-    </select>
+    <ComboInput
+      disabled={disabled}
+      value={value}
+      onChange={onChange}
+      options={options}
+      includeIgnore
+      ignoreLabel={emptyLabel}
+    />
   );
 }
 
@@ -350,7 +387,7 @@ export default function FormatMechanicsFields({
     <div className="flex max-h-[min(32rem,70vh)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#f8f9fb]">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 px-4 py-3">
         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{title}</p>
-        <p className="text-[10px] text-slate-400">Edit any rule to customize</p>
+        <p className="text-[10px] text-slate-400">Type any value — suggestions are optional</p>
       </div>
 
       <div className="pp-scroll min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
@@ -373,28 +410,24 @@ export default function FormatMechanicsFields({
               className={inputClass}
             />
           </Field>
-          <Field label="Orientation">
-            <select
+          <Field label="Orientation" hint="Portrait, Landscape, or type your school’s wording">
+            <ChoiceSelect
               disabled={disabled}
               value={form.paperOrientation}
-              onChange={set("paperOrientation")}
-              className={inputClass}
-            >
-              {String(form.paperOrientation || "") === "" ? <option value="">Choose…</option> : null}
-              <option value="IGNORE">IGNORE</option>
-              <option value="Portrait">Portrait</option>
-              <option value="Landscape">Landscape</option>
-            </select>
+              onChange={setValue("paperOrientation")}
+              options={["Portrait", "Landscape"]}
+            />
           </Field>
-          <Field label="Spacing" hint="Pick a choice or type your own, e.g. 1.5 or Double">
+          <Field label="Line Spacing" hint="Pick a suggestion or type any value, e.g. 1.5 or Double">
             <ComboInput
               disabled={disabled}
               value={form.spacing}
               onChange={setValue("spacing")}
               options={LINE_SPACING_OPTIONS}
+              includeIgnore
             />
           </Field>
-          <Field label="Word spacing" hint="Spaces between words and after periods">
+          <Field label="Word spacing" hint="Spaces between words and after periods — type any rule">
             <ChoiceSelect
               disabled={disabled}
               value={form.wordSpacing}
@@ -407,25 +440,19 @@ export default function FormatMechanicsFields({
               disabled={disabled}
               value={form.indention}
               onChange={set("indention")}
+              placeholder="Type any value…"
               className={inputClass}
             />
           </Field>
-          <Field label="Alignment" hint="Body text alignment — IGNORE skips this check">
-            <select
+          <Field label="Alignment" hint="Body text — type any wording; IGNORE skips this check">
+            <ChoiceSelect
               disabled={disabled}
               value={form.alignment || ""}
-              onChange={set("alignment")}
-              className={inputClass}
-            >
-              {String(form.alignment || "") === "" ? <option value="">Choose…</option> : null}
-              <option value="IGNORE">IGNORE</option>
-              <option value="Justified">Justified</option>
-              <option value="Left">Left</option>
-              <option value="Center">Center</option>
-              <option value="Right">Right</option>
-            </select>
+              onChange={setValue("alignment")}
+              options={["Justified", "Left", "Center", "Right"]}
+            />
           </Field>
-          <Field label="Landscape pages" hint="When pages may be turned sideways">
+          <Field label="Landscape pages" hint="When pages may be turned sideways — type any rule">
             <ChoiceSelect
               disabled={disabled}
               value={form.paperLandscapePages}
@@ -491,20 +518,23 @@ export default function FormatMechanicsFields({
               className={inputClass}
             />
           </Field>
-          <Field label="Type" hint="Font family">
+          <Field label="Type" hint="Any font name — e.g. Linux Biolinum O (suggestions optional)">
             <ComboInput
               disabled={disabled}
               value={form.fontType}
               onChange={setValue("fontType")}
               options={FONT_FAMILY_OPTIONS}
+              includeIgnore
+              placeholder="Type any font name…"
             />
           </Field>
-          <Field label="Color">
+          <Field label="Color" hint="Black, Automatic, or type any color rule">
             <ComboInput
               disabled={disabled}
               value={form.fontColor}
               onChange={setValue("fontColor")}
               options={FONT_COLOR_OPTIONS}
+              includeIgnore
             />
           </Field>
         </div>
@@ -616,7 +646,7 @@ export default function FormatMechanicsFields({
 
       <Section title="Pagination">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Position" hint="Where page numbers sit on normal pages">
+          <Field label="Position" hint="Where page numbers sit — type any wording">
             <ChoiceSelect
               disabled={disabled}
               value={form.paginationPosition}
@@ -624,7 +654,7 @@ export default function FormatMechanicsFields({
               options={PAGE_POSITIONS}
             />
           </Field>
-          <Field label="Title page" hint="Document page 1">
+          <Field label="Title page" hint="Document page 1 — type any rule">
             <ChoiceSelect
               disabled={disabled}
               value={form.paginationTitlePage}
@@ -632,7 +662,7 @@ export default function FormatMechanicsFields({
               options={TITLE_PAGE_OPTIONS}
             />
           </Field>
-          <Field label="First page of each chapter">
+          <Field label="First page of each chapter" hint="Type any rule your guide uses">
             <ChoiceSelect
               disabled={disabled}
               value={form.paginationFirstPageRule}
@@ -640,7 +670,7 @@ export default function FormatMechanicsFields({
               options={CHAPTER_FIRST_PAGE_OPTIONS}
             />
           </Field>
-          <Field label="Preliminary pages" hint="Pages before Chapter 1">
+          <Field label="Preliminary pages" hint="Pages before Chapter 1 — type any style">
             <ChoiceSelect
               disabled={disabled}
               value={form.paginationPreliminaryStyle}

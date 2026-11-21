@@ -143,6 +143,13 @@ describe("resolvePdfMarkY", () => {
       resolvePdfMarkY({ line: 4, ys, bboxY: 42, pageHeight: 800, preferBbox: true })
     ).toBe(42);
   });
+
+  it("prefers ink bbox for fonts/captions/figures when preferBbox is set", () => {
+    // Drifted line row must not steal the highlight onto a nearby table cell.
+    expect(
+      resolvePdfMarkY({ line: 4, ys, bboxY: 210, pageHeight: 800, preferBbox: true })
+    ).toBe(210);
+  });
 });
 
 describe("resolveDocxPageIndex", () => {
