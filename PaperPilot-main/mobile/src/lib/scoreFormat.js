@@ -9,7 +9,7 @@ export const SCORE_BREAKDOWN_ORDER = [
   "Fonts",
   "Margins",
   "Indentation",
-  "Spacing",
+  "Line Spacing",
   "Alignment",
   "Pagination",
   "Captions",
@@ -113,7 +113,7 @@ export function activeScoreCategoriesFromRules(rules) {
     spacings.some((value) => value != null && !isMechanicsRuleUnset(value)) ||
     !isMechanicsRuleUnset(rules.word_spacing)
   ) {
-    active.add("Spacing");
+    active.add("Line Spacing");
   }
 
   if (!isMechanicsRuleUnset(rules.alignment)) {
@@ -162,7 +162,10 @@ export function filterScoreBreakdownByRules(scoreBreakdown = [], rules) {
   if (!active.size) return [];
   return withoutIgnored.filter((row) => {
     const name = String(row?.metric || row?.section || "").trim();
-    return active.has(name);
+    if (active.has(name)) return true;
+    // Legacy scans used "Spacing" before the Line Spacing rename.
+    if (name === "Spacing" && active.has("Line Spacing")) return true;
+    return false;
   });
 }
 
@@ -175,6 +178,7 @@ export function filterIssuesByActiveRules(issues = [], rules) {
   return list.filter((issue) => {
     const section = String(issue?.section || issue?.category || "").trim();
     if (!section) return true;
+    if (section.toLowerCase() === "spacing" && active.has("Line Spacing")) return true;
     const known = [...active].find((name) => name.toLowerCase() === section.toLowerCase());
     return Boolean(known);
   });

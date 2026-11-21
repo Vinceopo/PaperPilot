@@ -169,6 +169,13 @@ export default function IssueTracingSection({
           return own;
         }
       }
+      const normExcerpt = (value) =>
+        String(value || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+      const entryExcerpt = normExcerpt(entry.excerpt || entry.finding);
+      let pageLineMatch = null;
       for (const check of formatChecks) {
         // Match the same rule — do not reuse another category's highlight at the same page/line.
         if (entry.issue_type && check.issue_type && entry.issue_type !== check.issue_type) continue;
@@ -179,17 +186,30 @@ export default function IssueTracingSection({
             entry.line == null
               ? loc.line == null || loc.line === undefined
               : loc.line === entry.line;
-          if (samePage && sameLine) {
-            return loc;
+          const locExcerpt = normExcerpt(loc.excerpt);
+          // Captions / multi-issue pages: prefer the location whose excerpt matches this row.
+          if (
+            entryExcerpt &&
+            locExcerpt &&
+            (locExcerpt === entryExcerpt ||
+              locExcerpt.includes(entryExcerpt) ||
+              entryExcerpt.includes(locExcerpt))
+          ) {
+            if (samePage || entry.page == null) return loc;
+          }
+          if (samePage && sameLine && !pageLineMatch) {
+            pageLineMatch = loc;
           }
         }
       }
+      if (pageLineMatch) return pageLineMatch;
       return normalizeIssueLocation({
         page: entry.page,
         line: entry.line,
         section: entry.section,
         margin_side: entry.margin_side,
         page_region: entry.page_region,
+        excerpt: entry.excerpt || "",
       });
     },
     [formatChecks]

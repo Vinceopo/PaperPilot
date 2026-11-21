@@ -3,7 +3,10 @@
  * The labels must match machinelearning/app/mechanics_options.py; the checker parses them.
  */
 
-/** Common Word / WPS Office typefaces for the Format Fields “Type” dropdown. */
+/**
+ * Suggested typefaces for Format Fields “Type”.
+ * Any font name may be typed — this list is only shortcuts, not a closed allow-list.
+ */
 export const FONT_FAMILIES = [
   "Times New Roman",
   "Arial",
@@ -11,14 +14,19 @@ export const FONT_FAMILIES = [
   "Cambria",
   "Georgia",
   "Garamond",
-  "Arial Black",
-  "Arial Narrow",
+  "Linux Biolinum O",
+  "Linux Libertine O",
+  "Libertinus Serif",
+  "TeXGyreTermes",
+  "Palatino Linotype",
   "Book Antiqua",
   "Bookman Old Style",
-  "Candara",
   "Century",
   "Century Gothic",
   "Century Schoolbook",
+  "Arial Black",
+  "Arial Narrow",
+  "Candara",
   "Comic Sans MS",
   "Consolas",
   "Constantia",
@@ -30,7 +38,6 @@ export const FONT_FAMILIES = [
   "Lucida Console",
   "Lucida Sans Unicode",
   "Microsoft Sans Serif",
-  "Palatino Linotype",
   "Rockwell",
   "Segoe UI",
   "Tahoma",
@@ -132,14 +139,15 @@ export function canonicalTitlePage(value) {
   if (/not\s+(?:be\s+)?counted|uncounted|(?:does|do)\s+not\s+count|excluded/.test(text)) return "Hidden and not counted";
   if (/\b(no|not|without|hidden|hide|suppress\w*|omit\w*|none)\b/.test(text)) return "Hidden but counted";
   if (/\b(shown|show|numbered|visible|display\w*)\b/.test(text)) return "Number shown";
-  return "";
+  // Keep school-specific wording — Format Fields are not a closed enum.
+  return clean(value);
 }
 
 export function canonicalPreliminaryStyle(value) {
   const text = lower(value);
   if (/roman|\bi\s*,\s*ii\b/.test(text)) return PRELIMINARY_STYLE_OPTIONS[0];
   if (/arabic|\b1\s*,\s*2\b/.test(text)) return PRELIMINARY_STYLE_OPTIONS[1];
-  return "";
+  return clean(value);
 }
 
 export function canonicalBodyNumbering(value) {
@@ -175,17 +183,22 @@ export function canonicalWordSpacing(value) {
   const text = lower(value);
   if (/\b(two|2|double)\s+spaces?\b/.test(text)) return WORD_SPACING_OPTIONS[1];
   if (/\b(one|1|single)\s+space\b|no\s+double\s+spac/.test(text)) return WORD_SPACING_OPTIONS[0];
-  return "";
+  return clean(value);
 }
 
 export function canonicalLandscapePages(value) {
   const text = lower(value);
   if (!text) return "";
   // "Not allowed" / prohibit language → NA (no special landscape exception).
-  if (/\b(not|never|no)\b/.test(text)) return "";
+  if (
+    /\b(not|never|no)\b.{0,24}\b(allow|landscape|sideways|orient)/.test(text) ||
+    /\b(prohibit|forbid|disallow)\b/.test(text)
+  ) {
+    return "";
+  }
   if (/table|figure|chart|wide/.test(text)) return LANDSCAPE_OPTIONS[0];
   if (/\b(any|all|allowed|yes)\b/.test(text)) return LANDSCAPE_OPTIONS[1];
-  return "";
+  return clean(value);
 }
 
 export function headingLabel(index) {

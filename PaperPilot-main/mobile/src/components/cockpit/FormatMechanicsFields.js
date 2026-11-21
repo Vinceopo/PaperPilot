@@ -31,13 +31,7 @@ import {
   headingLabel,
 } from "../../lib/mechanicsOptions";
 
-const ORIENTATION_OPTIONS = [
-  { value: "IGNORE", label: "IGNORE" },
-  { value: "Portrait", label: "Portrait" },
-  { value: "Landscape", label: "Landscape" },
-];
 const ALIGNMENT_OPTIONS = [
-  { value: "IGNORE", label: "IGNORE" },
   { value: "Justified", label: "Justified" },
   { value: "Left", label: "Left" },
   { value: "Center", label: "Center" },
@@ -152,16 +146,58 @@ function Section({ title, children }) {
   );
 }
 
-/** Free-text input with a dropdown that always lists every preset, whatever is typed. */
-function ComboInput({ value, onChange, options, disabled }) {
+/**
+ * Free-text field with optional suggestions. Presets are shortcuts only —
+ * any value may be typed (dynamic school / thesis mechanics).
+ */
+function ComboInput({
+  value,
+  onChange,
+  options,
+  disabled,
+  includeIgnore = false,
+  ignoreLabel = "IGNORE",
+  placeholder = "Type any value…",
+}) {
   const [open, setOpen] = useState(false);
   const inputRef = useRef(null);
   const keyboardScroll = useKeyboardScroll();
-  const current = String(value ?? "").trim().toLowerCase();
+  const currentRaw = value == null ? "" : String(value);
+  const current = currentRaw.trim().toLowerCase();
+
+  const items = (() => {
+    const base = (options || []).map((option) =>
+      typeof option === "string"
+        ? { value: option, label: option }
+        : { ...option, label: option.label || option.value }
+    );
+    const list = [];
+    if (includeIgnore) list.push({ value: "IGNORE", label: ignoreLabel });
+    for (const item of base) {
+      if (!list.some((entry) => entry.value === item.value)) list.push(item);
+    }
+    if (
+      currentRaw &&
+      currentRaw !== "IGNORE" &&
+      !list.some((entry) => entry.value.toLowerCase() === current)
+    ) {
+      list.push({ value: currentRaw, label: `${currentRaw} (custom)` });
+    }
+    return list;
+  })();
+
+  const matched = items.find((o) => o.value.toLowerCase() === current);
+  const displayValue = matched?.label || currentRaw;
 
   function choose(option) {
     onChange(option.value);
     setOpen(false);
+  }
+
+  function commitTyped(typed) {
+    const trimmed = typed.trim().toLowerCase();
+    const byLabel = items.find((o) => (o.label || o.value).toLowerCase() === trimmed);
+    onChange(byLabel ? byLabel.value : typed);
   }
 
   return (
@@ -171,9 +207,10 @@ function ComboInput({ value, onChange, options, disabled }) {
           ref={inputRef}
           editable={!disabled}
           style={[styles.input, styles.comboInput, disabled && styles.inputDisabled]}
-          value={value == null ? "" : String(value)}
-          onChangeText={onChange}
+          value={displayValue}
+          onChangeText={commitTyped}
           onFocus={() => keyboardScroll?.ensureVisible?.(inputRef)}
+          placeholder={placeholder}
           placeholderTextColor={colors.muted}
         />
         <Pressable
@@ -182,7 +219,7 @@ function ComboInput({ value, onChange, options, disabled }) {
           onPress={() => setOpen((v) => !v)}
           hitSlop={6}
           accessibilityRole="button"
-          accessibilityLabel="Show choices"
+          accessibilityLabel="Show suggestions"
         >
           <View style={open ? styles.chevronOpen : null}>
             <ChevronDownIcon size={14} color={colors.slate} />
@@ -191,11 +228,11 @@ function ComboInput({ value, onChange, options, disabled }) {
       </View>
       {open ? (
         <View style={styles.comboList} accessibilityRole="menu">
-          {options.map((option) => {
+          {items.map((option, index) => {
             const selected = option.value.toLowerCase() === current;
             return (
               <Pressable
-                key={option.value}
+                key={`${option.value}-${index}`}
                 style={({ pressed }) => [styles.comboOption, pressed && styles.comboOptionPressed]}
                 onPress={() => choose(option)}
                 accessibilityRole="menuitem"
@@ -213,26 +250,16 @@ function ComboInput({ value, onChange, options, disabled }) {
   );
 }
 
-/** Select with an IGNORE (no rule) choice; a saved value outside the list stays selectable. */
-function ChoiceSelect({ value, onChange, options, disabled, title, emptyLabel = "IGNORE" }) {
-  const items = options.map((option) =>
-    typeof option === "string" ? { value: option, label: option } : { ...option, label: option.label || option.value }
-  );
-  const current = String(value ?? "");
-  if (current && current !== "IGNORE" && !items.some((item) => item.value === current)) {
-    items.push({ value: current, label: `${current} (custom)` });
-  }
-  const selectOptions = [{ value: "IGNORE", label: emptyLabel }, ...items];
-  if (current === "") {
-    selectOptions.unshift({ value: "", label: "Choose…" });
-  }
+/** Suggestions + IGNORE + free text (same as ComboInput — not a closed select). */
+function ChoiceSelect({ value, onChange, options, disabled, emptyLabel = "IGNORE" }) {
   return (
-    <SelectField
-      title={title}
-      value={current}
-      options={selectOptions}
-      onChange={onChange}
+    <ComboInput
       disabled={disabled}
+      value={value}
+      onChange={onChange}
+      options={options}
+      includeIgnore
+      ignoreLabel={emptyLabel}
     />
   );
 }
@@ -308,7 +335,7 @@ export default function FormatMechanicsFields({
     <View style={styles.wrap}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>{title}</Text>
-        <Text style={styles.headerHint}>Edit any rule to customize</Text>
+        <Text style={styles.headerHint}>Type any value — suggestions are optional</Text>
       </View>
 
       <View style={styles.body}>
@@ -326,30 +353,25 @@ export default function FormatMechanicsFields({
 
         <Section title="Paper">
           <Field label="Size">{input("paperSize")}</Field>
-          <Field label="Orientation">
-            <SelectField
-              title="Orientation"
-              value={form.paperOrientation || ""}
-              options={
-                String(form.paperOrientation || "") === ""
-                  ? [{ value: "", label: "Choose…" }, ...ORIENTATION_OPTIONS]
-                  : ORIENTATION_OPTIONS
-              }
-              onChange={(v) => set("paperOrientation", v)}
+          <Field label="Orientation" hint="Portrait, Landscape, or type your school’s wording">
+            <ChoiceSelect
               disabled={disabled}
+              value={form.paperOrientation}
+              onChange={(v) => set("paperOrientation", v)}
+              options={["Portrait", "Landscape"]}
             />
           </Field>
-          <Field label="Spacing" hint="Pick a choice or type your own, e.g. 1.5 or Double">
+          <Field label="Line Spacing" hint="Pick a suggestion or type any value, e.g. 1.5 or Double">
             <ComboInput
               disabled={disabled}
               value={form.spacing}
               onChange={(v) => set("spacing", v)}
               options={LINE_SPACING_OPTIONS}
+              includeIgnore
             />
           </Field>
-          <Field label="Word spacing" hint="Spaces between words and after periods">
+          <Field label="Word spacing" hint="Spaces between words and after periods — type any rule">
             <ChoiceSelect
-              title="Word spacing"
               disabled={disabled}
               value={form.wordSpacing}
               onChange={(v) => set("wordSpacing", v)}
@@ -359,17 +381,12 @@ export default function FormatMechanicsFields({
           <Field label="Indention" hint="e.g. 0.5 inch, 1/2 inch, 1.27 cm">
             {input("indention")}
           </Field>
-          <Field label="Alignment" hint="Body text alignment — IGNORE skips this check">
-            <SelectField
-              title="Alignment"
-              value={form.alignment || ""}
-              options={
-                String(form.alignment || "") === ""
-                  ? [{ value: "", label: "Choose…" }, ...ALIGNMENT_OPTIONS]
-                  : ALIGNMENT_OPTIONS
-              }
-              onChange={(v) => set("alignment", v)}
+          <Field label="Alignment" hint="Body text — type any wording; IGNORE skips this check">
+            <ChoiceSelect
               disabled={disabled}
+              value={form.alignment}
+              onChange={(v) => set("alignment", v)}
+              options={ALIGNMENT_OPTIONS}
             />
           </Field>
           <Field
@@ -382,9 +399,8 @@ export default function FormatMechanicsFields({
               onChange={(next) => set("alignmentPageOverrides", next)}
             />
           </Field>
-          <Field label="Landscape pages" hint="When pages may be turned sideways">
+          <Field label="Landscape pages" hint="When pages may be turned sideways — type any rule">
             <ChoiceSelect
-              title="Landscape pages"
               disabled={disabled}
               value={form.paperLandscapePages}
               onChange={(v) => set("paperLandscapePages", v)}
@@ -407,20 +423,23 @@ export default function FormatMechanicsFields({
           <Field label="Body text size" hint="Same as Contents Size — not heading size">
             {input("bodySize", { keyboardType: "decimal-pad" })}
           </Field>
-          <Field label="Type" hint="Font family">
+          <Field label="Type" hint="Any font name — e.g. Linux Biolinum O (suggestions optional)">
             <ComboInput
               disabled={disabled}
               value={form.fontType}
               onChange={(v) => set("fontType", v)}
               options={FONT_FAMILY_OPTIONS}
+              includeIgnore
+              placeholder="Type any font name…"
             />
           </Field>
-          <Field label="Color">
+          <Field label="Color" hint="Black, Automatic, or type any color rule">
             <ComboInput
               disabled={disabled}
               value={form.fontColor}
               onChange={(v) => set("fontColor", v)}
               options={FONT_COLOR_OPTIONS}
+              includeIgnore
             />
           </Field>
         </Section>
@@ -480,7 +499,6 @@ export default function FormatMechanicsFields({
                           />
                         ) : (
                           <ChoiceSelect
-                            title={`${label} · ${field.label}`}
                             disabled={disabled}
                             value={heading[field.key]}
                             onChange={(v) => setHeadingValue(index, field.key, v)}
@@ -526,39 +544,32 @@ export default function FormatMechanicsFields({
 
         <Section title="Pagination">
           <View style={styles.paginationFields}>
-            <Field label="Position" hint="Where page numbers sit on normal pages">
+            <Field label="Position" hint="Where page numbers sit — type any wording">
               <ChoiceSelect
-                title="Position"
                 disabled={disabled}
                 value={form.paginationPosition}
                 onChange={(v) => set("paginationPosition", v)}
                 options={PAGE_POSITIONS}
               />
             </Field>
-            <Field
-              label="Title page"
-              hint="Document page 1 — leave IGNORE unless your guide says whether page 1 shows a number"
-            >
+            <Field label="Title page" hint="Document page 1 — type any rule">
               <ChoiceSelect
-                title="Title page"
                 disabled={disabled}
                 value={form.paginationTitlePage}
                 onChange={(v) => set("paginationTitlePage", v)}
                 options={TITLE_PAGE_OPTIONS}
               />
             </Field>
-            <Field label="First page of each chapter">
+            <Field label="First page of each chapter" hint="Type any rule your guide uses">
               <ChoiceSelect
-                title="First page of each chapter"
                 disabled={disabled}
                 value={form.paginationFirstPageRule}
                 onChange={(v) => set("paginationFirstPageRule", v)}
                 options={CHAPTER_FIRST_PAGE_OPTIONS}
               />
             </Field>
-            <Field label="Preliminary pages" hint="Pages before Chapter 1">
+            <Field label="Preliminary pages" hint="Pages before Chapter 1 — type any style">
               <ChoiceSelect
-                title="Preliminary pages"
                 disabled={disabled}
                 value={form.paginationPreliminaryStyle}
                 onChange={(v) => set("paginationPreliminaryStyle", v)}

@@ -221,6 +221,13 @@ function alignmentKey(value) {
   return "";
 }
 
+/** Map known alignment wording to checker keys; keep unknown custom text as-is. */
+function alignmentRuleValue(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  return alignmentKey(text) || text;
+}
+
 /** Parse lines like `Page 1 = center` into `{ "1": "center" }` (1-based pages). */
 export function parseAlignmentPageOverrides(text) {
   const overrides = {};
@@ -371,7 +378,8 @@ export function rulesToForm(rules = {}, name = "") {
     spacing,
     wordSpacing: canonicalWordSpacing(rules.word_spacing),
     indention,
-    alignment: ALIGNMENT_LABELS[alignmentKey(rules.alignment)] || "",
+    alignment:
+      ALIGNMENT_LABELS[alignmentKey(rules.alignment)] || String(rules.alignment || "").trim(),
     alignmentPageOverrides: formatAlignmentPageOverrides(rules.alignment_page_overrides),
     marginTop: margins.top != null ? String(margins.top) : "",
     marginLeft: margins.left != null ? String(margins.left) : "",
@@ -464,7 +472,7 @@ export function formToRules(form, tier) {
     if (indentNum != null && indentNum <= 2) rules.first_line_indent_inches = indentNum;
   }
 
-  const alignment = alignmentKey(formText(form.alignment));
+  const alignment = alignmentRuleValue(formText(form.alignment));
   if (alignment) rules.alignment = alignment;
 
   const pageOverrides = parseAlignmentPageOverrides(form.alignmentPageOverrides);
@@ -538,10 +546,17 @@ export function formToRules(form, tier) {
       .split(/\n|;/)
       .map((part) => part.trim())
       .filter(Boolean);
+  // Table/figure layout templates use real line breaks (one-line vs two-line).
+  // Only ';' separates multiple rules — do not split on newlines.
+  const splitLayout = (text) =>
+    formText(text)
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean);
 
   const pageBreaks = split(form.pageBreaks);
-  const tableLayout = split(form.tableLayout);
-  const figureLayout = split(form.figureLayout);
+  const tableLayout = splitLayout(form.tableLayout);
+  const figureLayout = splitLayout(form.figureLayout);
   if (pageBreaks.length) rules.page_break_requirements = pageBreaks;
   if (tableLayout.length) rules.table_layout_requirements = tableLayout;
   if (figureLayout.length) rules.figure_layout_requirements = figureLayout;

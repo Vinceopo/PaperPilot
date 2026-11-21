@@ -206,6 +206,7 @@ export default function UploadScreen({ navigation }) {
   const [nameError, setNameError] = useState("");
   const [confirm, setConfirm] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [conflictNotice, setConflictNotice] = useState(null);
   const [leaveAnalyzingOpen, setLeaveAnalyzingOpen] = useState(false);
   const scrollRef = useRef(null);
   const nameInputRef = useRef(null);
@@ -406,14 +407,31 @@ export default function UploadScreen({ navigation }) {
   function clearUploadDraft() {
     setMechFile(null);
     setExtractMeta(null);
+    setConflictNotice(null);
     setUploadForm(emptyMechanicsForm());
     setNameError("");
+  }
+
+  function conflictNoticeFromExtract(conflicts) {
+    if (!Array.isArray(conflicts) || !conflicts.length) return null;
+    const messages = conflicts
+      .map((item) => (typeof item?.message === "string" ? item.message.trim() : ""))
+      .filter(Boolean);
+    if (!messages.length) return null;
+    return {
+      title:
+        messages.length === 1
+          ? "We noticed conflicting rules"
+          : "We noticed a few conflicting rules",
+      message: messages.join("\n\n"),
+    };
   }
 
   async function runExtract(file) {
     setMechError("");
     setMechSuccess("");
     setNameError("");
+    setConflictNotice(null);
     setMechFile(file);
     setExtractMeta(null);
     setExtracting(true);
@@ -430,6 +448,9 @@ export default function UploadScreen({ navigation }) {
         text_preview: data.text_preview || "",
         page_count: data.page_count || (data.pages || []).length || 0,
         pages: Array.isArray(data.pages) ? data.pages : [],
+        assist_items: Array.isArray(data.assist_items) ? data.assist_items : [],
+        gemini_available: data.gemini_available !== false,
+        gemini_used: Boolean(data.gemini_used),
       });
       // Fill found rules; any field the guide omits becomes IGNORE (auto-pass).
       setUploadForm(
@@ -437,7 +458,10 @@ export default function UploadScreen({ navigation }) {
           rulesToForm(data.rules || {}, data.name || file.name.replace(/\.(pdf|docx)$/i, ""))
         )
       );
-      setMechSuccess("Format fields extracted from your guide — review and edit below, then save.");
+      setMechSuccess(
+        "Format fields filled from your guide. Editing is optional — save to keep this format, then upload another or continue from Saved."
+      );
+      setConflictNotice(conflictNoticeFromExtract(data.conflicts));
     } catch (err) {
       setMechError(err.message || "Extraction failed.");
     } finally {
@@ -463,7 +487,7 @@ export default function UploadScreen({ navigation }) {
     }
     setConfirm({
       title: "Extract format fields?",
-      message: `PaperPilot will analyze “${file.name}” and fill Format Fields from the rules in that guide. You can edit any value before saving.`,
+      message: `PaperPilot will analyze “${file.name}” and fill Format Fields from the rules in that guide. Editing afterward is optional — you can save as-is.`,
       confirmLabel: "Extract fields",
       onConfirm: () => {
         void runExtract(file);
@@ -506,6 +530,8 @@ export default function UploadScreen({ navigation }) {
       file_type: fromUpload && extractMeta?.file_type ? extractMeta.file_type : "docx",
       extracted_text: fromUpload ? extractMeta?.extracted_text || "" : "",
       ignored_fields: ignoredFieldsFromForm(form),
+      assist_items:
+        fromUpload && Array.isArray(extractMeta?.assist_items) ? extractMeta.assist_items : undefined,
     };
   }
 
@@ -516,9 +542,12 @@ export default function UploadScreen({ navigation }) {
     if (!payload) return;
     const savingMode = mode;
     setConfirm({
-      title: "Save format mechanics?",
-      message: `Save “${payload.name}” to Saved Mechanics and continue to Upload Manuscript?`,
-      confirmLabel: "Save and Continue",
+      title: "Save this format?",
+      message:
+        savingMode === "upload"
+          ? `Save “${payload.name}” and keep uploading guides? To analyze a manuscript, choose a saved format and continue from there.`
+          : `Save “${payload.name}”? Choose it under Use a Saved Format when you are ready to continue.`,
+      confirmLabel: savingMode === "upload" ? "Save & continue" : "Save format",
       onConfirm: async () => {
         try {
           await onSaveMechanicsProfile(payload);
@@ -1156,6 +1185,9 @@ export default function UploadScreen({ navigation }) {
 
                     {extractMeta ? (
                       <View style={{ marginTop: 16 }}>
+                        <Text style={[styles.cardHint, { marginTop: 0, marginBottom: 10 }]}>
+                          Review (optional) — primary action is to save the extracted fields as-is.
+                        </Text>
                         <FormatMechanicsFields
                           form={uploadForm}
                           onChange={updateForm}
@@ -1165,9 +1197,34 @@ export default function UploadScreen({ navigation }) {
                           nameInputRef={nameInputRef}
                           tier={tier}
                         />
+                        {Array.isArray(extractMeta?.assist_items) &&
+                        extractMeta.assist_items.length > 0 ? (
+                          <View style={styles.assistBox}>
+                            <Text style={styles.assistKicker}>Checked with AI assist on scan</Text>
+                            <View style={styles.assistChips}>
+                              {extractMeta.assist_items.map((item) => (
+                                <View
+                                  key={item.id || item.requirement_text}
+                                  style={styles.assistChip}
+                                >
+                                  <Text style={styles.assistKind}>{item.kind || "other"}</Text>
+                                  <Text style={styles.assistText} numberOfLines={2}>
+                                    {item.requirement_text}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                            {extractMeta.gemini_available === false ? (
+                              <Text style={styles.assistWarn}>
+                                Gemini assist is unavailable — these items will show as unchecked on
+                                scan.
+                              </Text>
+                            ) : null}
+                          </View>
+                        ) : null}
                         <View style={styles.editorActions}>
                           <PrimaryButton
-                            title={mechanicsBusy ? "Saving…" : "Save and Continue"}
+                            title={mechanicsBusy ? "Saving…" : "Save format"}
                             onPress={requestSaveProfile}
                             busy={mechanicsBusy}
                             disabled={mechBusy}
@@ -1632,6 +1689,16 @@ export default function UploadScreen({ navigation }) {
       />
 
       <ConfirmDialog
+        open={Boolean(conflictNotice) && !mechError && !confirm}
+        title={conflictNotice?.title || ""}
+        message={conflictNotice?.message || ""}
+        confirmLabel="Got it"
+        cancelLabel=""
+        onConfirm={() => setConflictNotice(null)}
+        onCancel={() => setConflictNotice(null)}
+      />
+
+      <ConfirmDialog
         open={oversizeBytes != null}
         title="Upload limit reached"
         message={oversizeFileMessage(oversizeBytes, maxBytes, tier)}
@@ -2060,6 +2127,48 @@ const styles = StyleSheet.create({
   dropzoneDisabled: { borderColor: "#cbd5e1", backgroundColor: "#f8fafc" },
   dropBusy: { alignItems: "center", gap: 4 },
   editorActions: { marginTop: 12, flexDirection: "row", gap: 8, alignItems: "stretch" },
+  assistBox: {
+    marginTop: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  assistKicker: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: colors.muted,
+  },
+  assistChips: { marginTop: 8, gap: 6 },
+  assistChip: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  assistKind: {
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    color: colors.muted,
+    backgroundColor: "#f1f5f9",
+    overflow: "hidden",
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  assistText: { flex: 1, fontSize: 12, lineHeight: 17, color: colors.slate, fontWeight: "500" },
+  assistWarn: { marginTop: 8, fontSize: 11, lineHeight: 16, color: "#b45309" },
   clearBtn: {
     minHeight: 44,
     justifyContent: "center",

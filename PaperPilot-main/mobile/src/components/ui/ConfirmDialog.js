@@ -91,12 +91,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     paddingHorizontal: 20,
     paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: "center",
   },
   cancelPressed: { backgroundColor: "#f8fafc" },
   cancelText: { fontSize: 12, fontWeight: "600", color: "#475569" },
   disabled: { opacity: 0.4 },
   confirmBtn: {
     minWidth: 112,
+    minHeight: 44,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -111,6 +114,6 @@ const styles = StyleSheet.create({
   confirmDanger: { backgroundColor: "#e11d48" },
   confirmDangerPressed: { backgroundColor: "#be123c" },
   confirmDangerBusy: { backgroundColor: "#fda4af" },
-  confirmText: { fontSize: 12, fontWeight: "700", color: colors.white },
+  confirmText: { fontSize: 12, fontWeight: "600", color: colors.white, lineHeight: 16 },
   confirmTextBusy: { color: colors.muted },
 });

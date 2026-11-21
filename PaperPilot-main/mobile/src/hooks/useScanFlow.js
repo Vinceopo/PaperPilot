@@ -114,6 +114,8 @@ export function useScanFlow({
         citationStyle: target.citationStyle,
         mechanicsName: target.mechanicsName,
         mechanicsRules: target.mechanicsRules,
+        assistItems: target.assistItems,
+        assistExpected: target.assistExpected,
         pageCount: target.pageCount,
         cloudinaryUrl: target.cloudinaryUrl,
         documentPreview: target.documentPreview,

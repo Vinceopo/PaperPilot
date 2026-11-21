@@ -250,6 +250,8 @@ function ScanResultBody({ navigation }) {
     scoreBreakdown = [],
     mechanicsRules = null,
     formatChecks = [],
+    assistFindings = [],
+    assistExpected = false,
     pageCount = 0,
     unitsChecked,
     unitsPassed,
@@ -505,6 +507,43 @@ function ScanResultBody({ navigation }) {
         </View>
       </View>
 
+      {Array.isArray(assistFindings) && assistFindings.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.cardKicker}>AI assist findings</Text>
+          <Text style={styles.assistHint}>
+            Visual / image / style checks from your custom guide. These do not change the score.
+          </Text>
+          <View style={styles.assistList}>
+            {assistFindings.map((item) => (
+              <View key={item.id} style={styles.assistItem}>
+                <View style={styles.assistMeta}>
+                  <Text style={styles.assistKind}>{item.kind || "other"}</Text>
+                  <Text style={styles.assistStatus}>
+                    {String(item.status || "unclear").replace(/_/g, " ")}
+                  </Text>
+                </View>
+                <Text style={styles.assistTitle}>{item.title}</Text>
+                {item.summary ? <Text style={styles.assistBody}>{item.summary}</Text> : null}
+                {item.recommendation ? (
+                  <Text style={styles.assistSuggest}>Suggestion: {item.recommendation}</Text>
+                ) : null}
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : assistExpected ? (
+        <View style={styles.card}>
+          <Text style={styles.cardKicker}>AI assist findings</Text>
+          <Text style={styles.assistHint}>
+            Visual / image / style checks from your custom guide. These do not change the score.
+          </Text>
+          <Text style={styles.assistEmpty}>
+            No assist findings were returned for this scan (none flagged, or assist unavailable).
+            Re-run the scan if you expected visual notes here.
+          </Text>
+        </View>
+      ) : null}
+
       <View onLayout={(e) => (tracingY.current = e.nativeEvent.layout.y)}>
         <IssueTracingSection
           result={result}
@@ -707,4 +746,54 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   downloadError: { marginTop: 8, fontSize: 11, color: "#f43f5e" },
+  assistHint: { marginTop: 6, fontSize: 12, lineHeight: 17, color: colors.muted },
+  assistList: { marginTop: 10, gap: 8 },
+  assistItem: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  assistMeta: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 4 },
+  assistKind: {
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    color: "#64748b",
+    backgroundColor: "#e2e8f0",
+    overflow: "hidden",
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  assistStatus: {
+    fontSize: 9,
+    fontWeight: "600",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    color: colors.muted,
+    backgroundColor: colors.white,
+    overflow: "hidden",
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  assistTitle: { fontSize: 13, fontWeight: "700", color: colors.text },
+  assistBody: { marginTop: 4, fontSize: 12, lineHeight: 17, color: colors.slate },
+  assistSuggest: { marginTop: 4, fontSize: 11, lineHeight: 16, color: colors.muted },
+  assistEmpty: {
+    marginTop: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#f8fafc",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.slate,
+  },
 });

@@ -243,6 +243,7 @@ export function AppDataProvider({ children }) {
     const mechanicsId = selectedMechanicsIdRef.current;
     const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
     const citationStyle = supportedCitationStyle(profile?.rules?.citation_style);
+    const assistItems = Array.isArray(profile?.assist_items) ? profile.assist_items : [];
     return {
       manuscriptId,
       versionId,
@@ -250,6 +251,8 @@ export function AppDataProvider({ children }) {
       mechanicsName: profile?.name || profile?.source_filename || profile?.filename || "",
       mechanicsRules:
         profile?.rules && typeof profile.rules === "object" ? profile.rules : null,
+      assistItems,
+      assistExpected: assistItems.length > 0,
       pageCount: version?.page_count,
       versionNumber: version?.version_number,
       cloudinaryUrl: version?.cloudinary_url || "",
@@ -648,6 +651,7 @@ export function AppDataProvider({ children }) {
         fileType: payload.file_type || payload.fileType,
         extractedText: payload.extracted_text || payload.extractedText,
         ignoredFields: payload.ignored_fields || payload.ignoredFields,
+        assistItems: payload.assist_items || payload.assistItems,
       });
       mechanicsChangeRef.current += 1;
       if (created?.id) {
@@ -870,12 +874,25 @@ export function AppDataProvider({ children }) {
     }
     try {
       const scan = await getComplianceScan(scanId);
+      const mechanicsId =
+        version.scanResult?.mechanicsId || manuscript?.mechanicsId || selectedMechanicsIdRef.current;
+      const profile = mechanicsRef.current.find((item) => item.id === mechanicsId);
+      const assistItems = Array.isArray(version.scanResult?.assistItems)
+        ? version.scanResult.assistItems
+        : Array.isArray(profile?.assist_items)
+          ? profile.assist_items
+          : [];
       const full = mapComplianceScanToResult(scan, {
         documentId: manuscript?.id,
         documentTitle: manuscript?.title,
         citationStyle: manuscript?.citationStyle,
         mechanicsName: version.scanResult?.mechanicsName || manuscript?.mechanicsName || "",
         mechanicsRules: resolveMechanicsRules(version.scanResult),
+        assistItems,
+        assistExpected: Boolean(
+          version.scanResult?.assistExpected ||
+            (Array.isArray(assistItems) && assistItems.length > 0)
+        ),
         versionId: version.versionId || version.scanResult?.versionId,
         documentName: version.scanResult?.documentName,
         cloudinaryUrl: version.scanResult?.cloudinaryUrl,
