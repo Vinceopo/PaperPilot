@@ -799,37 +799,6 @@ def _related_parts(document, needle: str):
             continue
 
 
-def _rfonts_typeface(rfonts) -> str | None:
-    """Prefer latin (ascii/hAnsi) typeface from a w:rFonts node; skip decorative faces."""
-    if rfonts is None:
-        return None
-    for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
-        value = rfonts.get(qn(f"w:{attr}"))
-        if value and not _is_docx_decorative_font(value):
-            return value
-    for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
-        value = rfonts.get(qn(f"w:{attr}"))
-        if value:
-            return value
-    return None
-
-
-def _style_rfonts_typeface(style) -> str | None:
-    """Read the style's own w:rFonts (python-docx style.font.name often misses custom faces)."""
-    if style is None:
-        return None
-    try:
-        element = getattr(style, "_element", None)
-        if element is None:
-            return None
-        rpr = element.rPr
-        if rpr is None or rpr.rFonts is None:
-            return None
-        return _rfonts_typeface(rpr.rFonts)
-    except Exception:
-        return None
-
-
 def _docx_run_font_name(run, paragraph) -> str | None:
     name = run.font.name
     if name:
@@ -837,17 +806,21 @@ def _docx_run_font_name(run, paragraph) -> str | None:
     try:
         rpr = run._element.rPr
         if rpr is not None:
-            named = _rfonts_typeface(rpr.rFonts)
-            if named:
-                return named
+            rfonts = rpr.rFonts
+            if rfonts is not None:
+                for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
+                    value = rfonts.get(qn(f"w:{attr}"))
+                    if value and not _is_docx_decorative_font(value):
+                        return value
+                for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
+                    value = rfonts.get(qn(f"w:{attr}"))
+                    if value:
+                        return value
     except Exception:
         pass
     try:
         style = paragraph.style
         while style is not None:
-            named = _style_rfonts_typeface(style)
-            if named:
-                return named
             if style.font and style.font.name:
                 return style.font.name
             style = style.base_style
@@ -1549,21 +1522,8 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
         for side in _sides_from_margin_phrase(phrase, margins):
             margins[side] = amount
 
-    # "1.5\" Margin at Left Side" / "1.0\" Margin at Top, Bottom and Right Side"
-    margin_at = re.compile(
-        rf"({_MEASURE_WITH_UNIT})\s+margins?\s+at\s+(?:the\s+)?"
-        rf"((?:(?:{_MARGIN_SIDE_ALT}|sides?)(?:\s*(?:,|and|&|/)\s*(?:the\s+)?)?)+)",
-        re.I,
-    )
-    for match in margin_at.finditer(flat):
-        amount = parse_length_inches(match.group(1))
-        if amount is None:
-            continue
-        for side in _sides_from_margin_phrase(match.group(2), margins):
-            margins[side] = amount
-
     before_side = re.compile(
-        rf"({_MEASURE_WITH_UNIT})\s+(?:on|for|at)\s+(?:the\s+)?({_MARGIN_SIDE_ALT})\s+margins?\b",
+        rf"({_MEASURE_WITH_UNIT})\s+(?:on\s+(?:the\s+)?)?({_MARGIN_SIDE_ALT})\s+margins?\b",
         re.I,
     )
     for match in before_side.finditer(window):
@@ -1571,20 +1531,16 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
         if amount is not None:
             margins[match.group(2).lower()] = amount
 
-    labeled_margins: dict[str, float] = {}
     for side in MARGIN_SIDES:
-        # Prefer "Top: 1" / "Left margin: 1.5". Avoid bare "Left"/"Right" which
-        # matches "Margin at Left Side" and steals the next measure.
-        colon = re.search(
-            rf"\b{side}(?:\s+margins?)?\s*:\s*({MEASURE_PATTERN})",
-            flat,
-            re.I,
-        )
+        if side in margins:
+            continue
+        # Prefer "Top: 1" labels - incidental "Top" in intro prose must not win.
+        colon = re.search(rf"\b{side}\s*:\s*({MEASURE_PATTERN})", flat, re.I)
         amount = parse_length_inches(colon.group(1)) if colon else None
         if amount is None:
             side_raw = _value_after_label(
                 flat,
-                (f"{side.capitalize()} margin", f"{side} margin"),
+                (f"{side.capitalize()} margin", f"{side} margin", side.capitalize(), side),
                 stop_words,
             )
             amount = _simple_margin_amount(side_raw) if side_raw else None
@@ -1597,8 +1553,7 @@ def _extract_margins(flat: str, stop_words: tuple[str, ...]) -> dict[str, float]
             if match:
                 amount = parse_length_inches(match.group(1))
         if amount is not None:
-            labeled_margins[side] = amount
-    margins.update(labeled_margins)
+            margins[side] = amount
 
     # "... and all other margins 1 inch" fills only the sides not named yet.
     others = re.search(
@@ -1657,113 +1612,16 @@ KNOWN_FONTS = (
     "Georgia",
     "Helvetica",
     "Impact",
-    "Linux Biolinum O",
-    "Linux Libertine O",
-    "Libertinus Serif",
     "Lucida Console",
     "Lucida Sans Unicode",
     "Microsoft Sans Serif",
     "Palatino Linotype",
     "Rockwell",
     "Segoe UI",
-    "TeXGyreTermes",
     "Tahoma",
     "Trebuchet MS",
     "Verdana",
 )
-
-
-def _clean_font_type_label(value: str) -> str:
-    """Keep an arbitrary typeface name from a Font type: label (not limited to KNOWN_FONTS)."""
-    text = re.sub(r"\s+", " ", str(value or "")).strip(" \t.,;:|/\\")
-    if not text or len(text) > 80:
-        return ""
-    # Drop trailing size/color chatter: "Linux Biolinum O 12 pt"
-    text = re.sub(r"(?i)\s+\d{1,2}(?:\.\d+)?\s*(?:pt|points?)\b.*$", "", text).strip(" \t.,;:")
-    if re.fullmatch(r"(?i)(?:n/?a|none|any|same|default|automatic|black)", text):
-        return ""
-    # Outline / section leftovers must never become a typeface ("i. Sizes", "ii. Type").
-    if not _looks_like_typeface_name(text):
-        return ""
-    return text
-
-
-def _looks_like_typeface_name(value: str) -> bool:
-    """True when a candidate is plausibly a typeface across varied school guides.
-
-    Rejects outline markers and size/heading section titles that sit under a bare
-    \"Font\" header (e.g. Capstone \"e. Font / i. Sizes / ii. Type : Times New Roman\").
-    """
-    text = re.sub(r"\s+", " ", str(value or "")).strip(" \t.,;:|/\\")
-    if not text or len(text) > 80:
-        return False
-    if not re.search(r"[A-Za-z]", text):
-        return False
-    # "i. Sizes", "a. Heading 1", "ii. Type" (label alone — value is elsewhere).
-    if re.match(r"(?i)^(?:[ivxlcdm]{1,6}|[a-z])\.\s*\S", text):
-        return False
-    if re.fullmatch(
-        r"(?i)(?:sizes?|headings?|colors?|styles?|weights?|body|content|contents|"
-        r"type|font|fonts|typeface|family|name)",
-        text,
-    ):
-        return False
-    if re.match(r"(?i)^(?:sizes?|headings?|colors?)\b", text):
-        return False
-    if re.fullmatch(r"[\d.\s\"″'x×/-]+", text):
-        return False
-    return True
-
-
-def _outline_line_value(text: str, labels: tuple[str, ...]) -> str:
-    """Like _line_value, but strips leading a./i./ii. outline markers first."""
-    stripped_lines: list[str] = []
-    for line in (text or "").replace("\r", "\n").split("\n"):
-        cleaned = line.strip(" \t•●▪◦*-")
-        cleaned = re.sub(r"^(?:[a-k]|[ivxlcdm]{1,6})\.\s+", "", cleaned, flags=re.I)
-        stripped_lines.append(cleaned)
-    return _line_value("\n".join(stripped_lines), labels)
-
-
-def _extract_labeled_font_type(text: str, flat: str, stop_words: tuple[str, ...]) -> str:
-    """Resolve typeface from varied label styles without mistaking a Font section header.
-
-    Prefer specific labels (Font type / Typeface / Type). Bare \"Font\" is only accepted
-    when the captured value itself looks like a typeface (\"Font: Arial\"), never when it
-    is the next outline item (\"Font / i. Sizes\").
-    """
-    specific = (
-        "Font type",
-        "Font family",
-        "Font name",
-        "Font style",
-        "Typeface",
-        "Body font",
-        "Body typeface",
-    )
-    label_groups: tuple[tuple[str, ...], ...] = (specific, ("Type",), ("Font",))
-
-    def _accept(raw: str) -> str:
-        raw = str(raw or "").strip()
-        if not raw:
-            return ""
-        mentioned = _font_families_in(raw)
-        if mentioned:
-            return mentioned[0]
-        custom = _clean_font_type_label(raw)
-        return custom if custom else ""
-
-    for labels in label_groups:
-        # Bare Font is last-resort only — specific Type/Typeface labels win first.
-        for raw in (
-            _outline_line_value(text, labels),
-            _line_value(text, labels),
-            _value_after_label(flat, labels, stop_words),
-        ):
-            accepted = _accept(raw)
-            if accepted:
-                return accepted
-    return ""
 
 
 def _font_families_in(text: str) -> list[str]:
@@ -1819,28 +1677,6 @@ def _mechanics_rule_count(rules: dict | None) -> int:
         elif value not in (None, "", [], {}):
             count += 1
     return count
-
-
-def _looks_like_font_color(value: str) -> bool:
-    """True when text looks like a named/hex font color, not figure-accessibility prose."""
-    text = str(value or "").strip()
-    if not text or len(text) > 48:
-        return False
-    if re.search(r"(?i)\b(?:vision|figures?|grayscale|chart|graph|pattern|indicated)\b", text):
-        return False
-    if re.fullmatch(r"#?[0-9A-Fa-f]{3,8}", text):
-        return True
-    if re.fullmatch(r"(?i)rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)", text):
-        return True
-    cleaned = re.sub(r"[()]", " ", text)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t/-")
-    return bool(
-        re.fullmatch(
-            r"(?i)(?:black(?:\s*/\s*automatic|\s+automatic)?|automatic|white|red|blue|green|navy|"
-            r"gray|grey|dark\s+blue|dark\s+gray|dark\s+grey)",
-            cleaned,
-        )
-    )
 
 
 def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
@@ -1947,40 +1783,15 @@ def derive_mechanics_rules(text: str) -> dict:
     if paper_size:
         rules["paper_size"] = paper_size
 
-    orientation = (
-        _outline_line_value(text, ("Orientation", "Page orientation"))
-        or _line_value(text, ("Orientation", "Page orientation"))
-        or _value_after_label(flat, ("Orientation", "Page orientation"), stop)
-    )
+    orientation = _value_after_label(flat, ("Orientation", "Page orientation"), stop)
     if orientation:
-        has_portrait = bool(re.search(r"\bportrait\b", orientation, re.I))
-        has_landscape = bool(re.search(r"\blandscape\b", orientation, re.I))
-        if has_portrait and has_landscape:
-            paper["orientation"] = "Portrait"
-            land_for = re.search(
-                r"(?i)\blandscape\b[^.]{0,100}?(?:for|when|on|except)\s+([^.;]+)",
-                orientation,
-            )
-            if land_for:
-                paper["landscape_pages"] = re.sub(r"\s+", " ", land_for.group(1)).strip(" :,-")[:160]
-            elif not paper.get("landscape_pages"):
-                paper["landscape_pages"] = "Allowed for tables and figures"
-        elif has_landscape:
+        if re.search(r"landscape", orientation, re.I):
             paper["orientation"] = "Landscape"
-        elif has_portrait:
+        elif re.search(r"portrait", orientation, re.I):
             paper["orientation"] = "Portrait"
-    elif re.search(
-        r"(?i)\bportrait\b.{0,80}\b(?:main|body|manuscript|document)\b"
-        r"|\b(?:main|body|manuscript|document)\b.{0,80}\bportrait\b",
-        flat,
-    ):
-        paper["orientation"] = "Portrait"
-    elif re.search(
-        r"(?i)\borientation\s*(?::|=)\s*landscape\b|\blandscape\s+orientation\b",
-        flat,
-    ) and not re.search(r"(?i)\bportrait\b", flat):
+    elif re.search(r"\blandscape\b(?!\s+(?:pages?|orientation\s*:))", flat, re.I):
         paper["orientation"] = "Landscape"
-    elif re.search(r"\bportrait\b", flat, re.I) and not re.search(r"\blandscape\b", flat, re.I):
+    elif re.search(r"\bportrait\b", flat, re.I):
         paper["orientation"] = "Portrait"
     # Never invent Portrait when the guide does not state orientation.
 
@@ -2159,12 +1970,9 @@ def derive_mechanics_rules(text: str) -> dict:
         rules["alignment_page_overrides"] = alignment_page_overrides_for_storage(alignment_overrides)
 
     fonts = _font_families_in(flat)
-    font_type = _extract_labeled_font_type(text, flat, stop)
+    font_type = _value_after_label(flat, ("Font type", "Font", "Typeface", "Type"), stop)
     if font_type:
         mentioned = _font_families_in(font_type)
-        # Any labeled typeface is valid — do not require membership in KNOWN_FONTS.
-        if not mentioned and _looks_like_typeface_name(font_type):
-            mentioned = [font_type]
         for family in reversed(mentioned):
             if family in fonts:
                 fonts.remove(family)
@@ -2501,10 +2309,8 @@ def derive_mechanics_rules(text: str) -> dict:
             # Earlier manuscript rules beat later exceptions when scores tie.
             candidates.append((score, -start, float(value)))
 
-        _pt_num = r"(\d{1,2}(?:\.\d+)?)(?:\s*(?:pt|points?)|\b)"
-
         for match in re.finditer(
-            rf"\b(?:typeface|font(?:\s*(?:family|type|style))?|type)\b(.{{0,40}}?)\bsize\s*(?:=|:|,)?\s*{_pt_num}",
+            r"\b(?:typeface|font(?:\s*(?:family|type))?|type)\b(.{0,40}?)\bsize\s*(?:=|:|,)?\s*(\d{1,2}(?:\.\d+)?)\b",
             flat,
             re.I,
         ):
@@ -2513,8 +2319,8 @@ def derive_mechanics_rules(text: str) -> dict:
             _add_candidate(match.start(), match.end(), float(match.group(2)), base=5)
 
         for match in re.finditer(
-            rf"\bfont\s*(?:type\s*)?(?:and|&|/)\s*size\b\s*:?\s*[^.\d]{{0,60}}?{_pt_num}"
-            rf"|\b(?:typeface|font\s*(?:family|type|style)|type)\s+size\b\s*(?:=|:)?\s*{_pt_num}",
+            r"\bfont\s*(?:type\s*)?(?:and|&|/)\s*size\b\s*:?\s*[^.\d]{0,60}?(\d{1,2}(?:\.\d+)?)\s*(?:pt|points?)?\b"
+            r"|\b(?:typeface|font\s*(?:family|type)|type)\s+size\b\s*(?:=|:)?\s*(\d{1,2}(?:\.\d+)?)\b",
             flat,
             re.I,
         ):
@@ -2522,7 +2328,7 @@ def derive_mechanics_rules(text: str) -> dict:
             _add_candidate(match.start(), match.end(), value, base=4)
 
         for match in re.finditer(
-            rf"\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*{_pt_num}",
+            r"\bfont\s+size\b\s*(?::|=|of|is|should\s+be|must\s+be)?\s*(\d{1,2}(?:\.\d+)?)\b",
             flat,
             re.I,
         ):
@@ -2567,33 +2373,9 @@ def derive_mechanics_rules(text: str) -> dict:
         font["sizes_points"] = [float(font["body_size"])]
     elif "body_size" not in font and "body_size" in blocked_font_keys:
         font.pop("sizes_points", None)
-    font_color = (
-        _outline_line_value(text, ("Font color", "Text color", "Font colour", "Text colour", "Color", "Colour"))
-        or _line_value(text, ("Font color", "Text color", "Font colour", "Text colour", "Color", "Colour"))
-        or _value_after_label(
-            flat, ("Font color", "Text color", "Font colour", "Text colour"), stop
-        )
-    )
-    if not font_color:
-        labeled = re.search(
-            r"(?i)\b(?:font|text)\s+colou?r\s*(?::|=)\s*([A-Za-z][A-Za-z /\-()]{1,40})",
-            flat,
-        )
-        font_color = labeled.group(1).strip() if labeled else ""
-    if not font_color:
-        inline = re.search(
-            r"(?i)(?:^|[\n\r]|[ivxlcdm]{1,6}\.\s*|[a-z]\.\s*|\s)colou?r\s*(?::|=)\s*"
-            r"([A-Za-z][A-Za-z /\-()]{1,40})",
-            text or flat,
-        )
-        font_color = inline.group(1).strip() if inline else ""
+    font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
+    # Only store color when the guide names it - never invent Black/Automatic.
     if font_color:
-        font_color = re.split(
-            r"(?i)\s+(?:[ivxlcdm]{1,6}|[a-z])\.\s+|\s{2,}",
-            font_color,
-            maxsplit=1,
-        )[0].strip(" \t.,;:")
-    if font_color and _looks_like_font_color(font_color):
         if re.search(r"black|automatic", font_color, re.I):
             font["color"] = "Black/Automatic"
         else:
@@ -3138,7 +2920,7 @@ _SAMPLE_SECTIONS = (
         (
             ("Size", "8.5 x 11"),
             ("Orientation", "Portrait"),
-            ("Line Spacing", "Double"),
+            ("Spacing", "Double"),
             ("Word spacing", "One space between words and after periods"),
             ("Indention", "0.5 inch"),
             ("Alignment", "Left"),

@@ -116,7 +116,7 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(scoring["consistency"]["ok"], scoring["consistency"]["errors"])
         self.assertEqual(body["units_checked"], scoring["units"]["checked"])
         self.assertEqual(body["units_passed"] + body["units_failed"], body["units_checked"])
-        spacing = next(item for item in body["sections"] if item["section"] == "Line Spacing")
+        spacing = next(item for item in body["sections"] if item["section"] == "Spacing")
         self.assertEqual(spacing["status"], "not_applicable")
         self.assertIsNone(spacing["formatting_score"])
 

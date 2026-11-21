@@ -41,7 +41,7 @@ MECHANICS_SCHEMA: tuple[dict[str, Any], ...] = (
                 "example": "20",
                 "rule": ("paper", "substance"),
             },
-            {"id": "spacing", "label": "Line Spacing", "example": "Double", "rule": ("spacing",)},
+            {"id": "spacing", "label": "Spacing", "example": "Double", "rule": ("spacing",)},
             {
                 "id": "word_spacing",
                 "label": "Word spacing",
