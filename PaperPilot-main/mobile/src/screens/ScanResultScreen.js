@@ -57,18 +57,22 @@ function CategoryScoreCard({
   displayNonCompliant,
   displayIssueCount,
   displayScore,
+  notice,
 }) {
-  // Ring % and subtitle use the same issue count: (total − issues) / total.
+  const unreliable = String(status || "").toLowerCase() === "could_not_check_reliably";
+  // Ring % and subtitle use the same issue count: (total - issues) / total.
   const issueCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
-  const fromShown = compliancePercentFromUnits(displayTotal, issueCount);
+  const fromShown = unreliable ? null : compliancePercentFromUnits(displayTotal, issueCount);
   const pct =
     fromShown != null
       ? fromShown
-      : hasValue(displayScore)
-        ? Number(displayScore)
-        : hasValue(score)
-          ? Number(score)
-          : null;
+      : unreliable
+        ? null
+        : hasValue(displayScore)
+          ? Number(displayScore)
+          : hasValue(score)
+            ? Number(score)
+            : null;
   const evaluated = hasValue(pct);
   const safe = evaluated ? Math.max(0, Math.min(100, Number(pct))) : 0;
   const name = String(metric || "Category").trim() || "Category";
@@ -76,9 +80,11 @@ function CategoryScoreCard({
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
-  const detail = formatCategoryIssuesDetail(issueCount, displayTotal)
-    || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
-    || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
+  const detail = unreliable
+    ? String(notice || CATEGORY_STATUS_LABEL.could_not_check_reliably)
+    : formatCategoryIssuesDetail(issueCount, displayTotal)
+      || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
+      || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
   return (
     <View style={styles.catCard}>
@@ -502,6 +508,7 @@ function ScanResultBody({ navigation }) {
               displayNonCompliant={item.displayNonCompliant}
               displayIssueCount={item.displayIssueCount}
               displayScore={item.displayScore}
+              notice={item.notice}
             />
           ))}
         </View>

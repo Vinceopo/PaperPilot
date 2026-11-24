@@ -48,18 +48,22 @@ function CategoryRingCard({
   displayNonCompliant,
   displayIssueCount,
   displayScore,
+  notice,
 }) {
+  const unreliable = String(status || "").toLowerCase() === "could_not_check_reliably";
   // Same issue count used for ring % as on Scan Results.
   const issueCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
-  const fromShown = compliancePercentFromUnits(displayTotal, issueCount);
+  const fromShown = unreliable ? null : compliancePercentFromUnits(displayTotal, issueCount);
   const pct =
     fromShown != null
       ? fromShown
-      : hasValue(displayScore)
-        ? Number(displayScore)
-        : hasValue(score)
-          ? Number(score)
-          : null;
+      : unreliable
+        ? null
+        : hasValue(displayScore)
+          ? Number(displayScore)
+          : hasValue(score)
+            ? Number(score)
+            : null;
   const evaluated = hasValue(pct);
   const safe = evaluated ? Math.max(0, Math.min(100, Number(pct))) : 0;
   const name = String(metric || "Category").trim() || "Category";
@@ -68,10 +72,11 @@ function CategoryRingCard({
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
-  const detail =
-    formatShortCategoryDetail(issueCount, displayTotal) ||
-    (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated") ||
-    (evaluated ? "Checked 0 · failed 0" : "Not evaluated");
+  const detail = unreliable
+    ? String(notice || CATEGORY_STATUS_LABEL.could_not_check_reliably)
+    : formatShortCategoryDetail(issueCount, displayTotal) ||
+      (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated") ||
+      (evaluated ? "Checked 0 · failed 0" : "Not evaluated");
 
   return (
     <View style={styles.catCard}>
@@ -640,6 +645,7 @@ export default function ManuscriptDetailModal({
                   displayNonCompliant={item.displayNonCompliant}
                   displayIssueCount={item.displayIssueCount}
                   displayScore={item.displayScore}
+                  notice={item.notice}
                 />
               ))}
             </View>

@@ -250,6 +250,7 @@ function categoryRows(scan) {
         unitsFailed: sectionUnitField(section, "units_failed"),
         issueCount: numberOrNull(section.issue_count) ?? 0,
         failedShare: null,
+        notice: section.notice || null,
         measured: unitsChecked == null ? section.formatting_score != null : unitsChecked > 0,
       };
     });

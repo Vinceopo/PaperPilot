@@ -11,13 +11,14 @@ import { isServerId, mapComplianceScanToResult } from "./scanMapper";
 import { scanNeedsPolling, waitForScanResult } from "./scanPoll";
 import {
   CATEGORY_STATUS_LABEL,
+  filterScoreBreakdownByRules,
   formatCategoryIssuesDetail,
   formatCount,
   formatPct,
   formatScore,
   hasValue,
+  reconcileDisplayedUnits,
   resolveCategoryUnitDisplays,
-  resolveUnitCounts,
 } from "./scoreFormat";
 import { APP_TIME_ZONE } from "./timeZone";
 
@@ -123,10 +124,12 @@ export async function downloadReport(result, opts = {}) {
     scannedAt,
     mechanicsName = "",
     formatMechanicsName = "",
+    citationStyle = "",
     overallScore = null,
     rightPct,
     wrongPct,
     scoreBreakdown = [],
+    mechanicsRules = null,
     formatChecks = [],
     assistFindings = [],
     assistExpected = false,
@@ -137,7 +140,25 @@ export async function downloadReport(result, opts = {}) {
 
   const versionNumber = Number(opts.versionNumber ?? result?.versionNumber ?? 1) || 1;
   const versionLabel = `v${versionNumber}.0`;
-  const scoreValue = hasValue(overallScore) ? Number(overallScore) : null;
+  const formatLabel =
+    String(formatMechanicsName || mechanicsName || "").trim() ||
+    String(citationStyle || "").trim() ||
+    "Format mechanics";
+  const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
+  const categoryCards = resolveCategoryUnitDisplays(activeBreakdown).map((row) => ({
+    ...row,
+    displayIssueCount: hasValue(row.displayNonCompliant)
+      ? row.displayNonCompliant
+      : row.displayIssueCount,
+  }));
+  const evaluatedCards = categoryCards.filter(
+    (row) => hasValue(row.displayTotal) && Number(row.displayTotal) > 0 && hasValue(row.displayScore),
+  );
+  const scoreValue = evaluatedCards.length
+    ? evaluatedCards.reduce((sum, row) => sum + Number(row.displayScore), 0) / evaluatedCards.length
+    : hasValue(overallScore)
+      ? Number(overallScore)
+      : null;
 
   const issueRows = (formatChecks || []).filter((c) => c && c.result !== "PASS");
   const issueTypes = issueRows.length;
@@ -145,7 +166,10 @@ export async function downloadReport(result, opts = {}) {
     total: totalUnits,
     compliant: compliantUnits,
     nonCompliant: nonCompliantUnits,
-  } = resolveUnitCounts({ unitsChecked, unitsPassed, unitsFailed });
+  } = reconcileDisplayedUnits(
+    { unitsChecked, unitsPassed, unitsFailed },
+    categoryCards,
+  );
 
   function scoreBandLabel(score) {
     if (score == null) return "NOT EVALUATED";
@@ -268,8 +292,8 @@ export async function downloadReport(result, opts = {}) {
   doc.roundedRect(ML, Y, CW, 22, 2, 2, "FD");
   const metaCols = [
     ["DOCUMENT", `${documentTitle} · ${versionLabel}`],
-    // Same Document Details source as ScanResultScreen — profile name, not citation style.
-    ["FORMAT MECHANICS", String(mechanicsName || formatMechanicsName || "").trim() || "Format mechanics"],
+    // Same Document Details source as ScanResultScreen - profile name, not citation style.
+    ["FORMAT MECHANICS", formatLabel],
     ["SCANNED", scannedDate],
     ["GENERATED", generatedDate],
   ];
@@ -353,7 +377,6 @@ export async function downloadReport(result, opts = {}) {
 
   Y += 48;
 
-  const categoryCards = resolveCategoryUnitDisplays(scoreBreakdown);
   if (categoryCards.length) {
     const cols = 3;
     const gap = 3.5;
@@ -377,11 +400,14 @@ export async function downloadReport(result, opts = {}) {
       const issueCount = hasValue(item.displayIssueCount)
         ? item.displayIssueCount
         : item.displayNonCompliant;
-      const pct = hasValue(item.displayScore)
-        ? Number(item.displayScore)
-        : hasValue(item.score)
-          ? Number(item.score)
-          : null;
+      const unreliable = String(item.status || "").toLowerCase() === "could_not_check_reliably";
+      const pct = unreliable
+        ? null
+        : hasValue(item.displayScore)
+          ? Number(item.displayScore)
+          : hasValue(item.score)
+            ? Number(item.score)
+            : null;
       const evaluated = hasValue(pct);
       const safe = evaluated ? Math.max(0, Math.min(100, Number(pct))) : 0;
       const color = ringColor(evaluated ? safe : null);
@@ -400,10 +426,11 @@ export async function downloadReport(result, opts = {}) {
 
       const textX = x + 20;
       const name = String(item.metric || item.section || "Category").trim() || "Category";
-      const detail =
-        formatCategoryIssuesDetail(issueCount, item.displayTotal) ||
-        (evaluated ? null : CATEGORY_STATUS_LABEL[item.status] || "Not evaluated") ||
-        "";
+      const detail = unreliable
+        ? String(item.notice || CATEGORY_STATUS_LABEL.could_not_check_reliably)
+        : formatCategoryIssuesDetail(issueCount, item.displayTotal) ||
+          (evaluated ? null : CATEGORY_STATUS_LABEL[item.status] || "Not evaluated") ||
+          "";
       doc.setFontSize(7.5).setFont("helvetica", "bold").setTextColor(30, 41, 59);
       doc.text(doc.splitTextToSize(name, cardW - 24).slice(0, 1), textX, y + 8);
       doc.setFontSize(5.5).setFont("helvetica", "normal").setTextColor(...SLATE);

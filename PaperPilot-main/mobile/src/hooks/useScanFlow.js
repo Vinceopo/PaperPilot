@@ -133,6 +133,9 @@ export function useScanFlow({
       if (title) scanResult.documentTitle = title;
       if (reuseId) scanResult.documentId = reuseId;
       if (isServerId(target.manuscriptId)) scanResult.documentId = target.manuscriptId;
+      if (target.cloudinaryUrl && !scanResult.cloudinaryUrl) {
+        scanResult.cloudinaryUrl = target.cloudinaryUrl;
+      }
 
       const serverVersion = Number(target.versionNumber) || 0;
       scanResult.versionNumber = serverVersion > 0 ? serverVersion : nextVersion;
@@ -145,9 +148,14 @@ export function useScanFlow({
       setAnalyzeProgress({ percent: 100, stage: "done", message: "Analysis complete" });
     } catch (err) {
       if (run !== runRef.current) return;
-      setError(
-        err?.message || "The analysis could not finish. No scan was used. Check your connection, then run the scan again."
-      );
+      const raw = err?.message || err?.detail?.message || err?.detail;
+      const message =
+        typeof raw === "string" && raw.trim()
+          ? raw.trim()
+          : Array.isArray(raw) && raw[0]?.msg
+            ? String(raw[0].msg)
+            : "The analysis could not finish. No scan was used. Check your connection, then run the scan again.";
+      setError(message);
       setStep("error");
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);
@@ -235,6 +243,11 @@ export function useScanFlow({
     setStep(saved ? "results" : "idle");
   }, []);
 
+  const syncVersionNumber = useCallback((version) => {
+    const n = Number(version);
+    setVersionNumber(Number.isFinite(n) && n > 0 ? n : 1);
+  }, []);
+
   const setDocumentLoadingState = useCallback((loading) => {
     setDocumentLoading(Boolean(loading));
   }, []);
@@ -293,6 +306,7 @@ export function useScanFlow({
     uploadNewVersion,
     backToDashboard,
     showSavedResult,
+    syncVersionNumber,
     setDocumentLoading: setDocumentLoadingState,
     clearPickerFile,
     patchResult,

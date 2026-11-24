@@ -441,6 +441,7 @@ export function plural(count, word, pluralWord = `${word}s`) {
 }
 
 export const CATEGORY_STATUS_LABEL = {
+  could_not_check_reliably: "Could not check reliably",
   not_evaluated: "Not evaluated",
   not_applicable: "Not applicable",
 };
