@@ -1327,7 +1327,7 @@ export default function App() {
 
   async function onMechanicsExtract(file) {
     setError("");
-    await warmApi();
+    // extractMechanics already warms the API — avoid a second cold-start wait.
     return extractMechanics(file);
   }
 

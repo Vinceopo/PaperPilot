@@ -17,6 +17,7 @@ import google.generativeai as genai
 from app.config import settings
 from app.documents import (
     _CORE_MARGIN_SIDES,
+    _mechanics_rule_count,
     iter_uniform_margin_mentions,
     parse_length_inches,
 )
@@ -162,6 +163,14 @@ def _merge_fill(base: dict, extra: dict) -> dict:
                     merged["sizes_points"] = sizes
             out[key] = merged
         elif isinstance(value, list):
+            # Table/figure layout: seed already filled Format Fields — never append a
+            # second near-duplicate rule (that showed up as “filled twice”).
+            if key in {"table_layout_requirements", "figure_layout_requirements"}:
+                current = list(out.get(key) or [])
+                if current:
+                    continue
+                out[key] = [item for item in value if str(item).strip()][:12]
+                continue
             current = list(out.get(key) or [])
             for item in value:
                 if item not in current:
@@ -584,6 +593,7 @@ def understand_mechanics_with_gemini(
             "gemini_available": gemini_available,
         }
 
+    seed_count = _mechanics_rule_count(seed)
     empty = _pack(
         seed,
         harvested,
@@ -592,24 +602,39 @@ def understand_mechanics_with_gemini(
         gemini_used=False,
         gemini_available=_gemini_ready(),
     )
-    if not _gemini_ready():
-        return empty
     if not body:
         return empty
+    # Templates that already filled Format Fields from embodied styles/text do not
+    # need a slow Gemini round-trip — keep local harvest assist items only.
+    if guessed_kind in {"template_as_guide", "hybrid"} and seed_count >= 6:
+        return _pack(
+            seed,
+            harvested,
+            confidence=0.72 if harvested else 0.6,
+            guide_kind=guessed_kind,
+            gemini_used=False,
+            gemini_available=_gemini_ready(),
+        )
+    if not _gemini_ready():
+        return empty
     styles = [str(name) for name in (style_names or []) if str(name).strip()][:80]
+    # Cap prompt size so understand stays responsive on long templates.
     prompt = (
         f"{UNDERSTAND_SYSTEM}\n\nSEED_RULES (prefer these when already set):\n"
-        f"{json.dumps(seed, ensure_ascii=False)[:12_000]}\n\n"
+        f"{json.dumps(seed, ensure_ascii=False)[:8_000]}\n\n"
         f"DOCUMENT_STYLE_NAMES (from the uploaded file; may be empty):\n"
         f"{json.dumps(styles, ensure_ascii=False)}\n\n"
         f"ALREADY_HARVESTED_ASSIST_ITEMS (keep / extend; do not drop):\n"
-        f"{json.dumps(harvested, ensure_ascii=False)}\n\n"
-        f"GUIDE_TEXT:\n{body[:24_000]}"
+        f"{json.dumps(harvested, ensure_ascii=False)[:4_000]}\n\n"
+        f"GUIDE_TEXT:\n{body[:12_000]}"
     )
     try:
         genai.configure(api_key=settings.gemini_api_key)
         model = genai.GenerativeModel(settings.gemini_model)
-        response = model.generate_content(prompt)
+        response = model.generate_content(
+            prompt,
+            request_options={"timeout": 35},
+        )
         data = _parse_json_response(response.text or "")
         gemini_rules = data.get("rules") if isinstance(data.get("rules"), dict) else {}
         # Non-schema Gemini keys become assist_items (never scored).

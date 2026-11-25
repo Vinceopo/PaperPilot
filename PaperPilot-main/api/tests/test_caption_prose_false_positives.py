@@ -105,7 +105,7 @@ class CaptionProseReferenceTests(unittest.TestCase):
         self.assertFalse(any(ex.strip() == "Table 3" for ex in excerpts))
 
     def test_scan_keeps_real_caption_case_flags_without_prose_hits(self):
-        from test_compliance_pipeline import _mechanics_paragraph
+        from tests.test_compliance_pipeline import _mechanics_paragraph
 
         paragraphs = [
             _mechanics_paragraph(

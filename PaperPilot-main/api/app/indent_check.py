@@ -375,12 +375,11 @@ def _mark_indent_table_units(units: list[dict]) -> set[int]:
                 left = float(bbox[0])
                 if not any(abs(left - edge) <= 10.0 for edge in lefts):
                     continue
-                in_band = bbox[3] >= band_top and bbox[1] <= band_bottom
-                near = in_band or any(
-                    bbox[1] <= anchor["bbox"][3] + 40.0 and bbox[3] >= anchor["bbox"][1] - 40.0
-                    for anchor in anchors
-                )
-                if not near:
+                # Keep growth inside the seeded band (+ one-line pad). The old
+                # 40pt "near any anchor" path cascaded into body text under tables.
+                wrap_pad = 14.0
+                in_band = bbox[3] >= band_top - wrap_pad and bbox[1] <= band_bottom + wrap_pad
+                if not in_band:
                     continue
                 page_table_ids.add(index)
                 table_ids.add(index)
@@ -724,6 +723,11 @@ def measure_paragraph_indent(paragraph: dict, indent_type: str) -> dict | None:
 
 
 def _overlaps_image(unit: dict, units: list[dict]) -> bool:
+    """True when text sits beside/inside a figure — not merely below it.
+
+    Body paragraphs under a picture must still be checked for indentation;
+    only true vertical overlap with the drawing box is treated as beside-image.
+    """
     if not _has_box(unit):
         return False
     box = unit["bbox"]
@@ -737,7 +741,8 @@ def _overlaps_image(unit: dict, units: list[dict]) -> bool:
             continue
         ob = other["bbox"]
         horizontally = box[2] >= ob[0] - 8 and box[0] <= ob[2] + 8
-        vertically = box[3] >= ob[1] - 12 and box[1] <= ob[3] + 12
+        # Require real vertical overlap with the image ink (no pad-below leak).
+        vertically = box[3] > ob[1] and box[1] < ob[3]
         if horizontally and vertically:
             return True
     return False

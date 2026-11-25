@@ -274,6 +274,13 @@ def run_analyze_job(
         job_store.complete(job_id, scan)
     except DocumentError as exc:
         job_store.fail(job_id, str(exc))
+    except KeyError as exc:
+        key = exc.args[0] if exc.args else "?"
+        job_store.fail(
+            job_id,
+            f"Analysis failed while scoring “{key}”. "
+            "The format checker hit an internal category mismatch — re-save mechanics and re-run.",
+        )
     except Exception as exc:
         job_store.fail(job_id, f"Analysis failed: {exc}")
 

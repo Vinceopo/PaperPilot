@@ -55,7 +55,9 @@ export async function pollScanUntilDone(scanId, onProgress, { intervalMs = 1000 
 
     if (TERMINAL_STAGES.has(stage)) {
       if (stage === "failed") {
-        throw new Error(message || "The analysis could not finish. No scan was used. Run the scan again.");
+        const raw = message || "The analysis could not finish. No scan was used. Run the scan again.";
+        // Keep KeyError / Analysis failed: 'X' out of the UI — useScanFlow maps these.
+        throw new Error(raw);
       }
       return payload;
     }

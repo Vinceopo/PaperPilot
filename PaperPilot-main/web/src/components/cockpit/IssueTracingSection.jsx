@@ -110,7 +110,8 @@ export default function IssueTracingSection({
   const enrichedEntries = useMemo(() => {
     const mapped = entries.map((entry) => ({
       ...entry,
-      category: entry.category || categoryForIssue(entry),
+      // Normalize Spacing→Line Spacing and infer from issue_type when section is General.
+      category: categoryForIssue(entry),
       printed_page_label: entry.printed_page_label || entry.location?.printed_page_label,
       printedPageLabel: entry.printedPageLabel || entry.location?.printedPageLabel,
     }));

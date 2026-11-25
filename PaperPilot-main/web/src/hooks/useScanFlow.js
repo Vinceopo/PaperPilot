@@ -30,6 +30,26 @@ function titleFromFile(file) {
   return file?.name?.replace(/\.(pdf|docx)$/i, "") || "";
 }
 
+/** Turn raw backend KeyError / exception strings into something a user can act on. */
+export function friendlyScanError(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return "The analysis could not finish. No scan was used. Check your connection, then run the scan again.";
+  }
+  const keyError = text.match(/Analysis failed:\s*'([^']+)'/i) || text.match(/^'([^']+)'$/);
+  if (keyError) {
+    const key = keyError[1];
+    if (/^(Line )?Spacing$/i.test(key) || /Captions|Indentation|Fonts|Margins/i.test(key)) {
+      return `Analysis failed while scoring “${key}”. The format checker hit an internal category mismatch — try again after the latest update, or re-save your format mechanics and re-run.`;
+    }
+    return `Analysis failed due to a missing internal field (“${key}”). Try again, or re-upload the manuscript.`;
+  }
+  if (/Analysis failed:/i.test(text) && text.length < 80) {
+    return `${text} Try again, or re-save your format mechanics and re-run the scan.`;
+  }
+  return text;
+}
+
 const INITIAL_PROGRESS = { percent: 0, stage: "queued", message: "Starting analysis…" };
 
 /**
@@ -155,13 +175,13 @@ export function useScanFlow({
     } catch (err) {
       if (run !== runRef.current) return;
       const raw = err?.message || err?.detail?.message || err?.detail;
-      const message =
+      const extracted =
         typeof raw === "string" && raw.trim()
           ? raw.trim()
           : Array.isArray(raw) && raw[0]?.msg
             ? String(raw[0].msg)
-            : "The analysis could not finish. No scan was used. Check your connection, then run the scan again.";
-      setError(message);
+            : "";
+      setError(friendlyScanError(extracted));
       setStep("error");
     }
   }, [file, fileError, step, mechanicsId, documentId, resolveManuscript, getActiveManuscript, getScanTarget]);

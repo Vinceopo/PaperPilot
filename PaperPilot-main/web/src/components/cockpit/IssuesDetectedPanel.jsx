@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { normalizeIssueLocation } from "../../lib/scanMapper.js";
+import { resolveScoreCategory } from "../../lib/scoreFormat.js";
 
 const SEVERITY = {
   minor: {
@@ -49,29 +50,11 @@ const CATEGORY_ORDER = [
 ];
 
 export function categoryForIssue(entry = {}) {
-  const section = String(entry.section || entry.category || "").trim();
-  if (section) {
-    if (section.toLowerCase() === "spacing") return "Line Spacing";
-    const known = CATEGORY_ORDER.find((name) => name.toLowerCase() === section.toLowerCase());
-    return known || section;
+  const resolved = resolveScoreCategory(entry);
+  if (resolved) {
+    const known = CATEGORY_ORDER.find((name) => name.toLowerCase() === resolved.toLowerCase());
+    return known || resolved;
   }
-  const type = String(entry.issue_type || "").toLowerCase();
-  if (type.startsWith("font") || type.includes("heading")) return "Fonts";
-  if (type.includes("margin") || type.includes("paper") || type.includes("orientation")) {
-    return "Margins";
-  }
-  if (type.includes("indent")) return "Indentation";
-  if (type.includes("spacing") || type.includes("line_spacing") || type.includes("word_spacing")) {
-    return "Line Spacing";
-  }
-  if (type.includes("align")) return "Alignment";
-  if (type.includes("pagination") || type.includes("page_number") || type.includes("page_token")) {
-    return "Pagination";
-  }
-  if (type.includes("caption") || type.startsWith("table_") || type.startsWith("figure_")) {
-    return "Captions";
-  }
-  if (type.includes("citation")) return "Citations";
   return "Other";
 }
 

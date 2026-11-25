@@ -61,8 +61,8 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
     fontType: "Times New Roman",
     fontColor: "Black/Automatic",
     headings: [
-      starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "center" }),
-      starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "left" }),
+      starterHeading({ size: "12", bold: "Bold", italic: "Not italic", case: "title", alignment: "center" }),
+      starterHeading({ size: "12", bold: "Bold", italic: "Not italic", case: "title", alignment: "left" }),
     ],
     paginationPosition: "Top right",
     // Leave unset: schools differ on whether page 1 shows a number. Cover-like pages still auto-skip.
@@ -400,10 +400,17 @@ export function formToRules(form) {
       .split(/\n|;/)
       .map((part) => part.trim())
       .filter(Boolean);
+  // Table/figure layout templates use real line breaks (one-line vs two-line).
+  // Only ';' separates multiple rules — do not split on newlines.
+  const splitLayout = (text) =>
+    formText(text)
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean);
 
   const pageBreaks = split(form.pageBreaks);
-  const tableLayout = split(form.tableLayout);
-  const figureLayout = split(form.figureLayout);
+  const tableLayout = splitLayout(form.tableLayout);
+  const figureLayout = splitLayout(form.figureLayout);
   if (pageBreaks.length) rules.page_break_requirements = pageBreaks;
   if (tableLayout.length) rules.table_layout_requirements = tableLayout;
   if (figureLayout.length) rules.figure_layout_requirements = figureLayout;

@@ -20,9 +20,17 @@ import {
   PRELIMINARY_STYLE_OPTIONS,
   TITLE_PAGE_OPTIONS,
   WORD_SPACING_OPTIONS,
+  canonicalHeadingItalic,
+  canonicalHeadingWeight,
   emptyHeading,
   headingLabel,
 } from "../../lib/mechanicsOptions";
+
+function headingFieldDisplayValue(key, value) {
+  if (key === "bold") return canonicalHeadingWeight(value);
+  if (key === "italic") return canonicalHeadingItalic(value);
+  return value;
+}
 
 const ORIENTATION_OPTIONS = [
   { value: "IGNORE", label: "IGNORE" },
@@ -66,6 +74,23 @@ function Field({ label, hint, children, style, labelStyle }) {
       <Text style={[styles.label, labelStyle]}>{label}</Text>
       {children}
       {hint ? <Text style={styles.hint}>{hint}</Text> : null}
+    </View>
+  );
+}
+
+/** Number input with a fixed unit badge (in, pt, …) so measures aren’t ambiguous. */
+function MeasureInput({ unit, editable = true, style, ...props }) {
+  return (
+    <View style={styles.measureWrap}>
+      <TextInput
+        editable={editable}
+        style={[styles.input, styles.measureInput, !editable && styles.inputDisabled, style]}
+        placeholderTextColor={colors.muted}
+        {...props}
+      />
+      <Text style={styles.measureUnit} accessibilityElementsHidden importantForAccessibility="no">
+        {unit}
+      </Text>
     </View>
   );
 }
@@ -249,7 +274,9 @@ export default function FormatMechanicsFields({
         </Field>
 
         <Section title="Paper">
-          <Field label="Size">{input("paperSize")}</Field>
+          <Field label="Size" hint="Width × height in inches — e.g. 8.5 x 11">
+            {input("paperSize", { placeholder: "8.5 x 11 in" })}
+          </Field>
           <Field label="Orientation">
             <SelectField
               title="Orientation"
@@ -311,18 +338,33 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Margins">
+          <Text style={styles.hint}>Values are in inches (in)</Text>
           <View style={styles.grid}>
             {MARGINS.map(([key, label]) => (
               <Field key={key} label={label} style={styles.gridCell}>
-                {input(key, { keyboardType: "decimal-pad" })}
+                <MeasureInput
+                  unit="in"
+                  editable={!disabled}
+                  value={form[key] == null ? "" : String(form[key])}
+                  onChangeText={(v) => set(key, v)}
+                  keyboardType="decimal-pad"
+                  accessibilityLabel={`${label} margin in inches`}
+                />
               </Field>
             ))}
           </View>
         </Section>
 
         <Section title="Font">
-          <Field label="Body text size" hint="Same as Contents Size - not heading size">
-            {input("bodySize", { keyboardType: "decimal-pad" })}
+          <Field label="Body text size" hint="Points (pt) — same as Contents Size, not heading size">
+            <MeasureInput
+              unit="pt"
+              editable={!disabled}
+              value={form.bodySize == null ? "" : String(form.bodySize)}
+              onChangeText={(v) => set("bodySize", v)}
+              keyboardType="decimal-pad"
+              accessibilityLabel="Body text size in points"
+            />
           </Field>
           <Field label="Type" hint="Font family">
             <ComboInput
@@ -387,20 +429,22 @@ export default function FormatMechanicsFields({
                           )}
                         </View>
                         {field.key === "size" ? (
-                          <TextInput
+                          <MeasureInput
+                            unit="pt"
                             editable={!disabled}
-                            style={[styles.input, disabled && styles.inputDisabled]}
                             value={heading.size == null ? "" : String(heading.size)}
                             onChangeText={(v) => setHeadingValue(index, "size", v)}
                             keyboardType="decimal-pad"
-                            placeholderTextColor={colors.muted}
+                            accessibilityLabel={`${label} size in points`}
                           />
                         ) : (
                           <ChoiceSelect
                             title={`${label} · ${field.label}`}
                             disabled={disabled}
-                            value={heading[field.key]}
-                            onChange={(v) => setHeadingValue(index, field.key, v)}
+                            value={headingFieldDisplayValue(field.key, heading[field.key])}
+                            onChange={(v) =>
+                              setHeadingValue(index, field.key, headingFieldDisplayValue(field.key, v))
+                            }
                             options={field.options}
                           />
                         )}
@@ -602,6 +646,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 13,
     color: "#334155",
+  },
+  measureWrap: { position: "relative" },
+  measureInput: { paddingRight: 34 },
+  measureUnit: {
+    position: "absolute",
+    right: 10,
+    top: 6,
+    height: 40,
+    textAlignVertical: "center",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    color: colors.muted,
+    lineHeight: 40,
   },
   inputDisabled: { backgroundColor: "#f8fafc" },
   area: { height: 76, paddingTop: 8, paddingBottom: 8 },

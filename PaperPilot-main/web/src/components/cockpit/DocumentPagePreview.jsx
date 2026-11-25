@@ -1197,8 +1197,27 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint =
     scroller.querySelector(".pp-issue-box")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [scrollTarget, highlight, busy, frameHeight, paged, pageCountHint, pagesReady]);
 
+  // Single scrollport only (same as PDF paged preview). A wrapper + inner
+  // overflow-y-auto pair reintroduced a second scrollbar in Mechanics preview.
   return (
-    <div className={`relative min-h-[12rem]${fillHeight ? " h-full min-h-0" : ""}`}>
+    <div
+      ref={scrollRef}
+      className={
+        paged
+          ? `pp-scroll relative mx-auto min-h-[12rem] w-full overflow-x-hidden overflow-y-auto overscroll-contain${
+              fillHeight ? " h-full max-h-full min-h-0" : ""
+            }`
+          : `relative min-h-[12rem]${fillHeight ? " h-full min-h-0" : ""}`
+      }
+      style={
+        paged
+          ? {
+              height: fillHeight ? "100%" : frameHeight || "70vh",
+              ...(fillHeight ? { maxHeight: "100%" } : {}),
+            }
+          : undefined
+      }
+    >
       {busy && (
         <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-[#e8ecf1]/80 text-xs text-slate-500">
           <Spinner className="h-4 w-4 text-[#16bfa8]" />
@@ -1208,26 +1227,7 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint =
       {error ? (
         <p className="rounded-lg bg-white px-4 py-3 text-xs text-rose-500 shadow-sm">{error}</p>
       ) : null}
-      <div
-        ref={scrollRef}
-        className={
-          paged
-            ? `pp-scroll relative mx-auto w-full overflow-x-hidden overflow-y-auto overscroll-contain${
-                fillHeight ? " h-full max-h-full" : ""
-              }`
-            : "relative"
-        }
-        style={
-          paged
-            ? {
-                height: fillHeight ? "100%" : frameHeight || "70vh",
-                ...(fillHeight ? { maxHeight: "100%" } : {}),
-              }
-            : undefined
-        }
-      >
-        <div ref={hostRef} className={paged ? "pp-docx-host pp-docx-host--paged" : "pp-docx-host"} />
-      </div>
+      <div ref={hostRef} className={paged ? "pp-docx-host pp-docx-host--paged" : "pp-docx-host"} />
     </div>
   );
 }

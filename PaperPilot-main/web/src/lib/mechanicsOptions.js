@@ -80,8 +80,15 @@ export const MAX_HEADING_LEVELS = 9;
 export const DEFAULT_HEADING_LEVELS = 2;
 
 export const HEADING_STYLE_FIELDS = [
-  { key: "bold", label: "Weight", options: [{ value: "yes", label: "Bold" }, { value: "no", label: "Not bold" }] },
-  { key: "italic", label: "Italic", options: [{ value: "yes", label: "Italic" }, { value: "no", label: "Not italic" }] },
+  { key: "bold", label: "Weight", options: [{ value: "Bold", label: "Bold" }, { value: "Not bold", label: "Not bold" }] },
+  {
+    key: "italic",
+    label: "Italic",
+    options: [
+      { value: "Italic", label: "Italic" },
+      { value: "Not italic", label: "Not italic" },
+    ],
+  },
   { key: "case", label: "Case", options: [{ value: "upper", label: "ALL CAPS" }, { value: "title", label: "Title Case" }] },
   {
     key: "alignment",
@@ -89,6 +96,37 @@ export const HEADING_STYLE_FIELDS = [
     options: [{ value: "center", label: "Centered" }, { value: "left", label: "Flush left" }],
   },
 ];
+
+/** Map stored / extracted weight+italic tokens to the Format Fields labels. */
+export function canonicalHeadingWeight(value) {
+  const text = lower(value);
+  if (!text || text === "ignore") return text === "ignore" ? "IGNORE" : "";
+  if (["yes", "true", "bold", "y"].includes(text)) return "Bold";
+  if (["no", "false", "not bold", "n", "regular", "normal"].includes(text)) return "Not bold";
+  return clean(value);
+}
+
+export function canonicalHeadingItalic(value) {
+  const text = lower(value);
+  if (!text || text === "ignore") return text === "ignore" ? "IGNORE" : "";
+  if (["yes", "true", "italic", "y"].includes(text)) return "Italic";
+  if (["no", "false", "not italic", "n", "roman", "regular", "normal"].includes(text)) return "Not italic";
+  return clean(value);
+}
+
+function headingFlagIsOn(value, kind) {
+  const text = lower(value);
+  if (!text || text === "ignore") return null;
+  if (kind === "bold") {
+    if (["yes", "true", "bold", "y"].includes(text)) return true;
+    if (["no", "false", "not bold", "n", "regular", "normal"].includes(text)) return false;
+  }
+  if (kind === "italic") {
+    if (["yes", "true", "italic", "y"].includes(text)) return true;
+    if (["no", "false", "not italic", "n", "roman", "regular", "normal"].includes(text)) return false;
+  }
+  return null;
+}
 
 /** Every rule one heading level can carry, in display order. */
 export const HEADING_RULE_FIELDS = [{ key: "size", label: "Size (pt)" }, ...HEADING_STYLE_FIELDS];
@@ -186,6 +224,33 @@ export function canonicalWordSpacing(value) {
   return clean(value);
 }
 
+/** Preset line-spacing multiples shown in Format Fields (not in/pt/cm — those are lengths). */
+export const LINE_SPACING_OPTIONS = [
+  { value: "1", label: "1 (Single)" },
+  { value: "1.15", label: "1.15" },
+  { value: "1.5", label: "1.5 (One and a half)" },
+  { value: "2", label: "2 (Double)" },
+];
+
+/** Map Double / 2.0 / 1.304≈… onto a preset value when close; else a clean multiple string. */
+export function canonicalLineSpacing(value) {
+  const raw = clean(value);
+  if (!raw || raw === "IGNORE") return raw;
+  const text = lower(raw);
+  if (/\bdouble\b/.test(text)) return "2";
+  if (/\bsingle\b/.test(text)) return "1";
+  if (/one[\s-]+and[\s-]+a[\s-]+half|1\s*½/.test(text)) return "1.5";
+  const match = text.replace(/,/g, ".").match(/\d+(?:\.\d+)?/);
+  if (!match) return raw;
+  const number = Number(match[0]);
+  if (!(number >= 0.8 && number <= 3)) return raw;
+  for (const option of LINE_SPACING_OPTIONS) {
+    if (Math.abs(Number(option.value) - number) < 0.05) return option.value;
+  }
+  // Keep a tidy multiple (no "2.0 (custom)" / trailing zeros).
+  return String(Number(number.toFixed(3)));
+}
+
 export function canonicalLandscapePages(value) {
   const text = lower(value);
   if (!text) return "";
@@ -209,7 +274,7 @@ export function emptyHeading() {
 
 /**
  * Rules `font` → one form entry per heading level the format defines
- * ("yes"/"no", "upper"/"title", "center"/"left", "" = NA / not in mechanics).
+ * (Bold/Not bold, Italic/Not italic, "upper"/"title", "center"/"left", "" = NA).
  */
 export function headingsFromRules(font = {}) {
   const styles = font.heading_styles && typeof font.heading_styles === "object" ? font.heading_styles : {};
@@ -230,10 +295,12 @@ export function headingsFromRules(font = {}) {
   return Array.from({ length: count }, (_, index) => {
     const item = styleOf(index + 1);
     const heading = { ...emptyHeading(), size: sizeOf(index + 1) };
-    for (const flag of ["bold", "italic"]) {
-      if (item[flag] === true) heading[flag] = "yes";
-      else if (item[flag] === false) heading[flag] = "no";
-    }
+    if (item.bold === true) heading.bold = "Bold";
+    else if (item.bold === false) heading.bold = "Not bold";
+    else if (item.bold != null && item.bold !== "") heading.bold = canonicalHeadingWeight(item.bold);
+    if (item.italic === true) heading.italic = "Italic";
+    else if (item.italic === false) heading.italic = "Not italic";
+    else if (item.italic != null && item.italic !== "") heading.italic = canonicalHeadingItalic(item.italic);
     if (["upper", "title"].includes(item.case)) heading.case = item.case;
     if (["center", "left"].includes(item.alignment)) heading.alignment = item.alignment;
     heading.fields = HEADING_RULE_FIELDS.map((field) => field.key).filter((key) => heading[key] !== "");
@@ -286,8 +353,9 @@ export function headingsToRules(headings) {
     const style = {};
     for (const flag of ["bold", "italic"]) {
       if (!enabled.has(flag)) continue;
-      if (heading?.[flag] === "yes") style[flag] = true;
-      else if (heading?.[flag] === "no") style[flag] = false;
+      const parsed = headingFlagIsOn(heading?.[flag], flag);
+      if (parsed === true) style[flag] = true;
+      else if (parsed === false) style[flag] = false;
       // IGNORE / blank → omit (no style rule for this flag)
     }
     // Never persist IGNORE as a case/alignment value - that faked coverage client-side

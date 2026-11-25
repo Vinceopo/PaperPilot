@@ -487,7 +487,10 @@ async def mechanics_extract(
                 "Use a text-based PDF or DOCX (not a scanned image-only PDF)."
             )
         paragraphs = parsed.get("paragraphs") if isinstance(parsed.get("paragraphs"), list) else []
-        rules = apply_template_extract_guards(derive_mechanics_rules(text), text, paragraphs)
+        sections = parsed.get("sections") if isinstance(parsed.get("sections"), list) else []
+        rules = apply_template_extract_guards(
+            derive_mechanics_rules(text), text, paragraphs, sections
+        )
         rules = _clamp_citation_style_for_plan(rules, uid)
         assert_mechanics_guide(text, rules)
         style_names = sorted(
@@ -502,6 +505,7 @@ async def mechanics_extract(
             normalize_mechanics_rules(understood.get("rules") or rules),
             text,
             paragraphs,
+            sections,
         )
         rules = _clamp_citation_style_for_plan(rules, uid)
         assist_items = understood.get("assist_items") or []
@@ -609,7 +613,10 @@ async def mechanics_create(
         if not item_name:
             raise DocumentError("A mechanics name is required.")
         paragraphs = parsed.get("paragraphs") if isinstance(parsed.get("paragraphs"), list) else []
-        rules = apply_template_extract_guards(derive_mechanics_rules(text), text, paragraphs)
+        sections = parsed.get("sections") if isinstance(parsed.get("sections"), list) else []
+        rules = apply_template_extract_guards(
+            derive_mechanics_rules(text), text, paragraphs, sections
+        )
         rules = _clamp_citation_style_for_plan(rules, uid)
         assert_mechanics_guide(text, rules)
         style_names = sorted(
@@ -624,6 +631,7 @@ async def mechanics_create(
             normalize_mechanics_rules(understood.get("rules") or rules),
             text,
             paragraphs,
+            sections,
         )
         rules = _clamp_citation_style_for_plan(rules, uid)
         item = create_mechanics(

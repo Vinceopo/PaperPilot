@@ -4,7 +4,7 @@ export function hasValue(value) {
   return value != null && Number.isFinite(Number(value));
 }
 
-/** Score Breakdown categories (matches backend BREAKDOWN_ORDER). */
+/** Score Breakdown categories (display names; backend uses "Spacing" for Line Spacing). */
 export const SCORE_BREAKDOWN_ORDER = [
   "Fonts",
   "Margins",
@@ -15,6 +15,59 @@ export const SCORE_BREAKDOWN_ORDER = [
   "Captions",
   "Citations",
 ];
+
+/** Map API category keys onto the labels shown in Score Breakdown / issue filters. */
+export function displayScoreCategory(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  if (raw.toLowerCase() === "spacing") return "Line Spacing";
+  const known = SCORE_BREAKDOWN_ORDER.find((item) => item.toLowerCase() === raw.toLowerCase());
+  return known || raw;
+}
+
+/** Infer a Score Breakdown category from an issue type when section is missing/generic. */
+export function categoryFromIssueType(issue = {}) {
+  const type = String(issue?.issue_type || issue?.id || "").toLowerCase();
+  if (!type) return "";
+  if (type.startsWith("font") || type.includes("heading")) return "Fonts";
+  if (type.includes("margin") || type.includes("paper") || type.includes("orientation")) {
+    return "Margins";
+  }
+  if (type.includes("indent")) return "Indentation";
+  if (type.includes("spacing") || type.includes("line_spacing") || type.includes("word_spacing")) {
+    return "Line Spacing";
+  }
+  if (type.includes("align")) return "Alignment";
+  if (type.includes("pagination") || type.includes("page_number") || type.includes("page_token")) {
+    return "Pagination";
+  }
+  if (type.includes("caption") || type.startsWith("table_") || type.startsWith("figure_")) {
+    return "Captions";
+  }
+  if (type.includes("citation")) return "Citations";
+  return "";
+}
+
+/**
+ * Normalize an issue/row onto a Score Breakdown display category.
+ * Prefers a real category over generic "General" / "Other" section labels.
+ */
+export function resolveScoreCategory(issueOrRow = {}) {
+  const section = String(issueOrRow?.section || "").trim();
+  const category = String(issueOrRow?.category || issueOrRow?.metric || "").trim();
+  const candidates = [category, section].filter(Boolean);
+  for (const candidate of candidates) {
+    const lower = candidate.toLowerCase();
+    if (lower === "general" || lower === "other") continue;
+    const display = displayScoreCategory(candidate);
+    if (display) return display;
+  }
+  const inferred = categoryFromIssueType(issueOrRow);
+  if (inferred) return inferred;
+  if (category) return displayScoreCategory(category) || category;
+  if (section) return displayScoreCategory(section) || section;
+  return "";
+}
 
 /**
  * True when a mechanics field is blank / IGNORE / NA (no rule to enforce).
@@ -87,14 +140,19 @@ export function activeScoreCategoriesFromRules(rules) {
 
   const margins =
     rules.margins_inches && typeof rules.margins_inches === "object" ? rules.margins_inches : {};
-  const hasMargins = ["top", "bottom", "left", "right"].some(
+  const hasMargins = ["top", "bottom", "left", "right", "gutter", "header", "footer"].some(
     (side) => margins[side] != null && !isMechanicsRuleUnset(margins[side]),
   );
   const paper = rules.paper && typeof rules.paper === "object" ? rules.paper : {};
   const hasPaperSize =
     !isMechanicsRuleUnset(paper.size) ||
     (rules.paper_size && !isMechanicsRuleUnset(rules.paper_size));
-  if (hasMargins || hasPaperSize || !isMechanicsRuleUnset(paper.orientation)) {
+  if (
+    hasMargins ||
+    hasPaperSize ||
+    !isMechanicsRuleUnset(paper.orientation) ||
+    !isMechanicsRuleUnset(paper.landscape_pages)
+  ) {
     active.add("Margins");
   }
 
@@ -116,7 +174,14 @@ export function activeScoreCategoriesFromRules(rules) {
     active.add("Line Spacing");
   }
 
-  if (!isMechanicsRuleUnset(rules.alignment)) {
+  const alignmentOverrides =
+    rules.alignment_page_overrides && typeof rules.alignment_page_overrides === "object"
+      ? rules.alignment_page_overrides
+      : {};
+  const hasAlignmentOverrides = Object.values(alignmentOverrides).some(
+    (value) => !isMechanicsRuleUnset(value),
+  );
+  if (!isMechanicsRuleUnset(rules.alignment) || hasAlignmentOverrides) {
     active.add("Alignment");
   }
 
@@ -145,42 +210,47 @@ export function activeScoreCategoriesFromRules(rules) {
   return active;
 }
 
+function withDisplayCategory(row = {}) {
+  const metric = displayScoreCategory(row?.metric || row?.section || row?.category) || row?.metric;
+  return metric && metric !== row?.metric ? { ...row, metric } : row;
+}
+
 /**
  * Keep only Score Breakdown rows whose category has configured/enabled rules.
  * Always hide IGNORE / not_applicable rows. When `rules` is null/undefined
  * (legacy scans), keep API rows except not_applicable.
+ * Empty `{}` rules fall back to showing API rows (do not wipe the breakdown).
  */
 export function filterScoreBreakdownByRules(scoreBreakdown = [], rules) {
   const list = Array.isArray(scoreBreakdown) ? scoreBreakdown : [];
-  const withoutIgnored = list.filter((row) => {
-    const status = String(row?.status || "").toLowerCase();
-    // Hide IGNORE / not_applicable only. Unreliable stays visible (notice, no ring).
-    return status !== "not_applicable";
-  });
-  if (rules == null) return withoutIgnored;
+  const withoutIgnored = list
+    .filter((row) => {
+      const status = String(row?.status || "").toLowerCase();
+      // Hide IGNORE / not_applicable only. Unreliable stays visible (notice, no ring).
+      return status !== "not_applicable";
+    })
+    .map(withDisplayCategory);
+  if (rules == null || typeof rules !== "object") return withoutIgnored;
   const active = activeScoreCategoriesFromRules(rules);
-  if (!active.size) return [];
+  // Empty / unrecognized rules must not erase categories the backend already scored.
+  if (!active.size) return withoutIgnored;
   return withoutIgnored.filter((row) => {
-    const name = String(row?.metric || row?.section || "").trim();
-    if (active.has(name)) return true;
-    // Legacy scans used "Spacing" before the Line Spacing rename.
-    if (name === "Spacing" && active.has("Line Spacing")) return true;
-    return false;
+    const name = displayScoreCategory(row?.metric || row?.section || "");
+    return Boolean(name) && active.has(name);
   });
 }
 
 /** Drop issue cards for categories that have no configured/enabled rule. */
 export function filterIssuesByActiveRules(issues = [], rules) {
   const list = Array.isArray(issues) ? issues : [];
-  if (rules == null) return list;
+  if (rules == null || typeof rules !== "object") return list;
   const active = activeScoreCategoriesFromRules(rules);
-  if (!active.size) return [];
+  // Empty rules → keep issues (legacy / partial hydrate); never return [].
+  if (!active.size) return list;
   return list.filter((issue) => {
-    const section = String(issue?.section || issue?.category || "").trim();
-    if (!section) return true;
-    if (section.toLowerCase() === "spacing" && active.has("Line Spacing")) return true;
-    const known = [...active].find((name) => name.toLowerCase() === section.toLowerCase());
-    return Boolean(known);
+    const name = resolveScoreCategory(issue);
+    if (!name || name === "Other" || name === "General") return true;
+    return active.has(name);
   });
 }
 

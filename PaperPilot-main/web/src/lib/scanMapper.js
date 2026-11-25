@@ -314,9 +314,13 @@ export function mapComplianceScanToResult(scan, meta = {}) {
 
   const scoring = scan?.scoring || null;
   const scoreBreakdown = categoryRows(scan);
-  const overallScore = numberOrNull(scoring ? scoring.overall?.value : scan?.overall_score);
-  const rightPct = numberOrNull(scoring ? scoring.passed_pct?.value : scan?.right_pct);
-  const wrongPct = numberOrNull(scoring ? scoring.failed_pct?.value : scan?.wrong_pct);
+  // Prefer nested scoring payload, but fall back to top-level fields when overall was
+  // written only there (or scoring.overall is missing after a partial hydrate).
+  const overallScore = numberOrNull(
+    scoring?.overall?.value ?? scan?.overall_score ?? scoring?.overall_score,
+  );
+  const rightPct = numberOrNull(scoring?.passed_pct?.value ?? scan?.right_pct);
+  const wrongPct = numberOrNull(scoring?.failed_pct?.value ?? scan?.wrong_pct);
   // Prefer the sum of category unit fields so header totals always match the breakdown.
   const fromCategories = scoreBreakdown.reduce(
     (acc, row) => {

@@ -255,8 +255,8 @@ export async function warmApi({ attempts = 4, delayMs = 1500 } = {}) {
 }
 
 export async function extractMechanics(file) {
-  // Avoid racing a Python cold-start on the first authenticated call.
-  await warmApi({ attempts: 2, delayMs: 1000 });
+  // One short warm is enough; long retry loops made template extract feel stuck.
+  await warmApi({ attempts: 1, delayMs: 400 });
   const uploaded = await uploadDocument(file);
   return authorizedFetch("/mechanics/extract", {
     method: "POST",

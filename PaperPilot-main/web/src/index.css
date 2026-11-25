@@ -382,8 +382,14 @@ input[type="checkbox"].auth-check:focus-visible {
   margin: 0 auto 1.25rem !important;
 }
 
+.pp-docx-host--paged {
+  /* Parent .pp-scroll owns scrolling — never nest a second scrollbar here. */
+  overflow: visible;
+}
+
 .pp-docx-host--paged .docx-wrapper {
   padding: 0 !important;
+  overflow: visible !important;
 }
 
 .pp-issue-hit {

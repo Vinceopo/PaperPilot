@@ -6,6 +6,7 @@
 import {
   canonicalChapterFirstPage,
   canonicalLandscapePages,
+  canonicalLineSpacing,
   canonicalPagePosition,
   canonicalPreliminaryStyle,
   canonicalTitlePage,
@@ -80,8 +81,8 @@ export function sampleMechanicsForm(name = "APA 7th Edition Format") {
     fontType: "Times New Roman",
     fontColor: "Black/Automatic",
     headings: [
-      starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "center" }),
-      starterHeading({ size: "12", bold: "yes", italic: "no", case: "title", alignment: "left" }),
+      starterHeading({ size: "12", bold: "Bold", italic: "Not italic", case: "title", alignment: "center" }),
+      starterHeading({ size: "12", bold: "Bold", italic: "Not italic", case: "title", alignment: "left" }),
     ],
     paginationPosition: "Top right",
     paginationTitlePage: "Number shown",
@@ -355,12 +356,13 @@ export function rulesToForm(rules = {}, name = "") {
         ? null
         : font.heading3_content_size;
 
-  const spacing =
+  const spacing = canonicalLineSpacing(
     rules.spacing != null
       ? String(rules.spacing)
       : rules.line_spacing != null
         ? String(rules.line_spacing)
-        : "";
+        : ""
+  );
 
   const indention =
     rules.indention != null

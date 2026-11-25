@@ -9,6 +9,7 @@ import {
   alignmentPageOverridesTextFromRows,
   citationStylesForPlan,
   clampCitationFormatForPlan,
+  parseLineSpacing,
 } from "../../lib/formatMechanicsForm.js";
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, Plus, Trash2, X } from "lucide-react";
@@ -17,21 +18,25 @@ import {
   FONT_FAMILIES,
   HEADING_RULE_FIELDS,
   LANDSCAPE_OPTIONS,
+  LINE_SPACING_OPTIONS,
   MAX_HEADING_LEVELS,
   PAGE_POSITIONS,
   PRELIMINARY_STYLE_OPTIONS,
   TITLE_PAGE_OPTIONS,
   WORD_SPACING_OPTIONS,
+  canonicalHeadingItalic,
+  canonicalHeadingWeight,
+  canonicalLineSpacing,
   emptyHeading,
   headingLabel,
 } from "../../lib/mechanicsOptions";
 
-const LINE_SPACING_OPTIONS = [
-  { value: "1", label: "1 (Single)" },
-  { value: "1.15" },
-  { value: "1.5", label: "1.5 (One and a half)" },
-  { value: "2", label: "2 (Double)" },
-];
+function headingFieldDisplayValue(key, value) {
+  if (key === "bold") return canonicalHeadingWeight(value);
+  if (key === "italic") return canonicalHeadingItalic(value);
+  return value;
+}
+
 const FONT_FAMILY_OPTIONS = FONT_FAMILIES.map((value) => ({ value }));
 const FONT_COLOR_OPTIONS = ["Black/Automatic", "Black", "Automatic"].map((value) => ({ value }));
 
@@ -39,6 +44,31 @@ const inputClass =
   "mt-1.5 h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
 const areaClass =
   "mt-1.5 min-h-[4.5rem] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
+
+/** Number input with a fixed unit badge (in, pt, …) so measures aren’t ambiguous. */
+function MeasureInput({ unit, disabled, className = inputClass, ...props }) {
+  return (
+    <div className="relative">
+      <input disabled={disabled} className={`${className} pr-9`} {...props} />
+      <span
+        className="pointer-events-none absolute inset-y-0 right-0 mt-1.5 flex h-9 items-center pr-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+        aria-hidden="true"
+      >
+        {unit}
+      </span>
+    </div>
+  );
+}
+
+function optionMatchesValue(option, currentRaw) {
+  const optionValue = String(option?.value ?? "").trim();
+  const current = String(currentRaw ?? "").trim();
+  if (!optionValue || !current) return false;
+  if (optionValue.toLowerCase() === current.toLowerCase()) return true;
+  const optionN = parseLineSpacing(optionValue);
+  const currentN = parseLineSpacing(current);
+  return optionN != null && currentN != null && Math.abs(optionN - currentN) < 0.05;
+}
 
 function AlignmentPageOverridesEditor({ value, onChange, disabled }) {
   const [rows, setRows] = useState(() => alignmentPageOverrideRowsFromText(value));
@@ -180,18 +210,20 @@ function ComboInput({
     for (const item of base) {
       if (!list.some((entry) => entry.value === item.value)) list.push(item);
     }
+    // Keep typed/extracted values selectable, but never label them "(custom)" —
+    // that looked like a unit name instead of in / pt / cm on measure fields.
     if (
       currentRaw &&
       currentRaw !== "IGNORE" &&
-      !list.some((entry) => entry.value.toLowerCase() === current)
+      !list.some((entry) => optionMatchesValue(entry, currentRaw))
     ) {
-      list.push({ value: currentRaw, label: `${currentRaw} (custom)` });
+      list.push({ value: currentRaw, label: currentRaw });
     }
     return list;
   })();
 
-  const matched = items.find((o) => o.value.toLowerCase() === current);
-  const displayValue = matched?.label || currentRaw;
+  const matched = items.find((o) => optionMatchesValue(o, currentRaw));
+  const displayValue = matched?.label || matched?.value || currentRaw;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -402,11 +434,12 @@ export default function FormatMechanicsFields({
 
       <Section title="Paper">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Size">
+          <Field label="Size" hint="Width × height in inches — e.g. 8.5 x 11">
             <input
               disabled={disabled}
               value={form.paperSize}
               onChange={set("paperSize")}
+              placeholder="8.5 x 11 in"
               className={inputClass}
             />
           </Field>
@@ -418,14 +451,25 @@ export default function FormatMechanicsFields({
               options={["Portrait", "Landscape"]}
             />
           </Field>
-          <Field label="Line Spacing" hint="Pick a suggestion or type any value, e.g. 1.5 or Double">
-            <ComboInput
-              disabled={disabled}
-              value={form.spacing}
-              onChange={setValue("spacing")}
-              options={LINE_SPACING_OPTIONS}
-              includeIgnore
-            />
+          <Field
+            label="Line Spacing"
+            hint="Line multiple (not in/pt/cm) — Single, 1.5, Double, or type a value"
+          >
+            <div className="relative">
+              <ComboInput
+                disabled={disabled}
+                value={canonicalLineSpacing(form.spacing)}
+                onChange={(next) => setValue("spacing")(canonicalLineSpacing(next))}
+                options={LINE_SPACING_OPTIONS}
+                includeIgnore
+              />
+              <span
+                className="pointer-events-none absolute inset-y-0 right-8 mt-1.5 flex h-9 items-center pr-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+                aria-hidden="true"
+              >
+                ×
+              </span>
+            </div>
           </Field>
           <Field label="Word spacing" hint="Spaces between words and after periods — type any rule">
             <ChoiceSelect
@@ -435,13 +479,14 @@ export default function FormatMechanicsFields({
               options={WORD_SPACING_OPTIONS}
             />
           </Field>
-          <Field label="Indention" hint="e.g. 0.5 inch, 1/2 inch, 1.27 cm">
-            <input
+          <Field label="Indention" hint="First-line indent — values are in inches (in)">
+            <MeasureInput
+              unit="in"
               disabled={disabled}
               value={form.indention}
               onChange={set("indention")}
-              placeholder="Type any value…"
-              className={inputClass}
+              placeholder="0.5"
+              aria-label="Indention in inches"
             />
           </Field>
           <Field label="Alignment" hint="Body text — type any wording; IGNORE skips this check">
@@ -478,6 +523,7 @@ export default function FormatMechanicsFields({
       </Section>
 
       <Section title="Margins">
+        <p className="mb-2 text-[10px] text-slate-400">Values are in inches (in)</p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {[
             ["marginTop", "Top"],
@@ -489,7 +535,8 @@ export default function FormatMechanicsFields({
             ["marginFooter", "Footer"],
           ].map(([key, label]) => (
             <Field key={key} label={label}>
-              <input
+              <MeasureInput
+                unit="in"
                 disabled={disabled}
                 type="number"
                 min="0"
@@ -497,7 +544,7 @@ export default function FormatMechanicsFields({
                 step="0.05"
                 value={form[key]}
                 onChange={set(key)}
-                className={inputClass}
+                aria-label={`${label} margin in inches`}
               />
             </Field>
           ))}
@@ -506,8 +553,9 @@ export default function FormatMechanicsFields({
 
       <Section title="Font">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Body text size" hint="Same as Contents Size — not heading size">
-            <input
+          <Field label="Body text size" hint="Points (pt) — same as Contents Size, not heading size">
+            <MeasureInput
+              unit="pt"
               disabled={disabled}
               type="number"
               min="6"
@@ -515,7 +563,7 @@ export default function FormatMechanicsFields({
               step="0.5"
               value={form.bodySize}
               onChange={set("bodySize")}
-              className={inputClass}
+              aria-label="Body text size in points"
             />
           </Field>
           <Field label="Type" hint="Any font name — e.g. Linux Biolinum O (suggestions optional)">
@@ -588,7 +636,8 @@ export default function FormatMechanicsFields({
                         )}
                       </div>
                       {field.key === "size" ? (
-                        <input
+                        <MeasureInput
+                          unit="pt"
                           disabled={disabled}
                           type="number"
                           min="6"
@@ -596,13 +645,15 @@ export default function FormatMechanicsFields({
                           step="0.5"
                           value={heading.size}
                           onChange={(e) => setHeadingValue(index, "size", e.target.value)}
-                          className={inputClass}
+                          aria-label={`${label} size in points`}
                         />
                       ) : (
                         <ChoiceSelect
                           disabled={disabled}
-                          value={heading[field.key]}
-                          onChange={(value) => setHeadingValue(index, field.key, value)}
+                          value={headingFieldDisplayValue(field.key, heading[field.key])}
+                          onChange={(value) =>
+                            setHeadingValue(index, field.key, headingFieldDisplayValue(field.key, value))
+                          }
                           options={field.options}
                         />
                       )}

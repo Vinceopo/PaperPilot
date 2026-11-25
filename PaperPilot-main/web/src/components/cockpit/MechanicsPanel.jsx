@@ -761,8 +761,10 @@ export default function MechanicsPanel({
               />
             </label>
             {extractMeta && !extracting && (
-              <div className="mt-3 flex min-h-[22rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
-                <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2.5">
+              // One height box, overflow clipped — only DocumentPagePreview scrolls
+              // (no outer overflow-y-auto; that caused the double scrollbar).
+              <div className="mt-3 flex h-[min(36rem,72vh)] min-h-[20rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2.5">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     Mechanics preview
                   </p>
@@ -777,17 +779,14 @@ export default function MechanicsPanel({
                     </span>
                   )}
                 </div>
-                <div
-                  className={`max-h-[min(36rem,72vh)] min-h-[20rem] flex-1 ${
-                    file?.name?.toLowerCase().endsWith(".pdf")
-                      ? "overflow-hidden bg-white"
-                      : "pp-scroll overflow-y-auto px-3 py-4 sm:px-5"
-                  }`}
-                >
+                <div className="min-h-0 flex-1 overflow-hidden bg-white">
                   <DocumentPagePreview
                     file={file}
                     preview={extractMeta}
                     emptyLabel="No mechanics preview available yet."
+                    paged
+                    fillHeight
+                    pageCountHint={extractMeta.page_count || 0}
                   />
                 </div>
               </div>

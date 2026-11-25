@@ -268,7 +268,7 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(loc0.get("page_height"), 792)
         self.assertIn("explanation", loc0)
         self.assertEqual([item["section"] for item in result["sections"]], [
-            "Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination", "Citations",
+            "Fonts", "Margins", "Indentation", "Spacing", "Alignment", "Pagination", "Captions", "Citations",
         ])
         fonts = next(item for item in result["sections"] if item["section"] == "Fonts")
         self.assertEqual(fonts["formatting_score"], 0)
@@ -327,13 +327,14 @@ class MechanicsExtractionTests(unittest.TestCase):
 
         text = parse_document(build_sample_mechanics_docx(), "docx")["text"]
         rules = normalize_mechanics_rules(derive_mechanics_rules(text))
+        # body_numbering / chapter_markers were removed from Format Fields; normalize drops them.
         self.assertEqual(rules["pagination"], {
             "position": "Top right",
             "first_page_of_chapter": "Same position as other pages",
             "title_page": "Number shown",
-            "body_numbering": "Arabic, continuous",
-            "chapter_markers": ["chapter_roman", "chapter_arabic"],
         })
+        self.assertNotIn("body_numbering", rules["pagination"])
+        self.assertNotIn("chapter_markers", rules["pagination"])
         self.assertEqual(rules["font"]["heading_styles"]["heading1"], {"bold": True, "case": "title", "alignment": "center"})
         self.assertEqual(rules["word_spacing"], "One space between words and after periods")
         self.assertEqual(rules["paper"]["landscape_pages"], "Allowed for tables and figures")
@@ -608,8 +609,9 @@ class MechanicsExtractionTests(unittest.TestCase):
         self.assertEqual(pagination["first_page_of_chapter"], "No page number shown")
         self.assertEqual(pagination["title_page"], "Hidden but counted")
         self.assertEqual(pagination["preliminary_style"], "Lowercase Roman (i, ii, iii)")
-        self.assertEqual(pagination["body_numbering"], "Arabic, restart at 1 on Chapter 1")
-        self.assertEqual(pagination["chapter_markers"], ["chapter_arabic"])
+        # Body numbering + chapter markers are no longer extracted into Format Fields.
+        self.assertNotIn("body_numbering", pagination)
+        self.assertNotIn("chapter_markers", pagination)
         self.assertIn("new chapter", rules["page_break_requirements"][0].lower())
         self.assertRegex(rules["table_layout_requirements"][0], r"(?i)caption|number")
         self.assertRegex(rules["figure_layout_requirements"][0], r"(?i)caption")
