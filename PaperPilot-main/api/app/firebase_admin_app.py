@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -66,6 +67,9 @@ def _parse_service_account(raw: str) -> dict | None:
 
     Base64 is the reliable form for Vercel: a PEM pasted into an env var often
     loses newlines, and Google then rejects the JWT as an invalid signature.
+
+    Also accepts a common dotenv-mangled form where the whole pretty-printed JSON
+    was escaped with literal ``\\n`` sequences (invalid as strict JSON until fixed).
     """
     text = raw.strip()
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
@@ -78,13 +82,47 @@ def _parse_service_account(raw: str) -> dict | None:
         if not decoded.startswith("{"):
             return None
         text = decoded
+    info: dict | None
     try:
-        info = json.loads(text)
+        parsed = json.loads(text)
+        info = parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
-        return None
-    if not isinstance(info, dict) or not info.get("private_key") or not info.get("client_email"):
+        info = _parse_dotenv_mangled_service_account(text)
+    if not info or not info.get("private_key") or not info.get("client_email"):
         return None
     return _normalize_private_key(info)
+
+
+def _parse_dotenv_mangled_service_account(text: str) -> dict | None:
+    """Recover JSON when pretty-printed SA JSON was stored with literal \\n escapes."""
+    if "\\n" in text:
+        pretty = text.replace("\\n", "\n").replace("\\r", "").replace("\r", "")
+    else:
+        pretty = text
+    required = (
+        "type",
+        "project_id",
+        "private_key_id",
+        "private_key",
+        "client_email",
+        "client_id",
+        "auth_uri",
+        "token_uri",
+        "auth_provider_x509_cert_url",
+        "client_x509_cert_url",
+    )
+    info: dict[str, str] = {}
+    for name in required:
+        match = re.search(rf'"{re.escape(name)}"\s*:\s*"(.*?)"', pretty, flags=re.S)
+        if not match:
+            return None
+        info[name] = match.group(1)
+    universe = re.search(r'"universe_domain"\s*:\s*"(.*?)"', pretty, flags=re.S)
+    if universe:
+        info["universe_domain"] = universe.group(1)
+    if "BEGIN PRIVATE KEY" not in info.get("private_key", ""):
+        return None
+    return info
 
 
 def firebase_admin_app():

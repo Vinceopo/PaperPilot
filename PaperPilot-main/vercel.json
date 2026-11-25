@@ -23,7 +23,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 300,
-      "includeFiles": "api/app/**",
+      "includeFiles": "{api/app/**,public/**}",
       "excludeFiles": "{mobile/**,web/node_modules/**,web/dist/**,.venv/**,api/.venv/**,api/venv/**,api/data/**,api/tests/**,machinelearning/**,paperpilot-ml/**,testdata/**,docs/**,scripts/**,**/.pytest_cache/**,**/__pycache__/**,**/*.pdf,**/*.docx,**/*.apk,**/*.aab}"
     },
     "api/webhooks/paymongo.py": {
@@ -36,10 +36,6 @@
     {
       "source": "/api/webhooks/(.*)",
       "destination": "/api/webhooks/paymongo"
-    },
-    {
-      "source": "/((?!api(?:/|$)|assets(?:/|$)).*)",
-      "destination": "/index.html"
     }
   ]
 }
