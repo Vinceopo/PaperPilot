@@ -1,8 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "cd web && npm install && npm run build",
-  "outputDirectory": "web/dist",
-  "installCommand": "cd web && npm install",
   "headers": [
     {
       "source": "/index.html",
@@ -26,24 +23,19 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 300,
-      "memory": 1024,
       "includeFiles": "api/app/**",
-      "excludeFiles": "{mobile/**,web/node_modules/**,.venv/**,api/.venv/**,api/venv/**,api/data/**,api/tests/**,machinelearning/**,paperpilot-ml/**,testdata/**,docs/**,scripts/**,**/.pytest_cache/**,**/__pycache__/**,**/*.pdf,**/*.docx,**/*.apk,**/*.aab}"
+      "excludeFiles": "{mobile/**,web/node_modules/**,web/dist/**,.venv/**,api/.venv/**,api/venv/**,api/data/**,api/tests/**,machinelearning/**,paperpilot-ml/**,testdata/**,docs/**,scripts/**,**/.pytest_cache/**,**/__pycache__/**,**/*.pdf,**/*.docx,**/*.apk,**/*.aab}"
     },
     "api/webhooks/paymongo.py": {
       "maxDuration": 30,
       "includeFiles": "api/app/**",
-      "excludeFiles": "{mobile/**,web/node_modules/**,.venv/**,api/.venv/**,api/venv/**,api/data/**,api/tests/**,machinelearning/**,paperpilot-ml/**,testdata/**,docs/**,scripts/**,**/.pytest_cache/**,**/__pycache__/**,**/*.pdf,**/*.docx,**/*.apk,**/*.aab}"
+      "excludeFiles": "{mobile/**,web/node_modules/**,web/dist/**,.venv/**,api/.venv/**,api/venv/**,api/data/**,api/tests/**,machinelearning/**,paperpilot-ml/**,testdata/**,docs/**,scripts/**,**/.pytest_cache/**,**/__pycache__/**,**/*.pdf,**/*.docx,**/*.apk,**/*.aab}"
     }
   },
   "rewrites": [
     {
-      "source": "/api/((?!webhooks(?:/|$)).*)",
-      "destination": "/api/index"
-    },
-    {
-      "source": "/api",
-      "destination": "/api/index"
+      "source": "/api/webhooks/(.*)",
+      "destination": "/api/webhooks/paymongo"
     },
     {
       "source": "/((?!api(?:/|$)|assets(?:/|$)).*)",

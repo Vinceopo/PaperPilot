@@ -143,7 +143,7 @@ Clients upload with `PUT` to an API-issued **presigned** URL (`upload_url`). Tha
       "http://127.0.0.1:5173",
       "http://localhost:5174",
       "http://127.0.0.1:5174",
-      "https://paperpilotph.vercel.app"
+      "https://paperpilotphh.vercel.app"
     ],
     "ExposeHeaders": ["ETag"],
     "MaxAgeSeconds": 3000

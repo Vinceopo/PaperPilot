@@ -1088,7 +1088,7 @@ def subscription_subscribe(body: SubscribeRequest, uid: str = Depends(authentica
         billing_period = "monthly"
     tier = "pro" if plan == "pro" else "premium"
 
-    base = (settings.app_public_url or "https://paperpilotph.vercel.app").rstrip("/")
+    base = (settings.app_public_url or "https://paperpilotphh.vercel.app").rstrip("/")
     # Mobile checkouts land on a web page that hands control back to the app.
     app_return = "&app=1" if body.return_to == "app" else ""
     success_url = f"{base}/?billing=success{app_return}"

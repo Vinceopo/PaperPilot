@@ -16,14 +16,14 @@
         "buildType": "apk"
       },
       "env": {
-        "PAPERPILOT_API_URL": "https://paperpilotph.vercel.app/api"
+        "PAPERPILOT_API_URL": "https://paperpilotphh.vercel.app/api"
       },
       "channel": "preview"
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "PAPERPILOT_API_URL": "https://paperpilotph.vercel.app/api"
+        "PAPERPILOT_API_URL": "https://paperpilotphh.vercel.app/api"
       },
       "channel": "production"
     }

@@ -23,6 +23,7 @@ mobile/dist/
 .env copy.*
 **/.env copy
 **/.env copy.*
+final.ENV.txt
 creds.json
 *.pem
 *serviceAccount*.json

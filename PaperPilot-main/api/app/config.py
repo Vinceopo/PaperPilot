@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     cors_origins: str = (
         "http://localhost:5173,http://127.0.0.1:5173,"
         "http://localhost:5174,http://127.0.0.1:5174,"
-        "https://paperpilotph.vercel.app"
+        "https://paperpilotphh.vercel.app"
     )
 
     smtp_host: str = ""
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     paymongo_webhook_secret: str = ""
     paymongo_payment_methods: str = "card,gcash,paymaya,grab_pay,qrph"
     # Public web app URL used for Checkout success/cancel redirects.
-    app_public_url: str = "https://paperpilotph.vercel.app"
+    app_public_url: str = "https://paperpilotphh.vercel.app"
 
     # Render ML analyze service (gateway-only; never expose key to clients).
     ml_service_url: str = ""

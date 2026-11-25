@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   PaperPilot - standalone Android build (APK / AAB) for the Expo app in this folder.
@@ -42,7 +42,7 @@ $MobileRoot = $PSScriptRoot
 $Root = Split-Path -Parent $MobileRoot
 $AndroidDir = Join-Path $MobileRoot "android"
 $OutDir = Join-Path $Root "builds\android"
-$ProdApiUrl = "https://paperpilotph.vercel.app/api"
+$ProdApiUrl = "https://paperpilotphh.vercel.app/api"
 $DefaultCmake = "3.22.1"
 $KeepBuilds = if ($env:KEEP_BUILDS) { [int]$env:KEEP_BUILDS } else { 5 }
 $MinFreeGb = 10
@@ -539,7 +539,7 @@ out.push("INFO env files: " + (loaded.join(", ") || "(none)"));
 const api = (env.PAPERPILOT_API_URL || env.EXPO_PUBLIC_API_URL || env.EXPO_PUBLIC_APP_URL || extra.apiUrl || "").trim();
 const allowLocal = process.env.ALLOW_LOCAL_API === "1";
 if (!api) {
-  out.push("ERR PAPERPILOT_API_URL / apiUrl is not set - set it in mobile/.env or the environment (https://paperpilotph.vercel.app/api).");
+  out.push("ERR PAPERPILOT_API_URL / apiUrl is not set - set it in mobile/.env or the environment (https://paperpilotphh.vercel.app/api).");
 } else {
   let url;
   try { url = new URL(api); } catch (e) {}
@@ -548,7 +548,7 @@ if (!api) {
     const host = url.hostname;
     const loopback = /^(localhost|127\.|0\.0\.0\.0|10\.0\.2\.2$)/.test(host);
     const lan = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
-    if (loopback && !allowLocal) out.push("ERR API URL points at " + host + " - a phone can't reach that. Use https://paperpilotph.vercel.app/api (or pass -AllowLocalApi).");
+    if (loopback && !allowLocal) out.push("ERR API URL points at " + host + " - a phone can't reach that. Use https://paperpilotphh.vercel.app/api (or pass -AllowLocalApi).");
     else if (url.protocol === "http:" && !allowLocal) out.push("ERR API URL uses http:// - release APKs block cleartext HTTP. Use https:// (or pass -AllowLocalApi).");
     else if (lan) out.push("WARN API URL is a LAN address (" + host + "); the APK only works on that Wi-Fi.");
     else out.push("OK API base baked into the APK: " + api);

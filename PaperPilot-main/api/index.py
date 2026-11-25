@@ -10,6 +10,11 @@ if str(_API_DIR) not in sys.path:
 
 from app.main import app as _core_app  # noqa: E402
 
+# Serve the Vite SPA from /public when present (Vercel CDN promotion).
+_public_dir = _API_DIR.parent / "public"
+if _public_dir.is_dir() and hasattr(_core_app, "frontend"):
+    _core_app.frontend("/", directory=str(_public_dir))
+
 
 class _StripApiPrefix:
     """Map /api/... → /... so existing FastAPI routes keep working on Vercel."""
@@ -21,6 +26,10 @@ class _StripApiPrefix:
         if scope["type"] in ("http", "websocket"):
             path = scope.get("path") or ""
             if path == "/api" or path.startswith("/api/"):
+                # Keep webhook routes on their dedicated function path.
+                if path == "/api/webhooks" or path.startswith("/api/webhooks/"):
+                    await self.app(scope, receive, send)
+                    return
                 scope = dict(scope)
                 new_path = path[4:] or "/"
                 scope["path"] = new_path
