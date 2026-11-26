@@ -65,6 +65,14 @@ LIST_ITEM_RE = re.compile(
 CAPTION_RE = re.compile(r"^(?:figure|fig\.?|table|tbl\.?|plate|map|photo|image)\s*[\d.]+\b", re.I)
 LABEL_VALUE_RE = re.compile(r"^[A-Za-z][^:]{0,40}:\s+\S+")
 REFERENCE_LIKE_RE = re.compile(r"^\(\d{4}[a-z]?\)|,\s*\d{4}\.?$")
+REFERENCE_HEADER_RE = re.compile(
+    r"^(?:list\s+of\s+)?(?:references|bibliography|works cited|literature cited)\b",
+    re.I,
+)
+BACK_MATTER_LEAVE_RE = re.compile(
+    r"^(?:appendix|appendices|glossary|index|vita|about the author)\b",
+    re.I,
+)
 HEADING_ROLE_PREFIX = "heading"
 
 
@@ -375,12 +383,11 @@ def _mark_indent_table_units(units: list[dict]) -> set[int]:
                 left = float(bbox[0])
                 if not any(abs(left - edge) <= 10.0 for edge in lefts):
                     continue
-                in_band = bbox[3] >= band_top and bbox[1] <= band_bottom
-                near = in_band or any(
-                    bbox[1] <= anchor["bbox"][3] + 40.0 and bbox[3] >= anchor["bbox"][1] - 40.0
-                    for anchor in anchors
-                )
-                if not near:
+                # Keep growth inside the seeded band (+ one-line pad). The old
+                # 40pt "near any anchor" path cascaded into body text under tables.
+                wrap_pad = 14.0
+                in_band = bbox[3] >= band_top - wrap_pad and bbox[1] <= band_bottom + wrap_pad
+                if not in_band:
                     continue
                 page_table_ids.add(index)
                 table_ids.add(index)
@@ -549,8 +556,24 @@ def _visibly_indented(unit: dict, baseline: float) -> bool:
     return (unit["bbox"][0] - baseline) >= INDENT_MIN_INDENT_PT
 
 
-def _looks_like_mid_sentence_continuation(unit: dict) -> bool:
-    """True when the line clearly continues a sentence (soft wrap), not a new paragraph."""
+_SENTENCE_END_RE = re.compile(r"""[.!?…]["'”’)\]]*$""")
+
+
+def _previous_line_ends_sentence(unit: dict) -> bool:
+    """True when the line ends with sentence-final punctuation (optional closing quotes/brackets)."""
+    text = _text(unit)
+    if not text:
+        return True
+    return bool(_SENTENCE_END_RE.search(text))
+
+
+def _looks_like_mid_sentence_continuation(unit: dict, previous: dict | None = None) -> bool:
+    """True when the line clearly continues a sentence (soft wrap), not a new paragraph.
+
+    Lowercase starts are always soft wraps. Capitalized wraps (common in MLA PDFs)
+    stay continuations when the previous line did not end a sentence — otherwise they
+    become false new paragraphs measured at 0" indent.
+    """
     text = _text(unit)
     if not text:
         return False
@@ -559,7 +582,13 @@ def _looks_like_mid_sentence_continuation(unit: dict) -> bool:
         return True
     if first in {"\"", "'", "(", "[", "“", "‘"} and len(text) > 1 and text[1].islower():
         return True
-    return False
+    if previous is None or _previous_line_ends_sentence(previous):
+        return False
+    if _is_heading_unit(unit) or _is_list_line(unit):
+        return False
+    if CAPTION_RE.match(text) or LABEL_VALUE_RE.match(text):
+        return False
+    return True
 
 
 def indent_prose_paragraphs(units: list[dict]) -> list[dict]:
@@ -632,13 +661,13 @@ def indent_prose_paragraphs(units: list[dict]) -> list[dict]:
             # much-larger-than-pitch blank (keeps consistently unindented docs
             # as real multi-paragraph fails when blanks/shorts are present).
             # List wraps after a short marker line are NOT new body paragraphs.
-            # Lowercase / mid-sentence starts after a short wrap are soft wraps,
-            # not new paragraphs (avoids 0-inch false positives on true 0.5" body).
+            # Mid-sentence starts after a short wrap (including capitalized MLA soft
+            # wraps) stay in the same paragraph — avoids 0-inch false positives.
             if not indented and (prev_short or flush_para_gap):
                 if _is_list_line(previous) or (current and _is_list_line(current[0])):
                     current.append(unit)
                     continue
-                if _looks_like_mid_sentence_continuation(unit):
+                if _looks_like_mid_sentence_continuation(unit, previous):
                     current.append(unit)
                     continue
                 close()
@@ -724,6 +753,11 @@ def measure_paragraph_indent(paragraph: dict, indent_type: str) -> dict | None:
 
 
 def _overlaps_image(unit: dict, units: list[dict]) -> bool:
+    """True when text sits beside/inside a figure — not merely below it.
+
+    Body paragraphs under a picture must still be checked for indentation;
+    only true vertical overlap with the drawing box is treated as beside-image.
+    """
     if not _has_box(unit):
         return False
     box = unit["bbox"]
@@ -737,7 +771,8 @@ def _overlaps_image(unit: dict, units: list[dict]) -> bool:
             continue
         ob = other["bbox"]
         horizontally = box[2] >= ob[0] - 8 and box[0] <= ob[2] + 8
-        vertically = box[3] >= ob[1] - 12 and box[1] <= ob[3] + 12
+        # Require real vertical overlap with the image ink (no pad-below leak).
+        vertically = box[3] > ob[1] and box[1] < ob[3]
         if horizontally and vertically:
             return True
     return False
@@ -757,12 +792,45 @@ def _is_list_paragraph(lines: list[dict]) -> bool:
     return False
 
 
+def _reference_section_line_ids(units: list[dict]) -> set[int]:
+    """Lines inside References / Bibliography / Works Cited — not body paragraphs."""
+    ids: set[int] = set()
+    in_refs = False
+    for unit in units:
+        text = _text(unit)
+        if not text:
+            continue
+        if REFERENCE_HEADER_RE.match(text):
+            in_refs = True
+            ids.add(id(unit))
+            continue
+        if in_refs and _is_heading_unit(unit):
+            # Leave only for a real following back-matter section, not subheads.
+            if BACK_MATTER_LEAVE_RE.match(text) and not REFERENCE_HEADER_RE.match(text):
+                in_refs = False
+                continue
+            if REFERENCE_HEADER_RE.match(text):
+                ids.add(id(unit))
+                continue
+            # Other headings (Chapter, etc.) end the reference block.
+            role = str(unit.get("role") or "")
+            if role.startswith(HEADING_ROLE_PREFIX) and not BACK_MATTER_LEAVE_RE.match(text):
+                # Keep appendix-style exits above; chapter-like titles also exit.
+                if re.match(r"^(?:chapter|ch\.?)\s+", text, re.I):
+                    in_refs = False
+                    continue
+        if in_refs:
+            ids.add(id(unit))
+    return ids
+
+
 def eligibility(
     paragraph: dict,
     units: list[dict],
     rule: dict,
     *,
     first_body_ids: set[int] | None = None,
+    reference_ids: set[int] | None = None,
 ) -> tuple[bool, str | None]:
     """Return (eligible, skip_reason). Skipped items are not units."""
     lines = paragraph.get("lines") or []
@@ -800,6 +868,9 @@ def eligibility(
         return False, "list"
     if _overlaps_image(first, units):
         return False, "beside_image"
+    # Reference-list entries are not body paragraphs — never require first-line indent.
+    if reference_ids and any(id(line) in reference_ids for line in lines):
+        return False, "reference"
     if REFERENCE_LIKE_RE.search(text) and len(text) < 120:
         return False, "reference"
     if INDENT_SKIP_PAGE_CONTINUE and first_body_ids and id(first) in first_body_ids:
@@ -872,6 +943,7 @@ def check_pdf_indentation(
     paragraphs = indent_prose_paragraphs(units)
     labels = _printed_page_labels(units)
     first_body_ids = _first_body_line_ids(units)
+    reference_ids = _reference_section_line_ids(units)
     indent_type = rule["indent_type"]
     expected = float(rule["value_in"])
     tolerance = float(rule["tolerance_in"])
@@ -886,7 +958,13 @@ def check_pdf_indentation(
             meta["skipped"].append({"paragraph_id": paragraph["paragraph_id"], "reason": "list_continuation"})
             prev_was_list = True
             continue
-        ok, skip_reason = eligibility(paragraph, units, rule, first_body_ids=first_body_ids)
+        ok, skip_reason = eligibility(
+            paragraph,
+            units,
+            rule,
+            first_body_ids=first_body_ids,
+            reference_ids=reference_ids,
+        )
         if not ok:
             meta["skipped"].append({"paragraph_id": paragraph["paragraph_id"], "reason": skip_reason})
             prev_was_list = is_list or skip_reason == "list"

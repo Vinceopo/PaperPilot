@@ -94,6 +94,8 @@ export default function ManuscriptPanel({
       setPreviewBusy(false);
       return;
     }
+    // Arm the DocumentLoader overlay while pdf.js / local page-count work runs.
+    setPreviewBusy(true);
     // Browser-local stub so DocumentPagePreview can render the File immediately.
     // No S3 upload / server parse during preview.
     setPreview({
@@ -103,8 +105,10 @@ export default function ManuscriptPanel({
       cloudinary_url: "",
       public_url: "",
     });
-    setPreviewBusy(false);
-    if (!onPreview) return;
+    if (!onPreview) {
+      if (previewRequest.current === requestId) setPreviewBusy(false);
+      return;
+    }
     try {
       const data = await onPreview(nextFile);
       if (previewRequest.current !== requestId) return;
@@ -121,6 +125,8 @@ export default function ManuscriptPanel({
       });
     } catch {
       // Keep the local stub; DocumentPagePreview still uses `file`.
+    } finally {
+      if (previewRequest.current === requestId) setPreviewBusy(false);
     }
   }
 
@@ -374,7 +380,7 @@ export default function ManuscriptPanel({
           </label>
 
           {showPreview && (
-            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
+            <div className="relative flex min-h-[18rem] flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-[#e8ecf1]">
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 bg-[#f3f5f7] px-4 py-2">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   Manuscript preview

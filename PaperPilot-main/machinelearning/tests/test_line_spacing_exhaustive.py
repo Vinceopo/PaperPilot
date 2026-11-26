@@ -1,4 +1,4 @@
-"""Line spacing must check every in-scope paragraph, with full evidence on flags."""
+"""Line spacing must check every in-scope visual line, with full evidence on flags."""
 
 from __future__ import annotations
 

@@ -45,16 +45,29 @@ const inputClass =
 const areaClass =
   "mt-1.5 min-h-[4.5rem] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-[#16bfa8] disabled:bg-slate-50";
 
-/** Number input with a fixed unit badge (in, pt, …) so measures aren’t ambiguous. */
+/** Side badge for length fields: Inches / pt / cm (never invent a unit). */
+function measureUnitLabel(unit) {
+  const raw = String(unit || "").trim();
+  const key = raw.toLowerCase();
+  if (key === "in" || key === "inch" || key === "inches") return "Inches";
+  if (key === "pt" || key === "point" || key === "points") return "pt";
+  if (key === "cm" || key === "centimeter" || key === "centimeters") return "cm";
+  if (key === "mm" || key === "millimeter" || key === "millimeters") return "mm";
+  return raw;
+}
+
+/** Number input with a fixed unit badge (Inches, pt, cm, …) so measures aren’t ambiguous. */
 function MeasureInput({ unit, disabled, className = inputClass, ...props }) {
+  const badge = measureUnitLabel(unit);
+  const wide = badge.length > 2;
   return (
     <div className="relative">
-      <input disabled={disabled} className={`${className} pr-9`} {...props} />
+      <input disabled={disabled} className={`${className} ${wide ? "pr-14" : "pr-9"}`} {...props} />
       <span
-        className="pointer-events-none absolute inset-y-0 right-0 mt-1.5 flex h-9 items-center pr-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+        className="pointer-events-none absolute inset-y-0 right-0 mt-1.5 flex h-9 items-center pr-2.5 text-[10px] font-semibold tracking-wide text-slate-400"
         aria-hidden="true"
       >
-        {unit}
+        {badge}
       </span>
     </div>
   );
@@ -453,7 +466,7 @@ export default function FormatMechanicsFields({
           </Field>
           <Field
             label="Line Spacing"
-            hint="Line multiple (not in/pt/cm) — Single, 1.5, Double, or type a value"
+            hint="Line multiple (not Inches/pt/cm) — 1, 1.15, 1.5, 2, or type a value"
           >
             <div className="relative">
               <ComboInput
@@ -479,9 +492,9 @@ export default function FormatMechanicsFields({
               options={WORD_SPACING_OPTIONS}
             />
           </Field>
-          <Field label="Indention" hint="First-line indent — values are in inches (in)">
+          <Field label="Indention" hint="First-line indent — values are in inches">
             <MeasureInput
-              unit="in"
+              unit="Inches"
               disabled={disabled}
               value={form.indention}
               onChange={set("indention")}
@@ -523,7 +536,7 @@ export default function FormatMechanicsFields({
       </Section>
 
       <Section title="Margins">
-        <p className="mb-2 text-[10px] text-slate-400">Values are in inches (in)</p>
+        <p className="mb-2 text-[10px] text-slate-400">Values are in inches</p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {[
             ["marginTop", "Top"],
@@ -536,7 +549,7 @@ export default function FormatMechanicsFields({
           ].map(([key, label]) => (
             <Field key={key} label={label}>
               <MeasureInput
-                unit="in"
+                unit="Inches"
                 disabled={disabled}
                 type="number"
                 min="0"

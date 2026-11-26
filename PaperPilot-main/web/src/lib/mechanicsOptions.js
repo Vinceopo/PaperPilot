@@ -226,10 +226,10 @@ export function canonicalWordSpacing(value) {
 
 /** Preset line-spacing multiples shown in Format Fields (not in/pt/cm — those are lengths). */
 export const LINE_SPACING_OPTIONS = [
-  { value: "1", label: "1 (Single)" },
+  { value: "1", label: "1" },
   { value: "1.15", label: "1.15" },
-  { value: "1.5", label: "1.5 (One and a half)" },
-  { value: "2", label: "2 (Double)" },
+  { value: "1.5", label: "1.5" },
+  { value: "2", label: "2" },
 ];
 
 /** Map Double / 2.0 / 1.304≈… onto a preset value when close; else a clean multiple string. */

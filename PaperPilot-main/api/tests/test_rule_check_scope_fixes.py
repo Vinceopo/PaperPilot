@@ -17,6 +17,7 @@ from app.compliance import (
     _promote_pdf_table_cells,
     FIGURE_LABEL_RE,
 )
+from app.documents import _annotate_pdf_line_underlines
 
 
 def _body(text: str, **kwargs):
@@ -99,6 +100,62 @@ class TableCellExemptionTests(unittest.TestCase):
             self.assertEqual(len(collector.items["first_line_indent"]["locations"]), 1)
 
 
+class PdfTitleUnderlineDetectionTests(unittest.TestCase):
+    def test_title_only_stroke_marks_title_span_not_figure_label(self):
+        """Word→PDF underlines sit under the title only, slightly inside the glyph box."""
+        # Mirrors real manuscript geometry: stroke under title, ~1.2pt above line bottom.
+        line_bbox = [274.13, 70.58, 407.26, 82.8]
+        label_bbox = [274.13, 70.58, 316.75, 82.8]
+        title_bbox = [316.75, 70.58, 407.26, 82.8]
+        stroke = [316.75, 81.62, 404.49, 82.7]
+        lines = [
+            {
+                "bbox": line_bbox,
+                "spans": [
+                    {"text": "Figure 2: ", "bbox": label_bbox, "bold": False},
+                    {"text": "Agile Methodology ", "bbox": title_bbox, "bold": True},
+                ],
+            }
+        ]
+        _annotate_pdf_line_underlines(lines, [stroke])
+        self.assertFalse(lines[0]["spans"][0]["underline"])
+        self.assertTrue(lines[0]["spans"][1]["underline"])
+
+        text = "Figure 2: Agile Methodology"
+        match = FIGURE_LABEL_RE.match(text)
+        expect = _layout_expectations(
+            "Figure <number[1..n] : Figure Title <bold, underlined>"
+        )
+        unit = _body(
+            text,
+            spans=[
+                {"text": "Figure 2: ", "bold": False, "underline": False},
+                {"text": "Agile Methodology", "bold": True, "underline": True},
+            ],
+        )
+        collector = IssueCollector()
+        _check_one_caption(unit, "figure", match, expect, collector)
+        self.assertNotIn("figure_caption_style", collector.items)
+
+    def test_old_line_level_y_window_would_miss_but_span_path_hits(self):
+        """Regression: 1pt-above-bottom window rejected real title underlines."""
+        line_bbox = [100.0, 50.0, 300.0, 62.0]
+        title_bbox = [180.0, 50.0, 300.0, 62.0]
+        # Stroke 1.2pt above the bottom edge — previously rejected by bbox[3]-1.0.
+        stroke = [180.0, 60.8, 295.0, 61.5]
+        lines = [
+            {
+                "bbox": line_bbox,
+                "spans": [
+                    {"text": "Figure 1: ", "bbox": [100.0, 50.0, 180.0, 62.0]},
+                    {"text": "Sample Title", "bbox": title_bbox},
+                ],
+            }
+        ]
+        _annotate_pdf_line_underlines(lines, [stroke])
+        self.assertTrue(lines[0]["spans"][1]["underline"])
+
+
 class CaptionStyleUnderlineTests(unittest.TestCase):
     def test_layout_expectations_read_underline_variants(self):
         only_underline = _layout_expectations("Figure title underlined below the image")
@@ -118,6 +175,8 @@ class CaptionStyleUnderlineTests(unittest.TestCase):
 
     def test_title_bold_and_underline_scope_not_stolen_by_number_token(self):
         """Schema-like wording still scopes bold+underline to the title, for figures and tables."""
+        from app.compliance import CAPTION_LINE_ONE
+
         for wording in (
             "Figure <number[1..n] : Figure Title <bold, underlined>",
             "Figure number[1..n] : Figure Title bold, underlined",
@@ -131,6 +190,16 @@ class CaptionStyleUnderlineTests(unittest.TestCase):
             self.assertFalse(expect["number_bold"], wording)
             self.assertFalse(expect["bold"], wording)
             self.assertFalse(expect["underline"], wording)
+        # Schema with title on the same line as the number → one_line (tables and figures).
+        for wording in (
+            "Figure <number[1..n] : Figure Title <bold, underlined>",
+            "Table <number[1..n] : Table Title <bold, underlined>",
+        ):
+            self.assertEqual(
+                _layout_expectations(wording)["line_structure"],
+                CAPTION_LINE_ONE,
+                wording,
+            )
 
     def test_figure_title_bold_underline_only_checks_title_runs(self):
         """Same title-only measurement used for tables: label may stay plain."""

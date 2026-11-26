@@ -93,14 +93,16 @@ function CategoryScoreCard({
   notice,
 }) {
   const unreliable = String(status || "").toLowerCase() === "could_not_check_reliably";
+  const zeroUnits = hasValue(displayTotal) && Number(displayTotal) === 0;
   // Ring % and issue subtitle both follow failed / non-compliant units.
-  const fromUnits = unreliable
+  // Zero-unit IGNORE / blank categories show "-" (not included in overall).
+  const fromUnits = unreliable || zeroUnits
     ? null
     : compliancePercentFromUnits(displayTotal, displayNonCompliant);
   const pct =
     fromUnits != null
       ? fromUnits
-      : unreliable
+      : unreliable || zeroUnits
         ? null
         : hasValue(displayScore)
           ? Number(displayScore)
@@ -117,9 +119,11 @@ function CategoryScoreCard({
   const findingCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
   const detail = unreliable
     ? String(notice || CATEGORY_STATUS_LABEL.could_not_check_reliably)
-    : formatCategoryIssuesDetail(findingCount, displayTotal)
-      || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
-      || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
+    : zeroUnits
+      ? CATEGORY_STATUS_LABEL[status] || "Not applicable"
+      : formatCategoryIssuesDetail(findingCount, displayTotal)
+        || (evaluated ? null : CATEGORY_STATUS_LABEL[status] || "Not evaluated")
+        || (evaluated ? "0 issues found on 0 total units checked" : "Not evaluated");
 
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-[#f4f6f8] px-3.5 py-3">
@@ -184,8 +188,6 @@ export default function ScanResultsScreen({
     unitsPassed,
     unitsFailed,
     scoringConsistency = null,
-    assistFindings = [],
-    assistExpected = false,
   } = result;
 
   const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
@@ -423,51 +425,7 @@ export default function ScanResultsScreen({
         issueTotal={nonCompliantUnits}
       />
 
-      {Array.isArray(assistFindings) && assistFindings.length > 0 ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <h3 className="text-lg font-bold text-slate-900">AI assist findings</h3>
-          <p className="mt-1 text-xs text-slate-500">
-            Visual / image / style checks from your custom guide. These do not change the score.
-          </p>
-          <ul className="mt-4 space-y-3">
-            {assistFindings.map((item) => (
-              <li
-                key={item.id}
-                className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
-                    {item.kind || "other"}
-                  </span>
-                  <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                    {String(item.status || "unclear").replace(/_/g, " ")}
-                  </span>
-                  <span className="text-sm font-semibold text-slate-800">{item.title}</span>
-                </div>
-                {item.summary ? (
-                  <p className="mt-1.5 text-sm text-slate-600">{item.summary}</p>
-                ) : null}
-                {item.recommendation ? (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Suggestion: {item.recommendation}
-                  </p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : assistExpected ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-          <h3 className="text-lg font-bold text-slate-900">AI assist findings</h3>
-          <p className="mt-1 text-xs text-slate-500">
-            Visual / image / style checks from your custom guide. These do not change the score.
-          </p>
-          <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            No assist findings were returned for this scan (none flagged, or assist unavailable).
-            Re-run the scan if you expected visual notes here.
-          </p>
-        </div>
-      ) : null}
+      {/* assistFindings still computed server-side; public results UI hidden */}
     </div>
   );
 }

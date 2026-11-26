@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   excerptNeedles,
+  findPdfWordItem,
   isApproximateTracing,
   isIndentationIssue,
   pageAlign,
@@ -10,7 +11,10 @@ import {
   resolveDocxPageIndex,
   resolvePdfMarkY,
   shouldUsePaginationEdge,
+  slicePdfItemBox,
   visualLineTarget,
+  wantsWordHighlight,
+  wordMatchIndexes,
 } from "./documentPreviewLocate.js";
 
 describe("visualLineTarget", () => {
@@ -201,5 +205,81 @@ describe("pagination edge highlight", () => {
   it("reads top-right placement from recommendation wording", () => {
     expect(pageRegion({ recommendation: "Add a page number at the top right of the page." })).toBe("top");
     expect(pageAlign({ recommendation: "Add a page number at the top right of the page." })).toBe("right");
+  });
+});
+
+describe("findPdfWordItem", () => {
+  const lineA = {
+    str: "Research papers and thesis manuscripts are fundamental tools",
+    left: 72,
+    top: 120,
+    width: 420,
+    height: 14,
+  };
+  const lineB = {
+    str: "students' knowledge, critical thinking, and research com",
+    left: 72,
+    top: 138,
+    width: 400,
+    height: 14,
+  };
+
+  it("slices the exact word instead of painting a longer run that contains it", () => {
+    const hit = findPdfWordItem([lineA, lineB], "Research", 120);
+    expect(hit).toBeTruthy();
+    expect(hit.top).toBe(120);
+    // "Research" is the first 8 chars of the 61-char run.
+    expect(hit.left).toBeCloseTo(72, 1);
+    expect(hit.width).toBeLessThan(90);
+    expect(hit.width).toBeGreaterThan(40);
+  });
+
+  it("does not jump to a later soft-wrapped line that also contains the word", () => {
+    const hit = findPdfWordItem([lineA, lineB], "Research", 120);
+    expect(hit.top).toBe(120);
+    expect(String(hit.str || "").toLowerCase()).toContain("research");
+    expect(hit.width).toBeLessThan(lineB.width);
+  });
+
+  it("uses word boundaries so partial letters inside another word do not match", () => {
+    expect(wordMatchIndexes("researching methods", "research")).toEqual([]);
+    expect(wordMatchIndexes("research papers", "research")).toEqual([0]);
+  });
+
+  it("joins adjacent split glyph items into one word box", () => {
+    const hit = findPdfWordItem(
+      [
+        { str: "Res", left: 72, top: 200, width: 24, height: 14 },
+        { str: "earch", left: 96, top: 200, width: 40, height: 14 },
+      ],
+      "Research",
+      200
+    );
+    expect(hit).toBeTruthy();
+    expect(hit.left).toBe(72);
+    expect(hit.width).toBeCloseTo(64, 0);
+  });
+
+  it("picks the occurrence nearest the scanner Y when the word repeats", () => {
+    const hit = findPdfWordItem([lineA, lineB], "research", 138);
+    expect(hit.top).toBe(138);
+    expect(hit.left).toBeGreaterThan(200);
+  });
+
+  it("flags single-word font excerpts for word highlighting", () => {
+    expect(
+      wantsWordHighlight({
+        section: "Fonts",
+        excerpt: "Research",
+        highlight_from: "word_excerpt",
+      })
+    ).toBe(true);
+    expect(wantsWordHighlight({ section: "Fonts", excerpt: "a whole line of text here" })).toBe(false);
+  });
+
+  it("proportionally slices pdf item boxes", () => {
+    const slice = slicePdfItemBox({ text: "abcd", left: 100, top: 10, width: 40, height: 12 }, 1, 2);
+    expect(slice.left).toBe(110);
+    expect(slice.width).toBe(20);
   });
 });

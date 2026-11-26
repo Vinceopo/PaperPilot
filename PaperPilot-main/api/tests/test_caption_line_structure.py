@@ -78,6 +78,28 @@ class CaptionLineStructureParseTests(unittest.TestCase):
             CAPTION_LINE_TITLE_LABEL,
         )
 
+    def test_schema_unclosed_number_tag_still_one_line_for_figures_and_tables(self):
+        """Format-field schemas often omit '>' before ': Title <bold…>' — still one_line."""
+        for wording in (
+            "Figure <number[1..n] : Figure Title <bold, underlined>",
+            "Figure <number[1..n]> : Figure Title <bold, underlined>",
+            "Table <number[1..n] : Table Title <bold>",
+            "Table <name[1..n]>TABLE TITLE",
+        ):
+            self.assertEqual(
+                _parse_caption_line_structure(wording),
+                CAPTION_LINE_ONE,
+                wording,
+            )
+
+    def test_schema_two_line_figure_template(self):
+        self.assertEqual(
+            _parse_caption_line_structure(
+                "Figure <number[1..n]>\nFigure Title <bold, underlined>"
+            ),
+            CAPTION_LINE_LABEL_TITLE,
+        )
+
 
 class CaptionLineStructureCheckTests(unittest.TestCase):
     def test_one_line_rule_flags_two_line_caption(self):
@@ -143,6 +165,102 @@ class CaptionLineStructureCheckTests(unittest.TestCase):
         _check_captions(units, rules, collector, stats)
         types = {issue["issue_type"] for issue in collector.result()}
         self.assertIn("table_caption_line_structure", types)
+
+    def test_figure_schema_one_line_flags_two_line_caption(self):
+        """Same structure technique as tables — driven by the user's figure rule text."""
+        rules = {
+            "figure_layout_requirements": [
+                "Figure <number[1..n] : Figure Title <bold, underlined>"
+            ]
+        }
+        units = [
+            _unit("Figure 1", line_index=0),
+            _unit("System Overview", line_index=1),
+        ]
+        collector = IssueCollector()
+        stats = CategoryStats()
+        _check_captions(units, rules, collector, stats)
+        types = {issue["issue_type"] for issue in collector.result()}
+        self.assertIn("figure_caption_line_structure", types)
+        self.assertGreaterEqual(stats.failed, 1)
+
+    def test_figure_schema_one_line_passes_one_line_caption(self):
+        rules = {
+            "figure_layout_requirements": [
+                "Figure <number[1..n] : Figure Title <bold, underlined>"
+            ]
+        }
+        units = [
+            _unit(
+                "Figure 1 System Overview",
+                line_index=0,
+                spans=[
+                    {"text": "Figure 1 ", "bold": False, "underline": False},
+                    {"text": "System Overview", "bold": True, "underline": True},
+                ],
+            )
+        ]
+        collector = IssueCollector()
+        stats = CategoryStats()
+        _check_captions(units, rules, collector, stats)
+        types = {issue["issue_type"] for issue in collector.result()}
+        self.assertNotIn("figure_caption_line_structure", types)
+        self.assertNotIn("figure_caption_style", types)
+        self.assertEqual(stats.failed, 0)
+        self.assertGreaterEqual(stats.checked, 1)
+
+    def test_figure_title_style_flags_when_mechanics_require_bold_and_underline(self):
+        """Only when the user's figure rule asks for title bold/underline — not hardcoded."""
+        rules = {
+            "figure_layout_requirements": [
+                "Figure <number[1..n] : Figure Title <bold, underlined>"
+            ]
+        }
+        units = [
+            _unit(
+                "Figure 2 Plain title text here",
+                line_index=0,
+                spans=[
+                    {"text": "Figure 2 ", "bold": False, "underline": False},
+                    {"text": "Plain title text here", "bold": False, "underline": False},
+                ],
+            )
+        ]
+        collector = IssueCollector()
+        stats = CategoryStats()
+        _check_captions(units, rules, collector, stats)
+        self.assertIn("figure_caption_style", {i["issue_type"] for i in collector.result()})
+        expecteds = {
+            str(loc.get("expected_value") or loc.get("expected") or "").lower()
+            for issue in collector.result()
+            for loc in issue.get("locations") or []
+        }
+        self.assertIn("bold", expecteds)
+        self.assertIn("underline", expecteds)
+        self.assertGreaterEqual(stats.failed, 1)
+
+    def test_figure_without_title_style_requirement_does_not_invent_bold_flags(self):
+        rules = {
+            "figure_layout_requirements": [
+                "Figure number and title on one line, below the figure."
+            ]
+        }
+        units = [
+            _unit(
+                "Figure 3 Plain title without styles",
+                line_index=0,
+                spans=[
+                    {"text": "Figure 3 ", "bold": False, "underline": False},
+                    {"text": "Plain title without styles", "bold": False, "underline": False},
+                ],
+            )
+        ]
+        collector = IssueCollector()
+        stats = CategoryStats()
+        _check_captions(units, rules, collector, stats)
+        types = {issue["issue_type"] for issue in collector.result()}
+        self.assertNotIn("figure_caption_style", types)
+        self.assertEqual(stats.failed, 0)
 
     def test_template_two_line_passes_two_line_caption(self):
         rules = {"table_layout_requirements": ["Table <name[1..n]>\nTABLE TITLE"]}

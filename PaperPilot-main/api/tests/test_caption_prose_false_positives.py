@@ -44,10 +44,33 @@ class CaptionProseReferenceTests(unittest.TestCase):
             "Figure 2.1 shows the architecture of the proposed system.",
             "Figure 4 Illustrates the workflow from upload to results.",
             "Fig. 7 depicts the sequence of validation steps used here.",
+            # Compound table refs must stay prose (not caption line-structure flags).
+            "Table 7 & 7.1 presents the data dictionary for the SUBSCRIPTIONS entity, which",
+            "Table 7 and 7.1 present the data dictionary for the entity under review.",
+            "Tables 7 and 8 show the measured attributes used during validation.",
+            "Figure 3/3.1 illustrates the workflow from upload to scored results.",
         ]
         for text in samples:
             with self.subTest(text=text):
                 self.assertTrue(_is_caption_prose_reference(text))
+
+    def test_compound_table_prose_not_flagged_as_caption_structure(self):
+        units = [
+            _unit(
+                "Table 7 & 7.1 presents the data dictionary for the SUBSCRIPTIONS entity, which "
+                "stores plan and billing details for each account."
+            )
+        ]
+        rules = {
+            "table_layout_requirements": [
+                "Table <number[1..n]>\nTABLE TITLE"
+            ]
+        }
+        collector = IssueCollector()
+        _check_captions(units, rules, collector)
+        types = {issue["issue_type"] for issue in collector.result()}
+        self.assertNotIn("table_caption_line_structure", types)
+        self.assertFalse(any("presents the data dictionary" in str(issue) for issue in collector.result()))
 
     def test_real_caption_labels_are_not_prose(self):
         samples = [

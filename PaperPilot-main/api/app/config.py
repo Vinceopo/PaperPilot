@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_ENV_FILE), env_file_encoding="utf-8", extra="ignore")
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     cors_origins: str = (
         "http://localhost:5173,http://127.0.0.1:5173,"
         "http://localhost:5174,http://127.0.0.1:5174,"
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Prefer Resend when set (dev: onboarding@resend.dev). SMTP remains a fallback.
     resend_api_key: str = ""
-    resend_from: str = "onboarding@resend.dev"
+    resend_from: str = "PaperPilot <paperpilot.25@gmail.com>"
 
     # When false, register / reset skip email codes (local/dev). Never disable in production.
     otp_enabled: bool = True

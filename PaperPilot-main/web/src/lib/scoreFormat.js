@@ -216,27 +216,33 @@ function withDisplayCategory(row = {}) {
 }
 
 /**
- * Keep only Score Breakdown rows whose category has configured/enabled rules.
- * Always hide IGNORE / not_applicable rows. When `rules` is null/undefined
- * (legacy scans), keep API rows except not_applicable.
- * Empty `{}` rules fall back to showing API rows (do not wipe the breakdown).
+ * Normalize Score Breakdown rows for display.
+ * IGNORE / blank categories (status not_applicable) are hidden — they are not
+ * scored and must not appear as Score Breakdown cards. When Format Mechanics
+ * rules are present, also drop categories with no configured (non-IGNORE) rule.
+ * Empty `{}` / missing rules must not wipe API rows (legacy / partial hydrate).
  */
 export function filterScoreBreakdownByRules(scoreBreakdown = [], rules) {
   const list = Array.isArray(scoreBreakdown) ? scoreBreakdown : [];
-  const withoutIgnored = list
-    .filter((row) => {
-      const status = String(row?.status || "").toLowerCase();
-      // Hide IGNORE / not_applicable only. Unreliable stays visible (notice, no ring).
-      return status !== "not_applicable";
-    })
-    .map(withDisplayCategory);
+  const normalized = list.map(withDisplayCategory);
+  const withoutIgnored = normalized.filter((row) => {
+    const status = String(row?.status || "").toLowerCase();
+    // Hide IGNORE / blank only. not_evaluated / unreliable stay visible.
+    return status !== "not_applicable";
+  });
   if (rules == null || typeof rules !== "object") return withoutIgnored;
   const active = activeScoreCategoriesFromRules(rules);
-  // Empty / unrecognized rules must not erase categories the backend already scored.
+  // Empty rules → keep API rows (except not_applicable); never return [] from {}.
   if (!active.size) return withoutIgnored;
   return withoutIgnored.filter((row) => {
     const name = displayScoreCategory(row?.metric || row?.section || "");
-    return Boolean(name) && active.has(name);
+    if (active.has(name)) return true;
+    // Legacy scans used "Spacing" before the Line Spacing rename.
+    if (name === "Line Spacing" && active.has("Line Spacing")) return true;
+    if (String(row?.metric || "").trim() === "Spacing" && active.has("Line Spacing")) {
+      return true;
+    }
+    return false;
   });
 }
 

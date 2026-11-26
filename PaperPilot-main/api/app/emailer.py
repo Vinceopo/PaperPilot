@@ -36,7 +36,7 @@ def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
     import resend
 
     resend.api_key = settings.resend_api_key.strip()
-    # Dev mode allows only onboarding@resend.dev as the from address.
+    # Dev/test sender only delivers to the Resend account owner until a domain is verified.
     from_addr = (settings.resend_from or "").strip() or "onboarding@resend.dev"
     try:
         result = resend.Emails.send(
@@ -49,7 +49,14 @@ def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
             }
         )
     except Exception as exc:
-        raise RuntimeError(f"Resend failed: {exc}") from exc
+        hint = ""
+        from_l = from_addr.lower()
+        if "onboarding@resend.dev" in from_l or from_l.endswith("@resend.dev"):
+            hint = (
+                " RESEND_FROM is still a Resend test address; verify a domain in Resend "
+                "and set RESEND_FROM to an address on that domain (e.g. PaperPilot <noreply@yourdomain.com>)."
+            )
+        raise RuntimeError(f"Resend failed: {exc}.{hint}") from exc
 
     email_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
     log.info("Resend accepted OTP email to %s id=%s", to_email, email_id)

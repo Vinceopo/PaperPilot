@@ -685,6 +685,57 @@ class IndentFalseNegativeAndFalsePositiveTests(unittest.TestCase):
         self.assertEqual(collector.result(), [])
         self.assertEqual(stats.failed, 0)
 
+    def test_capitalized_mla_soft_wrap_not_zero_indent_false_positive(self):
+        """MLA soft wraps often start with a capital; they must not become 0\" paragraphs."""
+        from app.compliance import _unit_location
+        from app.indent_check import check_pdf_indentation, indent_prose_paragraphs
+
+        units = [
+            _unit(
+                0,
+                100,
+                BODY_LEFT + 36,
+                "Opening line with the required half inch indent for this body paragraph text.",
+                x1=PAGE_W - 90,
+            ),
+            _unit(
+                0,
+                116,
+                BODY_LEFT,
+                "Full width continuation that nearly reaches the right margin of the page body xx.",
+                x1=PAGE_W - 72,
+            ),
+            _unit(
+                0,
+                132,
+                BODY_LEFT,
+                "Short wrap ends without a period",
+                x1=BODY_LEFT + 160,
+            ),
+            _unit(
+                0,
+                148,
+                BODY_LEFT,
+                "And families for their unconditional love continue the same sentence here.",
+                x1=PAGE_W - 100,
+            ),
+        ]
+        paras = indent_prose_paragraphs(units)
+        self.assertEqual(len(paras), 1)
+        self.assertEqual(len(paras[0]["lines"]), 4)
+
+        stats = CategoryStats()
+        collector = IssueCollector()
+        check_pdf_indentation(
+            units,
+            {"first_line_indent_inches": 0.5},
+            stats,
+            collector,
+            unit_location_fn=_unit_location,
+        )
+        self.assertEqual(collector.result(), [])
+        self.assertEqual(stats.failed, 0)
+
     def test_bordered_and_single_cell_table_excluded_from_indent(self):
         """Drawn table cells (including single-cell boxes) must not produce indent FPs."""
         from app.compliance import _unit_location

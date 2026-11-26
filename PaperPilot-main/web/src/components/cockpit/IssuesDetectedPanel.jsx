@@ -160,6 +160,8 @@ export function normalizeDetectedIssues(formatChecks = [], pageCountHint = 0) {
         result: check.result,
         bbox: normalized.bbox,
         excerpt: normalized.excerpt,
+        word_index: normalized.word_index ?? normalized.wordIndex ?? null,
+        highlight_from: normalized.highlight_from || normalized.highlightFrom || "",
         margin_side: normalized.margin_side || loc?.margin_side || loc?.marginSide || "",
         page_region: normalized.page_region || loc?.page_region || loc?.pageRegion || "",
         page_align: normalized.page_align || loc?.page_align || loc?.pageAlign || "",

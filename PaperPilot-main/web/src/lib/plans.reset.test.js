@@ -50,6 +50,23 @@ describe("applySuccessfulScanUsage", () => {
     expect(capped.used).toBe(3);
     expect(capped.remaining).toBe(0);
   });
+
+  it("strips stale paid billing fields so Free optimistic bumps are accepted", () => {
+    const next = applySuccessfulScanUsage({
+      tier: "free",
+      limit: 3,
+      used: 0,
+      remaining: 3,
+      status: "active",
+      paymongo_subscription_id: "sub_stale",
+      renews_at: "2099-01-01T00:00:00Z",
+    });
+    expect(next.used).toBe(1);
+    expect(next.remaining).toBe(2);
+    expect(next.status).toBe("free");
+    expect(next.paymongo_subscription_id).toBeNull();
+    expect(next.renews_at).toBeNull();
+  });
 });
 
 describe("daysUntilReset", () => {

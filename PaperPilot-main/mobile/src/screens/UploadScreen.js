@@ -1076,32 +1076,7 @@ export default function UploadScreen({ navigation }) {
                           nameError={nameError}
                           nameInputRef={nameInputRef}
                         />
-                        {Array.isArray(extractMeta.assist_items) && extractMeta.assist_items.length > 0 ? (
-                          <View style={styles.assistBox}>
-                            <Text style={styles.assistLabel}>Checked with AI assist on scan</Text>
-                            <View style={styles.assistChips}>
-                              {extractMeta.assist_items.map((item) => (
-                                <View
-                                  key={item.id || item.requirement_text}
-                                  style={styles.assistChip}
-                                >
-                                  <Text style={styles.assistKind}>
-                                    {String(item.kind || "other").toUpperCase()}
-                                  </Text>
-                                  <Text style={styles.assistText} numberOfLines={2}>
-                                    {item.requirement_text}
-                                  </Text>
-                                </View>
-                              ))}
-                            </View>
-                            {extractMeta.gemini_available === false ? (
-                              <Text style={styles.assistWarn}>
-                                Gemini assist is unavailable — these items will show as unchecked on
-                                scan.
-                              </Text>
-                            ) : null}
-                          </View>
-                        ) : null}
+                        {/* assist_items still saved/used on scan; label chips hidden from UI */}
                         <View style={styles.editorActions}>
                           <PrimaryButton
                             title={mechanicsBusy ? "Saving…" : "Save & use as-is"}

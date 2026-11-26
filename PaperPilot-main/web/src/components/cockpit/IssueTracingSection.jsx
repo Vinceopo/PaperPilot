@@ -218,6 +218,8 @@ export default function IssueTracingSection({
         margin_side: loc.margin_side || loc.marginSide || "",
         page_region: loc.page_region || loc.pageRegion || "",
         page_align: loc.page_align || loc.pageAlign || entry.page_align || "",
+        word_index: loc.word_index ?? loc.wordIndex ?? entry.word_index ?? null,
+        highlight_from: loc.highlight_from || loc.highlightFrom || entry.highlight_from || "",
         // Keep finding text as a locate hint when excerpt is missing.
         excerpt: loc.excerpt || entry.excerpt || "",
       };

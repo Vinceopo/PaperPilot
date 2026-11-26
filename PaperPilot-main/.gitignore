@@ -38,3 +38,6 @@ firebase-debug.log
 .vscode/
 .vercel
 .env*
+
+
+final.ENV.txt

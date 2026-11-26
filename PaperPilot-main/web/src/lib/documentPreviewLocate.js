@@ -372,3 +372,162 @@ export function clusterLineYs(ys, tolerance = 4) {
   });
   return lines;
 }
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Start indexes of whole-word `needle` hits inside normalized haystack text. */
+export function wordMatchIndexes(haystack, needle) {
+  const text = String(haystack || "");
+  const token = String(needle || "");
+  if (!text || !token || token.length < 2) return [];
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(token)}(?![\\p{L}\\p{N}])`, "giu");
+  const indexes = [];
+  let match = re.exec(text);
+  while (match) {
+    indexes.push(match.index);
+    if (match.index === re.lastIndex) re.lastIndex += 1;
+    match = re.exec(text);
+  }
+  return indexes;
+}
+
+/**
+ * Slice a pdf.js text-item box down to the characters [start, start+length).
+ * Proportional to string length — good enough for a tight word mark.
+ */
+export function slicePdfItemBox(item, start, length) {
+  const text = String(item?.text ?? item?.str ?? "");
+  const n = Math.max(1, text.length);
+  const from = Math.max(0, Math.min(n, Number(start) || 0));
+  const to = Math.max(from + 1, Math.min(n, from + Math.max(1, Number(length) || 1)));
+  const left = Number(item?.left) || 0;
+  const width = Number(item?.width) || 0;
+  const top = Number(item?.top) || 0;
+  const height = Number(item?.height) || 16;
+  return {
+    str: text.slice(from, to),
+    left: left + (width * from) / n,
+    top,
+    width: Math.max(6, (width * (to - from)) / n),
+    height: Math.max(8, height),
+  };
+}
+
+/**
+ * Match a whole-word excerpt to a tight pdf.js box near the scanner Y.
+ * Never paint a longer soft-wrapped run just because it contains the word
+ * (e.g. "Research" must not become "students' … and research com").
+ */
+export function findPdfWordItem(items, excerpt, estimateY = null, wordIndex = null) {
+  const needle = String(excerpt || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!needle || needle.length < 2 || !Array.isArray(items) || !items.length) return null;
+
+  const normalized = (items || [])
+    .map((item) => ({
+      ...item,
+      text: String(item?.str || "").replace(/\s+/g, " ").trim().toLowerCase(),
+    }))
+    .filter((item) => item.text);
+
+  const hits = [];
+
+  // 1) Exact whole-item token ("Research" === "Research").
+  normalized.forEach((item) => {
+    if (item.text === needle) {
+      hits.push({
+        ...item,
+        left: Number(item.left) || 0,
+        top: Number(item.top) || 0,
+        width: Math.max(6, Number(item.width) || 8),
+        height: Math.max(8, Number(item.height) || 16),
+      });
+    }
+  });
+
+  // 2) Word inside a longer pdf.js run — slice only that token's ink.
+  if (!hits.length) {
+    normalized.forEach((item) => {
+      wordMatchIndexes(item.text, needle).forEach((index) => {
+        hits.push(slicePdfItemBox(item, index, needle.length));
+      });
+    });
+  }
+
+  // 3) Adjacent same-row items that together equal the word (pdf.js may split tokens).
+  if (!hits.length) {
+    for (let i = 0; i < normalized.length; i += 1) {
+      let joined = "";
+      let left = Number(normalized[i].left) || 0;
+      let top = Number(normalized[i].top) || 0;
+      let right = left + (Number(normalized[i].width) || 0);
+      let bottom = top + (Number(normalized[i].height) || 0);
+      for (let j = i; j < Math.min(normalized.length, i + 8); j += 1) {
+        const part = normalized[j];
+        if (j > i && Math.abs((Number(part.top) || 0) - top) > Math.max(4, Number(normalized[i].height) || 12)) {
+          break;
+        }
+        joined += part.text;
+        right = Math.max(right, (Number(part.left) || 0) + (Number(part.width) || 0));
+        top = Math.min(top, Number(part.top) || 0);
+        bottom = Math.max(bottom, (Number(part.top) || 0) + (Number(part.height) || 0));
+        if (joined === needle) {
+          hits.push({
+            str: needle,
+            left,
+            top,
+            width: Math.max(6, right - left),
+            height: Math.max(8, bottom - top),
+          });
+          break;
+        }
+        if (!needle.startsWith(joined) || joined.length >= needle.length) break;
+      }
+    }
+  }
+
+  if (!hits.length) return null;
+
+  const ranked = [...hits].sort((a, b) => {
+    const topA = Number(a.top) || 0;
+    const topB = Number(b.top) || 0;
+    if (Math.abs(topA - topB) > 2) return topA - topB;
+    return (Number(a.left) || 0) - (Number(b.left) || 0);
+  });
+
+  const wantedIndex =
+    wordIndex != null && wordIndex !== "" && Number.isFinite(Number(wordIndex))
+      ? Math.max(0, Math.round(Number(wordIndex)))
+      : null;
+
+  if (Number.isFinite(Number(estimateY))) {
+    const target = Number(estimateY);
+    const rowSlack = Math.max(14, Math.max(...ranked.map((item) => Number(item.height) || 16)) * 1.5);
+    const near = ranked.filter((item) => Math.abs((Number(item.top) || 0) - target) <= rowSlack);
+    const pool = near.length ? near : ranked;
+    if (wantedIndex != null && wantedIndex < pool.length) return pool[wantedIndex];
+    return pool.reduce((best, item) => {
+      const dBest = Math.abs((Number(best.top) || 0) - target);
+      const dItem = Math.abs((Number(item.top) || 0) - target);
+      if (dItem < dBest) return item;
+      if (dItem > dBest) return best;
+      return (Number(item.left) || 0) < (Number(best.left) || 0) ? item : best;
+    });
+  }
+
+  if (wantedIndex != null && wantedIndex < ranked.length) return ranked[wantedIndex];
+  return ranked[0];
+}
+
+/** True when the scanner / XAI payload points at a single word rather than a line band. */
+export function wantsWordHighlight(target = {}) {
+  const from = String(target.highlight_from || target.highlightFrom || "").toLowerCase();
+  if (from === "word_excerpt") return true;
+  const section = String(target.section || "").toLowerCase();
+  const excerpt = String(target.excerpt || "").trim();
+  const issueType = String(target.issue_type || target.issueType || "").toLowerCase();
+  if (section === "fonts" && excerpt && excerpt.length <= 48 && !/\s/.test(excerpt)) return true;
+  if (issueType.startsWith("font_") && excerpt && excerpt.length <= 48 && !/\s/.test(excerpt)) return true;
+  return target.word_index != null || target.wordIndex != null;
+}

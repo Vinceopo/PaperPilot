@@ -215,16 +215,21 @@ def _pdf_vector_drawing_bboxes(page) -> tuple[list[dict], list[list[float]]]:
             rects.append(box)
             continue
         # Thin rules — used later to rebuild a grid union when cells are line-drawn.
-        if height <= 3.0 and width >= 40.0:
+        # Keep short horizontal strokes too: figure/table title underlines are often
+        # narrower than a full grid rule (title-only underline under "Figure N Title").
+        if height <= 3.0 and width >= 12.0:
             strokes_h.append(box)
         elif width <= 3.0 and height >= 40.0:
             strokes_v.append(box)
 
-    if len(strokes_h) >= 2 and len(strokes_v) >= 2:
-        xs0 = [b[0] for b in strokes_h + strokes_v]
-        ys0 = [b[1] for b in strokes_h + strokes_v]
-        xs1 = [b[2] for b in strokes_h + strokes_v]
-        ys1 = [b[3] for b in strokes_h + strokes_v]
+    # Grid rebuild needs longer rules; short title underlines stay in strokes_h for
+    # caption detection only and must not invent a fake table frame.
+    grid_h = [b for b in strokes_h if (b[2] - b[0]) >= 40.0]
+    if len(grid_h) >= 2 and len(strokes_v) >= 2:
+        xs0 = [b[0] for b in grid_h + strokes_v]
+        ys0 = [b[1] for b in grid_h + strokes_v]
+        xs1 = [b[2] for b in grid_h + strokes_v]
+        ys1 = [b[3] for b in grid_h + strokes_v]
         union = [min(xs0), min(ys0), max(xs1), max(ys1)]
         union_w = union[2] - union[0]
         union_h = union[3] - union[1]
@@ -252,27 +257,49 @@ def _pdf_vector_drawing_bboxes(page) -> tuple[list[dict], list[list[float]]]:
     return [{"bbox": box} for box in unique], strokes_h
 
 
+def _pdf_stroke_underlines_box(
+    box: list[float],
+    strokes_h: list[list[float]],
+    *,
+    y_pad: float = 4.0,
+    min_frac: float = 0.45,
+) -> bool:
+    """True when a thin horizontal stroke sits under ``box`` (line or span bbox)."""
+    if len(box) < 4:
+        return False
+    bottom = float(box[3])
+    width = max(1.0, float(box[2]) - float(box[0]))
+    for stroke in strokes_h:
+        # Word→PDF underlines often sit slightly *inside* the glyph bbox (1–3pt
+        # above the bottom), not only below it — a 1pt window missed real titles.
+        if not (bottom - y_pad <= float(stroke[1]) <= bottom + 5.0):
+            continue
+        overlap = min(float(stroke[2]), float(box[2])) - max(float(stroke[0]), float(box[0]))
+        if overlap >= min_frac * width:
+            return True
+    return False
+
+
 def _annotate_pdf_line_underlines(lines: list[dict], strokes_h: list[list[float]]) -> None:
-    """Mark spans underlined when a thin horizontal stroke sits under the line."""
+    """Mark spans underlined when a thin horizontal stroke sits under that span.
+
+    Figure/table rules often underline only the title (not ``Figure N`` / ``Table N``).
+    Matching against the full line width falsely missed those title-only strokes;
+    per-span overlap keeps the label plain and the title marked.
+    """
     for line in lines:
         bbox = line.get("bbox") or []
         spans = line.get("spans") or []
-        if len(bbox) < 4 or not spans:
-            for span in spans:
-                span.setdefault("underline", False)
+        if not spans:
             continue
-        text_w = max(1.0, float(bbox[2]) - float(bbox[0]))
-        underlined = False
-        for stroke in strokes_h:
-            # Stroke just under the glyph box, covering most of the text width.
-            if not (float(bbox[3]) - 1.0 <= float(stroke[1]) <= float(bbox[3]) + 5.0):
-                continue
-            overlap = min(float(stroke[2]), float(bbox[2])) - max(float(stroke[0]), float(bbox[0]))
-            if overlap >= 0.45 * text_w:
-                underlined = True
-                break
+        line_hit = _pdf_stroke_underlines_box(bbox, strokes_h) if len(bbox) >= 4 else False
         for span in spans:
-            span["underline"] = bool(span.get("underline")) or underlined
+            span_box = span.get("bbox") or []
+            if len(span_box) >= 4:
+                hit = _pdf_stroke_underlines_box(span_box, strokes_h)
+            else:
+                hit = line_hit
+            span["underline"] = bool(span.get("underline")) or hit
 
 
 def _parse_pdf(data: bytes, on_progress=None) -> dict:

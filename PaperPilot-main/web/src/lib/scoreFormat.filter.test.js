@@ -25,21 +25,43 @@ describe("score breakdown rule filtering", () => {
     expect(active.has("Captions")).toBe(true);
   });
 
-  it("keeps Spacing rows when Line Spacing rules are set", () => {
+  it("keeps Spacing rows and hides IGNORE / not_applicable categories", () => {
     const rows = filterScoreBreakdownByRules(
       [
         { metric: "Spacing", status: "fail", unitsChecked: 10, unitsFailed: 2 },
         { metric: "Captions", status: "not_applicable", unitsChecked: 0 },
+        { metric: "Citations", status: "not_applicable", unitsChecked: 0 },
       ],
       { line_spacing: 2 },
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].metric).toBe("Line Spacing");
+    expect(rows.every((row) => row.status !== "not_applicable")).toBe(true);
+  });
+
+  it("hides categories whose Format Mechanics rules are blank / IGNORE", () => {
+    const rows = filterScoreBreakdownByRules(
+      [
+        { metric: "Fonts", status: "pass", unitsChecked: 5, unitsFailed: 0 },
+        { metric: "Captions", status: "pass", unitsChecked: 2, unitsFailed: 0 },
+        { metric: "Citations", status: "fail", unitsChecked: 3, unitsFailed: 1 },
+      ],
+      {
+        font: { type: "Times New Roman", body_size: 12 },
+        citation_style: "IGNORE",
+        table_layout_requirements: "",
+        figure_layout_requirements: "IGNORE",
+      },
+    );
+    expect(rows.map((row) => row.metric)).toEqual(["Fonts"]);
   });
 
   it("does not wipe breakdown when rules are empty", () => {
     const rows = filterScoreBreakdownByRules(
-      [{ metric: "Fonts", status: "pass", unitsChecked: 3, unitsFailed: 0 }],
+      [
+        { metric: "Fonts", status: "pass", unitsChecked: 3, unitsFailed: 0 },
+        { metric: "Captions", status: "not_applicable", unitsChecked: 0 },
+      ],
       {},
     );
     expect(rows).toHaveLength(1);

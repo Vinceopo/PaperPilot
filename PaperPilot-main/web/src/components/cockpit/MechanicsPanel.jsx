@@ -805,32 +805,7 @@ export default function MechanicsPanel({
                 title="Format Fields (from uploaded guide)"
                 tier={tier}
               />
-              {Array.isArray(extractMeta?.assist_items) && extractMeta.assist_items.length > 0 && (
-                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Checked with AI assist on scan
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {extractMeta.assist_items.map((item) => (
-                      <span
-                        key={item.id || item.requirement_text}
-                        className="inline-flex max-w-full items-center rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-600"
-                        title={item.requirement_text}
-                      >
-                        <span className="mr-1.5 rounded bg-slate-100 px-1 py-0.5 text-[9px] uppercase tracking-wide text-slate-500">
-                          {item.kind || "other"}
-                        </span>
-                        <span className="truncate">{item.requirement_text}</span>
-                      </span>
-                    ))}
-                  </div>
-                  {extractMeta.gemini_available === false && (
-                    <p className="mt-2 text-[11px] text-amber-700">
-                      Gemini assist is unavailable — these items will show as unchecked on scan.
-                    </p>
-                  )}
-                </div>
-              )}
+              {/* assist_items still saved/used on scan; label chips hidden from UI */}
               <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                 <button
                   type="button"

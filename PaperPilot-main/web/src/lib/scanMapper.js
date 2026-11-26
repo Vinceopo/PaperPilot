@@ -135,6 +135,11 @@ export function normalizeIssueLocation(loc = {}) {
   const expectedIndent = loc.expected_indent_in ?? loc.expectedIndentIn;
   const ruleSnapshot = loc.rule_snapshot || loc.ruleSnapshot || null;
   const highlightFrom = String(loc.highlight_from || loc.highlightFrom || "").trim();
+  const wordIndexRaw = loc.word_index ?? loc.wordIndex;
+  const wordIndex =
+    wordIndexRaw != null && wordIndexRaw !== "" && Number.isFinite(Number(wordIndexRaw))
+      ? Math.max(0, Math.round(Number(wordIndexRaw)))
+      : null;
 
   return {
     page,
@@ -145,6 +150,7 @@ export function normalizeIssueLocation(loc = {}) {
     excerpt: pagination ? "" : String(loc.excerpt || loc.text || "").trim(),
     pageWidth: pageWidth != null ? Number(pageWidth) : null,
     pageHeight: pageHeight != null ? Number(pageHeight) : null,
+    ...(wordIndex != null ? { word_index: wordIndex, wordIndex } : {}),
     ...(printedPageLabel ? { printed_page_label: printedPageLabel, printedPageLabel } : {}),
     ...(paragraphId ? { paragraph_id: paragraphId, paragraphId } : {}),
     ...(measuredX0 != null && measuredX0 !== "" ? { measured_x0: Number(measuredX0), measuredX0: Number(measuredX0) } : {}),

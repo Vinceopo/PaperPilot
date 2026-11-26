@@ -15,6 +15,7 @@ import {
   centeredScrollTop,
   clusterLineYs,
   excerptNeedles,
+  findPdfWordItem,
   fitPageScale,
   hitPaint,
   isIndentationIssue,
@@ -33,6 +34,8 @@ import {
   resolvePdfMarkY,
   shouldUsePaginationEdge,
   visualLineTarget,
+  wantsWordHighlight,
+  wordMatchIndexes,
 } from "../../lib/documentPreviewLocate.js";
 
 function fileKind(file) {
@@ -400,6 +403,7 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
   const scrollerRef = useRef(null);
   const pdfRef = useRef(null);
   const lineYsRef = useRef(new Map());
+  const textItemsRef = useRef(new Map());
   const [pages, setPages] = useState([]);
   const [frameHeight, setFrameHeight] = useState(0);
   const [linesReady, setLinesReady] = useState(0);
@@ -451,13 +455,27 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
           const viewport = page.getViewport({ scale });
           // Text metrics power issue highlights; tolerate failures so preview still opens.
           let ys = [];
+          const pageItems = [];
           try {
             const text = await page.getTextContent();
             for (const item of text.items || []) {
               if (!item?.str || !String(item.str).trim()) continue;
-              const [, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+              const [vx, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
               const fontHeight = Math.hypot(item.transform[2], item.transform[3]) * viewport.scale;
-              ys.push(vy - fontHeight);
+              const top = vy - fontHeight;
+              ys.push(top);
+              // Width from pdf.js when present; else estimate from string length.
+              const rawW = Number(item.width);
+              const width = Number.isFinite(rawW) && rawW > 0
+                ? rawW * viewport.scale
+                : Math.max(8, String(item.str).length * fontHeight * 0.5);
+              pageItems.push({
+                str: item.str,
+                left: vx,
+                top,
+                width,
+                height: Math.max(8, fontHeight * 1.15),
+              });
             }
           } catch {
             ys = [];
@@ -466,6 +484,7 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
             pageNumber,
             clusterLineYs(ys, Math.max(2, viewport.height * 0.004))
           );
+          textItemsRef.current.set(pageNumber, pageItems);
           specs.push({
             pageNumber,
             width: viewport.width,
@@ -608,9 +627,11 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     const ys = lineYsRef.current.get(pageNumber) || [];
     const bbox = target.bbox;
     const pageHeight = pageEl.clientHeight;
+    const pageWidth = pageEl.clientWidth || 1;
     const bboxY =
       bbox && Number.isFinite(Number(bbox.y)) ? Number(bbox.y) * pageHeight : null;
     const indentIssue = isIndentationIssue(target);
+    const wordHighlight = wantsWordHighlight(target);
     const hasInkBox =
       bbox &&
       Number.isFinite(Number(bbox.x)) &&
@@ -620,7 +641,8 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     // Prefer scanner ink bbox whenever present (fonts, captions, figures, indent).
     // Line-only Y drifts when pdf.js text rows disagree with PyMuPDF line_index
     // (drawings counted as lines) and paints the wrong cell — e.g. "2 Weeks".
-    const preferBbox = indentIssue || hasInkBox;
+    // Word-level font findings prefer pdf.js text-item boxes over a full-line bbox.
+    const preferBbox = indentIssue || (hasInkBox && !wordHighlight);
     const y =
       preferBbox && bboxY != null
         ? bboxY
@@ -645,6 +667,47 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
       return;
     }
     let markHeight;
+    // Word-level findings: prefer the scanner word bbox (exact glyph box from ML/API).
+    // Only fall back to pdf.js text matching when that bbox is missing.
+    if (hasInkBox && wordHighlight) {
+      const boxH = Math.max(0.012, Number(bbox.h) || 0.022);
+      markHeight = boxH * pageHeight;
+      setMark({
+        page: pageNumber,
+        kind: "box",
+        severity: target.severity,
+        top: `${Number(bbox.y) * 100}%`,
+        left: `${Number(bbox.x) * 100}%`,
+        width: `${Math.max(0.02, Number(bbox.w)) * 100}%`,
+        height: `${boxH * 100}%`,
+      });
+      scrollMarkIntoView(scroller, elementTopIn(scroller, pageEl, Number(bbox.y) * pageHeight), markHeight);
+      return;
+    }
+    // Whole-word only: XAI excerpt is the full token (e.g. "Research"), never a single letter
+    // and never a longer soft-wrapped run that merely contains the word.
+    const wordItem = wordHighlight
+      ? findPdfWordItem(
+          textItemsRef.current.get(pageNumber) || [],
+          target.excerpt,
+          y ?? bboxY,
+          target.word_index ?? target.wordIndex
+        )
+      : null;
+    if (wordItem) {
+      markHeight = Math.max(12, Number(wordItem.height) || 16);
+      setMark({
+        page: pageNumber,
+        kind: "box",
+        severity: target.severity,
+        top: `${Number(wordItem.top)}px`,
+        left: `${(Number(wordItem.left) / pageWidth) * 100}%`,
+        width: `${Math.max(1.2, (Number(wordItem.width) / pageWidth) * 100)}%`,
+        height: `${markHeight}px`,
+      });
+      scrollMarkIntoView(scroller, elementTopIn(scroller, pageEl, Number(wordItem.top)), markHeight);
+      return;
+    }
     if (hasInkBox) {
       const boxH = Math.max(0.012, Number(bbox.h) || 0.022);
       markHeight = boxH * pageHeight;
@@ -664,8 +727,11 @@ function PdfPagedPreview({ source, scrollTarget, highlight, allowNativeFallback 
     } else {
       markHeight = Math.max(16, Math.min(28, pageHeight * 0.028));
       const excerptLen = String(target.excerpt || "").trim().length;
+      // Short word excerpts: keep the mark narrow instead of a half-page band.
       const widthPct = excerptLen
-        ? Math.max(28, Math.min(68, 18 + excerptLen * 0.9))
+        ? wordHighlight
+          ? Math.max(6, Math.min(28, 4 + excerptLen * 1.1))
+          : Math.max(28, Math.min(68, 18 + excerptLen * 0.9))
         : 56;
       const leftPct = Math.max(8, (100 - widthPct) / 2);
       setMark({
@@ -842,10 +908,23 @@ function textRangesIn(section, needle) {
         return [nodes[0].node, 0];
       };
       // Collect every occurrence - adjacent issues often share a short needle.
-      let searchFrom = 0;
-      while (searchFrom < text.length) {
-        const index = text.indexOf(needle, searchFrom);
-        if (index < 0 || map[index] == null) break;
+      // Single-word needles use word boundaries so "Research" never hits "researching"
+      // or paints a longer soft-wrapped phrase that merely contains the token.
+      const indexes = /\s/.test(needle)
+        ? (() => {
+            const found = [];
+            let searchFrom = 0;
+            while (searchFrom < text.length) {
+              const index = text.indexOf(needle, searchFrom);
+              if (index < 0) break;
+              found.push(index);
+              searchFrom = index + Math.max(1, needle.length);
+            }
+            return found;
+          })()
+        : wordMatchIndexes(text, needle);
+      indexes.forEach((index) => {
+        if (map[index] == null) return;
         const startRaw = map[index];
         const endRaw = (map[index + needle.length - 1] ?? startRaw) + 1;
         const range = document.createRange();
@@ -854,8 +933,7 @@ function textRangesIn(section, needle) {
         range.setStart(startNode, startOffset);
         range.setEnd(endNode, endOffset);
         ranges.push(range);
-        searchFrom = index + Math.max(1, needle.length);
-      }
+      });
     });
   return ranges;
 }

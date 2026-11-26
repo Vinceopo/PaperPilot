@@ -63,7 +63,14 @@ import { loadCachedMechanics, saveCachedMechanics } from "./lib/mechanicsCache.j
 import { latestVersion } from "./lib/scoreBand.js";
 import { formatFileSize } from "./lib/formatFileSize.js";
 import { supportedCitationStyle } from "./lib/formatMechanicsForm.js";
-import { applySuccessfulScanUsage, isPaidTier, planName, scanAllowance } from "./lib/plans.js";
+import {
+  applySuccessfulScanUsage,
+  isPaidTier,
+  normalizeTier,
+  planLimit,
+  planName,
+  scanAllowance,
+} from "./lib/plans.js";
 import {
   loadNotifications,
   saveNotifications,
@@ -295,8 +302,10 @@ export default function App() {
 
     // After cache clear there is no paid tier in memory yet. Do not persist a Free
     // snapshot that still carries active billing fields - retry will replace it.
+    // Optimistic scan bumps pass allowUsageBump so Free remaining updates immediately.
     if (
       !opts.allowDowngrade &&
+      !opts.allowUsageBump &&
       !isPaidTier(nextTier) &&
       !isPaidTier(currentTier) &&
       subscriptionLooksStaleFree(next)
@@ -304,11 +313,30 @@ export default function App() {
       return false;
     }
 
+    // A GET /subscription that races ahead of Firebase scan credit write must not
+    // undo a fresher local used count (Free "3 of 3" flashing after a successful scan).
+    let resolved = next;
+    if (!opts.allowDowngrade && current && normalizeTier(nextTier) === normalizeTier(currentTier)) {
+      const curUsed = Math.max(0, Number(current.used ?? current.scans_used) || 0);
+      const nextUsed = Math.max(0, Number(next.used ?? next.scans_used) || 0);
+      const samePeriod =
+        String(current.period_end || current.reset_at || "") ===
+        String(next.period_end || next.reset_at || "");
+      if (samePeriod && nextUsed < curUsed) {
+        const limit = Math.max(0, Number(next.limit) || planLimit(nextTier) || 0);
+        resolved = {
+          ...next,
+          used: curUsed,
+          remaining: Math.max(0, limit - curUsed),
+        };
+      }
+    }
+
     subscriptionAppliedRef.current = Math.max(subscriptionAppliedRef.current, order);
-    subscriptionRef.current = next;
+    subscriptionRef.current = resolved;
     if (isPaidTier(nextTier)) paidActivatedRef.current = true;
-    setSubscription(next);
-    writeCachedSubscription(auth?.currentUser?.uid, next);
+    setSubscription(resolved);
+    writeCachedSubscription(auth?.currentUser?.uid, resolved);
     return true;
   }, []);
   const notificationsRef = useRef([]);
@@ -661,7 +689,9 @@ export default function App() {
     if (liveDone && scanKey && scanKey !== countedScanRef.current) {
       countedScanRef.current = scanKey;
       const optimistic = applySuccessfulScanUsage(subscriptionRef.current);
-      if (optimistic) storeSubscription(optimistic, nextSubscriptionTicket());
+      if (optimistic) {
+        storeSubscription(optimistic, nextSubscriptionTicket(), { allowUsageBump: true });
+      }
     }
 
     let cancelled = false;

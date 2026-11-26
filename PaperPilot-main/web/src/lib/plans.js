@@ -96,6 +96,9 @@ export function scanAllowance(subscription, tier) {
 /**
  * Immediate header update after a successful scan. Server remains source of truth;
  * replace with GET /subscription as soon as it returns.
+ *
+ * Free snapshots sometimes still carry paid billing fields after cancel/cache races.
+ * Strip those so storeSubscription does not reject the optimistic Free bump.
  */
 export function applySuccessfulScanUsage(subscription) {
   if (!subscription || typeof subscription !== "object") return subscription;
@@ -103,11 +106,23 @@ export function applySuccessfulScanUsage(subscription) {
   const limit = Math.max(0, Number(subscription.limit) || planLimit(tier) || 0);
   const used = Math.max(0, Number(subscription.used ?? subscription.scans_used) || 0);
   const nextUsed = limit > 0 ? Math.min(limit, used + 1) : used + 1;
-  return {
+  const next = {
     ...subscription,
     used: nextUsed,
     remaining: Math.max(0, limit - nextUsed),
   };
+  if (!isPaidTier(tier)) {
+    const status = String(next.status || "").toLowerCase();
+    if (status === "active" || status === "past_due" || status === "paid") {
+      next.status = "free";
+    }
+    if (next.paymongo_subscription_id) next.paymongo_subscription_id = null;
+    const renews = Date.parse(next.renews_at || "");
+    if (Number.isFinite(renews) && renews > Date.now()) {
+      next.renews_at = null;
+    }
+  }
+  return next;
 }
 
 export function planPrice(tier, billingPeriod) {

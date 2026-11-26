@@ -179,12 +179,13 @@ def _probe_docx(data: bytes) -> dict:
     }
 
 
-def _pdf_vector_drawing_bboxes(page) -> list[dict]:
-    """Collect vector cell/frame rects from PDF drawings (table borders, boxes).
+def _pdf_vector_drawing_bboxes(page) -> tuple[list[dict], list[list[float]]]:
+    """Collect vector cell/frame rects and thin horizontal strokes from PDF drawings.
 
     Raster images alone are not enough — real manuscripts usually draw table grids
     with path strokes. Indent / role checks need those rects as ``has_drawing`` units
-    so cell text is not treated as body paragraphs.
+    so cell text is not treated as body paragraphs. Horizontal strokes also feed
+    underline detection for captions.
     """
     page_w = float(page.rect.width)
     page_h = float(page.rect.height)
@@ -214,16 +215,21 @@ def _pdf_vector_drawing_bboxes(page) -> list[dict]:
             rects.append(box)
             continue
         # Thin rules — used later to rebuild a grid union when cells are line-drawn.
-        if height <= 3.0 and width >= 40.0:
+        # Keep short horizontal strokes too: figure/table title underlines are often
+        # narrower than a full grid rule (title-only underline under "Figure N Title").
+        if height <= 3.0 and width >= 12.0:
             strokes_h.append(box)
         elif width <= 3.0 and height >= 40.0:
             strokes_v.append(box)
 
-    if len(strokes_h) >= 2 and len(strokes_v) >= 2:
-        xs0 = [b[0] for b in strokes_h + strokes_v]
-        ys0 = [b[1] for b in strokes_h + strokes_v]
-        xs1 = [b[2] for b in strokes_h + strokes_v]
-        ys1 = [b[3] for b in strokes_h + strokes_v]
+    # Grid rebuild needs longer rules; short title underlines stay in strokes_h for
+    # caption detection only and must not invent a fake table frame.
+    grid_h = [b for b in strokes_h if (b[2] - b[0]) >= 40.0]
+    if len(grid_h) >= 2 and len(strokes_v) >= 2:
+        xs0 = [b[0] for b in grid_h + strokes_v]
+        ys0 = [b[1] for b in grid_h + strokes_v]
+        xs1 = [b[2] for b in grid_h + strokes_v]
+        ys1 = [b[3] for b in grid_h + strokes_v]
         union = [min(xs0), min(ys0), max(xs1), max(ys1)]
         union_w = union[2] - union[0]
         union_h = union[3] - union[1]
@@ -248,7 +254,52 @@ def _pdf_vector_drawing_bboxes(page) -> list[dict]:
         ):
             continue
         unique.append(box)
-    return [{"bbox": box} for box in unique]
+    return [{"bbox": box} for box in unique], strokes_h
+
+
+def _pdf_stroke_underlines_box(
+    box: list[float],
+    strokes_h: list[list[float]],
+    *,
+    y_pad: float = 4.0,
+    min_frac: float = 0.45,
+) -> bool:
+    """True when a thin horizontal stroke sits under ``box`` (line or span bbox)."""
+    if len(box) < 4:
+        return False
+    bottom = float(box[3])
+    width = max(1.0, float(box[2]) - float(box[0]))
+    for stroke in strokes_h:
+        # Word→PDF underlines often sit slightly *inside* the glyph bbox (1–3pt
+        # above the bottom), not only below it — a 1pt window missed real titles.
+        if not (bottom - y_pad <= float(stroke[1]) <= bottom + 5.0):
+            continue
+        overlap = min(float(stroke[2]), float(box[2])) - max(float(stroke[0]), float(box[0]))
+        if overlap >= min_frac * width:
+            return True
+    return False
+
+
+def _annotate_pdf_line_underlines(lines: list[dict], strokes_h: list[list[float]]) -> None:
+    """Mark spans underlined when a thin horizontal stroke sits under that span.
+
+    Figure/table rules often underline only the title (not ``Figure N`` / ``Table N``).
+    Matching against the full line width falsely missed those title-only strokes;
+    per-span overlap keeps the label plain and the title marked.
+    """
+    for line in lines:
+        bbox = line.get("bbox") or []
+        spans = line.get("spans") or []
+        if not spans:
+            continue
+        line_hit = _pdf_stroke_underlines_box(bbox, strokes_h) if len(bbox) >= 4 else False
+        for span in spans:
+            span_box = span.get("bbox") or []
+            if len(span_box) >= 4:
+                hit = _pdf_stroke_underlines_box(span_box, strokes_h)
+            else:
+                hit = line_hit
+            span["underline"] = bool(span.get("underline")) or hit
 
 
 def _parse_pdf(data: bytes, on_progress=None) -> dict:
@@ -307,7 +358,8 @@ def _parse_pdf(data: bytes, on_progress=None) -> dict:
                     )
                     line_index += 1
             lines = _merge_pdf_rows(lines, page_index)
-            drawings = _pdf_vector_drawing_bboxes(page)
+            drawings, underline_strokes = _pdf_vector_drawing_bboxes(page)
+            _annotate_pdf_line_underlines(lines, underline_strokes)
             page_text = "\n".join(line["text"] for line in lines)
             all_text.append(page_text)
             pages.append(
@@ -857,8 +909,58 @@ def _docx_run_font_size(run, paragraph) -> float | None:
     return None
 
 
+def _docx_underline_is_on(value) -> bool | None:
+    """Map python-docx underline (bool / WD_UNDERLINE / None) to True/False/inherit."""
+    if value is None:
+        return None
+    if value is False:
+        return False
+    if value is True:
+        return True
+    try:
+        from docx.enum.text import WD_UNDERLINE
+
+        if value == WD_UNDERLINE.NONE:
+            return False
+        if value == WD_UNDERLINE.INHERITED:
+            return None
+    except Exception:
+        pass
+    # Any other underline style (single, thick, words, wavy, …) counts as on.
+    return True
+
+
 def _docx_run_flag(run, paragraph, attr: str) -> bool | None:
-    """bold / italic / all_caps as Word shows it: the run, then its character style, then the paragraph style."""
+    """bold / italic / all_caps / underline as Word shows it: run, then char style, then paragraph style."""
+    if attr == "underline":
+        try:
+            value = _docx_underline_is_on(run.font.underline)
+        except Exception:
+            value = None
+        if value is not None:
+            return value
+        styles = []
+        try:
+            if run._element.rPr is not None and run._element.rPr.find(qn("w:rStyle")) is not None:
+                styles.append(run.style)
+        except Exception:
+            pass
+        try:
+            styles.append(paragraph.style)
+        except Exception:
+            pass
+        for style in styles:
+            depth = 0
+            while style is not None and depth < 12:
+                try:
+                    value = _docx_underline_is_on(style.font.underline)
+                except Exception:
+                    value = None
+                if value is not None:
+                    return value
+                style = getattr(style, "base_style", None)
+                depth += 1
+        return None
     try:
         value = getattr(run.font, attr)
     except Exception:
@@ -922,6 +1024,7 @@ def _docx_paragraph_record(paragraph, paragraph_index: int, line_index: int, sou
                 "size": _docx_run_font_size(run, paragraph),
                 "bold": _docx_run_flag(run, paragraph, "bold"),
                 "italic": _docx_run_flag(run, paragraph, "italic"),
+                "underline": _docx_run_flag(run, paragraph, "underline"),
                 "caps": _docx_run_flag(run, paragraph, "all_caps"),
                 "color": rgb,
                 "style": run.style.name if run.style else None,
@@ -1303,8 +1406,11 @@ def parse_length_inches(value) -> float | None:
     text = str(value or "").strip().lower().replace(",", ".")
     if not text:
         return None
-    if re.search(r"\b(?:one\s+)?tab\b", text):
-        return 0.5
+    # "1 tab" / "one tab" — the leading digit is a tab count, not inches.
+    if re.search(r"\btabs?\b", text):
+        from app.indent_check import _parse_indent_inches
+
+        return _parse_indent_inches(text)
     amount = None
     unit_text = text
     mixed = re.search(r"(\d+)\s+(\d+)\s*/\s*(\d+)", text)
@@ -1373,6 +1479,519 @@ def parse_alignment(value) -> str | None:
     if re.search(r"\bleft\b", text):
         return "left"
     return None
+
+
+# Explicit citation-style naming only — venue strings like "IEEE 802.11" must not fill this.
+_CITATION_STYLE_EXPLICIT_RE = re.compile(
+    r"(?i)(?:\b(?:citation|reference|referencing|bibliography)\s+(?:style|format|system)\b"
+    r"|\bcite\s+(?:using|in|with)\b|\bin\s+(?:APA|MLA|IEEE)\s+(?:style|format)\b)"
+    r".{0,40}\b(APA|MLA|IEEE)\b"
+    r"|\b(APA|MLA|IEEE)\b\s*(?:7th|6th)?\s*(?:edition\s+)?(?:style|format|citation|referencing)\b"
+)
+
+_BODY_STYLE_NAMES = frozenset(
+    {
+        "para",
+        "normal",
+        "body text",
+        "bodytext",
+        "paracontinue",
+        "postheadpara",
+        "body",
+        "manuscript",
+        "text body",
+        "plaintext",
+    }
+)
+
+# Word built-in "Heading 1" plus publisher template styles ("Head1", "H1", "heading1").
+_HEADING_STYLE_RE = re.compile(r"^(?:heading\s*|head\s*|h)([1-9])\b", re.I)
+_WORD_BUILTIN_HEADING_RE = re.compile(r"^heading\s*[1-9]\b", re.I)
+_CAPTION_STYLE_RE = re.compile(
+    r"(?i)\b(?:caption|table\s*caption|figure\s*caption|table\s*title|figure\s*title)\b"
+)
+# Labeled school guides often use built-in Heading styles for their own outline
+# ("1. Page Setup") — those must not become manuscript heading-size rules.
+_LABELED_MECHANICS_GUIDE_RE = re.compile(
+    r"(?i)(?:font\s*type\s*:|top\s*margin\s*:|line\s*spacing\s*:|first(?:-|\s*)line\s*indent|"
+    r"\borientation\s*:|\bindention\s*:|font\s*size\s*:|paper\s*size\s*:)",
+)
+_TABLE_CAPTION_LINE_RE = re.compile(
+    r"^\s*table\s+(\d+(?:\.\d+)*)\b\s*[:.\-\u2013]?\s*(.*)$", re.I
+)
+_FIGURE_CAPTION_LINE_RE = re.compile(
+    r"^\s*(figure|fig\.?)\s+(\d+(?:\.\d+)*)\b\s*[:.\-\u2013]?\s*(.*)$", re.I
+)
+
+
+def citation_style_explicitly_named(text: str | None) -> str | None:
+    """Return APA/MLA/IEEE only when the guide explicitly names a citation style."""
+    flat = _flatten_mechanics_text(text or "")
+    if not flat:
+        return None
+    match = _CITATION_STYLE_EXPLICIT_RE.search(flat)
+    if not match:
+        return None
+    style = next((g for g in match.groups() if g), None)
+    return style.upper() if style else None
+
+
+def _is_body_style_name(style: str | None) -> bool:
+    name = str(style or "").strip().lower()
+    return name in _BODY_STYLE_NAMES or name.startswith("para") or name.startswith("postheadpara")
+
+
+def _looks_like_labeled_mechanics_guide(text: str | None) -> bool:
+    """True for outline/label guides (Font type:, Top margin:) vs submission templates."""
+    hits = _LABELED_MECHANICS_GUIDE_RE.findall(text or "")
+    return len(hits) >= 3
+
+
+def _majority_value(counts: dict, *, min_n: int = 1, min_share: float = 0.5):
+    """Return the majority key when it is common enough; else None."""
+    if not counts:
+        return None
+    winner, n = max(counts.items(), key=lambda item: (item[1], str(item[0])))
+    total = sum(counts.values())
+    if n < min_n or (total > 0 and n / total < min_share):
+        return None
+    return winner
+
+
+def embodied_body_alignment_from_paragraphs(paragraphs: list | None) -> str | None:
+    """Majority body-paragraph alignment from DOCX styles (e.g. Para jc=both → justify)."""
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    for para in paragraphs or []:
+        if not isinstance(para, dict):
+            continue
+        if not _is_body_style_name(para.get("style")):
+            continue
+        formatting = para.get("formatting") if isinstance(para.get("formatting"), dict) else {}
+        align = str(formatting.get("alignment") or "").strip().lower()
+        if align in {"left", "right", "center", "justify"}:
+            counts[align] += 1
+    if not counts:
+        return None
+    total = sum(counts.values())
+    # Prefer embodied justify when it is a real body signal (template-as-guide DOCX).
+    if counts.get("justify", 0) >= max(3, total // 3):
+        return "justify"
+    winner, n = counts.most_common(1)[0]
+    if n >= 3 and n * 2 >= total:
+        return winner
+    return None
+
+
+def _embodied_caption_line_structure(paragraphs: list | None, kind: str) -> str | None:
+    """Detect one-line / label-then-title / title-then-label from real caption paragraphs."""
+    from collections import Counter
+
+    pattern = _TABLE_CAPTION_LINE_RE if kind == "table" else _FIGURE_CAPTION_LINE_RE
+    other = _FIGURE_CAPTION_LINE_RE if kind == "table" else _TABLE_CAPTION_LINE_RE
+    label = "Table" if kind == "table" else "Figure"
+    paras = [p for p in (paragraphs or []) if isinstance(p, dict)]
+    structures: Counter[str] = Counter()
+    for index, para in enumerate(paras):
+        source = str(para.get("source") or "body")
+        if source in {"header", "footer", "table", "footnote", "endnote"}:
+            continue
+        style = str(para.get("style") or "")
+        text = " ".join(str(para.get("text") or "").split()).strip()
+        if not text:
+            continue
+        match = pattern.match(text)
+        if not match:
+            continue
+        # Prefer caption-styled lines; still accept clear Table/Figure labels in body.
+        title = (match.group(2) if kind == "table" else match.group(3) or "").strip()
+        if title:
+            structures["one_line"] += 1
+            continue
+        prev_text = (
+            " ".join(str(paras[index - 1].get("text") or "").split()).strip() if index > 0 else ""
+        )
+        next_text = (
+            " ".join(str(paras[index + 1].get("text") or "").split()).strip()
+            if index + 1 < len(paras)
+            else ""
+        )
+        if (
+            prev_text
+            and not pattern.match(prev_text)
+            and not other.match(prev_text)
+            and len(prev_text) <= 180
+        ):
+            structures["title_then_label"] += 1
+        elif (
+            next_text
+            and not pattern.match(next_text)
+            and not other.match(next_text)
+            and len(next_text) <= 180
+        ):
+            structures["label_then_title"] += 1
+        elif _CAPTION_STYLE_RE.search(style):
+            structures["one_line"] += 1
+    winner = _majority_value(structures, min_n=1, min_share=0.5)
+    if winner == "one_line":
+        return f"{label} number and title on one line"
+    if winner == "label_then_title":
+        return f"{label} number on one line, title on the next line"
+    if winner == "title_then_label":
+        return f"Title on one line, {label} number on the next line"
+    return None
+
+
+def embodied_rules_from_document(
+    paragraphs: list | None,
+    sections: list | None = None,
+    existing: dict | None = None,
+    text: str | None = None,
+) -> tuple[dict, dict[str, str]]:
+    """Fill Format Fields only from measurable template styles/layout.
+
+    Unknown fields stay unset. Returns (partial_rules, field_sources).
+    Never invents publisher-specific defaults; only majority signals from the file.
+    """
+    from collections import Counter, defaultdict
+
+    existing = existing if isinstance(existing, dict) else {}
+    partial: dict = {}
+    sources: dict[str, str] = {}
+    paras = [p for p in (paragraphs or []) if isinstance(p, dict)]
+    guide_text = text or " ".join(
+        str(para.get("text") or "") for para in paras[:120] if isinstance(para, dict)
+    )
+    skip_builtin_headings = _looks_like_labeled_mechanics_guide(guide_text)
+
+    body_spacing: Counter[float] = Counter()
+    body_align: Counter[str] = Counter()
+    body_indent: Counter[float] = Counter()
+    body_fonts: Counter[str] = Counter()
+    body_sizes: Counter[float] = Counter()
+    heading_sizes: dict[int, Counter[float]] = defaultdict(Counter)
+    heading_bold: dict[int, Counter[bool]] = defaultdict(Counter)
+    heading_align: dict[int, Counter[str]] = defaultdict(Counter)
+
+    for para in paras:
+        source = str(para.get("source") or "body")
+        if source not in {"body", "textbox"}:
+            continue
+        para_text = " ".join(str(para.get("text") or "").split()).strip()
+        if not para_text:
+            continue
+        style = str(para.get("style") or "")
+        formatting = para.get("formatting") if isinstance(para.get("formatting"), dict) else {}
+        heading_match = _HEADING_STYLE_RE.match(style.strip())
+        runs = [r for r in (para.get("runs") or []) if isinstance(r, dict) and str(r.get("text") or "").strip()]
+
+        if heading_match:
+            # Built-in "Heading N" on a labeled mechanics DOCX is the guide's outline,
+            # not the manuscript rule — still use publisher styles like Head1/H1.
+            if skip_builtin_headings and _WORD_BUILTIN_HEADING_RE.match(style.strip()):
+                continue
+            level = int(heading_match.group(1))
+            sizes = [float(r["size"]) for r in runs if r.get("size")]
+            if sizes:
+                heading_sizes[level][round(sizes[0], 1)] += 1
+            bold_votes = [bool(r.get("bold")) for r in runs if r.get("bold") is not None]
+            if bold_votes:
+                heading_bold[level][bold_votes[0]] += 1
+            align = str(formatting.get("alignment") or "").strip().lower()
+            if align in {"left", "right", "center", "justify"}:
+                heading_align[level][align] += 1
+            continue
+
+        if not _is_body_style_name(style):
+            continue
+        spacing = formatting.get("line_spacing")
+        try:
+            if spacing is not None:
+                body_spacing[round(float(spacing), 3)] += 1
+        except (TypeError, ValueError):
+            pass
+        align = str(formatting.get("alignment") or "").strip().lower()
+        if align in {"left", "right", "center", "justify"}:
+            body_align[align] += 1
+        try:
+            indent = formatting.get("first_line_indent_inches")
+            if indent is not None:
+                body_indent[round(float(indent), 3)] += 1
+        except (TypeError, ValueError):
+            pass
+        for run in runs:
+            font = str(run.get("font") or "").strip()
+            if font:
+                body_fonts[font] += 1
+            try:
+                if run.get("size") is not None:
+                    body_sizes[round(float(run["size"]), 1)] += 1
+            except (TypeError, ValueError):
+                pass
+
+    def _unset(path: str) -> bool:
+        cur: object = existing
+        for part in path.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                return True
+            cur = cur[part]
+        return rule_unset(cur)
+
+    spacing_val = _majority_value(body_spacing, min_n=2, min_share=0.5)
+    if spacing_val is not None and _unset("line_spacing") and _unset("spacing"):
+        # Snap near Word presets so Format Fields show Single/1.5/Double, not "1.304 (custom)".
+        snapped = float(spacing_val)
+        for preset in (1.0, 1.15, 1.5, 2.0):
+            if abs(snapped - preset) < 0.05:
+                snapped = preset
+                break
+        partial["line_spacing"] = snapped
+        partial["spacing"] = f"{snapped:g}"
+        sources["line_spacing"] = f"Embodied body style line spacing {snapped:g}"
+
+    align_val = embodied_body_alignment_from_paragraphs(paras)
+    if align_val and _unset("alignment"):
+        partial["alignment"] = align_val
+        sources["alignment"] = f"Embodied body style alignment {align_val}"
+
+    indent_val = _majority_value(body_indent, min_n=2, min_share=0.5)
+    if indent_val is not None and float(indent_val) > 0.05 and _unset("first_line_indent_inches") and _unset("indention"):
+        partial["first_line_indent_inches"] = float(indent_val)
+        partial["indention"] = f"{float(indent_val):g} inch"
+        sources["first_line_indent_inches"] = f"Embodied body first-line indent {float(indent_val):g} in"
+
+    font_name = _majority_value(body_fonts, min_n=2, min_share=0.45)
+    font_size = _majority_value(body_sizes, min_n=2, min_share=0.45)
+    font_out: dict = {}
+    if font_name and _unset("font.type") and _unset("font.families"):
+        font_out["type"] = str(font_name)
+        font_out["families"] = [str(font_name)]
+        sources["font.type"] = f"Embodied body font {font_name}"
+    if font_size is not None and _unset("font.body_size") and _unset("font.sizes_points"):
+        font_out["body_size"] = float(font_size)
+        font_out["sizes_points"] = [float(font_size)]
+        sources["font.body_size"] = f"Embodied body size {float(font_size):g} pt"
+
+    heading_styles: dict = {}
+    for level, size_counts in heading_sizes.items():
+        size = _majority_value(size_counts, min_n=1, min_share=0.5)
+        key = f"heading{level}_size"
+        if size is not None and _unset(f"font.{key}"):
+            font_out[key] = float(size)
+            sources[f"font.{key}"] = f"Embodied Heading {level} size {float(size):g} pt"
+        style_bits: dict = {}
+        bold = _majority_value(heading_bold.get(level) or {}, min_n=1, min_share=0.5)
+        if bold is True:
+            style_bits["bold"] = True
+        align = _majority_value(heading_align.get(level) or {}, min_n=1, min_share=0.5)
+        if align:
+            style_bits["alignment"] = align
+        if style_bits and _unset(f"font.heading_styles.heading{level}"):
+            heading_styles[f"heading{level}"] = style_bits
+            sources[f"font.heading_styles.heading{level}"] = f"Embodied Heading {level} style"
+    if heading_styles:
+        font_out["heading_styles"] = heading_styles
+    if font_out:
+        partial["font"] = font_out
+
+    # Section page setup (margins / paper) when prose did not set them.
+    sects = [s for s in (sections or []) if isinstance(s, dict)]
+    if sects:
+        first = sects[0]
+        margins: dict[str, float] = {}
+        for side, key in (
+            ("top", "top_margin_inches"),
+            ("bottom", "bottom_margin_inches"),
+            ("left", "left_margin_inches"),
+            ("right", "right_margin_inches"),
+        ):
+            try:
+                value = first.get(key)
+                if value is not None:
+                    margins[side] = round(float(value), 3)
+            except (TypeError, ValueError):
+                pass
+        if margins and _unset("margins_inches"):
+            # Only fill when at least one side is unset in existing nested dict.
+            existing_margins = existing.get("margins_inches") if isinstance(existing.get("margins_inches"), dict) else {}
+            fill = {
+                side: inches
+                for side, inches in margins.items()
+                if rule_unset(existing_margins.get(side))
+            }
+            if fill and len(fill) >= 2:
+                partial["margins_inches"] = {**existing_margins, **fill} if existing_margins else fill
+                sources["margins_inches"] = "Embodied section margins from template page setup"
+        try:
+            width = float(first.get("page_width_inches"))
+            height = float(first.get("page_height_inches"))
+        except (TypeError, ValueError):
+            width = height = 0.0
+        if width > 0 and height > 0 and _unset("paper_size") and _unset("paper.size"):
+            orientation = "Landscape" if width > height else "Portrait"
+            paper = {"orientation": orientation}
+            # Named sizes only when dimensions clearly match; else store raw size label.
+            named = None
+            dims = (round(width, 2), round(height, 2))
+            if dims in {(8.5, 11.0), (11.0, 8.5)}:
+                named = "LETTER"
+            elif dims in {(8.5, 14.0), (14.0, 8.5)}:
+                named = "LEGAL"
+            elif dims in {(8.27, 11.69), (11.69, 8.27)}:
+                named = "A4"
+            if named:
+                partial["paper_size"] = {
+                    "name": named,
+                    "width_inches": width,
+                    "height_inches": height,
+                }
+                paper["size"] = named.title() if named != "A4" else "A4"
+            else:
+                partial["paper_size"] = {"width_inches": width, "height_inches": height}
+                paper["size"] = f"{width:g} x {height:g}"
+            if _unset("paper") or _unset("paper.orientation"):
+                existing_paper = existing.get("paper") if isinstance(existing.get("paper"), dict) else {}
+                partial["paper"] = {**existing_paper, **paper}
+            sources["paper_size"] = f"Embodied page size {width:g} x {height:g} in"
+
+        # Page-number header/footer setup from the template section (publisher-agnostic).
+        page_number = first.get("page_number") if isinstance(first.get("page_number"), dict) else None
+        if page_number and _unset("pagination") and _unset("pagination.position"):
+            pagination_out: dict = {}
+            shown = page_number.get("shown")
+            where = str(page_number.get("where") or "").strip().lower()
+            align = str(page_number.get("align") or "").strip().lower()
+            if shown is False:
+                pagination_out["position"] = PAGE_NO_NUMBERS
+            elif where in {"header", "footer"} and align in {"left", "right", "center", "centre"}:
+                vertical = "Top" if where == "header" else "Bottom"
+                horizontal = "center" if align in {"center", "centre"} else align
+                pagination_out["position"] = canonical_page_position(f"{vertical} {horizontal}")[:120]
+            if pagination_out.get("position"):
+                if page_number.get("first_page_hidden"):
+                    pagination_out["title_page"] = canonical_title_page("No page number shown")
+                partial["pagination"] = pagination_out
+                sources["pagination"] = "Embodied section page-number setup from template"
+
+    def _layout_should_prefer_embodied(value) -> bool:
+        """True when narrative layout text should yield to measured caption structure."""
+        text_value = ""
+        if isinstance(value, list) and value:
+            # Multiple entries already look like a duplicate fill — prefer one structure rule.
+            if len([item for item in value if str(item or "").strip()]) > 1:
+                return True
+            text_value = str(value[0] or "")
+        else:
+            text_value = str(value or "")
+        cleaned = text_value.strip()
+        if not cleaned:
+            return True
+        # Narrative clips like: figure caption, apply the style “FigureCaption
+        quote_chars = cleaned.count('"') + cleaned.count("“") + cleaned.count("”")
+        if quote_chars % 2 == 1:
+            return True
+        if cleaned.endswith(("(", "[", "{", "-", "—", "–", ",", ";", ":", "“", '"')):
+            return True
+        if re.search(r"(?i)\bstyle\s+[“\"][A-Za-z0-9_-]+$", cleaned):
+            return True
+        # Long “must have … style applied” prose duplicates the real caption structure rule.
+        if len(cleaned) > 80 and re.search(
+            r"(?i)\b(?:style|applied|must have|gallery|template)\b", cleaned
+        ):
+            return True
+        return len(cleaned) < 24
+
+    if _unset("table_layout_requirements") and _unset("table_layout"):
+        table_layout = _embodied_caption_line_structure(paras, "table")
+        if table_layout:
+            partial["table_layout_requirements"] = [table_layout]
+            sources["table_layout_requirements"] = f"Embodied from template captions: {table_layout}"
+    elif _layout_should_prefer_embodied(
+        existing.get("table_layout_requirements") or existing.get("table_layout")
+    ):
+        table_layout = _embodied_caption_line_structure(paras, "table")
+        if table_layout:
+            partial["table_layout_requirements"] = [table_layout]
+            sources["table_layout_requirements"] = f"Embodied from template captions: {table_layout}"
+
+    if _unset("figure_layout_requirements") and _unset("figure_layout"):
+        figure_layout = _embodied_caption_line_structure(paras, "figure")
+        if figure_layout:
+            partial["figure_layout_requirements"] = [figure_layout]
+            sources["figure_layout_requirements"] = f"Embodied from template captions: {figure_layout}"
+    elif _layout_should_prefer_embodied(
+        existing.get("figure_layout_requirements") or existing.get("figure_layout")
+    ):
+        figure_layout = _embodied_caption_line_structure(paras, "figure")
+        if figure_layout:
+            partial["figure_layout_requirements"] = [figure_layout]
+            sources["figure_layout_requirements"] = f"Embodied from template captions: {figure_layout}"
+
+    return partial, sources
+
+
+def _deep_fill_unset(base: dict, fill: dict) -> dict:
+    """Merge fill into base only where base keys are missing or IGNORE."""
+    out = dict(base or {})
+    for key, value in (fill or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_fill_unset(out[key], value)
+        elif key not in out or rule_unset(out.get(key)):
+            out[key] = value
+        elif isinstance(value, dict) and not isinstance(out.get(key), dict):
+            out[key] = value
+    return out
+
+
+def apply_template_extract_guards(
+    rules: dict | None,
+    text: str | None = None,
+    paragraphs: list | None = None,
+    sections: list | None = None,
+) -> dict:
+    """Publisher-agnostic guards for template-as-guide extracts.
+
+    - Leave citation_style blank unless the guide explicitly names APA/MLA/IEEE
+      (do not keep venue inferences like IEEE 802.11).
+    - Fill unset Format Fields from embodied DOCX/PDF styles and section layout.
+    - When DOCX body styles embody justify, prefer that over a narrative \"left\" guess.
+    """
+    out = dict(rules or {})
+    explicit = citation_style_explicitly_named(text)
+    if explicit:
+        out["citation_style"] = explicit
+    else:
+        out.pop("citation_style", None)
+
+    embodied = embodied_body_alignment_from_paragraphs(paragraphs)
+    current = str(out.get("alignment") or "").strip().lower() or None
+    if embodied == "justify" and current in {None, "left"}:
+        # Conflict or empty: embodied Para/body justify wins over a narrative left guess.
+        out["alignment"] = "justify"
+    elif embodied and current is None:
+        out["alignment"] = embodied
+
+    partial, sources = embodied_rules_from_document(paragraphs, sections, out, text=text)
+    if partial:
+        # Truncated narrative layouts should yield to embodied caption structure.
+        for key in ("table_layout_requirements", "figure_layout_requirements"):
+            if key in partial:
+                out.pop(key, None)
+                out.pop(key.replace("_requirements", ""), None)
+        out = _deep_fill_unset(out, partial)
+    if sources:
+        field_sources = dict(out.get("field_sources") or {})
+        for key, note in sources.items():
+            if key in {
+                "table_layout_requirements",
+                "figure_layout_requirements",
+            } and key in (partial or {}):
+                field_sources[key] = note
+            else:
+                field_sources.setdefault(key, note)
+        out["field_sources"] = field_sources
+    return out
 
 
 def _parse_spacing(value: str) -> float | None:
@@ -1646,7 +2265,13 @@ MECHANICS_GUIDE_SIGNAL_RE = re.compile(
     r"margin(?:s)?|font\s*size|line\s*spacing|heading\s*[1-9]|page\s*number|"
     r"paper\s*size|typeface|format\s*mechanics|indent(?:ion|ation)?|"
     r"citation\s*style|times\s*new\s*roman|body\s*(?:text|font)\s*size|"
-    r"layout\s+for\s+(?:tables|figures)|pagination"
+    r"layout\s+for\s+(?:tables|figures)|pagination|"
+    # Template-as-guide vocabulary (publisher-agnostic; not ACM-specific).
+    r"submission\s+template|manuscript\s+template|author\s+guidelines?|"
+    r"camera[\s-]?ready|figure\s+caption|table\s+caption|alt[\s-]?text|"
+    r"figure\s+description|styles?\s+gallery|document\s+styles?|"
+    r"formatting\s+(?:requirements?|guidelines?|instructions?)|"
+    r"prepare\s+your\s+(?:manuscript|submission)|word\s+styles?"
     r")\b",
     re.I,
 )
@@ -1679,6 +2304,26 @@ def _mechanics_rule_count(rules: dict | None) -> int:
     return count
 
 
+def _looks_like_font_color(value: str) -> bool:
+    """True when text looks like a named/hex font color, not figure-accessibility prose."""
+    text = str(value or "").strip()
+    if not text or len(text) > 48:
+        return False
+    if re.search(r"(?i)\b(?:vision|figures?|grayscale|chart|graph|pattern|indicated)\b", text):
+        return False
+    if re.fullmatch(r"#?[0-9A-Fa-f]{3,8}", text):
+        return True
+    if re.fullmatch(r"(?i)rgb\s*\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)", text):
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?i)(?:black(?:\s*/\s*automatic)?|automatic|white|red|blue|green|navy|"
+            r"gray|grey|dark\s+blue|dark\s+gray|dark\s+grey)",
+            text,
+        )
+    )
+
+
 def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
     """Reject manuscript uploads in the format-mechanics extractor.
 
@@ -1694,17 +2339,21 @@ def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
     rule_count = _mechanics_rule_count(rules)
 
     # Schema categories (Margins, Paper, Font, …) present as labeled sections.
-    try:
-        from app.mechanics_validate import validate_mechanics_document
+    # Skip the full schema walk when we already have enough concrete rules — it was
+    # adding noticeable latency on large templates during /mechanics/extract.
+    if rule_count >= 5:
+        categories_present = 3
+    else:
+        try:
+            from app.mechanics_validate import validate_mechanics_document
 
-        schema = validate_mechanics_document(body, rules=None)
-        missing_categories = sum(
-            1 for issue in schema.get("issues") or [] if issue.get("code") == "missing_category"
-        )
-    except Exception:
-        missing_categories = 9
-
-    categories_present = 9 - missing_categories
+            schema = validate_mechanics_document(body, rules=None)
+            missing_categories = sum(
+                1 for issue in schema.get("issues") or [] if issue.get("code") == "missing_category"
+            )
+        except Exception:
+            missing_categories = 9
+        categories_present = 9 - missing_categories
     manuscript_msg = (
         "This file looks like a manuscript, not a format mechanics guide. "
         "Upload your institution’s formatting guidelines (margins, fonts, headings, pagination), "
@@ -1725,10 +2374,36 @@ def assert_mechanics_guide(text: str, rules: dict | None = None) -> None:
     if rule_count >= 3 and guide_hits >= 2:
         return
 
+    # Embodied template styles (Head1/Para/margins from the DOCX) are strong
+    # evidence the upload is a submission template used as a format guide.
+    field_sources = rules.get("field_sources") if isinstance(rules, dict) else None
+    embodied = isinstance(field_sources, dict) and len(field_sources) >= 2
+    if embodied and rule_count >= 3:
+        return
+    if rule_count >= 6 and guide_hits >= 1:
+        return
+
+    # Template-as-guide docs: long Word/PDF templates with instruction + style
+    # vocabulary (figure captions, submission template, document styles, …).
+    # Accept when format signals are strong even if manuscript section words appear
+    # in example content — still reject sparse manuscript-only uploads below.
+    template_as_guide = (
+        (guide_hits >= 3 and rule_count >= 2)
+        or (guide_hits >= 4 and (rule_count >= 1 or categories_present >= 1))
+        or (embodied and guide_hits >= 2)
+    )
+    if template_as_guide and guide_hits >= manuscript_hits:
+        return
+    if template_as_guide and words >= 400 and (guide_hits >= 5 or rule_count >= 4):
+        return
+    # Example manuscript sections inside a template should not veto strong format fills.
+    if template_as_guide and rule_count >= 4 and guide_hits >= 3:
+        return
+
     # Long thesis/paper bodies - deny unless the guide signals are strong.
     if manuscript_hits >= 2 and words >= 400 and (guide_hits < 2 or rule_count < 3):
         raise DocumentError(manuscript_msg)
-    if words >= 1200 and manuscript_hits >= 1 and guide_hits < 3:
+    if words >= 1200 and manuscript_hits >= 1 and guide_hits < 3 and not template_as_guide:
         raise DocumentError(manuscript_msg)
 
     if guide_hits < 2 and rule_count < 2:
@@ -1885,10 +2560,11 @@ def derive_mechanics_rules(text: str) -> dict:
                     indent_val = 0.5
                 else:
                     indent_val = _parse_indent_rule_inches(token)
-        # "0.5 inch TAB" / "TAB = 0.5 inch" — only when a measure is stated beside TAB.
+        # "0.5 inch TAB" / "TAB = 0.5 inch" — only when a measure is stated beside the
+        # whole word TAB (never match "Table" / "TableCaption" from template style lists).
         if indent_val is None:
             tab_with_measure = re.search(
-                rf"(?i)(?:({MEASURE_PATTERN})\s*TAB)"
+                rf"(?i)(?:({MEASURE_PATTERN})\s*\bTAB\b)"
                 rf"|\bTAB\b[^.]{{0,40}}?({MEASURE_PATTERN})"
                 rf"|\b(?:regular\s+)?paragraph\s+indent(?:ation|ion)?[^.]{{0,40}}?({MEASURE_PATTERN})",
                 flat,
@@ -1900,6 +2576,9 @@ def derive_mechanics_rules(text: str) -> dict:
                         if indent_val is not None:
                             break
         # Bare "one tab" / "indent of one tab" with no equivalent → leave unset (IGNORE).
+    # Reject absurd first-line values (template noise / unit-less digits).
+    if indent_val is not None and not (0 < float(indent_val) <= 1.5):
+        indent_val = None
     if indent_val is not None:
         rules["first_line_indent_inches"] = indent_val
         rules["indention"] = f"{indent_val} inch" if indent_val != 1 else "1 inch"
@@ -2373,9 +3052,17 @@ def derive_mechanics_rules(text: str) -> dict:
         font["sizes_points"] = [float(font["body_size"])]
     elif "body_size" not in font and "body_size" in blocked_font_keys:
         font.pop("sizes_points", None)
-    font_color = _value_after_label(flat, ("Font color", "Text color", "Color"), stop)
-    # Only store color when the guide names it - never invent Black/Automatic.
-    if font_color:
+    # Prefer explicit font/text color labels. Bare "Color" matches prose like
+    # "color vision differences" in figure-accessibility instructions.
+    font_color = _value_after_label(flat, ("Font color", "Text color", "Font colour", "Text colour"), stop)
+    if not font_color:
+        labeled = re.search(
+            r"(?i)\b(?:font|text)\s+colou?r\s*(?::|=)\s*([A-Za-z][A-Za-z /\-]{1,40})",
+            flat,
+        )
+        font_color = labeled.group(1).strip() if labeled else ""
+    # Only store color when the guide names a real color token - never invent Black/Automatic.
+    if font_color and _looks_like_font_color(font_color):
         if re.search(r"black|automatic", font_color, re.I):
             font["color"] = "Black/Automatic"
         else:
@@ -2589,19 +3276,11 @@ def derive_mechanics_rules(text: str) -> dict:
     if figure_layout and len(figure_layout) > 3:
         rules["figure_layout_requirements"] = [figure_layout[:300]]
 
-    # Require citation/style language near APA/MLA/IEEE. Venue names like IEEE 802.11
-    # or sample bibliography publishers must not become citation_style.
-    citation = re.search(
-        r"(?i)(?:\b(?:citation|reference|referencing|bibliography)\s+(?:style|format|system)\b"
-        r"|\bcite\s+(?:using|in|with)\b|\bin\s+(?:APA|MLA|IEEE)\s+(?:style|format)\b)"
-        r".{0,40}\b(APA|MLA|IEEE)\b"
-        r"|\b(APA|MLA|IEEE)\b\s*(?:7th|6th)?\s*(?:edition\s+)?(?:style|format|citation|referencing)\b",
-        flat,
-    )
-    if citation:
-        style_name = next((g for g in citation.groups() if g), None)
-        if style_name:
-            rules["citation_style"] = style_name.upper()
+    # Require citation/style language near APA/MLA/IEEE. Bare org / venue names
+    # (IEEE 802.11, IEEE Transactions, sample bibliography lines) must not fill this.
+    explicit_citation = citation_style_explicitly_named(flat)
+    if explicit_citation:
+        rules["citation_style"] = explicit_citation
     else:
         citation_raw = _value_after_label(
             flat, ("Citation format", "Citation style", "Citation", "Reference style"), stop
@@ -2781,7 +3460,19 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
     spacing = parse_line_spacing(spacing_text) if spacing_text else None
     if spacing is None:
         spacing = parse_line_spacing(raw.get("line_spacing"))
-    if spacing_text:
+    # Snap near Word presets so Format Fields show Single/1.5/Double, not noisy floats.
+    if spacing is not None:
+        for preset in (1.0, 1.15, 1.5, 2.0):
+            if abs(float(spacing) - preset) < 0.05:
+                spacing = preset
+                break
+    named_spacing = bool(re.search(r"(?i)\b(?:single|double|one[\s-]+and[\s-]+a[\s-]+half)\b", spacing_text))
+    if spacing_text and named_spacing:
+        rules["spacing"] = spacing_text[:80]
+    elif spacing is not None:
+        rules["spacing"] = f"{spacing:g}"
+        rules["line_spacing"] = spacing
+    elif spacing_text:
         rules["spacing"] = spacing_text[:80]
     if spacing is not None:
         rules["line_spacing"] = spacing
@@ -2799,7 +3490,7 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
         indention = ""
     if indention:
         rules["indention"] = indention[:120]
-    # Indentation only: bare "tab" without a stated equivalent must not become 0.5.
+    # "1 tab" / "one tab" → 0.5 in; never treat the tab count digit as inches.
     from app.indent_check import _parse_indent_inches as _parse_indent_rule_inches
 
     indent = _parse_indent_rule_inches(indention) if indention else None
@@ -2858,14 +3549,36 @@ def normalize_mechanics_rules(raw: dict | None) -> dict:
             return [part.strip()[:500] for part in re.split(r"[\n;]+", value) if part.strip()][:12]
         return []
 
+    def _layout_lines(value) -> list[str]:
+        """One caption-structure rule may contain real line breaks — only ';' splits rules."""
+        if isinstance(value, list):
+            items = [str(item).strip()[:500] for item in value if str(item).strip()]
+        elif isinstance(value, str) and value.strip():
+            items = [part.strip()[:500] for part in value.split(";") if part.strip()]
+        else:
+            items = []
+        # Dedupe near-identical fills so Format Fields / scans don't show twice.
+        unique: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            key = re.sub(r"\s+", " ", item).strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        return unique[:12]
+
     for key in (
         "heading_requirements",
         "pagination_requirements",
         "page_break_requirements",
-        "table_layout_requirements",
-        "figure_layout_requirements",
     ):
         lines = _lines(raw.get(key))
+        if lines:
+            rules[key] = lines
+
+    for key in ("table_layout_requirements", "figure_layout_requirements"):
+        lines = _layout_lines(raw.get(key))
         if lines:
             rules[key] = lines
 

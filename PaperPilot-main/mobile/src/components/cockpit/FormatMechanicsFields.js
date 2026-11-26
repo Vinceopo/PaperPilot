@@ -51,10 +51,10 @@ const CITATION_OPTIONS = [
   { value: "IEEE", label: "IEEE" },
 ];
 const LINE_SPACING_OPTIONS = [
-  { value: "1", label: "1 (Single)" },
-  { value: "1.15" },
-  { value: "1.5", label: "1.5 (One and a half)" },
-  { value: "2", label: "2 (Double)" },
+  { value: "1", label: "1" },
+  { value: "1.15", label: "1.15" },
+  { value: "1.5", label: "1.5" },
+  { value: "2", label: "2" },
 ];
 const FONT_FAMILY_OPTIONS = FONT_FAMILIES.map((value) => ({ value }));
 const FONT_COLOR_OPTIONS = ["Black/Automatic", "Black", "Automatic"].map((value) => ({ value }));
@@ -78,7 +78,18 @@ function Field({ label, hint, children, style, labelStyle }) {
   );
 }
 
-/** Number input with a fixed unit badge (in, pt, …) so measures aren’t ambiguous. */
+/** Side badge for length fields: Inches / pt / cm (never invent a unit). */
+function measureUnitLabel(unit) {
+  const raw = String(unit || "").trim();
+  const key = raw.toLowerCase();
+  if (key === "in" || key === "inch" || key === "inches") return "Inches";
+  if (key === "pt" || key === "point" || key === "points") return "pt";
+  if (key === "cm" || key === "centimeter" || key === "centimeters") return "cm";
+  if (key === "mm" || key === "millimeter" || key === "millimeters") return "mm";
+  return raw;
+}
+
+/** Number input with a fixed unit badge (Inches, pt, cm, …) so measures aren’t ambiguous. */
 function MeasureInput({ unit, editable = true, style, ...props }) {
   return (
     <View style={styles.measureWrap}>
@@ -89,7 +100,7 @@ function MeasureInput({ unit, editable = true, style, ...props }) {
         {...props}
       />
       <Text style={styles.measureUnit} accessibilityElementsHidden importantForAccessibility="no">
-        {unit}
+        {measureUnitLabel(unit)}
       </Text>
     </View>
   );
@@ -293,7 +304,7 @@ export default function FormatMechanicsFields({
           <Field label="Substance" hint="Paper weight">
             {input("paperSubstance", { keyboardType: "decimal-pad" })}
           </Field>
-          <Field label="Spacing" hint="Pick a choice or type your own, e.g. 1.5 or Double">
+          <Field label="Spacing" hint="Line multiple — 1, 1.15, 1.5, 2, or type a value">
             <ComboInput
               disabled={disabled}
               value={form.spacing}
@@ -338,12 +349,12 @@ export default function FormatMechanicsFields({
         </Section>
 
         <Section title="Margins">
-          <Text style={styles.hint}>Values are in inches (in)</Text>
+          <Text style={styles.hint}>Values are in inches</Text>
           <View style={styles.grid}>
             {MARGINS.map(([key, label]) => (
               <Field key={key} label={label} style={styles.gridCell}>
                 <MeasureInput
-                  unit="in"
+                  unit="Inches"
                   editable={!disabled}
                   value={form[key] == null ? "" : String(form[key])}
                   onChangeText={(v) => set(key, v)}

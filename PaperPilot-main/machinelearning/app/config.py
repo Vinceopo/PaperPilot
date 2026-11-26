@@ -6,7 +6,7 @@ class Settings(BaseSettings):
 
     ml_service_key: str = ""
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     # Absolute ceiling (must be ≥ Pro). Plan limits below enforce Free/Premium/Pro.
     max_document_bytes: int = 120 * 1024 * 1024
     # PDF pages processed per analysis chunk (progress + memory-friendly batches).

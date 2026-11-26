@@ -124,6 +124,12 @@ export function normalizeIssueLocation(loc = {}) {
   const recommendation = String(loc.recommendation || "").trim();
   const marginSide = String(loc.margin_side || loc.marginSide || "").trim().toLowerCase();
   const pageRegion = String(loc.page_region || loc.pageRegion || "").trim().toLowerCase();
+  const highlightFrom = String(loc.highlight_from || loc.highlightFrom || "").trim();
+  const wordIndexRaw = loc.word_index ?? loc.wordIndex;
+  const wordIndex =
+    wordIndexRaw != null && wordIndexRaw !== "" && Number.isFinite(Number(wordIndexRaw))
+      ? Math.max(0, Math.round(Number(wordIndexRaw)))
+      : null;
   return {
     page,
     line,
@@ -132,6 +138,8 @@ export function normalizeIssueLocation(loc = {}) {
     excerpt: String(loc.excerpt || loc.text || "").trim(),
     pageWidth: pageWidth != null ? Number(pageWidth) : null,
     pageHeight: pageHeight != null ? Number(pageHeight) : null,
+    ...(wordIndex != null ? { word_index: wordIndex, wordIndex } : {}),
+    ...(highlightFrom ? { highlight_from: highlightFrom, highlightFrom } : {}),
     ...(summary ? { summary } : {}),
     ...(explanation ? { explanation } : {}),
     ...(recommendation ? { recommendation } : {}),

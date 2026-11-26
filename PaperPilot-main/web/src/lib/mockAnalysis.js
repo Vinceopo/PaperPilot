@@ -121,8 +121,6 @@ export async function downloadReport(result, opts = {}) {
     unitsChecked,
     unitsPassed,
     unitsFailed,
-    assistFindings = [],
-    assistExpected = false,
   } = result;
 
   const versionNumber = Number(opts.versionNumber ?? result.versionNumber ?? 1) || 1;
@@ -540,67 +538,7 @@ export async function downloadReport(result, opts = {}) {
 
   Y = (doc.lastAutoTable?.finalY ?? Y) + 8;
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // SECTION: AI ASSIST FINDINGS (custom uploads — never silent when expected)
-  // ══════════════════════════════════════════════════════════════════════════
-  const assistRows = Array.isArray(assistFindings) ? assistFindings : [];
-  if (assistRows.length > 0 || assistExpected) {
-    checkPageBreak(24);
-    doc.setFontSize(10).setFont("helvetica", "bold").setTextColor(0, 0, 0);
-    doc.text("AI Assist Findings", ML, Y);
-    Y += 4;
-    doc.setFontSize(7).setFont("helvetica", "normal").setTextColor(...SLATE);
-    doc.text(
-      "Visual / image / style checks from your custom guide. These do not change the score.",
-      ML,
-      Y,
-      { maxWidth: CW }
-    );
-    Y += 6;
-    if (assistRows.length > 0) {
-      autoTable(doc, {
-        startY: Y,
-        margin: { left: ML, right: MR },
-        head: [["Status", "Finding", "Suggestion"]],
-        body: assistRows.map((item) => [
-          String(item.status || "unclear").replace(/_/g, " "),
-          `${item.title || "Assist finding"}\n${item.summary || ""}`.trim(),
-          item.recommendation || "-",
-        ]),
-        styles: {
-          fontSize: 8,
-          cellPadding: 3,
-          lineColor: [226, 232, 240],
-          lineWidth: 0.3,
-          fillColor: 255,
-        },
-        headStyles: {
-          fillColor: [248, 250, 252],
-          textColor: SLATE,
-          fontStyle: "bold",
-          fontSize: 7.5,
-        },
-        columnStyles: {
-          0: { cellWidth: 28, fontStyle: "bold" },
-          1: { cellWidth: "auto", textColor: [71, 85, 105] },
-          2: { cellWidth: 55, textColor: [100, 116, 139], fontSize: 7 },
-        },
-        didAddPage: () => {
-          Y = MT;
-        },
-      });
-      Y = (doc.lastAutoTable?.finalY ?? Y) + 8;
-    } else {
-      doc.setFontSize(8).setFont("helvetica", "normal").setTextColor(71, 85, 105);
-      doc.text(
-        "No assist findings were returned for this scan (none flagged, or assist unavailable).",
-        ML,
-        Y,
-        { maxWidth: CW }
-      );
-      Y += 10;
-    }
-  }
+  // Assist findings stay internal — not printed on the public PDF report.
 
   // ══════════════════════════════════════════════════════════════════════════
   // FOOTER NOTE (last page)
@@ -617,8 +555,7 @@ export async function downloadReport(result, opts = {}) {
   );
   Y += 8;
   doc.text(
-    "It does not evaluate grammar, writing quality, plagiarism, or the accuracy of cited content. " +
-    "AI assist findings (when present) never change the numeric score.",
+    "It does not evaluate grammar, writing quality, plagiarism, or the accuracy of cited content.",
     ML, Y, { maxWidth: CW }
   );
 

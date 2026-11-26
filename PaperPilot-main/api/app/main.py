@@ -148,11 +148,15 @@ init_db()
 init_compliance_db()
 
 # Local web (Vite) + Expo / LAN + Vercel. Credentials are not required for /analyze.
+# Always allow APP_PUBLIC_URL so a new Vercel hostname works even before CORS_ORIGINS is updated.
 origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+public_origin = (settings.app_public_url or "").strip().rstrip("/")
+if public_origin and public_origin not in origins:
+    origins.append(public_origin)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins or ["*"],
-    # localhost + private LAN IPs + Vercel previews
+    # localhost + private LAN IPs + Vercel production/preview hosts
     allow_origin_regex=(
         r"https?://("
         r"localhost|127\.0\.0\.1|"
@@ -1545,13 +1549,19 @@ def auth_otp_send(body: OtpSendRequest):
         send_otp_email(email, code, body.purpose)
     except Exception as exc:
         log.error("OTP email to %s failed: %s", email, exc)
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "We couldn't send the verification email right now. "
-                "Please try again in a few minutes."
-            ),
-        ) from exc
+        from_addr = (settings.resend_from or "").strip().lower()
+        test_from = "onboarding@resend.dev" in from_addr or from_addr.endswith("@resend.dev")
+        detail = (
+            "We couldn't send the verification email right now. "
+            "Please try again in a few minutes."
+        )
+        if test_from and settings.resend_api_key.strip():
+            detail = (
+                "We couldn't deliver the verification email. "
+                "The mail provider is still using a test sender — "
+                "verify your domain in Resend and set RESEND_FROM on the API host."
+            )
+        raise HTTPException(status_code=502, detail=detail) from exc
     minutes = max(1, ttl // 60)
     payload = {
         "ok": True,
