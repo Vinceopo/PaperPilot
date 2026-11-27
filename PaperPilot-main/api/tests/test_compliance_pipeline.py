@@ -2230,7 +2230,40 @@ class OtpTests(FirebaseTestCase):
 
 
 class OtpEmailTests(unittest.TestCase):
-    def test_each_code_is_delivered_only_to_its_requester(self):
+    def test_gmail_resend_from_uses_smtp_for_every_recipient(self):
+        """Gmail cannot be a Resend FROM for arbitrary inboxes — SMTP must deliver all OTPs."""
+        sent = []
+
+        def resend(to_email, subject, text, html):
+            sent.append(("resend", to_email, subject))
+            raise AssertionError("Resend must not run when FROM is Gmail")
+
+        def smtp(to_email, subject, text, html):
+            sent.append(("smtp", to_email, subject))
+
+        with (
+            patch.object(emailer.settings, "resend_api_key", "re_test"),
+            patch.object(emailer.settings, "resend_from", "PaperPilot <paperpilot.25@gmail.com>"),
+            patch.object(emailer.settings, "smtp_host", "smtp.gmail.com"),
+            patch.object(emailer.settings, "smtp_user", "paperpilot.25@gmail.com"),
+            patch.object(emailer.settings, "smtp_password", "app-password"),
+            patch.object(emailer, "_send_via_resend", side_effect=resend),
+            patch.object(emailer, "_send_via_smtp", side_effect=smtp),
+        ):
+            emailer.send_otp_email("owner@example.com", "111111", "verify_email")
+            emailer.send_otp_email("jemusu2002@gmail.com", "222222", "verify_email")
+            emailer.send_otp_email("anyone@outlook.com", "333333", "reset_password")
+
+        self.assertEqual(
+            sent,
+            [
+                ("smtp", "owner@example.com", "111111 is your PaperPilot verification code"),
+                ("smtp", "jemusu2002@gmail.com", "222222 is your PaperPilot verification code"),
+                ("smtp", "anyone@outlook.com", "333333 is your PaperPilot password reset code"),
+            ],
+        )
+
+    def test_verified_resend_domain_falls_back_to_smtp_per_recipient(self):
         sent = []
 
         def resend(to_email, subject, text, html):
@@ -2243,7 +2276,10 @@ class OtpEmailTests(unittest.TestCase):
 
         with (
             patch.object(emailer.settings, "resend_api_key", "re_test"),
+            patch.object(emailer.settings, "resend_from", "PaperPilot <noreply@paperpilot.app>"),
             patch.object(emailer.settings, "smtp_host", "smtp.example.com"),
+            patch.object(emailer.settings, "smtp_user", "mailer@example.com"),
+            patch.object(emailer.settings, "smtp_password", "secret"),
             patch.object(emailer, "_send_via_resend", side_effect=resend),
             patch.object(emailer, "_send_via_smtp", side_effect=smtp),
         ):

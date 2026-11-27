@@ -1,12 +1,30 @@
 from __future__ import annotations
 
 import logging
+import re
 import smtplib
 from email.message import EmailMessage
 
 from app.config import settings
 
 log = logging.getLogger("paperpilot.otp")
+
+# Public inboxes / placeholders cannot be used as a Resend "from" for arbitrary recipients.
+_BLOCKED_RESEND_DOMAINS = frozenset(
+    {
+        "gmail.com",
+        "googlemail.com",
+        "yahoo.com",
+        "outlook.com",
+        "hotmail.com",
+        "live.com",
+        "icloud.com",
+        "resend.dev",
+        "yourdomain.com",
+        "localhost",
+        "example.com",
+    }
+)
 
 
 def _otp_copy(purpose: str, code: str) -> tuple[str, str, str]:
@@ -32,11 +50,46 @@ def _otp_copy(purpose: str, code: str) -> tuple[str, str, str]:
     return subject, text, html
 
 
+def _extract_email_address(value: str) -> str:
+    raw = (value or "").strip()
+    match = re.search(r"<([^>]+)>", raw)
+    return (match.group(1) if match else raw).strip().lower()
+
+
+def _domain_of(address: str) -> str:
+    email = _extract_email_address(address)
+    if "@" not in email:
+        return ""
+    return email.rsplit("@", 1)[-1].strip().lower()
+
+
+def smtp_ready() -> bool:
+    return bool(
+        settings.smtp_host.strip()
+        and settings.smtp_user.strip()
+        and settings.smtp_password.strip()
+    )
+
+
+def resend_ready() -> bool:
+    """True only when Resend can deliver to arbitrary inboxes (verified custom domain)."""
+    if not settings.resend_api_key.strip():
+        return False
+    from_addr = (settings.resend_from or "").strip()
+    if not from_addr:
+        return False
+    domain = _domain_of(from_addr)
+    if not domain or domain in _BLOCKED_RESEND_DOMAINS:
+        return False
+    if domain.endswith(".resend.dev"):
+        return False
+    return True
+
+
 def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
     import resend
 
     resend.api_key = settings.resend_api_key.strip()
-    # Dev/test sender only delivers to the Resend account owner until a domain is verified.
     from_addr = (settings.resend_from or "").strip() or "onboarding@resend.dev"
     try:
         result = resend.Emails.send(
@@ -50,11 +103,11 @@ def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
         )
     except Exception as exc:
         hint = ""
-        from_l = from_addr.lower()
-        if "onboarding@resend.dev" in from_l or from_l.endswith("@resend.dev"):
+        domain = _domain_of(from_addr)
+        if domain in _BLOCKED_RESEND_DOMAINS or domain.endswith(".resend.dev"):
             hint = (
-                " RESEND_FROM is still a Resend test address; verify a domain in Resend "
-                "and set RESEND_FROM to an address on that domain (e.g. PaperPilot <noreply@yourdomain.com>)."
+                " RESEND_FROM must be an address on a domain verified in Resend "
+                "(not Gmail / resend.dev). Or clear RESEND_API_KEY and use SMTP."
             )
         raise RuntimeError(f"Resend failed: {exc}.{hint}") from exc
 
@@ -62,8 +115,30 @@ def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
     log.info("Resend accepted OTP email to %s id=%s", to_email, email_id)
 
 
+def _smtp_send_message(msg: EmailMessage, host: str, port: int) -> None:
+    user = settings.smtp_user.strip()
+    password = settings.smtp_password
+    # 465 = implicit SSL; 587 = STARTTLS. Try the configured port first.
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+            smtp.ehlo()
+            if user:
+                smtp.login(user, password)
+            smtp.send_message(msg)
+        return
+
+    with smtplib.SMTP(host, port, timeout=30) as smtp:
+        smtp.ehlo()
+        if settings.smtp_starttls:
+            smtp.starttls()
+            smtp.ehlo()
+        if user:
+            smtp.login(user, password)
+        smtp.send_message(msg)
+
+
 def _send_via_smtp(to_email: str, subject: str, text: str, html: str) -> None:
-    from_addr = settings.smtp_from or settings.smtp_user or "noreply@localhost"
+    from_addr = (settings.smtp_from or settings.smtp_user or "").strip() or "noreply@localhost"
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = from_addr
@@ -71,34 +146,67 @@ def _send_via_smtp(to_email: str, subject: str, text: str, html: str) -> None:
     msg.set_content(text)
     msg.add_alternative(html, subtype="html")
 
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-        if settings.smtp_starttls:
-            smtp.starttls()
-        if settings.smtp_user:
-            smtp.login(settings.smtp_user, settings.smtp_password)
-        smtp.send_message(msg)
+    host = settings.smtp_host.strip()
+    port = int(settings.smtp_port or 587)
+    # Gmail often works on 587; if the connection drops, retry implicit SSL on 465.
+    attempts = [port]
+    if host.lower() == "smtp.gmail.com" and port != 465:
+        attempts.append(465)
+
+    last_error: Exception | None = None
+    for attempt_port in attempts:
+        try:
+            _smtp_send_message(msg, host, attempt_port)
+            log.info("SMTP accepted OTP email to %s via %s:%s", to_email, host, attempt_port)
+            return
+        except smtplib.SMTPAuthenticationError as exc:
+            raise RuntimeError(
+                "SMTP login failed. Check SMTP_USER / SMTP_PASSWORD "
+                "(use a Gmail App Password, not the normal account password)."
+            ) from exc
+        except Exception as exc:
+            last_error = exc
+            log.warning("SMTP attempt %s:%s failed: %s", host, attempt_port, exc)
+
+    raise RuntimeError(f"SMTP failed ({host}:{port}): {last_error}") from last_error
 
 
 def email_delivery_configured() -> bool:
-    return bool(settings.resend_api_key.strip() or settings.smtp_host.strip())
+    return resend_ready() or smtp_ready()
 
 
 def send_otp_email(to_email: str, code: str, purpose: str) -> None:
+    """Deliver an OTP to any recipient email via Resend (verified domain) or SMTP."""
     subject, text, html = _otp_copy(purpose, code)
-    smtp_ready = bool(settings.smtp_host.strip())
+    errors: list[str] = []
 
-    if settings.resend_api_key.strip():
+    # Prefer a production-ready Resend domain when available.
+    if resend_ready():
         try:
             _send_via_resend(to_email, subject, text, html)
             return
         except Exception as exc:
-            # Resend's test sender only delivers to the account owner until a domain is verified.
-            if not smtp_ready:
+            errors.append(str(exc))
+            if not smtp_ready():
                 raise
             log.warning("Resend failed for %s, falling back to SMTP: %s", to_email, exc)
 
-    if smtp_ready:
-        _send_via_smtp(to_email, subject, text, html)
-        return
+    # Gmail / any SMTP account can send to every recipient inbox.
+    if smtp_ready():
+        try:
+            _send_via_smtp(to_email, subject, text, html)
+            return
+        except Exception as exc:
+            errors.append(str(exc))
+            raise RuntimeError("; ".join(errors)) from exc
+
+    # Dev-only: no mail provider — log the code so local signup still works with otp_echo.
+    if settings.resend_api_key.strip() and not resend_ready():
+        raise RuntimeError(
+            "RESEND_API_KEY is set but RESEND_FROM is not a verified custom domain "
+            "(Gmail/resend.dev cannot deliver to every user). "
+            "Clear RESEND_* and configure SMTP_HOST / SMTP_USER / SMTP_PASSWORD, "
+            "or verify a domain in Resend."
+        )
 
     log.warning("No Resend/SMTP configured. OTP for %s (%s): %s", to_email, purpose, code)

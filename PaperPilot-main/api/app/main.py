@@ -1549,17 +1549,20 @@ def auth_otp_send(body: OtpSendRequest):
         send_otp_email(email, code, body.purpose)
     except Exception as exc:
         log.error("OTP email to %s failed: %s", email, exc)
-        from_addr = (settings.resend_from or "").strip().lower()
-        test_from = "onboarding@resend.dev" in from_addr or from_addr.endswith("@resend.dev")
         detail = (
             "We couldn't send the verification email right now. "
             "Please try again in a few minutes."
         )
-        if test_from and settings.resend_api_key.strip():
+        err = str(exc).lower()
+        if "resend" in err and ("domain" in err or "gmail" in err or "resend.dev" in err):
             detail = (
                 "We couldn't deliver the verification email. "
-                "The mail provider is still using a test sender — "
-                "verify your domain in Resend and set RESEND_FROM on the API host."
+                "Configure SMTP on the API host, or verify a custom domain in Resend."
+            )
+        elif "smtp" in err and ("login" in err or "auth" in err):
+            detail = (
+                "We couldn't deliver the verification email. "
+                "SMTP login failed — check the mail app password on the API host."
             )
         raise HTTPException(status_code=502, detail=detail) from exc
     minutes = max(1, ttl // 60)
