@@ -2230,6 +2230,40 @@ class OtpTests(FirebaseTestCase):
 
 
 class OtpEmailTests(unittest.TestCase):
+    def test_brevo_delivers_to_every_recipient_before_smtp(self):
+        """HTTPS Brevo is preferred on Vercel so signup/reset OTP reaches any inbox."""
+        sent = []
+
+        def brevo(to_email, subject, text, html):
+            sent.append(("brevo", to_email, subject))
+
+        def smtp(to_email, subject, text, html):
+            sent.append(("smtp", to_email, subject))
+            raise AssertionError("SMTP must not run when Brevo succeeds")
+
+        with (
+            patch.object(emailer.settings, "brevo_api_key", "xkeysib-test"),
+            patch.object(emailer.settings, "brevo_from", "PaperPilot <paperpilot.25@gmail.com>"),
+            patch.object(emailer.settings, "resend_api_key", ""),
+            patch.object(emailer.settings, "smtp_host", "smtp.gmail.com"),
+            patch.object(emailer.settings, "smtp_user", "paperpilot.25@gmail.com"),
+            patch.object(emailer.settings, "smtp_password", "app-password"),
+            patch.object(emailer, "_send_via_brevo", side_effect=brevo),
+            patch.object(emailer, "_send_via_smtp", side_effect=smtp),
+        ):
+            emailer.send_otp_email("owner@example.com", "111111", "verify_email")
+            emailer.send_otp_email("jemusu2002@gmail.com", "222222", "verify_email")
+            emailer.send_otp_email("anyone@outlook.com", "333333", "reset_password")
+
+        self.assertEqual(
+            sent,
+            [
+                ("brevo", "owner@example.com", "111111 is your PaperPilot verification code"),
+                ("brevo", "jemusu2002@gmail.com", "222222 is your PaperPilot verification code"),
+                ("brevo", "anyone@outlook.com", "333333 is your PaperPilot password reset code"),
+            ],
+        )
+
     def test_gmail_resend_from_uses_smtp_for_every_recipient(self):
         """Gmail cannot be a Resend FROM for arbitrary inboxes — SMTP must deliver all OTPs."""
         sent = []
@@ -2242,6 +2276,7 @@ class OtpEmailTests(unittest.TestCase):
             sent.append(("smtp", to_email, subject))
 
         with (
+            patch.object(emailer.settings, "brevo_api_key", ""),
             patch.object(emailer.settings, "resend_api_key", "re_test"),
             patch.object(emailer.settings, "resend_from", "PaperPilot <paperpilot.25@gmail.com>"),
             patch.object(emailer.settings, "smtp_host", "smtp.gmail.com"),

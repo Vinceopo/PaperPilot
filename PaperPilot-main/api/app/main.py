@@ -91,7 +91,7 @@ from app.mechanics_validate import (
     apply_ignored_fields_to_rules,
     assert_mechanics_rules_ready,
 )
-from app.emailer import email_delivery_configured, send_otp_email
+from app.emailer import email_delivery_configured, mail_status, send_otp_email
 from app.firebase_admin_app import admin_auth
 from app.gemini_client import analyze_with_gemini
 from app.mechanics_gemini import understand_mechanics_with_gemini
@@ -189,6 +189,7 @@ def health():
         "ok": True,
         "service": "paperpilot-api",
         "s3": s3_configured(),
+        "mail": mail_status(),
     }
 
 
@@ -1554,15 +1555,20 @@ def auth_otp_send(body: OtpSendRequest):
             "Please try again in a few minutes."
         )
         err = str(exc).lower()
-        if "resend" in err and ("domain" in err or "gmail" in err or "resend.dev" in err):
+        if "brevo" in err:
             detail = (
                 "We couldn't deliver the verification email. "
-                "Configure SMTP on the API host, or verify a custom domain in Resend."
+                "Check BREVO_API_KEY and that the sender Gmail is verified in Brevo."
             )
-        elif "smtp" in err and ("login" in err or "auth" in err):
+        elif "resend" in err and ("domain" in err or "gmail" in err or "resend.dev" in err):
             detail = (
                 "We couldn't deliver the verification email. "
-                "SMTP login failed — check the mail app password on the API host."
+                "Set BREVO_API_KEY (recommended on Vercel), or verify a custom domain in Resend."
+            )
+        elif "smtp" in err and ("login" in err or "auth" in err or "closed" in err or "timed out" in err):
+            detail = (
+                "We couldn't deliver the verification email. "
+                "Gmail SMTP is blocked on this host — use BREVO_API_KEY instead."
             )
         raise HTTPException(status_code=502, detail=detail) from exc
     minutes = max(1, ttl // 60)

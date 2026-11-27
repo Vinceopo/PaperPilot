@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     resend_from: str = "PaperPilot <paperpilot.25@gmail.com>"
 
+    # Brevo (Sendinblue) HTTPS API — works on Vercel; verify the Gmail sender once in Brevo.
+    # Prefer this over Gmail SMTP from serverless hosts (outbound SMTP is often blocked).
+    brevo_api_key: str = ""
+    brevo_from: str = ""
+
     # When false, register / reset skip email codes (local/dev). Never disable in production.
     otp_enabled: bool = True
     otp_ttl_seconds: int = 300

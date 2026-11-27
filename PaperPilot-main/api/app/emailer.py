@@ -4,6 +4,9 @@ import logging
 import re
 import smtplib
 from email.message import EmailMessage
+from email.utils import parseaddr
+
+import requests
 
 from app.config import settings
 
@@ -63,12 +66,39 @@ def _domain_of(address: str) -> str:
     return email.rsplit("@", 1)[-1].strip().lower()
 
 
+def _parse_from(value: str) -> tuple[str, str]:
+    """Return (display_name, email) for provider APIs."""
+    name, email = parseaddr((value or "").strip())
+    email = (email or "").strip()
+    if not email and "@" in (value or ""):
+        email = _extract_email_address(value)
+    name = (name or "PaperPilot").strip() or "PaperPilot"
+    return name, email
+
+
+def _default_from_header() -> str:
+    return (
+        (settings.brevo_from or "").strip()
+        or (settings.smtp_from or "").strip()
+        or (settings.smtp_user or "").strip()
+        or (settings.resend_from or "").strip()
+        or "PaperPilot <noreply@localhost>"
+    )
+
+
 def smtp_ready() -> bool:
     return bool(
         settings.smtp_host.strip()
         and settings.smtp_user.strip()
         and settings.smtp_password.strip()
     )
+
+
+def brevo_ready() -> bool:
+    if not settings.brevo_api_key.strip():
+        return False
+    _, email = _parse_from(_default_from_header())
+    return bool(email and "@" in email)
 
 
 def resend_ready() -> bool:
@@ -84,6 +114,50 @@ def resend_ready() -> bool:
     if domain.endswith(".resend.dev"):
         return False
     return True
+
+
+def mail_status() -> dict:
+    """Safe diagnostics for /health — never includes secrets."""
+    return {
+        "brevo": brevo_ready(),
+        "resend": resend_ready(),
+        "smtp": smtp_ready(),
+        "configured": email_delivery_configured(),
+        "from": _extract_email_address(_default_from_header()) or None,
+    }
+
+
+def _send_via_brevo(to_email: str, subject: str, text: str, html: str) -> None:
+    """HTTPS send — works on Vercel. Sender must be verified once in Brevo (can be Gmail)."""
+    name, sender = _parse_from(_default_from_header())
+    if not sender:
+        raise RuntimeError("BREVO_FROM / SMTP_FROM is missing a sender email.")
+
+    response = requests.post(
+        "https://api.brevo.com/v3/smtp/email",
+        headers={
+            "accept": "application/json",
+            "api-key": settings.brevo_api_key.strip(),
+            "content-type": "application/json",
+        },
+        json={
+            "sender": {"name": name, "email": sender},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "htmlContent": html,
+            "textContent": text,
+        },
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        detail = response.text[:400]
+        raise RuntimeError(f"Brevo failed ({response.status_code}): {detail}")
+    message_id = None
+    try:
+        message_id = (response.json() or {}).get("messageId")
+    except Exception:
+        message_id = None
+    log.info("Brevo accepted OTP email to %s id=%s", to_email, message_id)
 
 
 def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
@@ -107,7 +181,7 @@ def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
         if domain in _BLOCKED_RESEND_DOMAINS or domain.endswith(".resend.dev"):
             hint = (
                 " RESEND_FROM must be an address on a domain verified in Resend "
-                "(not Gmail / resend.dev). Or clear RESEND_API_KEY and use SMTP."
+                "(not Gmail / resend.dev). Prefer BREVO_API_KEY with your Gmail sender."
             )
         raise RuntimeError(f"Resend failed: {exc}.{hint}") from exc
 
@@ -172,41 +246,48 @@ def _send_via_smtp(to_email: str, subject: str, text: str, html: str) -> None:
 
 
 def email_delivery_configured() -> bool:
-    return resend_ready() or smtp_ready()
+    return brevo_ready() or resend_ready() or smtp_ready()
 
 
 def send_otp_email(to_email: str, code: str, purpose: str) -> None:
-    """Deliver an OTP to any recipient email via Resend (verified domain) or SMTP."""
+    """Deliver OTP for signup / reset / change-password to any recipient inbox."""
     subject, text, html = _otp_copy(purpose, code)
     errors: list[str] = []
 
-    # Prefer a production-ready Resend domain when available.
+    # 1) Brevo HTTPS — reliable on Vercel; Gmail can be the verified sender.
+    if brevo_ready():
+        try:
+            _send_via_brevo(to_email, subject, text, html)
+            return
+        except Exception as exc:
+            errors.append(str(exc))
+            log.warning("Brevo failed for %s: %s", to_email, exc)
+
+    # 2) Resend with a verified custom domain.
     if resend_ready():
         try:
             _send_via_resend(to_email, subject, text, html)
             return
         except Exception as exc:
             errors.append(str(exc))
-            if not smtp_ready():
-                raise
-            log.warning("Resend failed for %s, falling back to SMTP: %s", to_email, exc)
+            log.warning("Resend failed for %s: %s", to_email, exc)
 
-    # Gmail / any SMTP account can send to every recipient inbox.
+    # 3) SMTP last — often blocked on serverless (Vercel); still useful for some hosts.
     if smtp_ready():
         try:
             _send_via_smtp(to_email, subject, text, html)
             return
         except Exception as exc:
             errors.append(str(exc))
-            raise RuntimeError("; ".join(errors)) from exc
+            log.warning("SMTP failed for %s: %s", to_email, exc)
 
-    # Dev-only: no mail provider — log the code so local signup still works with otp_echo.
+    if errors:
+        raise RuntimeError("; ".join(errors))
+
     if settings.resend_api_key.strip() and not resend_ready():
         raise RuntimeError(
-            "RESEND_API_KEY is set but RESEND_FROM is not a verified custom domain "
-            "(Gmail/resend.dev cannot deliver to every user). "
-            "Clear RESEND_* and configure SMTP_HOST / SMTP_USER / SMTP_PASSWORD, "
-            "or verify a domain in Resend."
+            "RESEND_API_KEY is set but RESEND_FROM is not a verified custom domain. "
+            "Set BREVO_API_KEY (verify your Gmail sender in Brevo) or clear RESEND_*."
         )
 
-    log.warning("No Resend/SMTP configured. OTP for %s (%s): %s", to_email, purpose, code)
+    log.warning("No Brevo/Resend/SMTP configured. OTP for %s (%s): %s", to_email, purpose, code)
