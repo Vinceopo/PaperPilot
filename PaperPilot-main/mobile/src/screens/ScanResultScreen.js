@@ -217,17 +217,30 @@ function ScanResultBody({ navigation }) {
   );
   const categoryDisplays = resolveCategoryUnitDisplays(activeBreakdown);
   // Tracing expands locations into findings for the subtitle only — never override unit %.
-  const tracedEntries = normalizeDetectedIssues(formatChecks, pageCount || 0).entries;
+  const tracedEntries = normalizeDetectedIssues(formatChecks, pageCount || 0).entries.map((entry) => ({
+    ...entry,
+    category: entry.category || categoryForIssue(entry) || "Other",
+  }));
   const tracedByCategory = {};
   tracedEntries.forEach((entry) => {
-    const key = entry.category || categoryForIssue(entry) || "Other";
+    const key = entry.category || "Other";
     tracedByCategory[key] = (tracedByCategory[key] || 0) + 1;
   });
+  const knownCategories = [
+    "Fonts",
+    "Margins",
+    "Indentation",
+    "Line Spacing",
+    "Alignment",
+    "Pagination",
+    "Captions",
+    "Citations",
+  ];
   const categoryCards = categoryDisplays.map((row) => {
     const name = String(row.metric || row.section || "").trim();
-    const traced = name ? tracedByCategory[name] : null;
-    const displayIssueCount = hasValue(traced)
-      ? traced
+    const known = knownCategories.some((item) => item.toLowerCase() === name.toLowerCase());
+    const displayIssueCount = known
+      ? tracedByCategory[name] || 0
       : hasValue(row.displayIssueCount)
         ? row.displayIssueCount
         : row.displayNonCompliant;
@@ -236,15 +249,19 @@ function ScanResultBody({ navigation }) {
       displayIssueCount,
     };
   });
-  // Header totals = sum of category cards so they always match what the user adds up.
-  const {
-    total: totalUnits,
-    compliant: compliantUnits,
-    nonCompliant: nonCompliantUnits,
-  } = reconcileDisplayedUnits(
+  // Total Units stay unit-based; Non-Compliant must equal Total issues found (traced cards).
+  const tracedTotal = Object.values(tracedByCategory).reduce(
+    (sum, n) => sum + Math.max(0, Number(n) || 0),
+    0
+  );
+  const { total: totalUnits } = reconcileDisplayedUnits(
     { unitsChecked, unitsPassed, unitsFailed },
     categoryCards,
   );
+  const nonCompliantUnits = Math.max(0, Math.round(Number(tracedTotal) || 0));
+  const compliantUnits = hasValue(totalUnits)
+    ? Math.max(0, Math.round(Number(totalUnits)) - nonCompliantUnits)
+    : null;
   // Bar shares only - percent numbers are not shown in the public results UI.
   const fromOverallUnits =
     hasValue(totalUnits) && totalUnits > 0 && hasValue(nonCompliantUnits)

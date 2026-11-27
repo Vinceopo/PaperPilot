@@ -91,6 +91,7 @@ export default function IssueTracingSection({
   file = null,
   documentLoading = false,
   issueTotal = null,
+  tracedByCategory = null,
 }) {
   const [activeIssueId, setActiveIssueId] = useState(null);
   const [scrollTarget, setScrollTarget] = useState(null);
@@ -119,13 +120,17 @@ export default function IssueTracingSection({
   }, [entries, result?.mechanicsRules]);
 
   const categoryCounts = useMemo(() => {
+    // Prefer the same map Score Breakdown used, so chips never drift.
+    if (tracedByCategory && typeof tracedByCategory === "object") {
+      return { ...tracedByCategory };
+    }
     const c = {};
     enrichedEntries.forEach((e) => {
       const key = e.category || "Other";
       c[key] = (c[key] || 0) + 1;
     });
     return c;
-  }, [enrichedEntries]);
+  }, [enrichedEntries, tracedByCategory]);
 
   const categoryOptions = useMemo(() => {
     const present = Object.keys(categoryCounts);
@@ -261,21 +266,25 @@ export default function IssueTracingSection({
     file || documentLoading || result?.cloudinaryUrl || result?.documentPreview
   );
   const showingFiltered = categoryFilter !== "all";
-  // Keep the Issues headline aligned with Non-Compliant Units on the compliance summary.
+  // Always count the cards in this list — never Non-Compliant Units (that caused 335 vs 8).
+  const listTotal = enrichedEntries.length;
   const displayIssueTotal = hasValue(issueTotal)
     ? Math.max(0, Math.round(Number(issueTotal)))
-    : enrichedEntries.length;
+    : listTotal;
+  // If parent total disagrees with the visible list, trust the list.
+  const syncedTotal =
+    displayIssueTotal === listTotal || listTotal === 0 ? displayIssueTotal : listTotal;
   const issueCountLabel = showingFiltered
-    ? `${formatCount(filteredEntries.length)} in ${categoryFilter} · ${formatCount(displayIssueTotal)} ${plural(displayIssueTotal, "issue")} total`
-    : `${formatCount(displayIssueTotal)} ${plural(displayIssueTotal, "issue")}`;
+    ? `${formatCount(filteredEntries.length)} in ${categoryFilter} · ${formatCount(syncedTotal)} ${plural(syncedTotal, "issue")} total`
+    : `${formatCount(syncedTotal)} ${plural(syncedTotal, "issue")}`;
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 bg-[#f8fffd] px-5 py-3">
         <h3 className="text-sm font-bold text-slate-800">Issue tracing &amp; XAI</h3>
         <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
-          Select a finding to highlight it in the manuscript. The issue total matches Non-Compliant
-          Units above. Filter by category to narrow the list.
+          Select a finding to highlight it in the manuscript. Category issue counts match Score
+          Breakdown above. Filter by category to narrow the list.
           {hiddenLocations > 0
             ? ` ${formatCount(hiddenLocations)} additional matching locations are available in the list.`
             : ""}
@@ -345,7 +354,7 @@ export default function IssueTracingSection({
                 aria-label="Filter by category"
               >
                 <option value="all">
-                  All categories ({formatCount(displayIssueTotal)})
+                  All categories ({formatCount(syncedTotal)})
                 </option>
                 {categoryOptions.map((name) => {
                   const count = categoryCounts[name] || 0;

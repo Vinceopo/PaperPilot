@@ -169,9 +169,10 @@ export function normalizedIndex(raw) {
 }
 
 /** Search strings to try, longest first. Short titles (e.g. "By:") still locate. */
-export function excerptNeedles(excerpt) {
+export function excerptNeedles(excerpt, { exactOnly = false } = {}) {
   const full = normalizeNeedle(excerpt);
   if (full.length < 2) return [];
+  if (exactOnly) return [full];
   const needles = [full];
   if (full.length > 48) {
     needles.push(full.slice(0, 40).trim());
@@ -182,6 +183,23 @@ export function excerptNeedles(excerpt) {
     if (words.length >= 3) needles.push(words.slice(0, 3).join(" "));
   }
   return needles.filter((value, index, list) => value.length >= 2 && list.indexOf(value) === index);
+}
+
+/** True when the scanner / XAI payload points at a single word rather than a line band. */
+export function wantsWordHighlight(target = {}) {
+  const from = String(target.highlight_from || target.highlightFrom || "").toLowerCase();
+  if (from === "word_excerpt" || from === "excerpt") return true;
+  if (from === "stored_bbox") {
+    const excerpt = String(target.excerpt || "").trim();
+    if (excerpt && excerpt.length <= 48) return true;
+  }
+  if (from === "line") return false;
+  const section = String(target.section || "").toLowerCase();
+  const excerpt = String(target.excerpt || "").trim();
+  const issueType = String(target.issue_type || target.issueType || "").toLowerCase();
+  if (section === "fonts" && excerpt && excerpt.length <= 48 && !/\s/.test(excerpt)) return true;
+  if (issueType.startsWith("font_") && excerpt && excerpt.length <= 48 && !/\s/.test(excerpt)) return true;
+  return target.word_index != null || target.wordIndex != null;
 }
 
 /**
@@ -271,34 +289,54 @@ export function isApproximateTracing(pagination) {
  * Prefer exact index, then excerpt search. Never invent a sheet via proportional
  * remap when counts disagree - that painted wrong-page highlights.
  */
+function sectionPlainText(section) {
+  if (!section) return "";
+  if (typeof section.innerText === "string") return section.innerText;
+  if (typeof section.text === "string") return section.text;
+  return String(section || "");
+}
+
+function findDocxPageByExcerpt(list, needles) {
+  if (!needles?.length || !list?.length) return null;
+  let best = null;
+  for (let i = 0; i < list.length; i += 1) {
+    const text = normalizeNeedle(sectionPlainText(list[i]));
+    for (const needle of needles) {
+      if (!text.includes(needle)) continue;
+      const score = needle.length;
+      if (!best || score > best.score) best = { index: i, pageNumber: i + 1, score };
+    }
+  }
+  return best;
+}
+
 export function resolveDocxPageIndex(sections, target = {}, pageCountHint = 0) {
   const list = Array.isArray(sections) ? sections : [];
   const wanted = Math.round(Number(target.page));
   if (!Number.isFinite(wanted) || wanted < 1 || !list.length) return null;
+
+  const exactOnly = wantsWordHighlight(target);
+  const needles = excerptNeedles(target.excerpt || target.finding || "", { exactOnly });
+
   if (wanted <= list.length) {
+    if (needles.length) {
+      const onReported = needles.some((needle) =>
+        normalizeNeedle(sectionPlainText(list[wanted - 1])).includes(needle)
+      );
+      if (onReported) {
+        return { index: wanted - 1, pageNumber: wanted, approximate: false };
+      }
+      const rematch = findDocxPageByExcerpt(list, needles);
+      if (rematch) {
+        return { index: rematch.index, pageNumber: rematch.pageNumber, approximate: true };
+      }
+    }
     return { index: wanted - 1, pageNumber: wanted, approximate: false };
   }
 
-  const needles = excerptNeedles(target.excerpt || target.finding || "");
-  if (needles.length) {
-    let best = null;
-    for (let i = 0; i < list.length; i += 1) {
-      const text = normalizeNeedle(
-        typeof list[i]?.innerText === "string"
-          ? list[i].innerText
-          : typeof list[i]?.text === "string"
-            ? list[i].text
-            : String(list[i] || "")
-      );
-      for (const needle of needles) {
-        if (!text.includes(needle)) continue;
-        const score = needle.length;
-        if (!best || score > best.score) best = { index: i, pageNumber: i + 1, score };
-      }
-    }
-    if (best) {
-      return { index: best.index, pageNumber: best.pageNumber, approximate: true };
-    }
+  const rematch = findDocxPageByExcerpt(list, needles);
+  if (rematch) {
+    return { index: rematch.index, pageNumber: rematch.pageNumber, approximate: true };
   }
 
   // No safe mapping - caller should leave the preview unmoved rather than jump wrongly.

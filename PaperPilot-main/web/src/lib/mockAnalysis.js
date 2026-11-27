@@ -8,6 +8,7 @@ import { isServerId, mapComplianceScanToResult } from "./scanMapper.js";
 import { fetchScanWithProgress } from "./scanPoll.js";
 import {
   CATEGORY_STATUS_LABEL,
+  displayScoreCategory,
   filterScoreBreakdownByRules,
   formatCategoryIssuesDetail,
   formatCount,
@@ -17,6 +18,7 @@ import {
   reconcileDisplayedUnits,
   resolveCategoryUnitDisplays,
 } from "./scoreFormat.js";
+import { countTracedIssuesByCategory, tracedCountForCategory } from "./tracedIssues.js";
 import { APP_TIME_ZONE } from "./timeZone.js";
 
 function titleFromFile(file) {
@@ -128,12 +130,21 @@ export async function downloadReport(result, opts = {}) {
   // Same Document Details source as ScanResultsScreen — profile name, not citation style.
   const formatLabel = String(formatMechanicsName || "").trim() || "Format mechanics";
   const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
-  const categoryCards = resolveCategoryUnitDisplays(activeBreakdown).map((row) => ({
-    ...row,
-    displayIssueCount: hasValue(row.displayNonCompliant)
-      ? row.displayNonCompliant
-      : row.displayIssueCount,
-  }));
+  const traced = countTracedIssuesByCategory(
+    formatChecks,
+    result.pageCount || 0,
+    mechanicsRules
+  );
+  const categoryCards = resolveCategoryUnitDisplays(activeBreakdown).map((row) => {
+    const name = displayScoreCategory(row.metric || row.section || "");
+    const issuesFound = tracedCountForCategory(traced.byCategory, name);
+    return {
+      ...row,
+      metric: name || row.metric || row.section,
+      issuesFound,
+      displayIssueCount: issuesFound,
+    };
+  });
   const evaluatedCards = categoryCards.filter(
     (row) => hasValue(row.displayTotal) && Number(row.displayTotal) > 0 && hasValue(row.displayScore),
   );
@@ -146,14 +157,15 @@ export async function downloadReport(result, opts = {}) {
   // ── Derived stats ─────────────────────────────────────────────────────────
   const issueRows = formatChecks.filter((c) => c && c.result !== "PASS");
   const issueTypes = issueRows.length;
-  const {
-    total: totalUnits,
-    compliant: compliantUnits,
-    nonCompliant: nonCompliantUnits,
-  } = reconcileDisplayedUnits(
+  // Non-Compliant must equal Total issues found (traced cards), same as live results UI.
+  const { total: totalUnits } = reconcileDisplayedUnits(
     { unitsChecked, unitsPassed, unitsFailed },
     categoryCards,
   );
+  const nonCompliantUnits = Math.max(0, Math.round(Number(traced.total) || 0));
+  const compliantUnits = hasValue(totalUnits)
+    ? Math.max(0, Math.round(Number(totalUnits)) - nonCompliantUnits)
+    : null;
 
   async function loadBrandLogo() {
     try {
@@ -423,9 +435,11 @@ export async function downloadReport(result, opts = {}) {
       doc.setDrawColor(226, 232, 240);
       doc.roundedRect(x, y, cardW, cardH, 2.5, 2.5, "FD");
 
-      const issueCount = hasValue(item.displayIssueCount)
-        ? item.displayIssueCount
-        : item.displayNonCompliant;
+      const issueCount = hasValue(item.issuesFound)
+        ? item.issuesFound
+        : hasValue(item.displayIssueCount)
+          ? item.displayIssueCount
+          : 0;
       const pct = hasValue(item.displayScore)
         ? Number(item.displayScore)
         : hasValue(item.score)
@@ -475,8 +489,8 @@ export async function downloadReport(result, opts = {}) {
   doc.text("Format Checks", ML, Y);
   doc.setFontSize(7.5).setFont("helvetica", "normal").setTextColor(...SLATE);
   doc.text(
-    hasValue(nonCompliantUnits)
-      ? `${formatCount(nonCompliantUnits)} issue${Number(nonCompliantUnits) === 1 ? "" : "s"} found (matches non-compliant units)`
+    traced.total > 0 || hasValue(nonCompliantUnits)
+      ? `${formatCount(traced.total)} issue${traced.total === 1 ? "" : "s"} found (matches Score Breakdown / Issue Tracing)`
       : `${issueTypes} issue type${issueTypes === 1 ? "" : "s"} found`,
     ML, Y + 5
   );

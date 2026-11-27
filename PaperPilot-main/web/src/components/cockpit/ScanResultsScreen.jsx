@@ -8,6 +8,7 @@ import IssueTracingSection from "./IssueTracingSection.jsx";
 import { PaperPilotMark } from "../PaperPilotLogo.jsx";
 import {
   CATEGORY_STATUS_LABEL,
+  displayScoreCategory,
   filterScoreBreakdownByRules,
   formatCategoryIssuesDetail,
   formatCount,
@@ -19,6 +20,10 @@ import {
   resolveCategoryUnitDisplays,
   roundSharesToTotal,
 } from "../../lib/scoreFormat.js";
+import {
+  countTracedIssuesByCategory,
+  tracedCountForCategory,
+} from "../../lib/tracedIssues.js";
 import { APP_TIME_ZONE } from "../../lib/timeZone.js";
 
 function scoreBand(score) {
@@ -88,14 +93,13 @@ function CategoryScoreCard({
   status,
   displayTotal,
   displayNonCompliant,
-  displayIssueCount,
+  issuesFound,
   displayScore,
   notice,
 }) {
   const unreliable = String(status || "").toLowerCase() === "could_not_check_reliably";
   const zeroUnits = hasValue(displayTotal) && Number(displayTotal) === 0;
-  // Ring % and issue subtitle both follow failed / non-compliant units.
-  // Zero-unit IGNORE / blank categories show "-" (not included in overall).
+  // Ring % uses failed units. Subtitle “issues found” uses traced Issue Tracing cards only.
   const fromUnits = unreliable || zeroUnits
     ? null
     : compliancePercentFromUnits(displayTotal, displayNonCompliant);
@@ -116,7 +120,8 @@ function CategoryScoreCard({
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (safe / 100) * circumference;
   const stroke = ringStroke(evaluated ? safe : null);
-  const findingCount = hasValue(displayIssueCount) ? displayIssueCount : displayNonCompliant;
+  // Never fall back to unitsFailed — that caused Fonts 16 vs tracing 8.
+  const findingCount = hasValue(issuesFound) ? Math.max(0, Math.round(Number(issuesFound))) : 0;
   const detail = unreliable
     ? String(notice || CATEGORY_STATUS_LABEL.could_not_check_reliably)
     : zeroUnits
@@ -192,23 +197,32 @@ export default function ScanResultsScreen({
 
   const activeBreakdown = filterScoreBreakdownByRules(scoreBreakdown, mechanicsRules);
   const categoryDisplays = resolveCategoryUnitDisplays(activeBreakdown);
-  // Issues total must match non-compliant units (one failed unit = one issue in the summary).
-  const categoryCards = categoryDisplays.map((row) => ({
-    ...row,
-    displayIssueCount: hasValue(row.displayNonCompliant)
-      ? row.displayNonCompliant
-      : row.displayIssueCount,
-  }));
+  // Single source of truth shared with Issue Tracing (same expand + filter pipeline).
+  const traced = countTracedIssuesByCategory(
+    result.formatChecks || [],
+    result.pageCount || 0,
+    mechanicsRules
+  );
+  const categoryCards = categoryDisplays.map((row) => {
+    const name = displayScoreCategory(row.metric || row.section || "");
+    const issuesFound = tracedCountForCategory(traced.byCategory, name);
+    return {
+      ...row,
+      metric: name || row.metric || row.section,
+      issuesFound,
+      displayIssueCount: issuesFound,
+    };
+  });
 
-  // Header totals = sum of category cards so they always match what the user adds up.
-  const {
-    total: totalUnits,
-    compliant: compliantUnits,
-    nonCompliant: nonCompliantUnits,
-  } = reconcileDisplayedUnits(
+  // Total Units stay unit-based; Non-Compliant must equal Total issues found (traced cards).
+  const { total: totalUnits } = reconcileDisplayedUnits(
     { unitsChecked, unitsPassed, unitsFailed },
     categoryCards,
   );
+  const nonCompliantUnits = Math.max(0, Math.round(Number(traced.total) || 0));
+  const compliantUnits = hasValue(totalUnits)
+    ? Math.max(0, Math.round(Number(totalUnits)) - nonCompliantUnits)
+    : null;
   // Format Mechanics profile name only — never fall back to citation style (e.g. APA).
   const formatLabel = String(formatMechanicsName || "").trim() || "Format mechanics";
   // Bar shares only - percent numbers are not shown in the public results UI.
@@ -410,7 +424,7 @@ export default function ScanResultsScreen({
               status={item.status}
               displayTotal={item.displayTotal}
               displayNonCompliant={item.displayNonCompliant}
-              displayIssueCount={item.displayIssueCount}
+              issuesFound={item.issuesFound}
               displayScore={item.displayScore}
               notice={item.notice}
             />
@@ -422,7 +436,8 @@ export default function ScanResultsScreen({
         result={result}
         file={file}
         documentLoading={documentLoading}
-        issueTotal={nonCompliantUnits}
+        issueTotal={traced.total}
+        tracedByCategory={traced.byCategory}
       />
 
       {/* assistFindings still computed server-side; public results UI hidden */}

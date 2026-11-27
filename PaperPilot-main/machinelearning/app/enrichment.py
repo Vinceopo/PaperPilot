@@ -140,6 +140,9 @@ Never invent a Heading level that differs from role_label.
 Use measured_explanation numbers as ground truth; do not invent different measurements.
 When locations list different measured sizes, do not pick one size for the whole issue —
 say sizes vary by location, and never claim every line measures the first location's size.
+When quoting location excerpts, quote the FULL excerpt string exactly as given —
+never truncate to a single character or partial token (e.g. never turn "their" into "t").
+If an excerpt is missing or shorter than 2 characters, say "this text" instead of inventing a quote.
 Never print list/array brackets such as [11.0]; always write a scalar with a unit (e.g. 11 pt).
 Do not invent issues. Do not output location, bbox, page, line, or role fields.
 {COMPLIANCE_SEVERITY_RUBRIC}

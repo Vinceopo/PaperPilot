@@ -534,17 +534,39 @@ def _soft_wrap_visual_lines_with_runs(
         def commit_line(chars: list[tuple[str, dict | None]]) -> None:
             line_text = "".join(ch for ch, _r in chars)
             line_runs: list[dict] = []
-            seen = set()
-            for _ch, run in chars:
+            # Rebuild run slices in visual order so interstitial spaces (owned by
+            # no run) stay in the piece text — otherwise "CHAPTER 1" becomes "CHAPTER1"
+            # and highlight excerpts / rematch needles drift.
+            buf_run = None
+            buf_chars: list[str] = []
+
+            def flush_run() -> None:
+                nonlocal buf_run, buf_chars
+                if buf_run is not None and buf_chars:
+                    line_runs.append({**buf_run, "text": "".join(buf_chars)})
+                buf_run = None
+                buf_chars = []
+
+            for ch, run in chars:
                 if run is None:
+                    if buf_run is not None:
+                        buf_chars.append(ch)
+                    elif line_runs:
+                        prev = line_runs[-1]
+                        line_runs[-1] = {**prev, "text": str(prev.get("text") or "") + ch}
+                    else:
+                        buf_chars.append(ch)
                     continue
-                key = id(run)
-                if key in seen:
-                    continue
-                seen.add(key)
-                # Keep only the slice of this run that appears on this line.
-                piece = "".join(ch for ch, r in chars if r is run)
-                line_runs.append({**run, "text": piece})
+                if buf_run is None:
+                    buf_run = run
+                    buf_chars.append(ch)
+                elif run is buf_run:
+                    buf_chars.append(ch)
+                else:
+                    flush_run()
+                    buf_run = run
+                    buf_chars = [ch]
+            flush_run()
             lines.append((line_text, line_runs))
 
         def emit_word(chars: list[tuple[str, dict | None]]) -> None:
@@ -1794,6 +1816,188 @@ def _mostly_black(unit: dict) -> bool | None:
     return colored <= 0.5 * total
 
 
+_FONT_PIN_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9''\-]{1,47}")
+
+
+def _font_pin_excerpt(text: str) -> str:
+    """Stable highlight needle from measured text. Never a single character."""
+    collapsed = " ".join(str(text or "").split())
+    if len(collapsed) < 2:
+        return ""
+    # Prefer the full measured span/run when it fits a rematch needle
+    # (keeps "CHAPTER 1 INTRODUCTION" intact instead of truncating to "CHAPTER").
+    if len(collapsed) <= 48:
+        return collapsed
+    # Longer runs: keep a distinctive multi-word head, not one token.
+    words = collapsed.split()
+    head: list[str] = []
+    for word in words:
+        trial = " ".join(head + [word])
+        if len(trial) > 48:
+            break
+        head.append(word)
+        if len(head) >= 4:
+            break
+    pin = " ".join(head) if head else collapsed[:48]
+    return pin if len(pin) >= 2 else ""
+
+
+def _font_pieces(unit: dict) -> list[dict]:
+    """Measured ink pieces for this line (PDF spans preferred, else DOCX runs)."""
+    pieces: list[dict] = []
+    for span in unit.get("spans") or []:
+        text = str(span.get("text") or "")
+        if not text.strip() or not _is_prose_font_text(text):
+            continue
+        font = span.get("font")
+        if font and _is_decorative_font(font):
+            continue
+        size = span.get("size")
+        bbox = span.get("bbox") if len(span.get("bbox") or []) >= 4 else None
+        pieces.append(
+            {
+                "text": text,
+                "font": str(font) if font else None,
+                "size": float(size) if size is not None else None,
+                "color": span.get("color"),
+                "bbox": list(bbox[:4]) if bbox else None,
+            }
+        )
+    if pieces:
+        return pieces
+    runs = unit.get("line_runs")
+    if not runs:
+        runs = unit.get("runs") or []
+    for run in runs:
+        text = str(run.get("text") or "")
+        if not text.strip() or not _is_prose_font_text(text):
+            continue
+        font = run.get("font")
+        if font and _is_decorative_font(font):
+            continue
+        size = run.get("size")
+        pieces.append(
+            {
+                "text": text,
+                "font": str(font) if font else None,
+                "size": float(size) if size is not None else None,
+                "color": run.get("color"),
+                "bbox": None,
+            }
+        )
+    return pieces
+
+
+def _word_occurrence_index(line_text: str, excerpt: str, piece_text: str | None = None) -> int | None:
+    """0-based index of this excerpt among equal tokens on the line (for rematch)."""
+    needle = " ".join(str(excerpt or "").split()).lower()
+    if len(needle) < 2:
+        return None
+    tokens = [token.lower() for token in _FONT_PIN_TOKEN_RE.findall(str(line_text or ""))]
+    if not tokens:
+        return None
+    # Prefer the occurrence that belongs to this piece when the word repeats.
+    piece = " ".join(str(piece_text or "").split()).lower()
+    if piece:
+        piece_tokens = [token.lower() for token in _FONT_PIN_TOKEN_RE.findall(piece)]
+        if needle in piece_tokens:
+            # Count matches of needle before this piece starts in the line.
+            piece_start = str(line_text or "").lower().find(piece)
+            if piece_start >= 0:
+                before = str(line_text or "")[:piece_start]
+                prior = sum(
+                    1
+                    for token in _FONT_PIN_TOKEN_RE.findall(before)
+                    if token.lower() == needle
+                )
+                return prior
+    matches = [index for index, token in enumerate(tokens) if token == needle]
+    return matches[0] if matches else None
+
+
+def _pick_failing_font_piece(
+    unit: dict,
+    *,
+    want_family: bool = False,
+    want_size: bool = False,
+    want_color: bool = False,
+    allowed_fonts: set[str] | None = None,
+    expected_size: float | None = None,
+    listed_sizes: set[float] | None = None,
+    role: str = "body",
+    role_sizes: bool = False,
+) -> dict | None:
+    """First measured piece that fails the requested font dimension(s)."""
+    allowed = allowed_fonts or set()
+    listed = listed_sizes or set()
+    for piece in _font_pieces(unit):
+        family_bad = False
+        if want_family and allowed and piece.get("font"):
+            key = _font_key(piece["font"])
+            family_bad = not any(allowed_key in key or key in allowed_key for allowed_key in allowed)
+        size_bad = False
+        size = piece.get("size")
+        if want_size:
+            if expected_size is not None:
+                size_bad = not _size_matches(size, expected_size)
+            elif listed and size is not None and not role_sizes and role == "body":
+                size_bad = not any(abs(size - allowed_size) <= SIZE_TOLERANCE for allowed_size in listed)
+        color_bad = False
+        if want_color:
+            channels = _color_channels(piece.get("color"))
+            color_bad = bool(channels and max(channels) > 0x50)
+        if family_bad or size_bad or color_bad:
+            return piece
+    return None
+
+
+def _font_issue_location(
+    unit: dict,
+    *,
+    piece: dict | None = None,
+    measured=None,
+    expected=None,
+) -> dict:
+    """Location pinned to the failing span/run when possible (any uploaded file)."""
+    loc = _unit_location(unit, "Fonts", measured=measured, expected=expected)
+    unit_text = str(unit.get("text") or "")
+    piece_text = str((piece or {}).get("text") or "") if piece else ""
+    # Prefer readable unit text when a run slice lost interstitial spaces.
+    if (
+        piece_text
+        and unit_text
+        and " " in unit_text
+        and " " not in piece_text.strip()
+        and re.sub(r"\s+", "", piece_text) == re.sub(r"\s+", "", unit_text)
+    ):
+        source_text = unit_text
+    else:
+        source_text = piece_text or unit_text
+    excerpt = _font_pin_excerpt(source_text or "")
+    if not excerpt:
+        excerpt = " ".join(unit_text.split())[:100]
+    if excerpt:
+        loc["excerpt"] = excerpt
+    piece_bbox = (piece or {}).get("bbox") if piece else None
+    if piece_bbox and len(piece_bbox) >= 4:
+        loc["bbox"] = list(piece_bbox[:4])
+        loc["page_index"] = unit.get("page_index")
+        loc["line_index"] = unit.get("line_index")
+        loc["highlight_from"] = "stored_bbox"
+    elif excerpt and 2 <= len(excerpt) <= 48:
+        # Single-token pins rematch as words; short multi-word pins still use exact excerpt search.
+        loc["highlight_from"] = "word_excerpt" if " " not in excerpt else "excerpt"
+        if " " not in excerpt:
+            word_index = _word_occurrence_index(
+                unit.get("text") or "", excerpt, (piece or {}).get("text")
+            )
+            if word_index is not None:
+                loc["word_index"] = word_index
+    else:
+        loc["highlight_from"] = "line"
+    return loc
+
+
 def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector: IssueCollector) -> None:
     font_rule = rules.get("font") or {}
     allowed_fonts = {_font_key(font) for font in font_rule.get("families", [])}
@@ -1873,30 +2077,70 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
         color_ok = True
         if want_black and (role in {"body", "caption"} or _is_heading_role(role)):
             color_ok = _mostly_black(unit) is not False
+        # Prefer concrete span/run evidence over the line dominant sample so mixed
+        # lines (one wrong word in an otherwise compliant paragraph) still pin exactly.
+        size_piece = None
+        if not (
+            role in {"heading_other", "heading_uncertain"}
+            or (_is_heading_role(role) and expected_size is None)
+        ):
+            size_piece = _pick_failing_font_piece(
+                unit,
+                want_size=True,
+                expected_size=expected_size,
+                listed_sizes=listed_sizes,
+                role=role,
+                role_sizes=role_sizes,
+            )
+        family_piece = (
+            _pick_failing_font_piece(unit, want_family=True, allowed_fonts=allowed_fonts)
+            if allowed_fonts
+            else None
+        )
+        color_piece = _pick_failing_font_piece(unit, want_color=True) if want_black else None
+        if size_piece is not None:
+            size_ok = False
+            if size_piece.get("size") is not None:
+                shown_size = size_piece["size"]
+        if family_piece is not None:
+            family_ok = False
+            if family_piece.get("font"):
+                shown_font = family_piece["font"]
+        if color_piece is not None:
+            color_ok = False
         stats.observe(family_ok and size_ok and color_ok)
-        loc = _unit_location(unit, "Fonts")
         if not color_ok:
+            piece = color_piece
+            loc = _font_issue_location(unit, piece=piece)
+            pin = loc.get("excerpt") or "this text"
             collector.add(
                 "font_color",
                 "minor",
                 "Font color differs",
                 "Text is not in the font color required by the uploaded format mechanics.",
-                f"This line is printed in a color other than black; the format requires {font_rule.get('color')}.",
-                "Set the font color of this text to Automatic/Black.",
+                (
+                    f"In “{pin}”, the text is printed in a color other than black; "
+                    f"the format requires {font_rule.get('color')}."
+                ),
+                f"Select “{pin}” and set the font color to Automatic/Black.",
                 loc,
             )
         if not family_ok:
-            detected = _font_display_name(shown_font)
+            piece = family_piece
+            measured_font = (piece or {}).get("font") or shown_font
+            loc = _font_issue_location(unit, piece=piece, measured=measured_font)
+            pin = loc.get("excerpt") or "this text"
+            detected = _font_display_name(measured_font)
             collector.add(
                 "font_family",
                 "critical",
                 "Font family differs",
                 "Text uses a font family not listed by the uploaded format mechanics.",
                 (
-                    f"The detected font is {detected}, but the uploaded format mechanics require "
-                    f"{required_families} for the manuscript text."
+                    f"In “{pin}”, the detected font is {detected}, but the uploaded format mechanics "
+                    f"require {required_families} for the manuscript text."
                 ),
-                "Apply the format-mechanics font family to this text.",
+                f"Select “{pin}” and apply the format-mechanics font family.",
                 loc,
             )
         if not size_ok and shown_size is not None:
@@ -1913,6 +2157,17 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 # Unset / unprintable expected size → no issue (check already passed above
                 # when expected_size is None for headings).
                 continue
+            piece = size_piece
+            measured_size = (piece or {}).get("size")
+            if measured_size is None:
+                measured_size = shown_size
+            loc = _font_issue_location(
+                unit,
+                piece=piece,
+                measured=measured_size,
+                expected=expected_text,
+            )
+            pin = loc.get("excerpt") or "this text"
             # Separate issue types per role so Heading 1/2/body findings are not merged
             # into one card that reuses the first page's explanation.
             size_issue_type = f"font_size_{role}" if role and role != "body" else "font_size"
@@ -1922,10 +2177,10 @@ def _check_fonts(units: list[dict], rules: dict, stats: CategoryStats, collector
                 f"{role_label} font size differs",
                 f"This {role_label} does not use the point size required by the uploaded format.",
                 (
-                    f"The measured font size is {shown_size:g} pt, but the uploaded format mechanics "
-                    f"require {expected_text} pt for the {role_label}."
+                    f"In “{pin}”, the measured font size is {float(measured_size):g} pt, but the "
+                    f"uploaded format mechanics require {expected_text} pt for the {role_label}."
                 ),
-                f"Select this line’s text and set the font size to {expected_text} pt.",
+                f"Select “{pin}” and set the font size to {expected_text} pt.",
                 loc,
             )
 

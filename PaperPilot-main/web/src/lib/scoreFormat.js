@@ -460,7 +460,8 @@ export function reconcileDisplayedUnits(overall = {}, categoryDisplays = []) {
 
 /**
  * Category card subtitle for findings vs units checked.
- * Prefer passing non-compliant units as issueCount so totals stay consistent.
+ * `issueCount` should be traced Issue Tracing cards for that category so both
+ * UIs stay in sync; the ring % still uses failed units separately.
  */
 export function formatCategoryIssuesDetail(issueCount, total) {
   if (!hasValue(total)) return null;

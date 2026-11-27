@@ -8,6 +8,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { normalizeIssueLocation } from "../../lib/scanMapper.js";
 import { resolveScoreCategory } from "../../lib/scoreFormat.js";
+import { countTracedIssuesByCategory as countTracedIssuesByCategoryShared } from "../../lib/tracedIssues.js";
+
+/** @deprecated Prefer importing from `lib/tracedIssues.js` — kept for callers. */
+export function countTracedIssuesByCategory(formatChecks, pageCountHint, mechanicsRules) {
+  return countTracedIssuesByCategoryShared(formatChecks, pageCountHint, mechanicsRules);
+}
 
 const SEVERITY = {
   minor: {

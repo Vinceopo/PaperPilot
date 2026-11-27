@@ -24,14 +24,14 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_starttls: bool = True
 
-    # Prefer Resend when set (dev: onboarding@resend.dev). SMTP remains a fallback.
+    # Mailjet Send API (works on Vercel). FROM must be a verified Mailjet sender.
+    mailjet_api_key: str = ""
+    mailjet_secret_key: str = ""
+    mailjet_from: str = ""
+
+    # Prefer Resend when set with a verified custom-domain FROM. SMTP remains a fallback.
     resend_api_key: str = ""
     resend_from: str = "PaperPilot <paperpilot.25@gmail.com>"
-
-    # Brevo (Sendinblue) HTTPS API — works on Vercel; verify the Gmail sender once in Brevo.
-    # Prefer this over Gmail SMTP from serverless hosts (outbound SMTP is often blocked).
-    brevo_api_key: str = ""
-    brevo_from: str = ""
 
     # When false, register / reset skip email codes (local/dev). Never disable in production.
     otp_enabled: bool = True

@@ -4,9 +4,8 @@ import logging
 import re
 import smtplib
 from email.message import EmailMessage
-from email.utils import parseaddr
 
-import requests
+import httpx
 
 from app.config import settings
 
@@ -59,6 +58,14 @@ def _extract_email_address(value: str) -> str:
     return (match.group(1) if match else raw).strip().lower()
 
 
+def _extract_display_name(value: str) -> str:
+    raw = (value or "").strip()
+    match = re.match(r"^([^<]+)<[^>]+>$", raw)
+    if match:
+        return match.group(1).strip().strip('"')
+    return ""
+
+
 def _domain_of(address: str) -> str:
     email = _extract_email_address(address)
     if "@" not in email:
@@ -66,23 +73,21 @@ def _domain_of(address: str) -> str:
     return email.rsplit("@", 1)[-1].strip().lower()
 
 
-def _parse_from(value: str) -> tuple[str, str]:
-    """Return (display_name, email) for provider APIs."""
-    name, email = parseaddr((value or "").strip())
-    email = (email or "").strip()
-    if not email and "@" in (value or ""):
-        email = _extract_email_address(value)
-    name = (name or "PaperPilot").strip() or "PaperPilot"
-    return name, email
-
-
 def _default_from_header() -> str:
     return (
-        (settings.brevo_from or "").strip()
+        (settings.mailjet_from or "").strip()
         or (settings.smtp_from or "").strip()
         or (settings.smtp_user or "").strip()
         or (settings.resend_from or "").strip()
         or "PaperPilot <noreply@localhost>"
+    )
+
+
+def mailjet_ready() -> bool:
+    return bool(
+        settings.mailjet_api_key.strip()
+        and settings.mailjet_secret_key.strip()
+        and _extract_email_address(settings.mailjet_from)
     )
 
 
@@ -92,13 +97,6 @@ def smtp_ready() -> bool:
         and settings.smtp_user.strip()
         and settings.smtp_password.strip()
     )
-
-
-def brevo_ready() -> bool:
-    if not settings.brevo_api_key.strip():
-        return False
-    _, email = _parse_from(_default_from_header())
-    return bool(email and "@" in email)
 
 
 def resend_ready() -> bool:
@@ -119,7 +117,7 @@ def resend_ready() -> bool:
 def mail_status() -> dict:
     """Safe diagnostics for /health — never includes secrets."""
     return {
-        "brevo": brevo_ready(),
+        "mailjet": mailjet_ready(),
         "resend": resend_ready(),
         "smtp": smtp_ready(),
         "configured": email_delivery_configured(),
@@ -127,37 +125,48 @@ def mail_status() -> dict:
     }
 
 
-def _send_via_brevo(to_email: str, subject: str, text: str, html: str) -> None:
-    """HTTPS send — works on Vercel. Sender must be verified once in Brevo (can be Gmail)."""
-    name, sender = _parse_from(_default_from_header())
-    if not sender:
-        raise RuntimeError("BREVO_FROM / SMTP_FROM is missing a sender email.")
+def _send_via_mailjet(to_email: str, subject: str, text: str, html: str) -> None:
+    from_header = (settings.mailjet_from or "").strip()
+    from_email = _extract_email_address(from_header)
+    from_name = _extract_display_name(from_header) or "PaperPilot"
+    if not from_email:
+        raise RuntimeError("MAILJET_FROM is missing or invalid.")
 
-    response = requests.post(
-        "https://api.brevo.com/v3/smtp/email",
-        headers={
-            "accept": "application/json",
-            "api-key": settings.brevo_api_key.strip(),
-            "content-type": "application/json",
-        },
-        json={
-            "sender": {"name": name, "email": sender},
-            "to": [{"email": to_email}],
-            "subject": subject,
-            "htmlContent": html,
-            "textContent": text,
-        },
-        timeout=30,
-    )
-    if response.status_code >= 400:
-        detail = response.text[:400]
-        raise RuntimeError(f"Brevo failed ({response.status_code}): {detail}")
-    message_id = None
+    payload = {
+        "Messages": [
+            {
+                "From": {"Email": from_email, "Name": from_name},
+                "To": [{"Email": to_email}],
+                "Subject": subject,
+                "TextPart": text,
+                "HTMLPart": html,
+            }
+        ]
+    }
     try:
-        message_id = (response.json() or {}).get("messageId")
-    except Exception:
-        message_id = None
-    log.info("Brevo accepted OTP email to %s id=%s", to_email, message_id)
+        response = httpx.post(
+            "https://api.mailjet.com/v3.1/send",
+            auth=(settings.mailjet_api_key.strip(), settings.mailjet_secret_key.strip()),
+            json=payload,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        body = response.json()
+    except Exception as exc:
+        raise RuntimeError(f"Mailjet failed: {exc}") from exc
+
+    messages = body.get("Messages") if isinstance(body, dict) else None
+    first = messages[0] if isinstance(messages, list) and messages else {}
+    status = first.get("Status") if isinstance(first, dict) else None
+    if status and status != "success":
+        raise RuntimeError(f"Mailjet rejected message: {body}")
+
+    message_id = None
+    if isinstance(first, dict):
+        to_list = first.get("To") or []
+        if to_list and isinstance(to_list[0], dict):
+            message_id = to_list[0].get("MessageID")
+    log.info("Mailjet accepted OTP email to %s id=%s", to_email, message_id)
 
 
 def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
@@ -181,7 +190,7 @@ def _send_via_resend(to_email: str, subject: str, text: str, html: str) -> None:
         if domain in _BLOCKED_RESEND_DOMAINS or domain.endswith(".resend.dev"):
             hint = (
                 " RESEND_FROM must be an address on a domain verified in Resend "
-                "(not Gmail / resend.dev). Prefer BREVO_API_KEY with your Gmail sender."
+                "(not Gmail / resend.dev). Use SMTP with a Gmail App Password instead."
             )
         raise RuntimeError(f"Resend failed: {exc}.{hint}") from exc
 
@@ -246,7 +255,7 @@ def _send_via_smtp(to_email: str, subject: str, text: str, html: str) -> None:
 
 
 def email_delivery_configured() -> bool:
-    return brevo_ready() or resend_ready() or smtp_ready()
+    return mailjet_ready() or resend_ready() or smtp_ready()
 
 
 def send_otp_email(to_email: str, code: str, purpose: str) -> None:
@@ -254,14 +263,14 @@ def send_otp_email(to_email: str, code: str, purpose: str) -> None:
     subject, text, html = _otp_copy(purpose, code)
     errors: list[str] = []
 
-    # 1) Brevo HTTPS — reliable on Vercel; Gmail can be the verified sender.
-    if brevo_ready():
+    # 1) Mailjet — works on Vercel; FROM must be a verified Mailjet sender.
+    if mailjet_ready():
         try:
-            _send_via_brevo(to_email, subject, text, html)
+            _send_via_mailjet(to_email, subject, text, html)
             return
         except Exception as exc:
             errors.append(str(exc))
-            log.warning("Brevo failed for %s: %s", to_email, exc)
+            log.warning("Mailjet failed for %s: %s", to_email, exc)
 
     # 2) Resend with a verified custom domain.
     if resend_ready():
@@ -272,7 +281,7 @@ def send_otp_email(to_email: str, code: str, purpose: str) -> None:
             errors.append(str(exc))
             log.warning("Resend failed for %s: %s", to_email, exc)
 
-    # 3) SMTP last — often blocked on serverless (Vercel); still useful for some hosts.
+    # 3) SMTP — works locally / on hosts that allow outbound SMTP; often blocked on Vercel.
     if smtp_ready():
         try:
             _send_via_smtp(to_email, subject, text, html)
@@ -284,10 +293,10 @@ def send_otp_email(to_email: str, code: str, purpose: str) -> None:
     if errors:
         raise RuntimeError("; ".join(errors))
 
-    if settings.resend_api_key.strip() and not resend_ready():
+    if settings.resend_api_key.strip() and not resend_ready() and not mailjet_ready():
         raise RuntimeError(
             "RESEND_API_KEY is set but RESEND_FROM is not a verified custom domain. "
-            "Set BREVO_API_KEY (verify your Gmail sender in Brevo) or clear RESEND_*."
+            "Verify a custom domain in Resend, configure Mailjet, or clear RESEND_* and use SMTP."
         )
 
-    log.warning("No Brevo/Resend/SMTP configured. OTP for %s (%s): %s", to_email, purpose, code)
+    log.warning("No Mailjet/Resend/SMTP configured. OTP for %s (%s): %s", to_email, purpose, code)

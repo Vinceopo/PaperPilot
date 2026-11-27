@@ -136,6 +136,17 @@ function targetFrom(scrollTarget, highlight) {
   const merged = { ...(highlight || {}), ...(scrollTarget || {}) };
   const section = String(merged.section || "").trim();
   const pagination = String(section).toLowerCase() === "pagination";
+  const wordIndexRaw = merged.word_index ?? merged.wordIndex;
+  const wordIndex =
+    wordIndexRaw != null && wordIndexRaw !== "" && Number.isFinite(Number(wordIndexRaw))
+      ? Math.max(0, Math.round(Number(wordIndexRaw)))
+      : null;
+  const highlightFrom = String(merged.highlight_from || merged.highlightFrom || "").trim();
+  const paragraphIndexRaw = merged.paragraph_index ?? merged.paragraphIndex;
+  const paragraphIndex =
+    paragraphIndexRaw != null && paragraphIndexRaw !== "" && Number.isFinite(Number(paragraphIndexRaw))
+      ? Math.max(0, Math.round(Number(paragraphIndexRaw)))
+      : null;
   return {
     page: merged.page ?? null,
     // Pagination is page-level - never pin to body line 1 (that over-highlights).
@@ -152,6 +163,10 @@ function targetFrom(scrollTarget, highlight) {
     recommendation: String(merged.recommendation || "").trim(),
     explanation: String(merged.explanation || "").trim(),
     token: merged.token ?? 0,
+    // Keep scanner word pins — dropping these forced approximate rematch on large files.
+    ...(wordIndex != null ? { word_index: wordIndex, wordIndex } : {}),
+    ...(highlightFrom ? { highlight_from: highlightFrom, highlightFrom } : {}),
+    ...(paragraphIndex != null ? { paragraph_index: paragraphIndex, paragraphIndex } : {}),
   };
 }
 
@@ -1011,11 +1026,11 @@ function locateDocxBox(
   line,
   excerpt,
   scroller,
-  { searchRadius = 2, paragraphStart = false } = {}
+  { searchRadius = 2, paragraphStart = false, exactOnly = false } = {}
 ) {
   const reported = sections[pageNumber - 1];
   const estimate = reported ? lineCountBox(reported, line, scroller, { paragraphStart }) : null;
-  const needles = excerptNeedles(excerpt, { paragraphStart });
+  const needles = excerptNeedles(excerpt, { paragraphStart, exactOnly });
   const hasLine = line != null && line !== "" && Number.isFinite(Number(line));
 
   const pack = (rects) => {
@@ -1029,7 +1044,11 @@ function locateDocxBox(
   };
 
   const allCandidates = [];
-  const radius = Math.max(1, Math.min(sections.length, Number(searchRadius) || 2));
+  // Word pins on large DOCX files often drift far from the estimated page —
+  // search the whole document so we do not settle on a repeated token nearby.
+  const radius = exactOnly
+    ? sections.length
+    : Math.max(1, Math.min(sections.length, Number(searchRadius) || 2));
   for (const needle of needles) {
     for (const page of pagesByDistance(pageNumber, sections.length, radius)) {
       const ranges = textRangesIn(sections[page - 1], needle);
@@ -1261,10 +1280,12 @@ function DocxFilePreview({ file, scrollTarget, highlight, paged, pageCountHint =
     const searchRadius =
       sections.length < Math.max(8, Number(pageCountHint) || 0) * 0.7 ? sections.length : 3;
     const paragraphStart = isIndentationIssue(target);
+    const exactOnly = wantsWordHighlight(target);
     const box =
       locateDocxBox(sections, pageNumber, target.line, target.excerpt || target.finding, scroller, {
         searchRadius,
         paragraphStart,
+        exactOnly,
       }) || fallbackDocxBox(pageEl, target.line, scroller, { paragraphStart });
     if (!box) return;
     paintBoxes(scroller, box.rects, target.severity);

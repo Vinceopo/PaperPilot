@@ -2230,38 +2230,32 @@ class OtpTests(FirebaseTestCase):
 
 
 class OtpEmailTests(unittest.TestCase):
-    def test_brevo_delivers_to_every_recipient_before_smtp(self):
-        """HTTPS Brevo is preferred on Vercel so signup/reset OTP reaches any inbox."""
+    def test_mailjet_is_preferred_over_smtp(self):
         sent = []
 
-        def brevo(to_email, subject, text, html):
-            sent.append(("brevo", to_email, subject))
+        def mailjet(to_email, subject, text, html):
+            sent.append(("mailjet", to_email, subject))
 
         def smtp(to_email, subject, text, html):
             sent.append(("smtp", to_email, subject))
-            raise AssertionError("SMTP must not run when Brevo succeeds")
+            raise AssertionError("SMTP must not run when Mailjet succeeds")
 
         with (
-            patch.object(emailer.settings, "brevo_api_key", "xkeysib-test"),
-            patch.object(emailer.settings, "brevo_from", "PaperPilot <paperpilot.25@gmail.com>"),
+            patch.object(emailer.settings, "mailjet_api_key", "mj_public"),
+            patch.object(emailer.settings, "mailjet_secret_key", "mj_secret"),
+            patch.object(emailer.settings, "mailjet_from", "PaperPilot <vincebelleopo@gmail.com>"),
             patch.object(emailer.settings, "resend_api_key", ""),
             patch.object(emailer.settings, "smtp_host", "smtp.gmail.com"),
             patch.object(emailer.settings, "smtp_user", "paperpilot.25@gmail.com"),
             patch.object(emailer.settings, "smtp_password", "app-password"),
-            patch.object(emailer, "_send_via_brevo", side_effect=brevo),
+            patch.object(emailer, "_send_via_mailjet", side_effect=mailjet),
             patch.object(emailer, "_send_via_smtp", side_effect=smtp),
         ):
-            emailer.send_otp_email("owner@example.com", "111111", "verify_email")
-            emailer.send_otp_email("jemusu2002@gmail.com", "222222", "verify_email")
-            emailer.send_otp_email("anyone@outlook.com", "333333", "reset_password")
+            emailer.send_otp_email("anyone@outlook.com", "444444", "verify_email")
 
         self.assertEqual(
             sent,
-            [
-                ("brevo", "owner@example.com", "111111 is your PaperPilot verification code"),
-                ("brevo", "jemusu2002@gmail.com", "222222 is your PaperPilot verification code"),
-                ("brevo", "anyone@outlook.com", "333333 is your PaperPilot password reset code"),
-            ],
+            [("mailjet", "anyone@outlook.com", "444444 is your PaperPilot verification code")],
         )
 
     def test_gmail_resend_from_uses_smtp_for_every_recipient(self):
@@ -2276,7 +2270,9 @@ class OtpEmailTests(unittest.TestCase):
             sent.append(("smtp", to_email, subject))
 
         with (
-            patch.object(emailer.settings, "brevo_api_key", ""),
+            patch.object(emailer.settings, "mailjet_api_key", ""),
+            patch.object(emailer.settings, "mailjet_secret_key", ""),
+            patch.object(emailer.settings, "mailjet_from", ""),
             patch.object(emailer.settings, "resend_api_key", "re_test"),
             patch.object(emailer.settings, "resend_from", "PaperPilot <paperpilot.25@gmail.com>"),
             patch.object(emailer.settings, "smtp_host", "smtp.gmail.com"),
@@ -2310,6 +2306,9 @@ class OtpEmailTests(unittest.TestCase):
             sent.append(("smtp", to_email, subject))
 
         with (
+            patch.object(emailer.settings, "mailjet_api_key", ""),
+            patch.object(emailer.settings, "mailjet_secret_key", ""),
+            patch.object(emailer.settings, "mailjet_from", ""),
             patch.object(emailer.settings, "resend_api_key", "re_test"),
             patch.object(emailer.settings, "resend_from", "PaperPilot <noreply@paperpilot.app>"),
             patch.object(emailer.settings, "smtp_host", "smtp.example.com"),

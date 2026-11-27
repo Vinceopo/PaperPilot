@@ -70,6 +70,12 @@ describe("excerptNeedles", () => {
     expect(startOnly).not.toContain(tail);
     expect(startOnly[0]).toBe(text);
   });
+
+  it("keeps exact-only needles for word pins", () => {
+    expect(excerptNeedles("their registered email", { exactOnly: true })).toEqual([
+      "their registered email",
+    ]);
+  });
 });
 
 describe("isIndentationIssue", () => {
@@ -180,6 +186,16 @@ describe("resolveDocxPageIndex", () => {
   it("does not invent a page via proportional remap when nothing matches", () => {
     expect(resolveDocxPageIndex(sections, { page: 9, excerpt: "" }, 9)).toBeNull();
   });
+
+  it("rematches by excerpt when the reported page drifted on a large DOCX", () => {
+    expect(
+      resolveDocxPageIndex(sections, {
+        page: 1,
+        excerpt: "CHAPTER I INTRODUCTION",
+        highlight_from: "word_excerpt",
+      })
+    ).toEqual({ index: 1, pageNumber: 2, approximate: true });
+  });
 });
 
 describe("isApproximateTracing", () => {
@@ -274,7 +290,21 @@ describe("findPdfWordItem", () => {
         highlight_from: "word_excerpt",
       })
     ).toBe(true);
+    expect(
+      wantsWordHighlight({
+        section: "Fonts",
+        excerpt: "their",
+        highlight_from: "stored_bbox",
+      })
+    ).toBe(true);
     expect(wantsWordHighlight({ section: "Fonts", excerpt: "a whole line of text here" })).toBe(false);
+    expect(
+      wantsWordHighlight({
+        section: "Fonts",
+        excerpt: "a whole line of text here",
+        highlight_from: "line",
+      })
+    ).toBe(false);
   });
 
   it("proportionally slices pdf item boxes", () => {

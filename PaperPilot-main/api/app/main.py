@@ -1555,20 +1555,20 @@ def auth_otp_send(body: OtpSendRequest):
             "Please try again in a few minutes."
         )
         err = str(exc).lower()
-        if "brevo" in err:
+        if "mailjet" in err:
             detail = (
-                "We couldn't deliver the verification email. "
-                "Check BREVO_API_KEY and that the sender Gmail is verified in Brevo."
+                "We couldn't deliver the verification email via Mailjet. "
+                "Check MAILJET_* keys and that MAILJET_FROM is a verified sender."
             )
         elif "resend" in err and ("domain" in err or "gmail" in err or "resend.dev" in err):
             detail = (
                 "We couldn't deliver the verification email. "
-                "Set BREVO_API_KEY (recommended on Vercel), or verify a custom domain in Resend."
+                "Configure Mailjet, verify a custom domain in Resend, or use SMTP."
             )
         elif "smtp" in err and ("login" in err or "auth" in err or "closed" in err or "timed out" in err):
             detail = (
                 "We couldn't deliver the verification email. "
-                "Gmail SMTP is blocked on this host — use BREVO_API_KEY instead."
+                "Check SMTP credentials, or use Mailjet / Resend with a verified sender."
             )
         raise HTTPException(status_code=502, detail=detail) from exc
     minutes = max(1, ttl // 60)
